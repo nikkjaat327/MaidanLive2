@@ -45,6 +45,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import { CRICKET_OVER_PRESETS } from '../../utils/cricketScoring.ts';
 
 type AdminStreamTab = 'ACTIVE' | 'UPCOMING' | 'HISTORY' | 'REPLAYS';
 
@@ -92,6 +93,8 @@ export function AdminLiveStreamsPage() {
   const [scoreboardPosition, setScoreboardPosition] = useState<ScoreboardPosition>('BOTTOM');
   const [chatEnabled, setChatEnabled] = useState(true);
   const [highlightsEnabled, setHighlightsEnabled] = useState(true);
+  const [oversLimit, setOversLimit] = useState('20');
+  const [playersPerSide, setPlayersPerSide] = useState('11');
   const [submitting, setSubmitting] = useState(false);
   const [confirmVideoChangeOpen, setConfirmVideoChangeOpen] = useState(false);
 
@@ -112,6 +115,7 @@ export function AdminLiveStreamsPage() {
   const [switchMtxPath, setSwitchMtxPath] = useState('');
   const [switchMtxHls, setSwitchMtxHls] = useState('');
   const [switchMtxWebrtc, setSwitchMtxWebrtc] = useState('');
+  const [switchConfirmed, setSwitchConfirmed] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
@@ -186,6 +190,8 @@ export function AdminLiveStreamsPage() {
     setScoreboardPosition('BOTTOM');
     setChatEnabled(true);
     setHighlightsEnabled(true);
+    setOversLimit('20');
+    setPlayersPerSide('11');
     setFormOpen(true);
   }
 
@@ -221,6 +227,9 @@ export function AdminLiveStreamsPage() {
     setScoreboardPosition(stream.scoreboardPosition || 'BOTTOM');
     setChatEnabled(stream.chatEnabled ?? true);
     setHighlightsEnabled(stream.highlightsEnabled ?? true);
+    const crkDetails = (stream.score?.sportSpecificDetails || {}) as Record<string, unknown>;
+    setOversLimit(String(crkDetails.oversLimit || 20));
+    setPlayersPerSide(String(crkDetails.playersPerSide || 11));
     setFormOpen(true);
   }
 
@@ -269,6 +278,7 @@ export function AdminLiveStreamsPage() {
     setSwitchMtxPath(stream.mediamtxStreamPath || '');
     setSwitchMtxHls(stream.mediamtxPlaybackUrl || '');
     setSwitchMtxWebrtc(stream.mediamtxWebrtcUrl || '');
+    setSwitchConfirmed(false);
     setSwitchError(null);
   }
 
@@ -370,6 +380,12 @@ export function AdminLiveStreamsPage() {
         scoreboardPosition,
         chatEnabled,
         highlightsEnabled,
+        ...(gameName === 'Cricket'
+          ? {
+              oversLimit: Math.max(1, Math.min(90, Math.floor(Number(oversLimit) || 20))),
+              playersPerSide: Math.max(2, Math.min(15, Math.floor(Number(playersPerSide) || 11))),
+            }
+          : {}),
       };
 
       if (editingStream) {
@@ -1050,6 +1066,64 @@ export function AdminLiveStreamsPage() {
                 />
               </div>
 
+              {gameName === 'Cricket' && (
+                <div className="sm:col-span-2 p-3.5 rounded-xl bg-orange-50/60 border border-orange-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold text-slate-900">
+                      Cricket Format Configuration (Overs &amp; Squad Size)
+                    </p>
+                    <span className="text-[11px] font-mono text-orange-800 font-semibold">
+                      {Math.max(1, Math.min(90, Number(oversLimit) || 20))} Overs ·{' '}
+                      {Math.max(2, Math.min(15, Number(playersPerSide) || 11))}/side
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CRICKET_OVER_PRESETS.map((ov) => (
+                      <button
+                        key={ov}
+                        type="button"
+                        onClick={() => setOversLimit(String(ov))}
+                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold border transition-colors ${
+                          Number(oversLimit) === ov
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        {ov} ov
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Match Overs Limit (1–90)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={oversLimit}
+                        onChange={(e) => setOversLimit(e.target.value)}
+                        className="w-full min-h-[40px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Players per Side (2–15)
+                      </label>
+                      <input
+                        type="number"
+                        min={2}
+                        max={15}
+                        value={playersPerSide}
+                        onChange={(e) => setPlayersPerSide(e.target.value)}
+                        className="w-full min-h-[40px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Team A */}
               <div className="space-y-2">
                 <label className="block text-xs font-medium text-slate-600">
@@ -1527,6 +1601,19 @@ export function AdminLiveStreamsPage() {
               </div>
             )}
 
+            <label className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={switchConfirmed}
+                onChange={(e) => setSwitchConfirmed(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-amber-400 text-[#EA580C]"
+              />
+              <span>
+                I confirm the destination feed is ready for live spectators. If verification fails,
+                the active stream will automatically remain intact.
+              </span>
+            </label>
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1537,7 +1624,7 @@ export function AdminLiveStreamsPage() {
               </button>
               <button
                 type="submit"
-                disabled={switching}
+                disabled={switching || !switchConfirmed}
                 className="min-h-[42px] inline-flex items-center gap-1.5 px-5 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${switching ? 'animate-spin' : ''}`} />

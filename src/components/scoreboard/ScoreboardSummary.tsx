@@ -2,11 +2,10 @@ import { Activity, Award, Clock, Shield, Target } from 'lucide-react';
 import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import {
   CricketDetails,
-  calculateCricketRunRate,
-  calculateRequiredRunRate,
-  createInitialCricketDetails,
+  computeCricketChaseState,
   formatCricketOvers,
   getTotalExtras,
+  normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
 import {
   KabaddiDetails,
@@ -66,10 +65,8 @@ export function ScoreboardSummary({
     ) : null;
 
   const renderCricketSummary = () => {
-    const details: CricketDetails = {
-      ...createInitialCricketDetails(),
-      ...(rawDetails as Partial<CricketDetails>),
-    };
+    const details: CricketDetails = normalizeCricketDetails(rawDetails as Partial<CricketDetails>);
+    const chase = computeCricketChaseState(details, teamA, teamB);
     const isBattingA = details.battingTeam !== 'B';
     const runsA = details.teamARuns ?? scoreA;
     const runsB = details.teamBRuns ?? scoreB;
@@ -78,27 +75,17 @@ export function ScoreboardSummary({
     const ballsA = details.teamABalls ?? 0;
     const ballsB = details.teamBBalls ?? 0;
 
-    const activeRuns = isBattingA ? runsA : runsB;
-    const activeBalls = isBattingA ? ballsA : ballsB;
-    const activeTeamName = isBattingA ? teamA : teamB;
-    const crr = calculateCricketRunRate(activeRuns, activeBalls);
-    const rrr = calculateRequiredRunRate(details);
-    const totalLimitBalls = (details.oversLimit || 20) * 6;
-    const remainingBalls = Math.max(0, totalLimitBalls - activeBalls);
-    const runsNeeded = details.target > 0 ? Math.max(0, details.target - activeRuns) : 0;
     const activeExtras = isBattingA ? details.extrasA : details.extrasB;
     const extrasTotal = getTotalExtras(activeExtras);
 
     const chaseLine =
-      details.innings === 2 && details.target > 0
-        ? runsNeeded === 0
-          ? `${activeTeamName} reached target ${details.target}`
-          : `${activeTeamName} need ${runsNeeded} run${runsNeeded === 1 ? '' : 's'} from ${remainingBalls} ball${remainingBalls === 1 ? '' : 's'}`
+      chase.isInningsBreak || chase.isSecondInnings || chase.isMatchCompleted
+        ? chase.chaseSummaryText
         : details.tossWinner
           ? `${details.tossWinner === 'A' ? teamA : teamB} won the toss & chose to ${
               details.tossDecision === 'BOWL' ? 'bowl' : 'bat'
             }`
-          : `Innings ${details.innings} · ${details.oversLimit || 20} overs match`;
+          : chase.chaseSummaryText;
 
     return (
       <div className="space-y-3">
@@ -106,7 +93,7 @@ export function ScoreboardSummary({
         <div className="grid grid-cols-2 gap-3">
           <div
             className={`rounded-lg border p-3 ${
-              isBattingA
+              isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted
                 ? 'bg-slate-900 text-white border-slate-900'
                 : 'bg-slate-50 text-slate-900 border-slate-200'
             }`}
@@ -115,7 +102,7 @@ export function ScoreboardSummary({
               <span className="font-semibold truncate">
                 {teamA} {details.teamAShortName ? `(${details.teamAShortName})` : ''}
               </span>
-              {isBattingA && (
+              {isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted && (
                 <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                   BAT
                 </span>
@@ -126,7 +113,11 @@ export function ScoreboardSummary({
                 {runsA}/{wktsA}
               </span>
               <span
-                className={`text-xs ${isBattingA ? 'text-slate-300' : 'text-slate-500'}`}
+                className={`text-xs ${
+                  isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted
+                    ? 'text-slate-300'
+                    : 'text-slate-500'
+                }`}
               >
                 ({formatCricketOvers(ballsA)} ov)
               </span>
@@ -135,7 +126,7 @@ export function ScoreboardSummary({
 
           <div
             className={`rounded-lg border p-3 ${
-              !isBattingA
+              !isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted
                 ? 'bg-slate-900 text-white border-slate-900'
                 : 'bg-slate-50 text-slate-900 border-slate-200'
             }`}
@@ -144,7 +135,7 @@ export function ScoreboardSummary({
               <span className="font-semibold truncate">
                 {teamB} {details.teamBShortName ? `(${details.teamBShortName})` : ''}
               </span>
-              {!isBattingA && (
+              {!isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted && (
                 <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                   BAT
                 </span>
@@ -155,7 +146,11 @@ export function ScoreboardSummary({
                 {runsB}/{wktsB}
               </span>
               <span
-                className={`text-xs ${!isBattingA ? 'text-slate-300' : 'text-slate-500'}`}
+                className={`text-xs ${
+                  !isBattingA && !chase.isInningsBreak && !chase.isMatchCompleted
+                    ? 'text-slate-300'
+                    : 'text-slate-500'
+                }`}
               >
                 ({formatCricketOvers(ballsB)} ov)
               </span>
@@ -164,11 +159,24 @@ export function ScoreboardSummary({
         </div>
 
         {/* Equation & Rates */}
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-          <span className="font-semibold text-slate-800">{chaseLine}</span>
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2 text-xs border rounded-lg px-3 py-2 ${
+            chase.isInningsBreak
+              ? 'bg-orange-50 border-orange-200 text-orange-950'
+              : chase.isMatchCompleted
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
+          }`}
+        >
+          <span className="font-semibold">{chaseLine}</span>
           <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums text-slate-600">
-            <span>CRR {crr}</span>
-            {rrr !== null && <span className="text-orange-700 font-semibold">RRR {rrr}</span>}
+            <span>CRR {chase.crr}</span>
+            {chase.rrr !== null && (
+              <span className="text-orange-700 font-semibold">RRR {chase.rrr}</span>
+            )}
+            {chase.target > 0 && !chase.isMatchCompleted && (
+              <span className="font-semibold text-slate-800">Target {chase.target}</span>
+            )}
             {!isCompact && <span>Extras {extrasTotal}</span>}
           </div>
         </div>

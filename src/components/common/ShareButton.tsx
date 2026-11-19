@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Copy, QrCode, Share2 } from 'lucide-react';
+import { Award, Check, Copy, Share2 } from 'lucide-react';
 import { ShareCardModal, ShareCardPayload } from './ShareCardModal.tsx';
 
 interface ShareButtonProps {
@@ -52,7 +52,7 @@ export function ShareButton({ title, text, url, compact = false, shareCard }: Sh
               compact ? 'min-h-[38px] px-3 py-1.5 text-xs' : 'min-h-[42px] px-3.5 py-2 text-xs'
             } inline-flex items-center gap-1.5 font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap`}
           >
-            <QrCode className="w-3.5 h-3.5 text-orange-400" />
+            <Award className="w-3.5 h-3.5 text-orange-400" />
             <span>Share Card</span>
           </button>
         )}

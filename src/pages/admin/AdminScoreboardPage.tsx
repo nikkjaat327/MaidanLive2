@@ -31,6 +31,7 @@ import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIn
 import { normalizeBroadcast } from '../../utils/normalizeBroadcast.ts';
 import { LiveScoreboardView } from '../../components/scoreboard/LiveScoreboardView.tsx';
 import { ScoreboardSummary } from '../../components/scoreboard/ScoreboardSummary.tsx';
+import { CricketScorecardPanel } from '../../components/scoreboard/CricketScorecardPanel.tsx';
 import { BroadcastScoreboardOverlay } from '../../components/scoreboard/broadcast/BroadcastScoreboardOverlay.tsx';
 import { ScoreMomentumCharts } from '../../components/scoreboard/ScoreMomentumCharts.tsx';
 import { ScoreControlPanel } from '../../components/scoreboard/ScoreControlPanel.tsx';
@@ -58,6 +59,7 @@ export function AdminScoreboardPage() {
   const [switchOpen, setSwitchOpen] = useState(false);
   const [switchTo, setSwitchTo] = useState<StreamingProvider>('mediamtx');
   const [switchReason, setSwitchReason] = useState('');
+  const [switchConfirmed, setSwitchConfirmed] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
@@ -225,6 +227,7 @@ export function AdminScoreboardPage() {
                 onClick={() => {
                   setSwitchTo(activeProvider === 'youtube' ? 'mediamtx' : 'youtube');
                   setSwitchReason('');
+                  setSwitchConfirmed(false);
                   setSwitchError(null);
                   setSwitchOpen(true);
                 }}
@@ -337,6 +340,10 @@ export function AdminScoreboardPage() {
 
           <ScoreboardSummary stream={stream} score={score} variant="compact" />
 
+          {score?.sportType === 'Cricket' && (
+            <CricketScorecardPanel stream={stream} score={score} />
+          )}
+
           {showMomentumCharts && (
             <ScoreMomentumCharts stream={stream} score={score} history={history} />
           )}
@@ -390,6 +397,18 @@ export function AdminScoreboardPage() {
               className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
             />
           </div>
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={switchConfirmed}
+              onChange={(e) => setSwitchConfirmed(e.target.checked)}
+              className="w-4 h-4 mt-0.5 rounded border-amber-400 text-[#EA580C]"
+            />
+            <span>
+              Confirm switching active spectator playback to{' '}
+              <strong className="uppercase">{switchTo}</strong> after live health verification.
+            </span>
+          </label>
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -400,7 +419,7 @@ export function AdminScoreboardPage() {
             </button>
             <button
               type="submit"
-              disabled={switching}
+              disabled={switching || !switchConfirmed}
               className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${switching ? 'animate-spin' : ''}`} />

@@ -1,11 +1,10 @@
 import { LiveScoreData, LiveStreamData, NormalizedBroadcast } from '../types/index.ts';
 import {
   CricketDetails,
-  calculateCricketRunRate,
-  calculateRequiredRunRate,
-  createInitialCricketDetails,
+  computeCricketChaseState,
   formatCricketOvers,
   getTotalExtras,
+  normalizeCricketDetails,
 } from './cricketScoring.ts';
 import { KabaddiDetails, createInitialKabaddiDetails } from './kabaddiScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from './footballScoring.ts';
@@ -62,40 +61,65 @@ export function normalizeBroadcast(
   const subStripItems: NormalizedBroadcast['subStripItems'] = [];
 
   if (sport === 'Cricket') {
-    const cd = { ...createInitialCricketDetails(), ...(details as Partial<CricketDetails>) };
+    const cd = normalizeCricketDetails(details as Partial<CricketDetails>);
+    const chase = computeCricketChaseState(cd, teamAName, teamBName);
     teamAPrimary = `${cd.teamARuns}/${cd.teamAWickets}`;
     teamBPrimary = `${cd.teamBRuns}/${cd.teamBWickets}`;
     teamASecondary = `${formatCricketOvers(cd.teamABalls)} ov`;
     teamBSecondary = `${formatCricketOvers(cd.teamBBalls)} ov`;
-    if (stream.status === 'LIVE') {
+    if (stream.status === 'LIVE' && !chase.isInningsBreak && !chase.isMatchCompleted) {
       teamABadge = cd.battingTeam === 'A' ? 'BATTING' : '';
       teamBBadge = cd.battingTeam === 'B' ? 'BATTING' : '';
     }
 
-    const activeRuns = cd.battingTeam === 'A' ? cd.teamARuns : cd.teamBRuns;
-    const activeBalls = cd.battingTeam === 'A' ? cd.teamABalls : cd.teamBBalls;
-    const crr = calculateCricketRunRate(activeRuns, activeBalls);
-    const rrr = calculateRequiredRunRate(cd);
     const activeExtras = cd.battingTeam === 'A' ? cd.extrasA : cd.extrasB;
 
-    periodLabel = `Innings ${cd.innings}`;
-    timerOrClock =
-      cd.innings === 2 && cd.target > 0
-        ? `Target ${cd.target}`
-        : score?.matchStatus || `Overs Limit ${cd.oversLimit}`;
-
-    subStripItems.push({ label: 'CRR', value: crr, accent: 'emerald' });
-    if (cd.target > 0) {
-      const needed = Math.max(0, cd.target - (cd.battingTeam === 'A' ? cd.teamARuns : cd.teamBRuns));
-      subStripItems.push({ label: 'Target', value: `${cd.target} (Need ${needed})`, accent: 'orange' });
+    if (chase.isInningsBreak) {
+      statusLabel = 'INNINGS BREAK';
+      periodLabel = 'Innings Break';
+      timerOrClock = `Target ${chase.target}`;
+    } else if (chase.isMatchCompleted || (score?.resultStatus && score.resultStatus !== 'NOT_DECLARED')) {
+      statusLabel = 'FINAL';
+      periodLabel = `Innings ${cd.innings}`;
+      timerOrClock = chase.winningMarginText || score?.resultDescription || 'Completed';
+    } else {
+      periodLabel = `Innings ${cd.innings}`;
+      timerOrClock =
+        cd.innings === 2 && chase.target > 0
+          ? `Target ${chase.target}`
+          : score?.matchStatus || `${cd.oversLimit} Ov Match`;
     }
-    if (rrr) {
-      subStripItems.push({ label: 'RRR', value: rrr, accent: 'orange' });
+
+    subStripItems.push({ label: 'CRR', value: chase.crr, accent: 'emerald' });
+    if (chase.isInningsBreak && chase.target > 0) {
+      subStripItems.push({
+        label: 'Target',
+        value: `${chase.target} (${cd.oversLimit} ov)`,
+        accent: 'orange',
+      });
+    } else if (cd.innings === 2 && chase.target > 0 && !chase.isMatchCompleted) {
+      subStripItems.push({
+        label: 'Equation',
+        value: `Need ${chase.runsRequired} in ${chase.ballsRemaining}b`,
+        accent: 'orange',
+      });
+    } else if (chase.isMatchCompleted) {
+      subStripItems.push({
+        label: 'Result',
+        value: chase.chaseSummaryText,
+        accent: 'emerald',
+      });
+    }
+    if (chase.rrr) {
+      subStripItems.push({ label: 'RRR', value: chase.rrr, accent: 'orange' });
     }
     if (cd.batsman1 || cd.batsman2) {
+      const battersDisplay = [cd.batsman1 ? `${cd.batsman1}*` : '', cd.batsman2]
+        .filter(Boolean)
+        .join(' & ');
       subStripItems.push({
         label: 'Batters',
-        value: [cd.batsman1, cd.batsman2].filter(Boolean).join(' & '),
+        value: battersDisplay,
         accent: 'slate',
       });
     }
@@ -160,10 +184,13 @@ export function normalizeBroadcast(
         statusLabel,
         timerOrClock,
         periodLabel,
-        isLive: stream.status === 'LIVE',
+        isLive: stream.status === 'LIVE' && !chase.isMatchCompleted,
       },
       subStripItems,
-      resultBannerText: score?.resultDescription || score?.winnerTeamName || '',
+      resultBannerText:
+        score?.resultDescription ||
+        score?.winnerTeamName ||
+        (chase.isMatchCompleted ? chase.chaseSummaryText : ''),
       resultDeclared: Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED'),
       winnerName: score?.winnerTeamName || '',
       mvpName: score?.mvpPlayerName || '',

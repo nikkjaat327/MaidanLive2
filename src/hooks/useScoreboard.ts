@@ -227,6 +227,9 @@ export function useScoreboard(
     socket.on('score:updated', handleScoreUpdated);
     socket.on('score:event:created', handleScoreUpdated);
     socket.on('score:event:corrected', handleScoreUpdated);
+    socket.on('cricket:innings_completed', handleScoreUpdated);
+    socket.on('cricket:second_innings_started', handleScoreUpdated);
+    socket.on('cricket:match_completed', handleResultEvent);
     socket.on('score:undo', handleScoreUndo);
     socket.on('score:reset', handleScoreReset);
     socket.on('commentary:added', handleCommentaryAdded);
@@ -240,6 +243,9 @@ export function useScoreboard(
       socket.off('score:updated', handleScoreUpdated);
       socket.off('score:event:created', handleScoreUpdated);
       socket.off('score:event:corrected', handleScoreUpdated);
+      socket.off('cricket:innings_completed', handleScoreUpdated);
+      socket.off('cricket:second_innings_started', handleScoreUpdated);
+      socket.off('cricket:match_completed', handleResultEvent);
       socket.off('score:undo', handleScoreUndo);
       socket.off('score:reset', handleScoreReset);
       socket.off('commentary:added', handleCommentaryAdded);

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import QRCode from 'qrcode';
-import { Check, Copy, Download, QrCode, Share2 } from 'lucide-react';
+import { Award, Check, Copy, Download, Share2 } from 'lucide-react';
 import { Modal } from './Modal.tsx';
 
 export type ShareCardPayload =
@@ -338,41 +337,28 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         }
       }
 
-      // Bottom QR Code Section
-      const footerY = H - 270;
+      // Bottom Branded CTA Footer Section (No QR Code)
+      const footerY = H - 250;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-      drawRoundedRect(ctx, 96, footerY, W - 192, 180, 26);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+      ctx.lineWidth = 2;
+      drawRoundedRect(ctx, 96, footerY, W - 192, 156, 26);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#EA580C';
+      drawRoundedRect(ctx, 130, footerY + 34, 14, 88, 7);
       ctx.fill();
 
-      try {
-        const qrDataUrl = await QRCode.toDataURL(shareUrl, {
-          width: 150,
-          margin: 1,
-          color: { dark: '#0F172A', light: '#FFFFFF' },
-        });
-        const img = new Image();
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = () => reject(new Error('QR load failed'));
-          img.src = qrDataUrl;
-        });
-        ctx.fillStyle = '#FFFFFF';
-        drawRoundedRect(ctx, 116, footerY + 15, 150, 150, 16);
-        ctx.fill();
-        ctx.drawImage(img, 122, footerY + 21, 138, 138);
-      } catch {
-        // Non-blocking QR fallback
-      }
-
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = '700 30px system-ui, -apple-system, sans-serif';
-      ctx.fillText('Scan to Open on MaidanLive', 298, footerY + 72);
+      ctx.font = '800 32px system-ui, -apple-system, sans-serif';
+      ctx.fillText('Watch Live Scores & Video on MaidanLive', 168, footerY + 66);
       ctx.fillStyle = '#94A3B8';
       ctx.font = '500 22px system-ui, -apple-system, sans-serif';
-      ctx.fillText('Live scores, video streams & grassroots sports profiles', 298, footerY + 114);
+      ctx.fillText('Ball-by-ball updates, official scorecards & grassroots broadcasts', 168, footerY + 104);
       ctx.fillStyle = '#F97316';
-      ctx.font = '600 20px ui-monospace, SFMono-Regular, monospace';
-      ctx.fillText(shareUrl.slice(0, 52), 298, footerY + 148);
+      ctx.font = '600 21px ui-monospace, SFMono-Regular, monospace';
+      ctx.fillText(shareUrl.slice(0, 62), 168, footerY + 138);
 
       if (active) {
         setPreviewUrl(canvas.toDataURL('image/png'));
@@ -445,7 +431,7 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       open={open}
       onClose={onClose}
       title="Shareable Sports Card"
-      subtitle="Download or share this score & QR card on WhatsApp or social feeds."
+      subtitle="Download or share this live score & match card on WhatsApp or social feeds."
       maxWidthClass="max-w-lg"
     >
       <div className="space-y-4">
@@ -454,8 +440,8 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         <div className="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center min-h-[280px]">
           {rendering || !previewUrl ? (
             <div className="py-16 text-xs text-slate-400 inline-flex items-center gap-2">
-              <QrCode className="w-4 h-4 animate-pulse" />
-              <span>Generating HD sports card &amp; QR code...</span>
+              <Award className="w-4 h-4 animate-pulse text-orange-400" />
+              <span>Generating HD sports card...</span>
             </div>
           ) : (
             <img

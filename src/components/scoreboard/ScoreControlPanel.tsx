@@ -40,8 +40,8 @@ import { useOnlineStatus } from '../../hooks/useOnlineStatus.ts';
 import {
   CricketDetails,
   applyCricketAction,
-  createInitialCricketDetails,
 } from '../../utils/cricketScoring.ts';
+import { CricketScorerConsole } from './CricketScorerConsole.tsx';
 import {
   KabaddiDetails,
   applyKabaddiAction,
@@ -248,6 +248,24 @@ export function ScoreControlPanel({
       setError(null);
       const result = await offlineScoreService.submitScoreEvent(stream.id, payload, score);
       if (result.queued) {
+        if (payload.sportType === 'Cricket' && score) {
+          const applied = applyCricketAction(
+            (score.sportSpecificDetails || {}) as Partial<CricketDetails>,
+            payload.action as any
+          );
+          const nextStatus = applied.autoCompletedMatch
+            ? 'COMPLETED'
+            : applied.autoCompletedInnings1
+              ? 'INNINGS BREAK'
+              : score.matchStatus;
+          onScoreChange({
+            ...score,
+            teamAScore: applied.teamAScore,
+            teamBScore: applied.teamBScore,
+            matchStatus: nextStatus,
+            sportSpecificDetails: applied.details as unknown as Record<string, unknown>,
+          });
+        }
         setSuccessMsg(
           'Scoring event cached in IndexedDB — will sync automatically upon reconnection.'
         );
@@ -687,35 +705,31 @@ export function ScoreControlPanel({
         </div>
       </form>
 
-      {/* Advanced Multi-Point & Structured Scorer */}
-      <AdvancedEventComposer
-        stream={stream}
-        score={score}
-        players={players}
-        saving={saving}
-        onSubmitEvent={handleSubmitStructuredEvent}
-      />
+      {/* Advanced Multi-Point & Structured Scorer (non-Cricket sports; Cricket has full Scorer Console below) */}
+      {sport !== 'Cricket' && (
+        <AdvancedEventComposer
+          stream={stream}
+          score={score}
+          players={players}
+          saving={saving}
+          onSubmitEvent={handleSubmitStructuredEvent}
+        />
+      )}
 
       {/* Sport-specific interactive touch controls */}
       {sport === 'Cricket' && (
-        <CricketControls
-          teamA={teamA}
-          teamB={teamB}
-          details={{
-            ...createInitialCricketDetails(),
-            ...((score?.sportSpecificDetails || {}) as Partial<CricketDetails>),
-          }}
+        <CricketScorerConsole
+          stream={stream}
+          score={score}
+          players={players}
           saving={saving}
-          onApply={(next) =>
-            commitUpdate({
-              teamAScore: next.teamAScore,
-              teamBScore: next.teamBScore,
-              sportSpecificDetails: next.details as unknown as Record<string, unknown>,
-              tossWinner: next.details.tossWinner,
-              tossDecision: next.details.tossDecision,
-              action: next.label,
-            })
-          }
+          onScoreChange={onScoreChange}
+          onRefreshHistory={onRefreshHistory}
+          onRefreshStats={onRefreshStats}
+          onOpenResultModal={() => setResultModalOpen(true)}
+          onSubmitCricketEvent={handleSubmitStructuredEvent}
+          onError={setError}
+          onSuccess={setSuccessMsg}
         />
       )}
 
@@ -919,424 +933,6 @@ export function ScoreControlPanel({
         saving={saving}
         onConfirmCorrection={handleConfirmEventCorrection}
       />
-    </div>
-  );
-}
-
-function CricketControls({
-  teamA,
-  teamB,
-  details,
-  saving,
-  onApply,
-}: {
-  teamA: string;
-  teamB: string;
-  details: CricketDetails;
-  saving: boolean;
-  onApply: (res: ReturnType<typeof applyCricketAction>) => void;
-}) {
-  const [batsman1, setBatsman1] = useState(details.batsman1 || '');
-  const [batsman2, setBatsman2] = useState(details.batsman2 || '');
-  const [bowler, setBowler] = useState(details.bowler || '');
-  const [target, setTarget] = useState(String(details.target || 0));
-  const [oversLimit, setOversLimit] = useState(String(details.oversLimit || 20));
-  const [shortA, setShortA] = useState(details.teamAShortName || '');
-  const [shortB, setShortB] = useState(details.teamBShortName || '');
-  const [tossWinner, setTossWinner] = useState<'A' | 'B' | ''>(details.tossWinner || '');
-  const [tossDecision, setTossDecision] = useState<'BAT' | 'BOWL' | ''>(details.tossDecision || '');
-  const [isSuperOver, setIsSuperOver] = useState(Boolean(details.isSuperOver));
-  const [soRunsA, setSoRunsA] = useState(String(details.superOverTeamARuns || 0));
-  const [soWktsA, setSoWktsA] = useState(String(details.superOverTeamAWickets || 0));
-  const [soRunsB, setSoRunsB] = useState(String(details.superOverTeamBRuns || 0));
-  const [soWktsB, setSoWktsB] = useState(String(details.superOverTeamBWickets || 0));
-
-  useEffect(() => {
-    setBatsman1(details.batsman1 || '');
-    setBatsman2(details.batsman2 || '');
-    setBowler(details.bowler || '');
-    setTarget(String(details.target || 0));
-    setOversLimit(String(details.oversLimit || 20));
-    setShortA(details.teamAShortName || '');
-    setShortB(details.teamBShortName || '');
-    setTossWinner(details.tossWinner || '');
-    setTossDecision(details.tossDecision || '');
-    setIsSuperOver(Boolean(details.isSuperOver));
-    setSoRunsA(String(details.superOverTeamARuns || 0));
-    setSoWktsA(String(details.superOverTeamAWickets || 0));
-    setSoRunsB(String(details.superOverTeamBRuns || 0));
-    setSoWktsB(String(details.superOverTeamBWickets || 0));
-  }, [
-    details.batsman1,
-    details.batsman2,
-    details.bowler,
-    details.target,
-    details.oversLimit,
-    details.teamAShortName,
-    details.teamBShortName,
-    details.tossWinner,
-    details.tossDecision,
-    details.isSuperOver,
-    details.superOverTeamARuns,
-    details.superOverTeamAWickets,
-    details.superOverTeamBRuns,
-    details.superOverTeamBWickets,
-  ]);
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-medium text-slate-500">Active Batting Side & Innings</p>
-            <p className="text-sm font-semibold text-slate-900 mt-0.5">
-              {details.battingTeam === 'A' ? teamA : teamB} · Innings {details.innings}
-              {details.isSuperOver ? ' · Super Over Active' : ''}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: 'A',
-                    innings: details.innings,
-                  })
-                )
-              }
-              className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-                details.battingTeam === 'A'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              {teamA} Batting
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: 'B',
-                    innings: details.innings,
-                  })
-                )
-              }
-              className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-                details.battingTeam === 'B'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              {teamB} Batting
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: details.battingTeam === 'A' ? 'B' : 'A',
-                    innings: details.innings === 1 ? 2 : 1,
-                    setTargetFromFirstInnings: details.innings === 1,
-                  })
-                )
-              }
-              className="min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
-            >
-              {details.innings === 1 ? 'Start 2nd Innings & Set Target' : 'Switch to 1st Innings'}
-            </button>
-          </div>
-        </div>
-
-        {/* Runs & Legal Balls */}
-        <div>
-          <p className="text-xs font-medium text-slate-500 mb-2">Scoring Runs (Legal Delivery)</p>
-          <div className="grid grid-cols-4 sm:grid-cols-7 gap-2.5">
-            {[0, 1, 2, 3, 4, 5, 6].map((runs) => (
-              <button
-                key={runs}
-                type="button"
-                disabled={saving}
-                onClick={() => onApply(applyCricketAction(details, { type: 'RUNS', runs }))}
-                className={`min-h-[50px] rounded-xl font-mono text-base font-bold border transition-colors active:scale-[0.98] ${
-                  runs === 4 || runs === 6
-                    ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
-                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                }`}
-              >
-                {runs === 0 ? 'Dot (0)' : `+${runs}`}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Extras, Wicket & Over Flow */}
-        <div>
-          <p className="text-xs font-medium text-slate-500 mb-2">Extras, Wickets &amp; Over Control</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'WIDE', extraRuns: 0 }))}
-              className="min-h-[48px] px-3 rounded-xl text-sm font-semibold bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-            >
-              Wide (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'NO_BALL', extraRuns: 0 }))}
-              className="min-h-[48px] px-3 rounded-xl text-sm font-semibold bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-            >
-              No Ball (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'BYE', runs: 1 }))}
-              className="min-h-[48px] px-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200"
-            >
-              Bye (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'LEG_BYE', runs: 1 }))}
-              className="min-h-[48px] px-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200"
-            >
-              Leg Bye (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'WICKET' }))}
-              className="min-h-[48px] px-3 rounded-xl text-sm font-bold bg-red-600 text-white hover:bg-red-700"
-            >
-              Wicket
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'CHANGE_STRIKER' }))}
-              className="min-h-[48px] px-3 rounded-xl text-xs font-semibold bg-white text-slate-800 border border-slate-300 hover:bg-slate-50"
-            >
-              Swap Striker
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'END_OVER' }))}
-              className="min-h-[48px] px-3 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700"
-            >
-              End Over
-            </button>
-          </div>
-        </div>
-
-        {/* Active Batters / Bowler / Target / Short Codes */}
-        <div className="pt-3 border-t border-slate-200 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Batsman 1</label>
-              <input
-                type="text"
-                value={batsman1}
-                onChange={(e) => setBatsman1(e.target.value)}
-                placeholder="Striker name"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Batsman 2</label>
-              <input
-                type="text"
-                value={batsman2}
-                onChange={(e) => setBatsman2(e.target.value)}
-                placeholder="Non-striker"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Bowler</label>
-              <input
-                type="text"
-                value={bowler}
-                onChange={(e) => setBowler(e.target.value)}
-                placeholder="Current bowler"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Target / Overs</label>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                  aria-label="Target runs"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-sm font-mono border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="number"
-                  min={1}
-                  value={oversLimit}
-                  onChange={(e) => setOversLimit(e.target.value)}
-                  aria-label="Overs limit"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-sm font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">TV Short Codes</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={shortA}
-                  onChange={(e) => setShortA(e.target.value.toUpperCase())}
-                  placeholder="TMA"
-                  aria-label="Team A Short Code"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-xs font-mono uppercase border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={shortB}
-                  onChange={(e) => setShortB(e.target.value.toUpperCase())}
-                  placeholder="TMB"
-                  aria-label="Team B Short Code"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-xs font-mono uppercase border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-            <div className="flex items-end">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  onApply(
-                    applyCricketAction(details, {
-                      type: 'UPDATE_META',
-                      batsman1,
-                      batsman2,
-                      bowler,
-                      target: Number(target) || 0,
-                      oversLimit: Number(oversLimit) || 20,
-                      teamAShortName: shortA,
-                      teamBShortName: shortB,
-                      tossWinner,
-                      tossDecision,
-                      isSuperOver,
-                      superOverTeamARuns: Number(soRunsA) || 0,
-                      superOverTeamAWickets: Number(soWktsA) || 0,
-                      superOverTeamBRuns: Number(soRunsB) || 0,
-                      superOverTeamBWickets: Number(soWktsB) || 0,
-                    })
-                  )
-                }
-                className="w-full min-h-[40px] px-3 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
-              >
-                Update Details
-              </button>
-            </div>
-          </div>
-
-          {/* Toss Tracking */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Toss Winner</label>
-              <select
-                value={tossWinner}
-                onChange={(e) => setTossWinner(e.target.value as 'A' | 'B' | '')}
-                className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">-- Not Recorded --</option>
-                <option value="A">{teamA}</option>
-                <option value="B">{teamB}</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Toss Decision</label>
-              <select
-                value={tossDecision}
-                onChange={(e) => setTossDecision(e.target.value as 'BAT' | 'BOWL' | '')}
-                className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">-- Select Decision --</option>
-                <option value="BAT">Elected to Bat</option>
-                <option value="BOWL">Elected to Bowl / Field</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Super Over Controls */}
-          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2.5">
-            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isSuperOver}
-                onChange={(e) => setIsSuperOver(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-              />
-              <span>Enable Super Over Tie-Breaker</span>
-            </label>
-            {isSuperOver && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamA} SO Runs</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={soRunsA}
-                    onChange={(e) => setSoRunsA(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamA} SO Wkts</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    value={soWktsA}
-                    onChange={(e) => setSoWktsA(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamB} SO Runs</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={soRunsB}
-                    onChange={(e) => setSoRunsB(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamB} SO Wkts</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    value={soWktsB}
-                    onChange={(e) => setSoWktsB(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

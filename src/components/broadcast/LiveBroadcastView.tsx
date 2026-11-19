@@ -48,6 +48,7 @@ import { BroadcastSportStrip } from './BroadcastSportStrip.tsx';
 import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
 import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
+import { CricketScorecardPanel } from '../scoreboard/CricketScorecardPanel.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { StartingSoonGraphic } from '../streaming/StartingSoonGraphic.tsx';
 import { SponsorOverlayBanner } from '../streaming/SponsorOverlayBanner.tsx';
@@ -98,7 +99,7 @@ function buildGoogleMapsUrl(venue: VenueData | null, fallbackLocation?: string):
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
-type DetailTab = 'commentary' | 'stats' | 'lineups' | 'chat' | 'highlights' | 'fixtures' | 'info';
+type DetailTab = 'commentary' | 'scorecard' | 'stats' | 'lineups' | 'chat' | 'highlights' | 'fixtures' | 'info';
 
 export function LiveBroadcastView({
   stream,
@@ -737,6 +738,9 @@ export function LiveBroadcastView({
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {[
             { id: 'commentary' as const, label: `Commentary (${history.length})` },
+            ...(broadcast.sport === 'Cricket'
+              ? [{ id: 'scorecard' as const, label: 'Scorecard' }]
+              : []),
             { id: 'stats' as const, label: `Player Stats (${matchStats.length})` },
             {
               id: 'lineups' as const,
@@ -767,6 +771,10 @@ export function LiveBroadcastView({
         </div>
 
         {activeTab === 'commentary' && <LiveCommentaryFeed history={history} />}
+
+        {activeTab === 'scorecard' && broadcast.sport === 'Cricket' && (
+          <CricketScorecardPanel stream={stream} score={score} />
+        )}
 
         {activeTab === 'stats' && (
           <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">

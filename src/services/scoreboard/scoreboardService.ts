@@ -109,6 +109,37 @@ export const scoreboardService = {
     return data;
   },
 
+  async completeCricketInnings(
+    streamId: string,
+    reason: 'MANUAL' | 'OVERS_COMPLETED' | 'ALL_OUT' = 'MANUAL'
+  ): Promise<{ streamId: string; score: LiveScoreData; historyItem?: ScoreHistoryItem }> {
+    const { data } = await adminApi.post<{
+      streamId: string;
+      score: LiveScoreData;
+      historyItem?: ScoreHistoryItem;
+    }>(`/live/${streamId}/cricket/complete-innings`, { reason });
+    return data;
+  },
+
+  async startSecondCricketInnings(
+    streamId: string,
+    payload: {
+      battingTeam?: 'A' | 'B';
+      batsman1: string;
+      batsman2: string;
+      bowler: string;
+      oversLimit?: number;
+      target?: number;
+    }
+  ): Promise<{ streamId: string; score: LiveScoreData; historyItem?: ScoreHistoryItem }> {
+    const { data } = await adminApi.post<{
+      streamId: string;
+      score: LiveScoreData;
+      historyItem?: ScoreHistoryItem;
+    }>(`/live/${streamId}/cricket/start-second-innings`, payload);
+    return data;
+  },
+
   async resetScore(streamId: string): Promise<{ streamId: string; score: LiveScoreData }> {
     const { data } = await adminApi.post<{ streamId: string; score: LiveScoreData }>(
       `/live/${streamId}/score/reset`

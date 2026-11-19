@@ -11,12 +11,16 @@ function preferenceKeyForType(type: NotificationType): string {
     case 'MATCH_STARTING':
       return 'matchStart';
     case 'MATCH_LIVE':
+    case 'INNINGS_BREAK':
+    case 'SECOND_INNINGS_STARTED':
       return 'matchLive';
     case 'FOLLOWED_TEAM':
       return 'followedTeams';
     case 'SCORE_UPDATE':
+    case 'WICKET':
       return 'scoreUpdates';
     case 'MATCH_RESULT':
+    case 'MATCH_COMPLETED':
       return 'matchResults';
     case 'TOURNAMENT_PUBLISHED':
     case 'FIXTURE_PUBLISHED':

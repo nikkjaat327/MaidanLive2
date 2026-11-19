@@ -9,7 +9,11 @@ export interface INotification extends Document {
     | 'MATCH_LIVE'
     | 'FOLLOWED_TEAM'
     | 'SCORE_UPDATE'
+    | 'WICKET'
+    | 'INNINGS_BREAK'
+    | 'SECOND_INNINGS_STARTED'
     | 'MATCH_RESULT'
+    | 'MATCH_COMPLETED'
     | 'TOURNAMENT_PUBLISHED'
     | 'FIXTURE_PUBLISHED'
     | 'SYSTEM';
@@ -34,7 +38,11 @@ const notificationSchema = new Schema<INotification>(
         'MATCH_LIVE',
         'FOLLOWED_TEAM',
         'SCORE_UPDATE',
+        'WICKET',
+        'INNINGS_BREAK',
+        'SECOND_INNINGS_STARTED',
         'MATCH_RESULT',
+        'MATCH_COMPLETED',
         'TOURNAMENT_PUBLISHED',
         'FIXTURE_PUBLISHED',
         'SYSTEM',

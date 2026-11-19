@@ -224,6 +224,14 @@ router.post(
 
       const gameName = normalizeSport(req.body.gameName);
       const scoreSport: SportType = gameName || 'Other';
+      const parsedOversLimit =
+        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
+          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
+          : undefined;
+      const parsedPlayersPerSide =
+        req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
+          ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
+          : undefined;
 
       const matchDate = req.body.matchDate ? new Date(req.body.matchDate) : null;
       const validMatchDate = matchDate && !isNaN(matchDate.getTime()) ? matchDate : null;
@@ -293,7 +301,10 @@ router.post(
         sportType: scoreSport,
         teamAScore: 0,
         teamBScore: 0,
-        sportSpecificDetails: getInitialSportDetails(scoreSport),
+        sportSpecificDetails: getInitialSportDetails(scoreSport, {
+          oversLimit: parsedOversLimit,
+          playersPerSide: parsedPlayersPerSide,
+        }),
         matchStatus: requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
         lastUpdatedBy: req.user!._id,
         lastUpdatedAt: new Date(),
@@ -1154,14 +1165,46 @@ router.patch(
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
 
+      const reqOversLimit =
+        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
+          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
+          : undefined;
+      const reqPlayersPerSide =
+        req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
+          ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
+          : undefined;
+
       if (sportChangedTo) {
         const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
         if (existingScore && existingScore.sportType !== sportChangedTo) {
           existingScore.sportType = sportChangedTo;
-          existingScore.sportSpecificDetails = getInitialSportDetails(sportChangedTo);
+          existingScore.sportSpecificDetails = getInitialSportDetails(sportChangedTo, {
+            oversLimit: reqOversLimit,
+            playersPerSide: reqPlayersPerSide,
+          });
           existingScore.lastUpdatedAt = new Date();
           existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
           await existingScore.save();
+        }
+      } else if (
+        stream.gameName === 'Cricket' &&
+        (reqOversLimit !== undefined || reqPlayersPerSide !== undefined)
+      ) {
+        const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
+        if (existingScore) {
+          const prevDetails = (existingScore.sportSpecificDetails || {}) as Record<string, unknown>;
+          existingScore.sportSpecificDetails = {
+            ...prevDetails,
+            ...(reqOversLimit !== undefined ? { oversLimit: reqOversLimit } : {}),
+            ...(reqPlayersPerSide !== undefined ? { playersPerSide: reqPlayersPerSide } : {}),
+          };
+          existingScore.lastUpdatedAt = new Date();
+          existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+          await existingScore.save();
+          emitStreamEvent(stream._id.toString(), 'score:updated', {
+            streamId: stream._id.toString(),
+            score: existingScore.toObject(),
+          });
         }
       }
 
