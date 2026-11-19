@@ -18,7 +18,13 @@ import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
 import { applyKabaddiAction } from '../../src/utils/kabaddiScoring.ts';
 import type { KabaddiDetails } from '../../src/utils/kabaddiScoring.ts';
-import { applyCricketAction } from '../../src/utils/cricketScoring.ts';
+import {
+  applyCricketAction,
+  computeCricketChaseState,
+  isBowlerCreditedWicket,
+  isCricketScoringLocked,
+  normalizeCricketDetails,
+} from '../../src/utils/cricketScoring.ts';
 import type { CricketDetails } from '../../src/utils/cricketScoring.ts';
 import { applyVolleyballAction } from '../../src/utils/volleyballScoring.ts';
 import type { VolleyballDetails } from '../../src/utils/volleyballScoring.ts';
@@ -27,7 +33,7 @@ import type { FootballDetails } from '../../src/utils/footballScoring.ts';
 import { validateMatchResult } from '../../src/utils/matchResultValidation.ts';
 import type { MatchResultType } from '../../src/utils/matchResultValidation.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
-import { emitStreamEvent } from '../socket/index.ts';
+import { emitStreamEvent, emitTournamentEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
@@ -137,20 +143,72 @@ async function applyStatUpdateForStructuredEvent(params: {
     if (Object.keys(inc).length > 0) {
       await incStat(playerId, action.team || '', inc);
     }
-  } else if (sportType === 'Cricket' && action?.type === 'STRUCTURED_DELIVERY' && playerId) {
-    const batRuns = Math.max(0, Math.trunc(action.batRuns || 0));
-    const extraType = action.extraType || 'NONE';
-    const isLegal = extraType !== 'WIDE' && extraType !== 'NO_BALL';
-    const inc: Record<string, number> = {};
-    if (batRuns > 0) inc.runs = batRuns;
-    if (isLegal) inc.ballsFaced = 1;
-    if (batRuns === 4) inc.fours = 1;
-    if (batRuns === 6) inc.sixes = 1;
-    if (Object.keys(inc).length > 0) {
-      await incStat(playerId, '', inc);
+  } else if (
+    sportType === 'Cricket' &&
+    (action?.type === 'STRUCTURED_DELIVERY' ||
+      ['RUNS', 'WIDE', 'NO_BALL', 'BYE', 'LEG_BYE', 'WICKET'].includes(String(action?.type || '')))
+  ) {
+    const batRuns = Math.max(
+      0,
+      Math.trunc(
+        action.type === 'RUNS'
+          ? action.runs || 0
+          : action.type === 'NO_BALL' || action.type === 'WICKET' || action.type === 'STRUCTURED_DELIVERY'
+            ? action.batRuns || 0
+            : 0
+      )
+    );
+    const extraType =
+      action.extraType ||
+      (action.type === 'WIDE'
+        ? 'WIDE'
+        : action.type === 'NO_BALL'
+          ? 'NO_BALL'
+          : action.type === 'BYE'
+            ? 'BYE'
+            : action.type === 'LEG_BYE'
+              ? 'LEG_BYE'
+              : 'NONE');
+    const extraRuns = Math.max(
+      0,
+      Math.trunc(
+        action.type === 'WIDE'
+          ? 1 + (action.extraRuns || 0)
+          : action.type === 'NO_BALL'
+            ? 1 + (action.extraRuns || 0)
+            : action.type === 'BYE' || action.type === 'LEG_BYE'
+              ? action.runs || 0
+              : action.extraRuns || 0
+      )
+    );
+    const isLegal =
+      typeof action.countsAsLegalBall === 'boolean'
+        ? action.countsAsLegalBall
+        : extraType !== 'WIDE' && extraType !== 'NO_BALL' && action.eventType !== 'PENALTY_RUNS';
+    const isWicket = Boolean(action.isWicket || action.type === 'WICKET');
+
+    if (playerId) {
+      const inc: Record<string, number> = {};
+      if (batRuns > 0) inc.runs = batRuns;
+      if (isLegal) inc.ballsFaced = 1;
+      if (batRuns === 4) inc.fours = 1;
+      if (batRuns === 6) inc.sixes = 1;
+      if (Object.keys(inc).length > 0) {
+        await incStat(playerId, '', inc);
+      }
     }
-    if (action.isWicket && assistPlayerId) {
-      await incStat(assistPlayerId, '', { wickets: 1 });
+    if (assistPlayerId) {
+      const bowlerInc: Record<string, number> = {};
+      if (isLegal) bowlerInc.oversBowledBalls = 1;
+      const bowlerRuns =
+        batRuns + (extraType === 'WIDE' || extraType === 'NO_BALL' ? extraRuns : 0);
+      if (bowlerRuns > 0) bowlerInc.runsConceded = bowlerRuns;
+      if (isWicket && isBowlerCreditedWicket(action.wicketType)) {
+        bowlerInc.wickets = 1;
+      }
+      if (Object.keys(bowlerInc).length > 0) {
+        await incStat(assistPlayerId, '', bowlerInc);
+      }
     }
   } else if (sportType === 'Volleyball' && action?.type === 'STRUCTURED_POINT' && playerId) {
     const inc: Record<string, number> = {};
@@ -230,6 +288,34 @@ router.patch(
       if (!score) {
         res.status(404).json({ message: 'Live stream not found.' });
         return;
+      }
+
+      if (score.sportType === 'Cricket') {
+        const lockCheck = isCricketScoringLocked(
+          (score.sportSpecificDetails || {}) as Partial<CricketDetails>
+        );
+        const incomingDetails =
+          req.body.sportSpecificDetails && typeof req.body.sportSpecificDetails === 'object'
+            ? (req.body.sportSpecificDetails as Record<string, unknown>)
+            : null;
+        const currD = (score.sportSpecificDetails || {}) as Record<string, unknown>;
+        const mutatingScoreValues =
+          (typeof req.body.teamAScore === 'number' && req.body.teamAScore !== score.teamAScore) ||
+          (typeof req.body.teamBScore === 'number' && req.body.teamBScore !== score.teamBScore) ||
+          Boolean(
+            incomingDetails &&
+              (Number(incomingDetails.teamARuns ?? currD.teamARuns) !== Number(currD.teamARuns ?? 0) ||
+                Number(incomingDetails.teamBRuns ?? currD.teamBRuns) !== Number(currD.teamBRuns ?? 0) ||
+                Number(incomingDetails.teamABalls ?? currD.teamABalls) !== Number(currD.teamABalls ?? 0) ||
+                Number(incomingDetails.teamBBalls ?? currD.teamBBalls) !== Number(currD.teamBBalls ?? 0) ||
+                Number(incomingDetails.teamAWickets ?? currD.teamAWickets) !== Number(currD.teamAWickets ?? 0) ||
+                Number(incomingDetails.teamBWickets ?? currD.teamBWickets) !== Number(currD.teamBWickets ?? 0))
+          );
+
+        if (lockCheck.locked && mutatingScoreValues && req.body.allowLockedOverride !== true) {
+          res.status(409).json({ message: lockCheck.reason, locked: true });
+          return;
+        }
       }
 
       const previousSnapshot = {
@@ -314,13 +400,9 @@ router.patch(
 );
 
 // POST /api/live/:id/score/event - Structured multi-point & delivery scoring with duplicate guard
-router.post(
-  '/:id/score/event',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
+async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
         res.status(400).json({ message: 'Invalid stream ID.' });
         return;
@@ -381,6 +463,29 @@ router.post(
         if (!score) return null;
 
         const sport = (req.body.sportType as SportType) || score.sportType || 'Other';
+
+        const isCricketDeliveryMutation =
+          sport === 'Cricket' &&
+          [
+            'RUNS',
+            'WIDE',
+            'NO_BALL',
+            'BYE',
+            'LEG_BYE',
+            'WICKET',
+            'END_OVER',
+            'STRUCTURED_DELIVERY',
+          ].includes(String(actionPayload.type || ''));
+
+        if (isCricketDeliveryMutation) {
+          const lockCheck = isCricketScoringLocked(
+            (score.sportSpecificDetails || {}) as Partial<CricketDetails>
+          );
+          if (lockCheck.locked) {
+            return { locked: true as const, reason: lockCheck.reason };
+          }
+        }
+
         const previousSnapshot = {
           sportType: score.sportType,
           teamAScore: score.teamAScore,
@@ -401,6 +506,9 @@ router.post(
         let eventType = sanitizeText(req.body.eventType, 80) || actionPayload.type || 'CUSTOM_EVENT';
         let teamSide: 'A' | 'B' | '' =
           actionPayload.team === 'A' || actionPayload.team === 'B' ? actionPayload.team : '';
+        let autoCompletedInnings1 = false;
+        let autoCompletedMatch = false;
+        let cricketWicketEvent = false;
 
         if (sport === 'Kabaddi') {
           const applied = applyKabaddiAction(
@@ -429,6 +537,11 @@ router.post(
           eventCategory = applied.eventCategory;
           eventType = applied.eventType;
           teamSide = applied.details.battingTeam;
+          autoCompletedInnings1 = Boolean(applied.autoCompletedInnings1);
+          autoCompletedMatch = Boolean(applied.autoCompletedMatch);
+          cricketWicketEvent = Boolean(
+            actionPayload.isWicket || actionPayload.type === 'WICKET' || eventType === 'WICKET'
+          );
           if (applied.details.tossWinner) score.tossWinner = applied.details.tossWinner;
           if (applied.details.tossDecision) score.tossDecision = applied.details.tossDecision;
         } else if (sport === 'Volleyball') {
@@ -474,7 +587,16 @@ router.post(
         score.teamAScore = nextTeamAScore;
         score.teamBScore = nextTeamBScore;
         score.sportSpecificDetails = nextDetails;
-        if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
+        if (autoCompletedInnings1) {
+          score.matchStatus = 'INNINGS BREAK';
+        } else if (autoCompletedMatch) {
+          const chaseEval = computeCricketChaseState(
+            nextDetails as unknown as CricketDetails,
+            stream.teamAName || 'Team A',
+            stream.teamBName || 'Team B'
+          );
+          score.matchStatus = chaseEval.outcome === 'TIED' ? 'Tied' : 'Completed';
+        } else if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
           score.matchStatus = sanitizeText(req.body.matchStatus, 80);
         }
         score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
@@ -539,12 +661,155 @@ router.post(
           session,
         });
 
-        return { score, historyId: createdHistory[0]._id };
+        return {
+          locked: false as const,
+          score,
+          historyId: createdHistory[0]._id,
+          autoCompletedInnings1,
+          autoCompletedMatch,
+          cricketWicketEvent,
+          actionLabel: label,
+        };
       });
 
       if (!txResult) {
         res.status(404).json({ message: 'Live stream not found.' });
         return;
+      }
+
+      if (txResult.locked) {
+        res.status(409).json({ message: txResult.reason, locked: true });
+        return;
+      }
+
+      // If 2nd innings auto-completed the match, officially declare result & sync linked fixture
+      let finalScoreObj = txResult.score.toObject();
+      let resultHistoryItem: any = null;
+      if (txResult.autoCompletedMatch && txResult.score.resultStatus === 'NOT_DECLARED') {
+        const d = normalizeCricketDetails(
+          (txResult.score.sportSpecificDetails || {}) as Partial<CricketDetails>
+        );
+        const chase = computeCricketChaseState(
+          d,
+          stream.teamAName || 'Team A',
+          stream.teamBName || 'Team B'
+        );
+        const resScore = txResult.score;
+        const winSide = chase.winnerSide;
+        const winnerName =
+          winSide === 'A'
+            ? stream.teamAName || 'Team A'
+            : winSide === 'B'
+              ? stream.teamBName || 'Team B'
+              : '';
+        resScore.resultStatus = chase.outcome === 'TIED' ? 'TIE' : 'DECLARED';
+        resScore.resultType =
+          winSide === 'A' ? 'TEAM_A_WON' : winSide === 'B' ? 'TEAM_B_WON' : 'TIE';
+        resScore.winnerTeamId =
+          winSide === 'A' ? stream.teamAId || null : winSide === 'B' ? stream.teamBId || null : null;
+        resScore.winnerTeamName = winnerName;
+        resScore.winningMargin = chase.winningMarginText;
+        resScore.resultDescription = chase.chaseSummaryText;
+        resScore.declaredBy = req.user!._id as mongoose.Types.ObjectId;
+        resScore.declaredByName = req.user!.name || req.user!.email;
+        resScore.declaredAt = new Date();
+        resScore.matchStatus = chase.outcome === 'TIED' ? 'Tied' : 'Completed';
+        await resScore.save();
+        finalScoreObj = resScore.toObject();
+
+        const linkedFixture = await Fixture.findOne({ liveStreamId: stream._id });
+        if (linkedFixture) {
+          linkedFixture.status = 'COMPLETED';
+          linkedFixture.resultConfirmed = true;
+          linkedFixture.resultSummary = resScore.resultDescription;
+          linkedFixture.winnerTeamId = resScore.winnerTeamId || null;
+          linkedFixture.winnerTeamName = resScore.winnerTeamName || '';
+          linkedFixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+          await linkedFixture.save();
+
+          if (linkedFixture.nextFixtureId && (winSide === 'A' || winSide === 'B')) {
+            const nextFixture = await Fixture.findById(linkedFixture.nextFixtureId);
+            if (nextFixture) {
+              const winnerTeamDoc = resScore.winnerTeamId
+                ? await Team.findById(resScore.winnerTeamId).lean()
+                : null;
+              const winLogo =
+                winnerTeamDoc?.logoUrl ||
+                (winSide === 'A' ? stream.teamALogo : stream.teamBLogo) ||
+                '';
+              if (linkedFixture.nextFixtureSlot === 'B') {
+                nextFixture.teamBId = resScore.winnerTeamId || null;
+                nextFixture.teamBName = winnerName;
+                nextFixture.teamBLogo = winLogo;
+              } else {
+                nextFixture.teamAId = resScore.winnerTeamId || null;
+                nextFixture.teamAName = winnerName;
+                nextFixture.teamALogo = winLogo;
+              }
+              nextFixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+              await nextFixture.save();
+            }
+          }
+        }
+
+        const rHist = await ScoreHistory.create({
+          liveStreamId: resScore.liveStreamId,
+          entryType: 'RESULT',
+          sportType: resScore.sportType,
+          previousScore: {
+            sportType: resScore.sportType,
+            teamAScore: resScore.teamAScore,
+            teamBScore: resScore.teamBScore,
+            sportSpecificDetails: resScore.sportSpecificDetails,
+            matchStatus: 'Live',
+          },
+          updatedScore: {
+            sportType: resScore.sportType,
+            teamAScore: resScore.teamAScore,
+            teamBScore: resScore.teamBScore,
+            sportSpecificDetails: resScore.sportSpecificDetails,
+            matchStatus: resScore.matchStatus,
+            resultStatus: resScore.resultStatus,
+            winnerTeamName: resScore.winnerTeamName,
+          },
+          action: `Official Result: ${resScore.resultDescription}`,
+          updatedBy: req.user!._id,
+        });
+        resultHistoryItem = await ScoreHistory.findById(rHist._id)
+          .populate('updatedBy', 'name role')
+          .lean();
+
+        emitStreamEvent(id, 'match:result:declared', {
+          streamId: id,
+          score: finalScoreObj,
+          historyItem: resultHistoryItem,
+          isCorrection: false,
+        });
+        emitStreamEvent(id, 'cricket:match_completed', {
+          streamId: id,
+          score: finalScoreObj,
+          chaseState: chase,
+        });
+        if (stream.tournamentId) {
+          emitTournamentEvent(stream.tournamentId.toString(), 'tournament:points_updated', {
+            tournamentId: stream.tournamentId.toString(),
+            streamId: id,
+            resultStatus: resScore.resultStatus,
+            winnerTeamId: resScore.winnerTeamId ? resScore.winnerTeamId.toString() : null,
+          });
+        }
+        await dispatchMatchNotifications({
+          type: 'MATCH_COMPLETED',
+          title: 'Match Completed',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${resScore.resultDescription}`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `cricket-complete-${stream._id.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          tournamentId: stream.tournamentId,
+          includeAllSpectatorsIfNoFollowers: true,
+        });
       }
 
       const populatedHistory = await ScoreHistory.findById(txResult.historyId)
@@ -553,19 +818,422 @@ router.post(
 
       const payload = {
         streamId: id,
-        score: txResult.score.toObject(),
+        score: finalScoreObj,
         historyItem: populatedHistory,
         duplicatePrevented: false,
       };
 
       emitStreamEvent(id, 'score:event:created', payload);
       emitStreamEvent(id, 'score:updated', payload);
-      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+      emitStreamEvent(id, 'match:timeline:updated', {
+        streamId: id,
+        historyItem: resultHistoryItem || populatedHistory,
+      });
+
+      if (txResult.autoCompletedInnings1) {
+        const d = normalizeCricketDetails(
+          (finalScoreObj.sportSpecificDetails || {}) as Partial<CricketDetails>
+        );
+        emitStreamEvent(id, 'cricket:innings_completed', payload);
+        await dispatchMatchNotifications({
+          type: 'INNINGS_BREAK',
+          title: 'Innings Break',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${d.target}`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `innings-break-${stream._id.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          tournamentId: stream.tournamentId,
+          includeAllSpectatorsIfNoFollowers: true,
+        });
+      } else if (txResult.cricketWicketEvent && !txResult.autoCompletedMatch) {
+        await dispatchMatchNotifications({
+          type: 'WICKET',
+          title: 'Wicket Alert!',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${txResult.actionLabel}`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `wicket-${stream._id.toString()}-${txResult.historyId.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          tournamentId: stream.tournamentId,
+          includeAllSpectatorsIfNoFollowers: false,
+        });
+      }
 
       res.status(201).json(payload);
     } catch (err) {
       console.error('[Score] Structured event error:', err);
       res.status(500).json({ message: 'Failed to record scoring event.' });
+    }
+}
+
+router.post('/:id/score/event', authenticate, requireAdminPortal, handleStructuredScoreEvent);
+
+// POST /api/live/:id/cricket/ball - Dedicated Cricket ball-by-ball endpoint
+router.post(
+  '/:id/cricket/ball',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const body = req.body || {};
+    if (!body.action) {
+      const batRuns = Math.max(0, Math.floor(Number(body.batRuns ?? body.runs ?? 0) || 0));
+      const extraRuns = Math.max(0, Math.floor(Number(body.extraRuns ?? 0) || 0));
+      const rawExtra = String(body.extraType || body.extra || 'NONE').toUpperCase();
+      const extraType = ['WIDE', 'NO_BALL', 'BYE', 'LEG_BYE', 'PENALTY'].includes(rawExtra)
+        ? rawExtra
+        : 'NONE';
+      const isWicket = Boolean(body.isWicket);
+      const eventType = isWicket
+        ? 'WICKET'
+        : extraType === 'WIDE'
+          ? 'WIDE'
+          : extraType === 'NO_BALL'
+            ? 'NO_BALL'
+            : extraType === 'BYE'
+              ? 'BYE'
+              : extraType === 'LEG_BYE'
+                ? 'LEG_BYE'
+                : 'LEGAL_DELIVERY';
+
+      req.body = {
+        ...body,
+        sportType: 'Cricket',
+        action: {
+          type: 'STRUCTURED_DELIVERY',
+          eventType,
+          batRuns,
+          extraRuns,
+          extraType,
+          isWicket,
+          wicketType: sanitizeText(body.wicketType, 60),
+          dismissedPlayer: sanitizeText(body.dismissedPlayer, 120),
+          newBatsman: sanitizeText(body.newBatsman, 120),
+          bowler: sanitizeText(body.bowler, 120),
+          description: sanitizeText(body.description, 200),
+          countsAsLegalBall: body.countsAsLegalBall,
+        },
+      };
+    } else {
+      req.body.sportType = 'Cricket';
+    }
+    return handleStructuredScoreEvent(req, res);
+  }
+);
+
+// POST /api/live/:id/cricket/complete-innings - Lock 1st innings & transition to INNINGS BREAK
+router.post(
+  '/:id/cricket/complete-innings',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to complete innings for this stream.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Score record not found.' });
+        return;
+      }
+
+      if (score.sportType !== 'Cricket') {
+        res.status(400).json({ message: 'Innings lifecycle is only applicable to Cricket matches.' });
+        return;
+      }
+
+      const currentDetails = normalizeCricketDetails(
+        (score.sportSpecificDetails || {}) as Partial<CricketDetails>
+      );
+      if (currentDetails.innings !== 1) {
+        res.status(409).json({ message: 'Match is already in the 2nd innings.' });
+        return;
+      }
+      if (currentDetails.innings1Locked || currentDetails.innings1Completed) {
+        res.status(409).json({ message: '1st innings is already completed and locked.' });
+        return;
+      }
+
+      const reasonRaw = String(req.body.reason || 'MANUAL').toUpperCase();
+      const reason =
+        reasonRaw === 'OVERS_COMPLETED' || reasonRaw === 'ALL_OUT' ? reasonRaw : 'MANUAL';
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const applied = applyCricketAction(currentDetails, {
+        type: 'COMPLETE_INNINGS',
+        reason,
+      });
+
+      score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+      score.matchStatus = 'INNINGS BREAK';
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'SCORE_UPDATE',
+        sportType: score.sportType,
+        teamSide: applied.details.battingTeam,
+        eventCategory: 'META',
+        eventType: 'COMPLETE_INNINGS',
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: applied.label,
+        updatedBy: req.user!._id,
+      });
+
+      const populatedHistory = await ScoreHistory.findById(historyItem._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      await recordActivity(
+        req.user!,
+        'COMPLETE_FIRST_INNINGS',
+        'LiveScore',
+        score._id.toString(),
+        applied.label,
+        { previousValue: { innings1Completed: false }, newValue: { target: applied.details.target } }
+      );
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populatedHistory,
+      };
+
+      emitStreamEvent(id, 'cricket:innings_completed', payload);
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+
+      await dispatchMatchNotifications({
+        type: 'INNINGS_BREAK',
+        title: 'Innings Break',
+        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${applied.details.target}`,
+        entityType: 'LiveStream',
+        entityId: stream._id.toString(),
+        link: `/live/${stream._id.toString()}`,
+        dedupeKey: `innings-break-${stream._id.toString()}`,
+        teamIds: [stream.teamAId, stream.teamBId],
+        tournamentId: stream.tournamentId,
+        includeAllSpectatorsIfNoFollowers: true,
+      });
+
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Complete 1st innings error:', err);
+      res.status(500).json({ message: 'Failed to complete 1st innings.' });
+    }
+  }
+);
+
+// POST /api/live/:id/cricket/start-second-innings - Confirm opening batters/bowler & start 2nd innings
+router.post(
+  '/:id/cricket/start-second-innings',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to start the 2nd innings for this stream.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Score record not found.' });
+        return;
+      }
+
+      if (score.sportType !== 'Cricket') {
+        res.status(400).json({ message: '2nd innings setup is only applicable to Cricket matches.' });
+        return;
+      }
+
+      const currentDetails = normalizeCricketDetails(
+        (score.sportSpecificDetails || {}) as Partial<CricketDetails>
+      );
+
+      if (currentDetails.matchPhase === 'COMPLETED' || currentDetails.innings2Locked) {
+        res.status(409).json({ message: 'Match is already completed.' });
+        return;
+      }
+
+      if (currentDetails.innings === 2 && currentDetails.innings2Started) {
+        res.status(409).json({ message: '2nd innings has already started.' });
+        return;
+      }
+
+      const batsman1 = sanitizeText(req.body.batsman1, 120);
+      const batsman2 = sanitizeText(req.body.batsman2, 120);
+      const bowler = sanitizeText(req.body.bowler, 120);
+      if (!batsman1 || !batsman2 || !bowler) {
+        res.status(400).json({
+          message: 'Striker, Non-Striker, and Opening Bowler are required to start the 2nd innings.',
+        });
+        return;
+      }
+
+      const defaultSecondBatting: 'A' | 'B' =
+        (currentDetails.firstInningsBattingTeam || currentDetails.battingTeam) === 'A' ? 'B' : 'A';
+      const battingTeam: 'A' | 'B' =
+        req.body.battingTeam === 'A' || req.body.battingTeam === 'B'
+          ? req.body.battingTeam
+          : defaultSecondBatting;
+
+      const oversLimit =
+        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
+          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || currentDetails.oversLimit)))
+          : currentDetails.oversLimit;
+
+      const firstRuns =
+        battingTeam === 'B' ? currentDetails.teamARuns : currentDetails.teamBRuns;
+      const target =
+        req.body.target !== undefined && req.body.target !== '' && Number(req.body.target) > 0
+          ? Math.floor(Number(req.body.target))
+          : currentDetails.target > 0
+            ? currentDetails.target
+            : firstRuns + 1;
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const applied = applyCricketAction(currentDetails, {
+        type: 'START_SECOND_INNINGS',
+        battingTeam,
+        batsman1,
+        batsman2,
+        bowler,
+        oversLimit,
+        target,
+      });
+
+      score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+      score.matchStatus = 'Live';
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'SCORE_UPDATE',
+        sportType: score.sportType,
+        teamSide: battingTeam,
+        eventCategory: 'META',
+        eventType: 'START_SECOND_INNINGS',
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: applied.label,
+        updatedBy: req.user!._id,
+      });
+
+      const populatedHistory = await ScoreHistory.findById(historyItem._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      await recordActivity(
+        req.user!,
+        'START_SECOND_INNINGS',
+        'LiveScore',
+        score._id.toString(),
+        applied.label,
+        {
+          previousValue: { innings: 1, matchPhase: previousSnapshot.matchStatus },
+          newValue: { innings: 2, battingTeam, target, oversLimit },
+        }
+      );
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populatedHistory,
+      };
+
+      emitStreamEvent(id, 'cricket:second_innings_started', payload);
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+
+      const chasingTeamName =
+        battingTeam === 'A' ? stream.teamAName || 'Team A' : stream.teamBName || 'Team B';
+      await dispatchMatchNotifications({
+        type: 'SECOND_INNINGS_STARTED',
+        title: '2nd Innings Started',
+        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${chasingTeamName} need ${target} runs in ${oversLimit} overs`,
+        entityType: 'LiveStream',
+        entityId: stream._id.toString(),
+        link: `/live/${stream._id.toString()}`,
+        dedupeKey: `second-innings-${stream._id.toString()}`,
+        teamIds: [stream.teamAId, stream.teamBId],
+        tournamentId: stream.tournamentId,
+        includeAllSpectatorsIfNoFollowers: true,
+      });
+
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Start 2nd innings error:', err);
+      res.status(500).json({ message: 'Failed to start 2nd innings.' });
     }
   }
 );
@@ -723,88 +1391,126 @@ router.patch(
   }
 );
 
-// POST /api/live/:id/score/undo
-router.post(
-  '/:id/score/undo',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        res.status(400).json({ message: 'Invalid stream ID.' });
-        return;
-      }
-
-      const allowed = await canManageStream(req.user!, id, 'score');
-      if (!allowed) {
-        res.status(403).json({
-          message: 'Forbidden: You are not authorized to undo scores for this stream.',
-        });
-        return;
-      }
-
-      const score = await ensureLiveScore(id);
-      if (!score) {
-        res.status(404).json({ message: 'Stream not found.' });
-        return;
-      }
-
-      const latestHistory = await ScoreHistory.findOne({
-        liveStreamId: score.liveStreamId,
-        reverted: { $ne: true },
-        $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
-      }).sort({ createdAt: -1 });
-
-      if (!latestHistory) {
-        res.status(400).json({ message: 'No previous score update available to undo.' });
-        return;
-      }
-
-      const previousSnapshot = {
-        teamAScore: score.teamAScore,
-        teamBScore: score.teamBScore,
-      };
-
-      const prev = latestHistory.previousScore as any;
-      score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
-      score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
-      score.sportSpecificDetails =
-        prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
-      if (prev.matchStatus) score.matchStatus = prev.matchStatus;
-      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
-      score.lastUpdatedAt = new Date();
-      await score.save();
-
-      await ScoreHistory.deleteOne({ _id: latestHistory._id });
-
-      await recordActivity(
-        req.user!,
-        'UNDO_SCORE',
-        'LiveScore',
-        score._id.toString(),
-        `Undid: ${latestHistory.action}`,
-        {
-          previousValue: previousSnapshot,
-          newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
-        }
-      );
-
-      const payload = {
-        streamId: id,
-        score: score.toObject(),
-        undoneAction: latestHistory.action,
-      };
-
-      emitStreamEvent(id, 'score:undo', payload);
-      emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
-      res.json(payload);
-    } catch (err) {
-      console.error('[Score] Undo error:', err);
-      res.status(500).json({ message: 'Failed to undo last score update.' });
+// POST /api/live/:id/score/undo & /cricket/undo
+async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
     }
+
+    const allowed = await canManageStream(req.user!, id, 'score');
+    if (!allowed) {
+      res.status(403).json({
+        message: 'Forbidden: You are not authorized to undo scores for this stream.',
+      });
+      return;
+    }
+
+    const score = await ensureLiveScore(id);
+    if (!score) {
+      res.status(404).json({ message: 'Stream not found.' });
+      return;
+    }
+
+    const latestHistory = await ScoreHistory.findOne({
+      liveStreamId: score.liveStreamId,
+      reverted: { $ne: true },
+      $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
+    }).sort({ createdAt: -1 });
+
+    if (!latestHistory) {
+      res.status(400).json({ message: 'No previous score update available to undo.' });
+      return;
+    }
+
+    const previousSnapshot = {
+      teamAScore: score.teamAScore,
+      teamBScore: score.teamBScore,
+    };
+
+    const prev = latestHistory.previousScore as any;
+    const prevWasDeclared = score.resultStatus !== 'NOT_DECLARED';
+    score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
+    score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
+    score.sportSpecificDetails =
+      prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
+    if (prev.matchStatus) score.matchStatus = prev.matchStatus;
+
+    let revertedAutoResult = false;
+    if (score.sportType === 'Cricket' && prevWasDeclared) {
+      const restoredPhase = (score.sportSpecificDetails as any)?.matchPhase;
+      const restoredLocked2 = Boolean((score.sportSpecificDetails as any)?.innings2Locked);
+      if (restoredPhase !== 'COMPLETED' && !restoredLocked2) {
+        score.resultStatus = 'NOT_DECLARED';
+        score.resultType = '';
+        score.winnerTeamId = null;
+        score.winnerTeamName = '';
+        score.winningMargin = '';
+        score.resultDescription = '';
+        score.declaredBy = null;
+        score.declaredByName = '';
+        score.declaredAt = null;
+        revertedAutoResult = true;
+      }
+    }
+
+    score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+    score.lastUpdatedAt = new Date();
+    await score.save();
+
+    await ScoreHistory.deleteOne({ _id: latestHistory._id });
+
+    if (revertedAutoResult) {
+      await ScoreHistory.deleteMany({
+        liveStreamId: score.liveStreamId,
+        entryType: 'RESULT',
+      });
+      const linkedFixture = await Fixture.findOne({ liveStreamId: score.liveStreamId });
+      if (linkedFixture && linkedFixture.resultConfirmed) {
+        linkedFixture.status = 'LIVE';
+        linkedFixture.resultConfirmed = false;
+        linkedFixture.resultSummary = '';
+        linkedFixture.winnerTeamId = null;
+        linkedFixture.winnerTeamName = '';
+        linkedFixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+        await linkedFixture.save();
+      }
+    }
+
+    await recordActivity(
+      req.user!,
+      'UNDO_SCORE',
+      'LiveScore',
+      score._id.toString(),
+      `Undid: ${latestHistory.action}`,
+      {
+        previousValue: previousSnapshot,
+        newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
+      }
+    );
+
+    const payload = {
+      streamId: id,
+      score: score.toObject(),
+      undoneAction: latestHistory.action,
+    };
+
+    emitStreamEvent(id, 'score:undo', payload);
+    if (revertedAutoResult) {
+      emitStreamEvent(id, 'match:result:updated', { streamId: id, score: score.toObject(), isCorrection: true });
+    }
+    emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+    res.json(payload);
+  } catch (err) {
+    console.error('[Score] Undo error:', err);
+    res.status(500).json({ message: 'Failed to undo last score update.' });
   }
-);
+}
+
+router.post('/:id/score/undo', authenticate, requireAdminPortal, handleUndoScore);
+router.post('/:id/cricket/undo', authenticate, requireAdminPortal, handleUndoScore);
 
 // POST /api/live/:id/score/reset
 router.post(
@@ -1311,6 +2017,14 @@ router.post(
         payload
       );
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+      if (stream.tournamentId) {
+        emitTournamentEvent(stream.tournamentId.toString(), 'tournament:points_updated', {
+          tournamentId: stream.tournamentId.toString(),
+          streamId: id,
+          resultStatus: score.resultStatus,
+          winnerTeamId: score.winnerTeamId ? score.winnerTeamId.toString() : null,
+        });
+      }
       res.json(payload);
     } catch (err) {
       console.error('[Score] Declare result error:', err);

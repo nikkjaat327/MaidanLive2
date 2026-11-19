@@ -1,12 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Eye, EyeOff, Radio, SlidersHorizontal, TrendingUp } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  Eye,
+  EyeOff,
+  Radio,
+  RefreshCw,
+  Server,
+  SlidersHorizontal,
+  TrendingUp,
+  Youtube,
+} from 'lucide-react';
 import {
   LiveStreamData,
   MatchHighlightData,
   PlayerData,
   PlayerMatchStatRecord,
   ScoreboardPosition,
+  StreamingProvider,
 } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { entityService } from '../../services/entities/entityService.ts';
@@ -15,13 +26,18 @@ import { platformOpsService } from '../../services/platformOps/platformOpsServic
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
-import { BroadcastPlayerShell } from '../../components/streaming/BroadcastPlayerShell.tsx';
+import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
+import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
+import { normalizeBroadcast } from '../../utils/normalizeBroadcast.ts';
 import { LiveScoreboardView } from '../../components/scoreboard/LiveScoreboardView.tsx';
+import { ScoreboardSummary } from '../../components/scoreboard/ScoreboardSummary.tsx';
+import { CricketScorecardPanel } from '../../components/scoreboard/CricketScorecardPanel.tsx';
 import { BroadcastScoreboardOverlay } from '../../components/scoreboard/broadcast/BroadcastScoreboardOverlay.tsx';
 import { ScoreMomentumCharts } from '../../components/scoreboard/ScoreMomentumCharts.tsx';
 import { ScoreControlPanel } from '../../components/scoreboard/ScoreControlPanel.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
+import { Modal } from '../../components/common/Modal.tsx';
 
 export function AdminScoreboardPage() {
   const { id } = useParams<{ id: string }>();
@@ -30,6 +46,7 @@ export function AdminScoreboardPage() {
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const [listSuccess, setListSuccess] = useState<string | null>(null);
   const [showVideoMonitor, setShowVideoMonitor] = useState(false);
   const [showMomentumCharts, setShowMomentumCharts] = useState(true);
   const [togglingOverlayDefault, setTogglingOverlayDefault] = useState(false);
@@ -38,9 +55,22 @@ export function AdminScoreboardPage() {
   const [highlights, setHighlights] = useState<MatchHighlightData[]>([]);
   const [playerStats, setPlayerStats] = useState<PlayerMatchStatRecord[]>([]);
 
+  // Quick provider switch modal
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [switchTo, setSwitchTo] = useState<StreamingProvider>('mediamtx');
+  const [switchReason, setSwitchReason] = useState('');
+  const [switchConfirmed, setSwitchConfirmed] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+
   const selectedId = id || streams[0]?.id || '';
 
-  const { stream, setStream, loading: streamLoading } = useLiveStream(selectedId || undefined);
+  const {
+    stream,
+    setStream,
+    loading: streamLoading,
+    refetch: refetchStream,
+  } = useLiveStream(selectedId || undefined);
   const { score, setScore, history, connected, refetch } = useScoreboard(selectedId || undefined);
 
   useEffect(() => {
@@ -133,6 +163,35 @@ export function AdminScoreboardPage() {
     }
   }
 
+  async function handleQuickSwitch(e: React.FormEvent) {
+    e.preventDefault();
+    if (!stream) return;
+    try {
+      setSwitching(true);
+      setSwitchError(null);
+      const res = await liveStreamService.switchProvider(stream.id, {
+        toProvider: switchTo,
+        reason: switchReason.trim() || 'Switched from Live Score Console',
+      });
+      setStream(res.stream);
+      setSwitchOpen(false);
+      setListSuccess(`Switched active video feed to ${res.toProvider.toUpperCase()}.`);
+      await refetchStream();
+    } catch (err) {
+      setSwitchError(
+        extractApiError(
+          err,
+          'Destination stream failed health check. Current broadcast feed remains active.'
+        )
+      );
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  const activeProvider = stream?.activeStreamingProvider || stream?.streamingProvider || 'youtube';
+  const normalized = stream ? normalizeBroadcast(stream, score) : null;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -162,6 +221,26 @@ export function AdminScoreboardPage() {
           )}
           {stream && (
             <>
+              <StreamStatusIndicator stream={stream} socketConnected={connected} />
+              <button
+                type="button"
+                onClick={() => {
+                  setSwitchTo(activeProvider === 'youtube' ? 'mediamtx' : 'youtube');
+                  setSwitchReason('');
+                  setSwitchConfirmed(false);
+                  setSwitchError(null);
+                  setSwitchOpen(true);
+                }}
+                className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
+              >
+                {activeProvider === 'mediamtx' ? (
+                  <Server className="w-3.5 h-3.5" />
+                ) : (
+                  <Youtube className="w-3.5 h-3.5" />
+                )}
+                <span>Feed: {activeProvider.toUpperCase()}</span>
+                <ArrowLeftRight className="w-3.5 h-3.5 opacity-80" />
+              </button>
               <select
                 value={stream.scoreboardPosition || 'BOTTOM'}
                 disabled={togglingOverlayDefault}
@@ -212,6 +291,7 @@ export function AdminScoreboardPage() {
       </div>
 
       <FeedbackBanner type="error" message={listError} onDismiss={() => setListError(null)} />
+      <FeedbackBanner type="success" message={listSuccess} onDismiss={() => setListSuccess(null)} />
 
       {listLoading || streamLoading ? (
         <div className="p-8 bg-white border border-slate-200 rounded-xl text-sm text-slate-500">
@@ -234,13 +314,14 @@ export function AdminScoreboardPage() {
         />
       ) : (
         <div className="space-y-6">
-          {showVideoMonitor && (
-            <div className="max-w-2xl">
-              <BroadcastPlayerShell
-                stream={stream}
-                score={score}
-                videoId={stream.youtubeVideoId}
-                title={stream.matchTitle || 'Stream Monitor'}
+          {showVideoMonitor && normalized && (
+            <div className="max-w-2xl aspect-video rounded-xl overflow-hidden border border-slate-200">
+              <LiveStreamPlayer
+                provider={normalized.activeProvider}
+                youtubeVideoId={normalized.youtubeVideoId}
+                mediamtxPlaybackUrl={normalized.mediamtxPlaybackUrl}
+                mediamtxWebrtcUrl={normalized.mediamtxWebrtcUrl}
+                title={normalized.title}
               />
             </div>
           )}
@@ -256,6 +337,12 @@ export function AdminScoreboardPage() {
           )}
 
           <LiveScoreboardView stream={stream} score={score} socketConnected={connected} />
+
+          <ScoreboardSummary stream={stream} score={score} variant="compact" />
+
+          {score?.sportType === 'Cricket' && (
+            <CricketScorecardPanel stream={stream} score={score} />
+          )}
 
           {showMomentumCharts && (
             <ScoreMomentumCharts stream={stream} score={score} history={history} />
@@ -275,7 +362,72 @@ export function AdminScoreboardPage() {
           />
         </div>
       )}
+
+      {/* Quick Broadcast Provider Switch Modal */}
+      <Modal
+        open={switchOpen}
+        onClose={() => setSwitchOpen(false)}
+        title="Switch Broadcast Video Feed"
+        subtitle="Scores and connected spectators stay live while the video feed updates."
+      >
+        <form onSubmit={handleQuickSwitch} className="space-y-4">
+          <FeedbackBanner type="error" message={switchError} onDismiss={() => setSwitchError(null)} />
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Target Provider
+            </label>
+            <select
+              value={switchTo}
+              onChange={(e) => setSwitchTo(e.target.value as StreamingProvider)}
+              className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+            >
+              <option value="mediamtx">MediaMTX Direct Feed</option>
+              <option value="youtube">YouTube Live</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Reason (Optional)
+            </label>
+            <input
+              type="text"
+              value={switchReason}
+              onChange={(e) => setSwitchReason(e.target.value)}
+              placeholder="Backup failover or encoder switch..."
+              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={switchConfirmed}
+              onChange={(e) => setSwitchConfirmed(e.target.checked)}
+              className="w-4 h-4 mt-0.5 rounded border-amber-400 text-[#EA580C]"
+            />
+            <span>
+              Confirm switching active spectator playback to{' '}
+              <strong className="uppercase">{switchTo}</strong> after live health verification.
+            </span>
+          </label>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSwitchOpen(false)}
+              className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={switching || !switchConfirmed}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${switching ? 'animate-spin' : ''}`} />
+              <span>{switching ? 'Verifying...' : 'Verify & Switch'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
-

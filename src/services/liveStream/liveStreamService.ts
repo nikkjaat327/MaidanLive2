@@ -1,4 +1,4 @@
-import { LiveStreamData } from '../../types/index.ts';
+import { LiveStreamData, StreamHealthData, StreamingProvider } from '../../types/index.ts';
 import { adminApi, publicApi } from '../api/httpClient.ts';
 
 export interface YouTubeVerification {
@@ -6,9 +6,28 @@ export interface YouTubeVerification {
   videoId: string | null;
   available: boolean;
   embeddable: boolean;
+  liveBroadcastStatus?: 'LIVE' | 'UPCOMING' | 'VOD' | 'UNKNOWN';
   title?: string;
   authorName?: string;
   message: string;
+}
+
+export interface AdminStreamConfigResponse {
+  streamId: string;
+  streamingProvider: StreamingProvider;
+  activeStreamingProvider: StreamingProvider;
+  youtubeVideoId: string;
+  youtubeStreamStatus: string;
+  mediamtxStreamPath: string;
+  mediamtxStreamKey: string;
+  mediamtxRtmpPublishUrl: string;
+  mediamtxRtmpServerUrl: string;
+  mediamtxPlaybackUrl: string;
+  mediamtxWebrtcUrl: string;
+  mediamtxPublishStatus: string;
+  streamHealth: StreamHealthData;
+  providerSwitchHistory: any[];
+  viewerCountVisibility: 'public' | 'admin_only' | 'hidden';
 }
 
 export const liveStreamService = {
@@ -86,5 +105,46 @@ export const liveStreamService = {
       payload
     );
     return data.stream;
+  },
+
+  async getAdminStreamConfig(id: string): Promise<AdminStreamConfigResponse> {
+    const { data } = await adminApi.get<AdminStreamConfigResponse>(`/live/${id}/stream-config`);
+    return data;
+  },
+
+  async verifyStreamHealth(
+    id: string,
+    provider?: StreamingProvider
+  ): Promise<{
+    provider: StreamingProvider;
+    ok: boolean;
+    playable: boolean;
+    latencyMs?: number;
+    checkedAt?: string;
+    message: string;
+    streamHealth?: StreamHealthData;
+  }> {
+    const { data } = await adminApi.post(`/live/${id}/verify-health`, { provider });
+    return data;
+  },
+
+  async switchProvider(
+    id: string,
+    payload: {
+      toProvider: StreamingProvider;
+      reason?: string;
+      youtubeInput?: string;
+      mediamtxStreamPath?: string;
+      mediamtxPlaybackUrl?: string;
+      mediamtxWebrtcUrl?: string;
+    }
+  ): Promise<{
+    message: string;
+    fromProvider: StreamingProvider;
+    toProvider: StreamingProvider;
+    stream: LiveStreamData;
+  }> {
+    const { data } = await adminApi.post(`/live/${id}/switch-provider`, payload);
+    return data;
   },
 };

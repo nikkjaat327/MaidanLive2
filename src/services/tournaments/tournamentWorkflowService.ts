@@ -22,6 +22,7 @@ export const tournamentWorkflowService = {
       roundNumber?: number;
       roundName?: string;
       groupName?: string;
+      matchFormat?: string;
       matchNumber?: number;
       teamAId?: string | null;
       teamBId?: string | null;

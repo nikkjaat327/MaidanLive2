@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export type ReportCategory =
   | 'STREAM_DOWN'
@@ -54,4 +55,5 @@ const matchReportSchema = new Schema<IMatchReport>(
 matchReportSchema.index({ status: 1, createdAt: -1 });
 matchReportSchema.index({ liveStreamId: 1, createdAt: -1 });
 
-export const MatchReport = mongoose.model<IMatchReport>('MatchReport', matchReportSchema);
+const MongooseMatchReport = mongoose.model<IMatchReport>('MatchReport', matchReportSchema);
+export const MatchReport = createDualModel<IMatchReport>('matchreports', MongooseMatchReport);

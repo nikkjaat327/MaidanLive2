@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export type ScoreHistoryEntryType = 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION';
 
@@ -71,4 +72,5 @@ const scoreHistorySchema = new Schema<IScoreHistory>(
 scoreHistorySchema.index({ liveStreamId: 1, createdAt: -1 });
 scoreHistorySchema.index({ liveStreamId: 1, clientEventId: 1 });
 
-export const ScoreHistory = mongoose.model<IScoreHistory>('ScoreHistory', scoreHistorySchema);
+const MongooseScoreHistory = mongoose.model<IScoreHistory>('ScoreHistory', scoreHistorySchema);
+export const ScoreHistory = createDualModel<IScoreHistory>('scorehistories', MongooseScoreHistory);

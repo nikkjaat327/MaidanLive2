@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface ITeam extends Document {
   name: string;
@@ -42,4 +43,5 @@ const teamSchema = new Schema<ITeam>(
 
 teamSchema.index({ name: 1, sportType: 1 });
 
-export const Team = mongoose.model<ITeam>('Team', teamSchema);
+const MongooseTeam = mongoose.model<ITeam>('Team', teamSchema);
+export const Team = createDualModel<ITeam>('teams', MongooseTeam);

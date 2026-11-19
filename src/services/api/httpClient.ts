@@ -2,6 +2,8 @@ import axios from 'axios';
 
 export const ADMIN_TOKEN_KEY = 'maidanlive_admin_token';
 export const CUSTOMER_TOKEN_KEY = 'maidanlive_customer_token';
+const CUSTOMER_REFRESH_KEY = 'maidanlive_customer_refresh_token';
+const ADMIN_REFRESH_KEY = 'maidanlive_admin_refresh_token';
 
 export const publicApi = axios.create({
   baseURL: '/api',
@@ -36,6 +38,51 @@ adminApi.interceptors.request.use((config) => {
   }
   return config;
 });
+
+function attachRefreshInterceptor(
+  instance: typeof customerApi,
+  tokenKey: string,
+  refreshKey: string
+) {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const original = error?.config;
+      if (
+        error?.response?.status === 401 &&
+        original &&
+        !original._retried &&
+        typeof window !== 'undefined'
+      ) {
+        const refreshToken = window.localStorage.getItem(refreshKey);
+        if (refreshToken) {
+          original._retried = true;
+          try {
+            const { data } = await publicApi.post<{ token?: string; refreshToken?: string }>(
+              '/auth/refresh',
+              { refreshToken }
+            );
+            if (data?.token) {
+              window.localStorage.setItem(tokenKey, data.token);
+              if (data.refreshToken) {
+                window.localStorage.setItem(refreshKey, data.refreshToken);
+              }
+              original.headers = original.headers || {};
+              original.headers.Authorization = `Bearer ${data.token}`;
+              return instance(original);
+            }
+          } catch {
+            // Refresh failed; let original 401 propagate
+          }
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
+}
+
+attachRefreshInterceptor(customerApi, CUSTOMER_TOKEN_KEY, CUSTOMER_REFRESH_KEY);
+attachRefreshInterceptor(adminApi, ADMIN_TOKEN_KEY, ADMIN_REFRESH_KEY);
 
 export function extractApiError(err: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(err)) {

@@ -1,6 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Edit3, MessageSquarePlus, RotateCcw, Send, Trophy, Undo2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  CloudOff,
+  Edit3,
+  MessageSquarePlus,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Trophy,
+  Undo2,
+  Wifi,
+} from 'lucide-react';
 import {
   LiveScoreData,
   LiveStreamData,
@@ -20,11 +32,16 @@ import { EventCorrectionModal } from './EventCorrectionModal.tsx';
 import { MatchHighlightsManager } from './MatchHighlightsManager.tsx';
 import { PlayerMatchStatsRecorder } from './PlayerMatchStatsRecorder.tsx';
 import type { MatchResultType } from '../../utils/matchResultValidation.ts';
+import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
+import { generateAutoCommentary } from '../../utils/autoCommentary.ts';
+import { OfflineScoreQueueItem } from '../../utils/offlineScoreQueue.ts';
+import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
+import { useOnlineStatus } from '../../hooks/useOnlineStatus.ts';
 import {
   CricketDetails,
   applyCricketAction,
-  createInitialCricketDetails,
 } from '../../utils/cricketScoring.ts';
+import { CricketScorerConsole } from './CricketScorerConsole.tsx';
 import {
   KabaddiDetails,
   applyKabaddiAction,
@@ -77,6 +94,21 @@ export function ScoreControlPanel({
 
   const [commentaryText, setCommentaryText] = useState('');
   const [postingCommentary, setPostingCommentary] = useState(false);
+  const [autoCommentaryEnabled, setAutoCommentaryEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('maidanlive_auto_commentary') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [autoPostCommentary, setAutoPostCommentary] = useState<boolean>(false);
+
+  // Offline Queue & Sync state (managed by OfflineScoreService)
+  const isOnline = useOnlineStatus();
+  const [queuedItems, setQueuedItems] = useState<OfflineScoreQueueItem[]>([]);
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
 
   const sport: SportOption = score?.sportType || (stream.gameName as SportOption) || 'Other';
   const teamA = stream.teamAName || 'Team A';
@@ -91,6 +123,71 @@ export function ScoreControlPanel({
     if (score?.matchStatus) setMatchStatusInput(score.matchStatus);
   }, [score?.matchStatus]);
 
+  useEffect(() => {
+    const unsubscribe = offlineScoreService.subscribe(
+      stream.id,
+      (snapshot) => {
+        setQueuedItems(snapshot.items);
+        setSyncingQueue(snapshot.syncing);
+        setLastSyncedAt(snapshot.lastSyncedAt);
+        setLastSyncError(snapshot.lastSyncError);
+      },
+      {
+        onScoreSynced: (syncedScore) => {
+          onScoreChange(syncedScore);
+          onRefreshHistory();
+          onRefreshStats?.();
+        },
+      }
+    );
+    return unsubscribe;
+  }, [stream.id, onScoreChange, onRefreshHistory, onRefreshStats]);
+
+  const syncOfflineQueue = useCallback(
+    async (forceOverride = false) => {
+      const result = await offlineScoreService.syncStream(stream.id, {
+        forceOverride,
+        onScoreSynced: (syncedScore) => {
+          onScoreChange(syncedScore);
+        },
+      });
+      if (result.syncedCount > 0) {
+        onRefreshHistory();
+        onRefreshStats?.();
+        setSuccessMsg(
+          `Synced ${result.syncedCount} cached scoring update${result.syncedCount === 1 ? '' : 's'} to server.`
+        );
+      }
+    },
+    [stream.id, onScoreChange, onRefreshHistory, onRefreshStats]
+  );
+
+  function handleAutoCommentaryAfterEvent(
+    actionLabel: string,
+    nextA: number,
+    nextB: number,
+    nextDetails?: Record<string, unknown>
+  ) {
+    if (!autoCommentaryEnabled) return;
+    const generated = generateAutoCommentary({
+      sport,
+      actionLabel,
+      teamAName: teamA,
+      teamBName: teamB,
+      teamAScore: nextA,
+      teamBScore: nextB,
+      details: nextDetails,
+    });
+    if (autoPostCommentary && navigator.onLine) {
+      scoreboardService
+        .submitCommentary(stream.id, generated)
+        .then(() => onRefreshHistory())
+        .catch(() => setCommentaryText(generated));
+    } else {
+      setCommentaryText(generated);
+    }
+  }
+
   async function commitUpdate(payload: {
     teamAScore?: number;
     teamBScore?: number;
@@ -104,10 +201,31 @@ export function ScoreControlPanel({
     try {
       setSaving(true);
       setError(null);
-      const res = await scoreboardService.updateScore(stream.id, payload);
-      onScoreChange(res.score);
-      onRefreshHistory();
-      setSuccessMsg(payload.action);
+      const result = await offlineScoreService.submitScorePatch(stream.id, payload, score);
+      if (result.score) {
+        onScoreChange(result.score);
+      }
+
+      if (result.queued) {
+        setSuccessMsg(`Saved offline (${payload.action}) — will sync automatically on reconnect.`);
+        handleAutoCommentaryAfterEvent(
+          payload.action,
+          result.score?.teamAScore ?? 0,
+          result.score?.teamBScore ?? 0,
+          payload.sportSpecificDetails
+        );
+      } else {
+        onRefreshHistory();
+        setSuccessMsg(payload.action);
+        if (result.score) {
+          handleAutoCommentaryAfterEvent(
+            payload.action,
+            result.score.teamAScore,
+            result.score.teamBScore,
+            result.score.sportSpecificDetails
+          );
+        }
+      }
     } catch (err) {
       setError(extractApiError(err, 'Failed to update score.'));
     } finally {
@@ -128,15 +246,49 @@ export function ScoreControlPanel({
     try {
       setSaving(true);
       setError(null);
-      const res = await scoreboardService.recordScoreEvent(stream.id, payload);
-      onScoreChange(res.score);
+      const result = await offlineScoreService.submitScoreEvent(stream.id, payload, score);
+      if (result.queued) {
+        if (payload.sportType === 'Cricket' && score) {
+          const applied = applyCricketAction(
+            (score.sportSpecificDetails || {}) as Partial<CricketDetails>,
+            payload.action as any
+          );
+          const nextStatus = applied.autoCompletedMatch
+            ? 'COMPLETED'
+            : applied.autoCompletedInnings1
+              ? 'INNINGS BREAK'
+              : score.matchStatus;
+          onScoreChange({
+            ...score,
+            teamAScore: applied.teamAScore,
+            teamBScore: applied.teamBScore,
+            matchStatus: nextStatus,
+            sportSpecificDetails: applied.details as unknown as Record<string, unknown>,
+          });
+        }
+        setSuccessMsg(
+          'Scoring event cached in IndexedDB — will sync automatically upon reconnection.'
+        );
+        return;
+      }
+
+      if (result.score) {
+        onScoreChange(result.score);
+      }
       onRefreshHistory();
       onRefreshStats?.();
+      const actionLabel = result.historyItem?.action || 'Structured scoring event recorded.';
       setSuccessMsg(
-        res.duplicatePrevented
-          ? 'Duplicate submission safely ignored.'
-          : res.historyItem?.action || 'Structured scoring event recorded.'
+        result.duplicatePrevented ? 'Duplicate submission safely ignored.' : actionLabel
       );
+      if (!result.duplicatePrevented && result.score) {
+        handleAutoCommentaryAfterEvent(
+          actionLabel,
+          result.score.teamAScore,
+          result.score.teamBScore,
+          result.score.sportSpecificDetails
+        );
+      }
     } catch (err) {
       setError(extractApiError(err, 'Failed to record scoring event.'));
     } finally {
@@ -260,8 +412,94 @@ export function ScoreControlPanel({
     }
   }
 
+  const conflictItems = queuedItems.filter((q) => q.status === 'CONFLICT');
+
   return (
     <div className="space-y-5">
+      {/* Offline Queue & Connectivity Sync Bar */}
+      <div
+        className={`rounded-xl border px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs ${
+          !isOnline
+            ? 'bg-amber-50 border-amber-300 text-amber-950'
+            : conflictItems.length > 0
+              ? 'bg-red-50 border-red-300 text-red-950'
+              : queuedItems.length > 0
+                ? 'bg-sky-50 border-sky-200 text-sky-950'
+                : 'bg-white border-slate-200 text-slate-700'
+        }`}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 font-semibold">
+            {isOnline ? (
+              <Wifi className="w-4 h-4 text-emerald-600" />
+            ) : (
+              <CloudOff className="w-4 h-4 text-amber-700" />
+            )}
+            <span>{isOnline ? 'Connected · Live Sync Ready' : 'Offline Mode · Caching in IndexedDB'}</span>
+          </span>
+          {queuedItems.length > 0 && (
+            <span className="font-mono font-bold tabular-nums">
+              · {queuedItems.length} cached update{queuedItems.length === 1 ? '' : 's'}
+            </span>
+          )}
+          {lastSyncError && isOnline && queuedItems.length > 0 && (
+            <span className="text-amber-800 font-medium">· {lastSyncError}</span>
+          )}
+          {lastSyncedAt && (
+            <span className="text-slate-500 font-mono tabular-nums hidden sm:inline">
+              · Last synced {lastSyncedAt}
+            </span>
+          )}
+        </div>
+        {queuedItems.length > 0 && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!isOnline || syncingQueue}
+              onClick={() => syncOfflineQueue(false)}
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white font-semibold hover:bg-slate-800 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncingQueue ? 'animate-spin' : ''}`} />
+              <span>{syncingQueue ? 'Syncing...' : 'Sync Now'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {conflictItems.length > 0 && (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 space-y-2.5 text-xs text-red-950">
+          <div className="flex items-center gap-2 font-bold">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>
+              {conflictItems.length} queued update{conflictItems.length === 1 ? '' : 's'} paused due
+              to newer server score state
+            </span>
+          </div>
+          <p className="text-red-800">
+            Another scorer updated this match while you were offline. Review before overwriting valid
+            server state:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => syncOfflineQueue(true)}
+              className="min-h-[36px] px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700"
+            >
+              Apply Local Queue Anyway
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await offlineScoreService.discardConflicts(stream.id);
+              }}
+              className="min-h-[36px] px-3 py-1.5 rounded-lg bg-white border border-red-300 text-red-800 font-semibold hover:bg-red-100"
+            >
+              Discard Conflicting Queue
+            </button>
+          </div>
+        </div>
+      )}
+
       <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
       {successMsg && (
         <FeedbackBanner
@@ -271,7 +509,7 @@ export function ScoreControlPanel({
         />
       )}
 
-      {/* Top Toolbar: Sport Mode, Match Status, Undo, Reset */}
+      {/* Top Toolbar: Sport Mode, Standardized Match Status, Undo, Reset */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -297,13 +535,38 @@ export function ScoreControlPanel({
               <label className="block text-xs font-medium text-slate-500 mb-1">
                 Match Status
               </label>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={
+                    STANDARD_MATCH_STATUSES.includes(matchStatusInput.toUpperCase() as any)
+                      ? matchStatusInput.toUpperCase()
+                      : ''
+                  }
+                  disabled={saving}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    setMatchStatusInput(e.target.value);
+                    commitUpdate({
+                      matchStatus: e.target.value,
+                      action: `Match status: ${e.target.value}`,
+                    });
+                  }}
+                  aria-label="Standardized match status preset"
+                  className="min-h-[42px] px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg"
+                >
+                  <option value="">Quick Status...</option>
+                  {STANDARD_MATCH_STATUSES.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="text"
                   value={matchStatusInput}
                   onChange={(e) => setMatchStatusInput(e.target.value)}
                   placeholder="e.g. Live, Half Time"
-                  className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg w-40 sm:w-48 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg w-36 sm:w-44 focus:outline-none focus:ring-2 focus:ring-slate-900"
                 />
                 <button
                   type="button"
@@ -373,12 +636,12 @@ export function ScoreControlPanel({
         )}
       </div>
 
-      {/* Live Commentary Snippet Input */}
+      {/* Live Commentary Snippet Input + Rule-Based Auto Commentary Controls */}
       <form
         onSubmit={handleSubmitCommentary}
         className="bg-white border border-slate-200 rounded-xl p-4 space-y-2.5"
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <label
             htmlFor="live-commentary-input"
             className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800"
@@ -386,9 +649,40 @@ export function ScoreControlPanel({
             <MessageSquarePlus className="w-4 h-4 text-emerald-600" />
             <span>Live Commentary Snippet</span>
           </label>
-          <span className="text-[11px] text-slate-500 font-mono tabular-nums">
-            {commentaryText.length}/280
-          </span>
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer font-medium">
+              <input
+                type="checkbox"
+                checked={autoCommentaryEnabled}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setAutoCommentaryEnabled(next);
+                  try {
+                    localStorage.setItem('maidanlive_auto_commentary', String(next));
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+              />
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Auto-Commentary</span>
+            </label>
+            {autoCommentaryEnabled && (
+              <label className="inline-flex items-center gap-1.5 text-slate-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoPostCommentary}
+                  onChange={(e) => setAutoPostCommentary(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-slate-300 text-[#EA580C]"
+                />
+                <span>Auto-Post Live</span>
+              </label>
+            )}
+            <span className="text-[11px] text-slate-500 font-mono tabular-nums">
+              {commentaryText.length}/280
+            </span>
+          </div>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <input
@@ -397,7 +691,7 @@ export function ScoreControlPanel({
             maxLength={280}
             value={commentaryText}
             onChange={(e) => setCommentaryText(e.target.value)}
-            placeholder="Type live commentary update (e.g. 'Brilliant yorker clean bowls the opener!')"
+            placeholder="Type live commentary update or let Auto-Commentary pre-fill from score updates"
             className="flex-1 min-h-[42px] px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
           <button
@@ -411,35 +705,31 @@ export function ScoreControlPanel({
         </div>
       </form>
 
-      {/* Advanced Multi-Point & Structured Scorer */}
-      <AdvancedEventComposer
-        stream={stream}
-        score={score}
-        players={players}
-        saving={saving}
-        onSubmitEvent={handleSubmitStructuredEvent}
-      />
+      {/* Advanced Multi-Point & Structured Scorer (non-Cricket sports; Cricket has full Scorer Console below) */}
+      {sport !== 'Cricket' && (
+        <AdvancedEventComposer
+          stream={stream}
+          score={score}
+          players={players}
+          saving={saving}
+          onSubmitEvent={handleSubmitStructuredEvent}
+        />
+      )}
 
       {/* Sport-specific interactive touch controls */}
       {sport === 'Cricket' && (
-        <CricketControls
-          teamA={teamA}
-          teamB={teamB}
-          details={{
-            ...createInitialCricketDetails(),
-            ...((score?.sportSpecificDetails || {}) as Partial<CricketDetails>),
-          }}
+        <CricketScorerConsole
+          stream={stream}
+          score={score}
+          players={players}
           saving={saving}
-          onApply={(next) =>
-            commitUpdate({
-              teamAScore: next.teamAScore,
-              teamBScore: next.teamBScore,
-              sportSpecificDetails: next.details as unknown as Record<string, unknown>,
-              tossWinner: next.details.tossWinner,
-              tossDecision: next.details.tossDecision,
-              action: next.label,
-            })
-          }
+          onScoreChange={onScoreChange}
+          onRefreshHistory={onRefreshHistory}
+          onRefreshStats={onRefreshStats}
+          onOpenResultModal={() => setResultModalOpen(true)}
+          onSubmitCricketEvent={handleSubmitStructuredEvent}
+          onError={setError}
+          onSuccess={setSuccessMsg}
         />
       )}
 
@@ -643,408 +933,6 @@ export function ScoreControlPanel({
         saving={saving}
         onConfirmCorrection={handleConfirmEventCorrection}
       />
-    </div>
-  );
-}
-
-function CricketControls({
-  teamA,
-  teamB,
-  details,
-  saving,
-  onApply,
-}: {
-  teamA: string;
-  teamB: string;
-  details: CricketDetails;
-  saving: boolean;
-  onApply: (res: ReturnType<typeof applyCricketAction>) => void;
-}) {
-  const [batsman1, setBatsman1] = useState(details.batsman1 || '');
-  const [batsman2, setBatsman2] = useState(details.batsman2 || '');
-  const [bowler, setBowler] = useState(details.bowler || '');
-  const [target, setTarget] = useState(String(details.target || 0));
-  const [oversLimit, setOversLimit] = useState(String(details.oversLimit || 20));
-  const [shortA, setShortA] = useState(details.teamAShortName || '');
-  const [shortB, setShortB] = useState(details.teamBShortName || '');
-  const [tossWinner, setTossWinner] = useState<'A' | 'B' | ''>(details.tossWinner || '');
-  const [tossDecision, setTossDecision] = useState<'BAT' | 'BOWL' | ''>(details.tossDecision || '');
-  const [isSuperOver, setIsSuperOver] = useState(Boolean(details.isSuperOver));
-  const [soRunsA, setSoRunsA] = useState(String(details.superOverTeamARuns || 0));
-  const [soWktsA, setSoWktsA] = useState(String(details.superOverTeamAWickets || 0));
-  const [soRunsB, setSoRunsB] = useState(String(details.superOverTeamBRuns || 0));
-  const [soWktsB, setSoWktsB] = useState(String(details.superOverTeamBWickets || 0));
-
-  useEffect(() => {
-    setBatsman1(details.batsman1 || '');
-    setBatsman2(details.batsman2 || '');
-    setBowler(details.bowler || '');
-    setTarget(String(details.target || 0));
-    setOversLimit(String(details.oversLimit || 20));
-    setShortA(details.teamAShortName || '');
-    setShortB(details.teamBShortName || '');
-    setTossWinner(details.tossWinner || '');
-    setTossDecision(details.tossDecision || '');
-    setIsSuperOver(Boolean(details.isSuperOver));
-    setSoRunsA(String(details.superOverTeamARuns || 0));
-    setSoWktsA(String(details.superOverTeamAWickets || 0));
-    setSoRunsB(String(details.superOverTeamBRuns || 0));
-    setSoWktsB(String(details.superOverTeamBWickets || 0));
-  }, [
-    details.batsman1,
-    details.batsman2,
-    details.bowler,
-    details.target,
-    details.oversLimit,
-    details.teamAShortName,
-    details.teamBShortName,
-    details.tossWinner,
-    details.tossDecision,
-    details.isSuperOver,
-    details.superOverTeamARuns,
-    details.superOverTeamAWickets,
-    details.superOverTeamBRuns,
-    details.superOverTeamBWickets,
-  ]);
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-medium text-slate-500">Active Batting Side & Innings</p>
-            <p className="text-sm font-semibold text-slate-900 mt-0.5">
-              {details.battingTeam === 'A' ? teamA : teamB} · Innings {details.innings}
-              {details.isSuperOver ? ' · Super Over Active' : ''}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: 'A',
-                    innings: details.innings,
-                  })
-                )
-              }
-              className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-                details.battingTeam === 'A'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              {teamA} Batting
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: 'B',
-                    innings: details.innings,
-                  })
-                )
-              }
-              className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-                details.battingTeam === 'B'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              {teamB} Batting
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyCricketAction(details, {
-                    type: 'SWITCH_INNINGS',
-                    battingTeam: details.battingTeam === 'A' ? 'B' : 'A',
-                    innings: details.innings === 1 ? 2 : 1,
-                    setTargetFromFirstInnings: details.innings === 1,
-                  })
-                )
-              }
-              className="min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
-            >
-              {details.innings === 1 ? 'Start 2nd Innings & Set Target' : 'Switch to 1st Innings'}
-            </button>
-          </div>
-        </div>
-
-        {/* Runs & Legal Balls */}
-        <div>
-          <p className="text-xs font-medium text-slate-500 mb-2">Scoring Runs (Legal Delivery)</p>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-            {[0, 1, 2, 3, 4, 6].map((runs) => (
-              <button
-                key={runs}
-                type="button"
-                disabled={saving}
-                onClick={() => onApply(applyCricketAction(details, { type: 'RUNS', runs }))}
-                className={`min-h-[48px] rounded-xl font-mono text-base font-bold border transition-colors active:scale-[0.98] ${
-                  runs === 4 || runs === 6
-                    ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
-                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                }`}
-              >
-                {runs === 0 ? 'Dot (0)' : `+${runs}`}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Extras & Wicket */}
-        <div>
-          <p className="text-xs font-medium text-slate-500 mb-2">Extras & Wickets</p>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'WIDE', extraRuns: 0 }))}
-              className="min-h-[46px] px-3 rounded-xl text-sm font-semibold bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-            >
-              Wide (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'NO_BALL', extraRuns: 0 }))}
-              className="min-h-[46px] px-3 rounded-xl text-sm font-semibold bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
-            >
-              No Ball (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'BYE', runs: 1 }))}
-              className="min-h-[46px] px-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200"
-            >
-              Bye (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'LEG_BYE', runs: 1 }))}
-              className="min-h-[46px] px-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200"
-            >
-              Leg Bye (+1)
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onApply(applyCricketAction(details, { type: 'WICKET' }))}
-              className="col-span-2 sm:col-span-1 min-h-[46px] px-3 rounded-xl text-sm font-bold bg-red-600 text-white hover:bg-red-700"
-            >
-              Wicket
-            </button>
-          </div>
-        </div>
-
-        {/* Active Batters / Bowler / Target / Short Codes */}
-        <div className="pt-3 border-t border-slate-200 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Batsman 1</label>
-              <input
-                type="text"
-                value={batsman1}
-                onChange={(e) => setBatsman1(e.target.value)}
-                placeholder="Striker name"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Batsman 2</label>
-              <input
-                type="text"
-                value={batsman2}
-                onChange={(e) => setBatsman2(e.target.value)}
-                placeholder="Non-striker"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Bowler</label>
-              <input
-                type="text"
-                value={bowler}
-                onChange={(e) => setBowler(e.target.value)}
-                placeholder="Current bowler"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Target / Overs</label>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                  aria-label="Target runs"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-sm font-mono border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="number"
-                  min={1}
-                  value={oversLimit}
-                  onChange={(e) => setOversLimit(e.target.value)}
-                  aria-label="Overs limit"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-sm font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">TV Short Codes</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={shortA}
-                  onChange={(e) => setShortA(e.target.value.toUpperCase())}
-                  placeholder="TMA"
-                  aria-label="Team A Short Code"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-xs font-mono uppercase border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={shortB}
-                  onChange={(e) => setShortB(e.target.value.toUpperCase())}
-                  placeholder="TMB"
-                  aria-label="Team B Short Code"
-                  className="w-1/2 min-h-[40px] px-2.5 py-1.5 text-xs font-mono uppercase border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-            <div className="flex items-end">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  onApply(
-                    applyCricketAction(details, {
-                      type: 'UPDATE_META',
-                      batsman1,
-                      batsman2,
-                      bowler,
-                      target: Number(target) || 0,
-                      oversLimit: Number(oversLimit) || 20,
-                      teamAShortName: shortA,
-                      teamBShortName: shortB,
-                      tossWinner,
-                      tossDecision,
-                      isSuperOver,
-                      superOverTeamARuns: Number(soRunsA) || 0,
-                      superOverTeamAWickets: Number(soWktsA) || 0,
-                      superOverTeamBRuns: Number(soRunsB) || 0,
-                      superOverTeamBWickets: Number(soWktsB) || 0,
-                    })
-                  )
-                }
-                className="w-full min-h-[40px] px-3 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
-              >
-                Update Details
-              </button>
-            </div>
-          </div>
-
-          {/* Toss Tracking */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Toss Winner</label>
-              <select
-                value={tossWinner}
-                onChange={(e) => setTossWinner(e.target.value as 'A' | 'B' | '')}
-                className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">-- Not Recorded --</option>
-                <option value="A">{teamA}</option>
-                <option value="B">{teamB}</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Toss Decision</label>
-              <select
-                value={tossDecision}
-                onChange={(e) => setTossDecision(e.target.value as 'BAT' | 'BOWL' | '')}
-                className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">-- Select Decision --</option>
-                <option value="BAT">Elected to Bat</option>
-                <option value="BOWL">Elected to Bowl / Field</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Super Over Controls */}
-          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2.5">
-            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isSuperOver}
-                onChange={(e) => setIsSuperOver(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-              />
-              <span>Enable Super Over Tie-Breaker</span>
-            </label>
-            {isSuperOver && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamA} SO Runs</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={soRunsA}
-                    onChange={(e) => setSoRunsA(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamA} SO Wkts</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    value={soWktsA}
-                    onChange={(e) => setSoWktsA(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamB} SO Runs</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={soRunsB}
-                    onChange={(e) => setSoRunsB(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 mb-0.5">{teamB} SO Wkts</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    value={soWktsB}
-                    onChange={(e) => setSoWktsB(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

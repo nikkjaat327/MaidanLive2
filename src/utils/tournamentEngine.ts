@@ -363,10 +363,11 @@ export function calculatePointsTable(
       const runsA = Number(d.teamARuns ?? m.teamAScore ?? 0);
       const runsB = Number(d.teamBRuns ?? m.teamBScore ?? 0);
       const oversLimitBalls = Math.max(6, (Number(d.oversLimit) || 20) * 6);
+      const maxWkts = Math.max(1, (Number(d.playersPerSide) || 11) - 1);
       const wktsA = Number(d.teamAWickets || 0);
       const wktsB = Number(d.teamBWickets || 0);
-      const ballsA = wktsA >= 10 ? oversLimitBalls : Math.max(0, Number(d.teamABalls || 0));
-      const ballsB = wktsB >= 10 ? oversLimitBalls : Math.max(0, Number(d.teamBBalls || 0));
+      const ballsA = wktsA >= maxWkts ? oversLimitBalls : Math.max(0, Number(d.teamABalls || 0));
+      const ballsB = wktsB >= maxWkts ? oversLimitBalls : Math.max(0, Number(d.teamBBalls || 0));
 
       if (m.resultStatus !== 'NO_RESULT' && m.resultStatus !== 'ABANDONED') {
         rowA.scoreFor += runsA;

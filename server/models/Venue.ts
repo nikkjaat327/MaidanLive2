@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface IVenue extends Document {
   name: string;
@@ -32,4 +33,5 @@ const venueSchema = new Schema<IVenue>(
 
 venueSchema.index({ name: 1, city: 1 });
 
-export const Venue = mongoose.model<IVenue>('Venue', venueSchema);
+const MongooseVenue = mongoose.model<IVenue>('Venue', venueSchema);
+export const Venue = createDualModel<IVenue>('venues', MongooseVenue);

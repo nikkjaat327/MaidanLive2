@@ -6,13 +6,10 @@ import { authService } from '../../services/auth/authService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
-import { FileUploadField } from '../../components/common/FileUploadField.tsx';
-import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 
 export function ProfilePage() {
   const { customerUser, customerLoading, refreshCustomer, logoutCustomer } = useAuth();
   const [name, setName] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState('');
   const [phone, setPhone] = useState('');
   const [favoriteSport, setFavoriteSport] = useState('');
   const [saving, setSaving] = useState(false);
@@ -22,7 +19,6 @@ export function ProfilePage() {
   useEffect(() => {
     if (customerUser) {
       setName(customerUser.name || '');
-      setAvatarUrl(customerUser.avatarUrl || '');
       setPhone(customerUser.phone || '');
       setFavoriteSport(customerUser.favoriteSport || '');
     }
@@ -46,7 +42,7 @@ export function ProfilePage() {
       setSaving(true);
       setError(null);
       setSuccess(null);
-      await authService.updateCustomerProfile({ name, avatarUrl: avatarUrl.trim(), phone, favoriteSport });
+      await authService.updateCustomerProfile({ name, phone, favoriteSport });
       await refreshCustomer();
       setSuccess('Profile updated.');
     } catch (err) {
@@ -59,12 +55,9 @@ export function ProfilePage() {
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <TeamAvatar name={customerUser.name} logoUrl={avatarUrl || customerUser.avatarUrl} size="lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-slate-900">Your Profile</h1>
-            <p className="text-sm text-slate-500 mt-1">{customerUser.email}</p>
-          </div>
+        <div>
+          <h1 className="font-display text-2xl font-bold text-slate-900">Your Profile</h1>
+          <p className="text-sm text-slate-500 mt-1">{customerUser.email}</p>
         </div>
         <button
           type="button"
@@ -93,15 +86,6 @@ export function ProfilePage() {
             className="w-full min-h-[44px] px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
           />
         </div>
-
-        <FileUploadField
-          label="Profile Photo (Optional)"
-          value={avatarUrl}
-          onChange={setAvatarUrl}
-          folder="avatars"
-          portal="customer"
-          placeholder="Upload profile photo or paste https://..."
-        />
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Phone (Optional)</label>

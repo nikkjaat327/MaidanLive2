@@ -1,29 +1,38 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Bell, Check, CheckCheck, Settings } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Bell, Check, CheckCheck, ExternalLink, Settings, Trash2 } from 'lucide-react';
 import { NotificationData, NotificationPreferences } from '../../types/index.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
+import { resolveNotificationTarget } from '../../utils/notificationNav.ts';
 
 const DEFAULT_PREFS: NotificationPreferences = {
   matchStart: true,
   matchLive: true,
+  matchDelayed: true,
+  matchResumed: true,
   followedTeams: true,
+  favoritePlayers: true,
   scoreUpdates: false,
   matchResults: true,
   tournamentUpdates: true,
   browserPushEnabled: false,
 };
 
+type FilterTab = 'all' | 'unread' | 'read';
+
 export function NotificationsPage() {
+  const navigate = useNavigate();
   const { customerUser, customerLoading, refreshNotifications, updateCustomerUser } = useAuth();
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
-  const [prefs, setPrefs] = useState<NotificationPreferences>(
-    customerUser?.notificationPreferences || DEFAULT_PREFS
-  );
+  const [filterTab, setFilterTab] = useState<FilterTab>('all');
+  const [prefs, setPrefs] = useState<NotificationPreferences>({
+    ...DEFAULT_PREFS,
+    ...(customerUser?.notificationPreferences || {}),
+  });
   const [loading, setLoading] = useState(true);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +40,7 @@ export function NotificationsPage() {
 
   useEffect(() => {
     if (customerUser?.notificationPreferences) {
-      setPrefs(customerUser.notificationPreferences);
+      setPrefs({ ...DEFAULT_PREFS, ...customerUser.notificationPreferences });
     }
   }, [customerUser?.notificationPreferences]);
 
@@ -42,7 +51,7 @@ export function NotificationsPage() {
     }
     setLoading(true);
     platformOpsService
-      .listNotifications()
+      .listNotifications('customer')
       .then((res) => setNotifications(res.notifications || []))
       .catch((err) => setError(extractApiError(err, 'Failed to load notifications.')))
       .finally(() => setLoading(false));
@@ -50,7 +59,7 @@ export function NotificationsPage() {
 
   async function handleMarkRead(id: string) {
     try {
-      await platformOpsService.markNotificationRead(id);
+      await platformOpsService.markNotificationRead(id, 'customer');
       setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
       refreshNotifications();
     } catch (err) {
@@ -58,9 +67,21 @@ export function NotificationsPage() {
     }
   }
 
+  async function handleNotificationClick(n: NotificationData) {
+    if (!n.isRead) {
+      setNotifications((prev) => prev.map((item) => (item.id === n.id ? { ...item, isRead: true } : item)));
+      platformOpsService
+        .markNotificationRead(n.id, 'customer')
+        .then(() => refreshNotifications())
+        .catch(() => {});
+    }
+    const target = resolveNotificationTarget(n, 'customer');
+    navigate(target);
+  }
+
   async function handleMarkAllRead() {
     try {
-      await platformOpsService.markAllNotificationsRead();
+      await platformOpsService.markAllNotificationsRead('customer');
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       refreshNotifications();
     } catch (err) {
@@ -68,11 +89,20 @@ export function NotificationsPage() {
     }
   }
 
+  async function handleDeleteNotification(id: string) {
+    try {
+      await platformOpsService.deleteNotification(id, 'customer');
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      refreshNotifications();
+    } catch (err) {
+      setError(extractApiError(err, 'Unable to remove notification.'));
+    }
+  }
+
   async function handleTogglePreference(key: keyof NotificationPreferences) {
     if (!customerUser) return;
     let nextVal = !prefs[key];
 
-    // Browser Notification API requires explicit user-triggered permission request
     if (key === 'browserPushEnabled' && nextVal) {
       if (typeof window === 'undefined' || !('Notification' in window)) {
         setError('Browser notifications are not supported in this browser.');
@@ -80,7 +110,6 @@ export function NotificationsPage() {
       }
       const perm = await window.Notification.requestPermission();
       if (perm !== 'granted') {
-        nextVal = false;
         setError('Browser notification permission was not granted.');
         return;
       }
@@ -91,7 +120,7 @@ export function NotificationsPage() {
       setSavingPrefs(true);
       setError(null);
       const saved = await platformOpsService.updateNotificationPreferences(updatedPrefs);
-      setPrefs(saved);
+      setPrefs({ ...DEFAULT_PREFS, ...saved });
       updateCustomerUser({ ...customerUser, notificationPreferences: saved });
       setSuccess('Notification preferences updated.');
       window.setTimeout(() => setSuccess(null), 2000);
@@ -118,7 +147,7 @@ export function NotificationsPage() {
         <EmptyState
           icon={<Bell className="w-6 h-6" />}
           title="Sign in for match notifications"
-          description="Receive live kickoff alerts, final match results, and updates from teams you follow."
+          description="Receive live kickoff alerts, match delay notices, and updates from teams, players, and tournaments you follow."
           action={
             <Link
               to="/login"
@@ -133,6 +162,11 @@ export function NotificationsPage() {
   }
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const visibleNotifications = notifications.filter((n) => {
+    if (filterTab === 'unread') return !n.isRead;
+    if (filterTab === 'read') return n.isRead;
+    return true;
+  });
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
@@ -142,7 +176,7 @@ export function NotificationsPage() {
             Notifications
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Real-time match start, followed team, and result alerts.
+            Real-time match start, weather delay, followed team, and result alerts.
           </p>
         </div>
 
@@ -150,10 +184,10 @@ export function NotificationsPage() {
           <button
             type="button"
             onClick={handleMarkAllRead}
-            className="min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
+            className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
           >
-            <CheckCheck className="w-4 h-4" />
-            <span>Mark All Read ({unreadCount})</span>
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>Read All ({unreadCount})</span>
           </button>
         )}
       </div>
@@ -162,51 +196,98 @@ export function NotificationsPage() {
       {success && <FeedbackBanner type="success" message={success} onDismiss={() => setSuccess(null)} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl overflow-hidden">
-          {notifications.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-500">
-              No notifications yet. Follow teams or stay tuned for upcoming live broadcasts.
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {notifications.map((n) => (
-                <div
-                  key={n.id}
-                  className={`p-4 flex items-start justify-between gap-3 ${
-                    !n.isRead ? 'bg-emerald-50/40' : 'bg-white'
-                  }`}
-                >
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex items-center gap-2">
-                      {!n.isRead && <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />}
-                      <p className="text-sm font-bold text-slate-900">{n.title}</p>
+        <div className="lg:col-span-8 space-y-3">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {[
+              { id: 'all' as const, label: `All (${notifications.length})` },
+              { id: 'unread' as const, label: `Unread (${unreadCount})` },
+              { id: 'read' as const, label: `Read (${notifications.length - unreadCount})` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setFilterTab(tab.id)}
+                className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                  filterTab === tab.id
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            {visibleNotifications.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-500">
+                {filterTab === 'unread'
+                  ? 'You are all caught up — zero unread notifications.'
+                  : 'No notifications yet. Follow teams, players, or tournaments for live alerts.'}
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {visibleNotifications.map((n) => (
+                  <div
+                    key={n.id}
+                    onClick={() => handleNotificationClick(n)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleNotificationClick(n);
+                      }
+                    }}
+                    className={`p-4 flex items-start justify-between gap-3 cursor-pointer transition-colors hover:bg-slate-50 ${
+                      !n.isRead ? 'bg-emerald-50/45' : 'bg-white'
+                    }`}
+                  >
+                    <div className="min-w-0 space-y-1 flex-1">
+                      <div className="flex items-center gap-2">
+                        {!n.isRead && <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />}
+                        <p className="text-sm font-bold text-slate-900">{n.title}</p>
+                      </div>
+                      <p className="text-xs text-slate-600">{n.message}</p>
+                      <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                        <span>{new Date(n.createdAt).toLocaleString()}</span>
+                        <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                          <span>Open</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-600">{n.message}</p>
-                    <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                      <span>{new Date(n.createdAt).toLocaleString()}</span>
-                      {n.link && (
-                        <Link to={n.link} className="text-emerald-700 font-semibold hover:underline">
-                          View Match
-                        </Link>
+
+                    <div
+                      className="flex items-center gap-1.5 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {!n.isRead && (
+                        <button
+                          type="button"
+                          onClick={() => handleMarkRead(n.id)}
+                          title="Mark as read"
+                          className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Read</span>
+                        </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteNotification(n.id)}
+                        title="Delete notification"
+                        aria-label="Delete notification"
+                        className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
-
-                  {!n.isRead && (
-                    <button
-                      type="button"
-                      onClick={() => handleMarkRead(n.id)}
-                      title="Mark as read"
-                      className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50 shrink-0"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Read</span>
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Preferences Card */}
@@ -217,10 +298,13 @@ export function NotificationsPage() {
           </h2>
           <div className="space-y-2.5 text-xs">
             {[
-              { key: 'matchLive' as const, label: 'Followed team goes LIVE' },
+              { key: 'matchLive' as const, label: 'Followed match goes LIVE' },
               { key: 'matchStart' as const, label: 'Upcoming match scheduled' },
+              { key: 'matchDelayed' as const, label: 'Match delayed / weather alerts' },
+              { key: 'matchResumed' as const, label: 'Match resumed alerts' },
               { key: 'matchResults' as const, label: 'Official match results' },
               { key: 'followedTeams' as const, label: 'Followed team updates' },
+              { key: 'favoritePlayers' as const, label: 'Followed player updates' },
               { key: 'tournamentUpdates' as const, label: 'Tournament announcements' },
               { key: 'browserPushEnabled' as const, label: 'Browser desktop alerts (explicit opt-in)' },
             ].map((item) => (

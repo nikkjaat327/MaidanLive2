@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Radio, Trophy } from 'lucide-react';
+import { Play, Trophy } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
+import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { formatCricketOvers } from '../../utils/cricketScoring.ts';
 
 interface StreamCardProps {
@@ -59,23 +60,25 @@ export function StreamCard({
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-transparent to-transparent" />
         <div className="absolute top-3 left-3 flex items-center gap-2">
-          {stream.status === 'LIVE' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-600 text-white text-xs font-semibold tracking-wide">
-              <Radio className="w-3.5 h-3.5" />
-              LIVE
+          {useReplayThumbnail ? (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded bg-slate-900/90 text-slate-100 text-[11px] font-bold uppercase tracking-wider border border-white/15">
+              REPLAY
             </span>
+          ) : (
+            <MatchStatusBadge stream={stream} score={score} dark compact />
           )}
-          {stream.status === 'UPCOMING' && (
-            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-900/90 text-white text-xs font-medium">
-              UPCOMING
-            </span>
-          )}
-          {stream.status === 'ENDED' && (
-            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-900/90 text-slate-200 text-xs font-medium">
-              {useReplayThumbnail ? 'REPLAY' : 'ENDED'}
-            </span>
-          )}
+          {(stream.activeStreamingProvider || stream.streamingProvider) === 'mediamtx' &&
+            stream.status === 'LIVE' && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-950/90 text-orange-300 text-[10px] font-bold uppercase tracking-wider">
+                DIRECT
+              </span>
+            )}
         </div>
+        {typeof stream.activeViewers === 'number' && stream.viewerCountVisibility === 'public' && (
+          <div className="absolute top-3 right-3 px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
+            {stream.activeViewers} watching
+          </div>
+        )}
         {score && (
           <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs font-mono tabular-nums">
             <span className="font-semibold truncate">
@@ -107,7 +110,7 @@ export function StreamCard({
             </div>
           )}
 
-          <h3 className="text-base font-semibold text-slate-900 leading-snug line-clamp-2 group-hover:text-emerald-700 transition-colors">
+          <h3 className="text-base font-semibold text-slate-900 leading-snug line-clamp-2 group-hover:text-[#EA580C] transition-colors">
             {displayTitle}
           </h3>
 

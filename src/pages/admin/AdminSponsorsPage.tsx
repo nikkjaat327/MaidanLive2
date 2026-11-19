@@ -5,6 +5,7 @@ import {
   ScoreboardPosition,
   SponsorData,
   SponsorOverlayData,
+  SponsorPlacement,
   TournamentData,
 } from '../../types/index.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
@@ -16,7 +17,6 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
-import { FileUploadField } from '../../components/common/FileUploadField.tsx';
 
 export function AdminSponsorsPage() {
   const [sponsors, setSponsors] = useState<SponsorData[]>([]);
@@ -36,6 +36,9 @@ export function AdminSponsorsPage() {
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [contactInfo, setContactInfo] = useState('');
   const [sponsorshipType, setSponsorshipType] = useState('Title Sponsor');
+  const [placement, setPlacement] = useState<SponsorPlacement>('live_match');
+  const [tagline, setTagline] = useState('');
+  const [ctaText, setCtaText] = useState('Visit Partner');
   const [tournamentId, setTournamentId] = useState('');
   const [liveStreamId, setLiveStreamId] = useState('');
   const [isPublished, setIsPublished] = useState(true);
@@ -90,6 +93,9 @@ export function AdminSponsorsPage() {
     setWebsiteUrl('');
     setContactInfo('');
     setSponsorshipType('Title Sponsor');
+    setPlacement('live_match');
+    setTagline('');
+    setCtaText('Visit Partner');
     setTournamentId('');
     setLiveStreamId('');
     setIsPublished(true);
@@ -104,6 +110,9 @@ export function AdminSponsorsPage() {
     setWebsiteUrl(s.websiteUrl || '');
     setContactInfo(s.contactInfo || '');
     setSponsorshipType(s.sponsorshipType || 'Title Sponsor');
+    setPlacement(s.placement || 'live_match');
+    setTagline(s.tagline || '');
+    setCtaText(s.ctaText || 'Visit Partner');
     setTournamentId(
       typeof s.tournamentId === 'object' && s.tournamentId
         ? s.tournamentId._id
@@ -130,6 +139,9 @@ export function AdminSponsorsPage() {
         websiteUrl: websiteUrl.trim(),
         contactInfo: contactInfo.trim(),
         sponsorshipType: sponsorshipType.trim(),
+        placement,
+        tagline: tagline.trim(),
+        ctaText: ctaText.trim() || 'Visit Partner',
         tournamentId: tournamentId || null,
         liveStreamId: liveStreamId || null,
         isPublished,
@@ -293,8 +305,9 @@ export function AdminSponsorsPage() {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
                   <th className="py-3 px-4">Sponsor</th>
-                  <th className="py-3 px-4">Tier / Type</th>
+                  <th className="py-3 px-4">Tier &amp; Placement</th>
                   <th className="py-3 px-4">Scope</th>
+                  <th className="py-3 px-4">Performance</th>
                   <th className="py-3 px-4">Visibility</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -321,13 +334,22 @@ export function AdminSponsorsPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="py-3 px-4 text-xs text-slate-600">{s.sponsorshipType || 'Partner'}</td>
+                    <td className="py-3 px-4 text-xs text-slate-600">
+                      <div className="font-semibold">{s.sponsorshipType || 'Partner'}</div>
+                      <div className="font-mono text-[11px] text-[#EA580C]">
+                        {s.placement || 'live_match'}
+                      </div>
+                    </td>
                     <td className="py-3 px-4 text-xs text-slate-600">
                       {typeof s.tournamentId === 'object' && s.tournamentId
                         ? s.tournamentId.name
                         : typeof s.liveStreamId === 'object' && s.liveStreamId
                           ? s.liveStreamId.matchTitle || 'Stream'
                           : 'Platform-wide'}
+                    </td>
+                    <td className="py-3 px-4 text-xs font-mono tabular-nums text-slate-700">
+                      <div>{s.impressionsCount ?? 0} views</div>
+                      <div className="text-[11px] text-emerald-600">{s.clicksCount ?? 0} clicks</div>
                     </td>
                     <td className="py-3 px-4 text-xs">
                       <span
@@ -487,14 +509,49 @@ export function AdminSponsorsPage() {
                 className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Placement Slot
+              </label>
+              <select
+                value={placement}
+                onChange={(e) => setPlacement(e.target.value as SponsorPlacement)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="live_match">Live Match View (live_match)</option>
+                <option value="home_feed">Home Feed Banner (home_feed)</option>
+                <option value="tournament_banner">Tournament Banner (tournament_banner)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">CTA Label</label>
+              <input
+                type="text"
+                value={ctaText}
+                onChange={(e) => setCtaText(e.target.value)}
+                placeholder="Visit Partner"
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
             <div className="sm:col-span-2">
-              <FileUploadField
-                label="Sponsor Logo (Optional)"
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Tagline / Offer Copy (Optional)
+              </label>
+              <input
+                type="text"
+                value={tagline}
+                onChange={(e) => setTagline(e.target.value)}
+                placeholder="Official Cricket Equipment & Kit Partner"
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Logo URL</label>
+              <input
+                type="url"
                 value={logoUrl}
-                onChange={setLogoUrl}
-                folder="sponsors"
-                portal="admin"
-                placeholder="Upload sponsor logo or paste https://..."
+                onChange={(e) => setLogoUrl(e.target.value)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
             <div>

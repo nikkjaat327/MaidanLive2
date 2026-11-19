@@ -8,6 +8,7 @@ export function useLiveStream(streamId?: string) {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(streamId));
   const [error, setError] = useState<string | null>(null);
+  const [switchingBanner, setSwitchingBanner] = useState(false);
 
   const fetchStream = useCallback(async () => {
     if (!streamId) return;
@@ -47,16 +48,93 @@ export function useLiveStream(streamId?: string) {
       }
     };
 
+    const handleProviderChanged = (payload: any) => {
+      if (payload?.streamId !== streamId) return;
+      setSwitchingBanner(true);
+      setStream((prev) =>
+        prev
+          ? {
+              ...prev,
+              streamingProvider: payload.activeStreamingProvider || payload.toProvider,
+              activeStreamingProvider: payload.activeStreamingProvider || payload.toProvider,
+              youtubeVideoId: payload.youtubeVideoId || prev.youtubeVideoId,
+              mediamtxPlaybackUrl: payload.mediamtxPlaybackUrl ?? prev.mediamtxPlaybackUrl,
+              mediamtxWebrtcUrl: payload.mediamtxWebrtcUrl ?? prev.mediamtxWebrtcUrl,
+            }
+          : prev
+      );
+      window.setTimeout(() => setSwitchingBanner(false), 3500);
+    };
+
+    const handleViewerUpdate = (payload: {
+      streamId?: string;
+      targetId?: string;
+      viewers: number | null;
+      visibility?: string;
+    }) => {
+      const target = payload?.streamId || payload?.targetId;
+      if (target !== streamId) return;
+      setStream((prev) =>
+        prev
+          ? {
+              ...prev,
+              activeViewers: payload.viewers,
+              viewerCountVisibility: (payload.visibility as any) || prev.viewerCountVisibility,
+            }
+          : prev
+      );
+    };
+
+    const handleHealthUpdated = (payload: {
+      streamId?: string;
+      provider?: 'youtube' | 'mediamtx';
+      mediamtxPublishStatus?: LiveStreamData['mediamtxPublishStatus'];
+      youtubeStreamStatus?: LiveStreamData['youtubeStreamStatus'];
+      streamHealth?: LiveStreamData['streamHealth'];
+    }) => {
+      if (payload?.streamId !== streamId) return;
+      setStream((prev) =>
+        prev
+          ? {
+              ...prev,
+              mediamtxPublishStatus: payload.mediamtxPublishStatus ?? prev.mediamtxPublishStatus,
+              youtubeStreamStatus: payload.youtubeStreamStatus ?? prev.youtubeStreamStatus,
+              streamHealth: payload.streamHealth ?? prev.streamHealth,
+            }
+          : prev
+      );
+    };
+
+    let hasConnectedOnce = socket.connected;
+    const handleConnect = () => {
+      if (hasConnectedOnce) {
+        fetchStream();
+      }
+      hasConnectedOnce = true;
+    };
+
     socket.on('live:updated', handleUpdated);
     socket.on('live:started', handleUpdated);
     socket.on('live:ended', handleEnded);
+    socket.on('streaming_provider_changed', handleProviderChanged);
+    socket.on('mediamtx:status_changed', handleHealthUpdated);
+    socket.on('stream:health_updated', handleHealthUpdated);
+    socket.on('stream:viewers', handleViewerUpdate);
+    socket.on('viewer:count_updated', handleViewerUpdate);
+    socket.on('connect', handleConnect);
 
     return () => {
       socket.off('live:updated', handleUpdated);
       socket.off('live:started', handleUpdated);
       socket.off('live:ended', handleEnded);
+      socket.off('streaming_provider_changed', handleProviderChanged);
+      socket.off('mediamtx:status_changed', handleHealthUpdated);
+      socket.off('stream:health_updated', handleHealthUpdated);
+      socket.off('stream:viewers', handleViewerUpdate);
+      socket.off('viewer:count_updated', handleViewerUpdate);
+      socket.off('connect', handleConnect);
     };
-  }, [streamId]);
+  }, [streamId, fetchStream]);
 
-  return { stream, setStream, loading, error, refetch: fetchStream };
+  return { stream, setStream, loading, error, switchingBanner, refetch: fetchStream };
 }

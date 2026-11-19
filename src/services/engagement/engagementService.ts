@@ -2,8 +2,10 @@ import {
   ChatMessageData,
   LiveStreamData,
   MatchHighlightData,
+  PlayerData,
   PollData,
   TeamData,
+  TournamentData,
 } from '../../types/index.ts';
 import { adminApi, customerApi, publicApi } from '../api/httpClient.ts';
 
@@ -145,8 +147,38 @@ export const engagementService = {
     return data;
   },
 
+  async followPlayer(
+    playerId: string
+  ): Promise<{ followed: boolean; followersCount: number; followedPlayerIds: string[] }> {
+    const { data } = await customerApi.post(`/players/${playerId}/follow`);
+    return data;
+  },
+
+  async unfollowPlayer(
+    playerId: string
+  ): Promise<{ followed: boolean; followersCount: number; followedPlayerIds: string[] }> {
+    const { data } = await customerApi.delete(`/players/${playerId}/follow`);
+    return data;
+  },
+
+  async followTournament(
+    tournamentId: string
+  ): Promise<{ followed: boolean; followersCount: number; followedTournamentIds: string[] }> {
+    const { data } = await customerApi.post(`/tournaments/${tournamentId}/follow`);
+    return data;
+  },
+
+  async unfollowTournament(
+    tournamentId: string
+  ): Promise<{ followed: boolean; followersCount: number; followedTournamentIds: string[] }> {
+    const { data } = await customerApi.delete(`/tournaments/${tournamentId}/follow`);
+    return data;
+  },
+
   async getFollowingFeed(): Promise<{
     teams: TeamData[];
+    players: PlayerData[];
+    tournaments: TournamentData[];
     liveMatches: LiveStreamData[];
     upcomingMatches: LiveStreamData[];
     recentResults: LiveStreamData[];

@@ -7,6 +7,7 @@ import { Notification } from '../models/Notification.ts';
 import { MatchReport } from '../models/MatchReport.ts';
 import { ViewerMetric } from '../models/ViewerMetric.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { LiveScore } from '../models/LiveScore.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Player } from '../models/Player.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
@@ -233,12 +234,19 @@ router.post(
         return;
       }
 
+      const placement = ['live_match', 'home_feed', 'tournament_banner'].includes(req.body.placement)
+        ? req.body.placement
+        : 'live_match';
+
       const sponsor = await Sponsor.create({
         name,
         logoUrl: sanitizeImageUrl(req.body.logoUrl),
         websiteUrl: sanitizeText(req.body.websiteUrl, 300),
         contactInfo: sanitizeText(req.body.contactInfo, 200),
         sponsorshipType: sanitizeText(req.body.sponsorshipType, 80) || 'Broadcast Partner',
+        placement,
+        tagline: sanitizeText(req.body.tagline, 200),
+        ctaText: sanitizeText(req.body.ctaText, 60) || 'Visit Partner',
         tournamentId:
           req.body.tournamentId && mongoose.Types.ObjectId.isValid(req.body.tournamentId)
             ? req.body.tournamentId
@@ -296,6 +304,23 @@ router.patch(
       if (req.body.contactInfo !== undefined) sponsor.contactInfo = sanitizeText(req.body.contactInfo, 200);
       if (req.body.sponsorshipType !== undefined) {
         sponsor.sponsorshipType = sanitizeText(req.body.sponsorshipType, 80);
+      }
+      if (['live_match', 'home_feed', 'tournament_banner'].includes(req.body.placement)) {
+        sponsor.placement = req.body.placement;
+      }
+      if (req.body.tagline !== undefined) sponsor.tagline = sanitizeText(req.body.tagline, 200);
+      if (req.body.ctaText !== undefined) sponsor.ctaText = sanitizeText(req.body.ctaText, 60);
+      if (req.body.tournamentId !== undefined) {
+        sponsor.tournamentId =
+          req.body.tournamentId && mongoose.Types.ObjectId.isValid(req.body.tournamentId)
+            ? req.body.tournamentId
+            : null;
+      }
+      if (req.body.liveStreamId !== undefined) {
+        sponsor.liveStreamId =
+          req.body.liveStreamId && mongoose.Types.ObjectId.isValid(req.body.liveStreamId)
+            ? req.body.liveStreamId
+            : null;
       }
       if (typeof req.body.isPublished === 'boolean') sponsor.isPublished = req.body.isPublished;
       if (typeof req.body.isActive === 'boolean') sponsor.isActive = req.body.isActive;
@@ -618,10 +643,33 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       await Notification.updateMany({ userId: req.user!._id, isRead: false }, { isRead: true });
-      res.json({ message: 'All notifications marked as read.' });
+      res.json({ message: 'All notifications marked as read.', unreadCount: 0 });
     } catch (err) {
       console.error('[Notifications] Read-all error:', err);
       res.status(500).json({ message: 'Failed to mark notifications as read.' });
+    }
+  }
+);
+
+router.delete(
+  '/notifications/:id',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid notification ID.' });
+        return;
+      }
+      const deleted = await Notification.findOneAndDelete({ _id: id, userId: req.user!._id });
+      if (!deleted) {
+        res.status(404).json({ message: 'Notification not found.' });
+        return;
+      }
+      res.json({ ok: true, id });
+    } catch (err) {
+      console.error('[Notifications] Delete error:', err);
+      res.status(500).json({ message: 'Failed to delete notification.' });
     }
   }
 );
@@ -642,10 +690,22 @@ router.patch(
           typeof prefs.matchLive === 'boolean'
             ? prefs.matchLive
             : user.notificationPreferences?.matchLive !== false,
+        matchDelayed:
+          typeof prefs.matchDelayed === 'boolean'
+            ? prefs.matchDelayed
+            : user.notificationPreferences?.matchDelayed !== false,
+        matchResumed:
+          typeof prefs.matchResumed === 'boolean'
+            ? prefs.matchResumed
+            : user.notificationPreferences?.matchResumed !== false,
         followedTeams:
           typeof prefs.followedTeams === 'boolean'
             ? prefs.followedTeams
             : user.notificationPreferences?.followedTeams !== false,
+        favoritePlayers:
+          typeof prefs.favoritePlayers === 'boolean'
+            ? prefs.favoritePlayers
+            : user.notificationPreferences?.favoritePlayers !== false,
         scoreUpdates:
           typeof prefs.scoreUpdates === 'boolean'
             ? prefs.scoreUpdates
@@ -863,27 +923,33 @@ router.get(
   async (_req: AuthenticatedRequest, res: Response) => {
     try {
       const activeCounts = getAllActiveViewerCounts();
-      const [streams, sessionMetrics] = await Promise.all([
+      const [streams, rawMetrics] = await Promise.all([
         LiveStream.find()
           .select('matchTitle teamAName teamBName gameName status totalViewsCount replayViewsCount startedAt')
           .sort({ totalViewsCount: -1, createdAt: -1 })
           .limit(50)
           .lean(),
-        ViewerMetric.aggregate([
-          {
-            $group: {
-              _id: '$liveStreamId',
-              uniqueSessions: { $sum: 1 },
-              totalWatchSeconds: { $sum: '$watchSeconds' },
-              replaySessions: {
-                $sum: { $cond: [{ $eq: ['$mode', 'REPLAY'] }, 1, 0] },
-              },
-            },
-          },
-        ]),
+        ViewerMetric.find().lean(),
       ]);
 
-      const metricMap = new Map(sessionMetrics.map((m) => [m._id.toString(), m]));
+      const metricMap = new Map<
+        string,
+        { uniqueSessions: number; totalWatchSeconds: number; replaySessions: number }
+      >();
+      for (const m of rawMetrics as any[]) {
+        const sid = m.liveStreamId?.toString();
+        if (!sid) continue;
+        const cur = metricMap.get(sid) || {
+          uniqueSessions: 0,
+          totalWatchSeconds: 0,
+          replaySessions: 0,
+        };
+        cur.uniqueSessions += 1;
+        cur.totalWatchSeconds += Number(m.watchSeconds) || 0;
+        if (m.mode === 'REPLAY') cur.replaySessions += 1;
+        metricMap.set(sid, cur);
+      }
+
       const perMatch = streams.map((s) => {
         const sid = s._id.toString();
         const agg = metricMap.get(sid);
@@ -929,35 +995,53 @@ router.get('/leaderboards', async (req: Request, res: Response) => {
       typeof req.query.tournamentId === 'string' &&
       mongoose.Types.ObjectId.isValid(req.query.tournamentId)
     ) {
-      matchStage.tournamentId = new mongoose.Types.ObjectId(req.query.tournamentId);
+      matchStage.tournamentId = req.query.tournamentId;
     }
 
-    const aggregated = await PlayerMatchStat.aggregate([
-      { $match: matchStage },
-      {
-        $group: {
-          _id: '$playerId',
-          teamId: { $last: '$teamId' },
-          sportType: { $last: '$sportType' },
-          matches: { $sum: '$appearances' },
-          runs: { $sum: '$runs' },
-          ballsFaced: { $sum: '$ballsFaced' },
-          wickets: { $sum: '$wickets' },
-          raidPoints: { $sum: '$raidPoints' },
-          tacklePoints: { $sum: '$tacklePoints' },
-          bonusPoints: { $sum: '$bonusPoints' },
-          superRaids: { $sum: '$superRaids' },
-          superTackles: { $sum: '$superTackles' },
-          attackPoints: { $sum: '$attackPoints' },
-          blockPoints: { $sum: '$blockPoints' },
-          serveAces: { $sum: '$serveAces' },
-          goals: { $sum: '$goals' },
-          assists: { $sum: '$assists' },
-          mvpAwards: { $sum: { $cond: ['$isMvp', 1, 0] } },
-        },
-      },
-      { $limit: 100 },
-    ]);
+    const rawStats = await PlayerMatchStat.find(matchStage).lean();
+    const groupedMap = new Map<string, any>();
+    for (const st of rawStats as any[]) {
+      const pid = st.playerId?.toString();
+      if (!pid) continue;
+      const cur = groupedMap.get(pid) || {
+        _id: pid,
+        teamId: st.teamId,
+        sportType: st.sportType,
+        matches: 0,
+        runs: 0,
+        ballsFaced: 0,
+        wickets: 0,
+        raidPoints: 0,
+        tacklePoints: 0,
+        bonusPoints: 0,
+        superRaids: 0,
+        superTackles: 0,
+        attackPoints: 0,
+        blockPoints: 0,
+        serveAces: 0,
+        goals: 0,
+        assists: 0,
+        mvpAwards: 0,
+      };
+      cur.matches += Number(st.appearances) || 0;
+      cur.runs += Number(st.runs) || 0;
+      cur.ballsFaced += Number(st.ballsFaced) || 0;
+      cur.wickets += Number(st.wickets) || 0;
+      cur.raidPoints += Number(st.raidPoints) || 0;
+      cur.tacklePoints += Number(st.tacklePoints) || 0;
+      cur.bonusPoints += Number(st.bonusPoints) || 0;
+      cur.superRaids += Number(st.superRaids) || 0;
+      cur.superTackles += Number(st.superTackles) || 0;
+      cur.attackPoints += Number(st.attackPoints) || 0;
+      cur.blockPoints += Number(st.blockPoints) || 0;
+      cur.serveAces += Number(st.serveAces) || 0;
+      cur.goals += Number(st.goals) || 0;
+      cur.assists += Number(st.assists) || 0;
+      if (st.isMvp) cur.mvpAwards += 1;
+      groupedMap.set(pid, cur);
+    }
+
+    const aggregated = Array.from(groupedMap.values()).slice(0, 100);
 
     if (aggregated.length === 0) {
       res.json({
@@ -1332,6 +1416,99 @@ router.post(
     } catch (err) {
       console.error('[Monetization] Revenue record error:', err);
       res.status(500).json({ message: 'Failed to record revenue entry.' });
+    }
+  }
+);
+
+// ==================== ADMIN MATCH HEALTH MONITOR ====================
+router.get(
+  '/admin/match-health',
+  authenticate,
+  requireAdminPortal,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const activeCounts = getAllActiveViewerCounts();
+      const [streams, scores] = await Promise.all([
+        LiveStream.find()
+          .populate('authorizedScorerId', 'name email')
+          .populate('backupScorerId', 'name email')
+          .sort({ status: 1, updatedAt: -1 })
+          .limit(80)
+          .lean(),
+        LiveScore.find().lean(),
+      ]);
+
+      const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
+
+      const matches = streams.map((s: any) => {
+        const sid = s._id.toString();
+        const sc = scoreMap.get(sid) || null;
+        const activeProvider = s.activeStreamingProvider || s.streamingProvider || 'youtube';
+        const sh = s.streamHealth || { ok: false, status: 'UNKNOWN', checkedAt: null };
+        const viewers = activeCounts[sid] || 0;
+
+        let healthGrade: 'Healthy' | 'Degraded' | 'Offline' | 'Unknown' = 'Unknown';
+        if (s.status === 'ENDED') {
+          healthGrade = 'Offline';
+        } else if (activeProvider === 'mediamtx') {
+          if (s.mediamtxPublishStatus === 'PUBLISHING' || sh.ok) {
+            healthGrade = 'Healthy';
+          } else if (s.mediamtxPublishStatus === 'ERROR' || s.mediamtxPublishStatus === 'OFFLINE') {
+            healthGrade = 'Offline';
+          } else if (sh.checkedAt) {
+            healthGrade = sh.ok ? 'Healthy' : 'Degraded';
+          }
+        } else {
+          if (sh.checkedAt) {
+            if (sh.ok) healthGrade = 'Healthy';
+            else if (s.youtubeStreamStatus === 'UNAVAILABLE') healthGrade = 'Offline';
+            else healthGrade = 'Degraded';
+          } else if (s.youtubeStreamStatus === 'UNAVAILABLE') {
+            healthGrade = 'Offline';
+          } else if (s.youtubeStreamStatus === 'LIVE') {
+            healthGrade = 'Healthy';
+          }
+        }
+
+        return {
+          id: sid,
+          matchTitle:
+            s.matchTitle || [s.teamAName, s.teamBName].filter(Boolean).join(' vs ') || 'Match',
+          teamAName: s.teamAName || 'Team A',
+          teamBName: s.teamBName || 'Team B',
+          sport: s.gameName || 'Other',
+          tournamentName: s.tournamentName || '',
+          status: s.status,
+          matchStatus: sc?.matchStatus || s.status,
+          activeStreamingProvider: activeProvider,
+          streamHealth: sh,
+          youtubeVideoId: s.youtubeVideoId || '',
+          youtubeStreamStatus: s.youtubeStreamStatus || 'UNKNOWN',
+          mediamtxStreamPath: s.mediamtxStreamPath || '',
+          mediamtxPublishStatus: s.mediamtxPublishStatus || 'IDLE',
+          activeSocketViewers: viewers,
+          scoreUpdatedAt: sc?.lastUpdatedAt || null,
+          authorizedScorer:
+            typeof s.authorizedScorerId === 'object' && s.authorizedScorerId
+              ? { id: s.authorizedScorerId._id?.toString(), name: s.authorizedScorerId.name }
+              : null,
+          backupScorer:
+            typeof s.backupScorerId === 'object' && s.backupScorerId
+              ? { id: s.backupScorerId._id?.toString(), name: s.backupScorerId.name }
+              : null,
+          healthGrade,
+        };
+      });
+
+      res.json({
+        generatedAt: new Date().toISOString(),
+        totalStreams: matches.length,
+        liveCount: matches.filter((m) => m.status === 'LIVE').length,
+        matches,
+      });
+    } catch (err) {
+      console.error('[MatchHealth] Overview error:', err);
+      res.status(500).json({ message: 'Failed to load match health diagnostics.' });
     }
   }
 );
