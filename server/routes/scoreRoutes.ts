@@ -1,0 +1,1322 @@
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import { LiveStream } from '../models/LiveStream.ts';
+import type { SportType } from '../models/LiveStream.ts';
+import { LiveScore } from '../models/LiveScore.ts';
+import { ScoreHistory } from '../models/ScoreHistory.ts';
+import { Fixture } from '../models/Fixture.ts';
+import { Player } from '../models/Player.ts';
+import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
+import { Team } from '../models/Team.ts';
+import {
+  authenticate,
+  canManageStream,
+  requireAdminPortal,
+} from '../middleware/auth.ts';
+import type { AuthenticatedRequest } from '../middleware/auth.ts';
+import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
+import { applyKabaddiAction } from '../../src/utils/kabaddiScoring.ts';
+import type { KabaddiDetails } from '../../src/utils/kabaddiScoring.ts';
+import { applyCricketAction } from '../../src/utils/cricketScoring.ts';
+import type { CricketDetails } from '../../src/utils/cricketScoring.ts';
+import { applyVolleyballAction } from '../../src/utils/volleyballScoring.ts';
+import type { VolleyballDetails } from '../../src/utils/volleyballScoring.ts';
+import { applyFootballAction } from '../../src/utils/footballScoring.ts';
+import type { FootballDetails } from '../../src/utils/footballScoring.ts';
+import { validateMatchResult } from '../../src/utils/matchResultValidation.ts';
+import type { MatchResultType } from '../../src/utils/matchResultValidation.ts';
+import { sanitizeText } from '../utils/sanitize.ts';
+import { emitStreamEvent } from '../socket/index.ts';
+import { recordActivity } from '../utils/audit.ts';
+import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
+import { dispatchMatchNotifications } from '../utils/notifications.ts';
+
+const router = Router();
+
+async function ensureLiveScore(streamId: string, session: any = null) {
+  let score = await LiveScore.findOne({ liveStreamId: streamId }).session(session);
+  if (!score) {
+    const stream = await LiveStream.findById(streamId).session(session);
+    if (!stream) return null;
+    const sport: SportType = (stream.gameName as SportType) || 'Other';
+    const created = await LiveScore.create(
+      [
+        {
+          liveStreamId: stream._id,
+          sportType: sport,
+          teamAScore: 0,
+          teamBScore: 0,
+          sportSpecificDetails: getInitialSportDetails(sport),
+          matchStatus:
+            stream.status === 'ENDED'
+              ? 'Completed'
+              : stream.status === 'UPCOMING'
+                ? 'Upcoming'
+                : 'Live',
+          lastUpdatedAt: new Date(),
+        },
+      ],
+      { session: session || undefined }
+    );
+    score = created[0];
+  }
+  return score;
+}
+
+async function applyStatUpdateForStructuredEvent(params: {
+  stream: any;
+  sportType: SportType;
+  action: any;
+  playerId?: string;
+  assistPlayerId?: string;
+  actorId: mongoose.Types.ObjectId;
+  session: any;
+}) {
+  const { stream, sportType, action, playerId, assistPlayerId, actorId, session } = params;
+
+  const incStat = async (
+    pid: string,
+    teamSide: 'A' | 'B' | '',
+    incObj: Record<string, number>
+  ) => {
+    if (!pid || !mongoose.Types.ObjectId.isValid(pid)) return;
+    const player = await Player.findById(pid).session(session);
+    if (!player) return;
+    const teamId =
+      player.teamId ||
+      (teamSide === 'A' ? stream.teamAId : teamSide === 'B' ? stream.teamBId : null);
+
+    await PlayerMatchStat.findOneAndUpdate(
+      { liveStreamId: stream._id, playerId: player._id },
+      {
+        $setOnInsert: {
+          liveStreamId: stream._id,
+          tournamentId: stream.tournamentId || null,
+          teamId: teamId || null,
+          playerId: player._id,
+          sportType,
+          appearances: 1,
+        },
+        $set: { updatedBy: actorId },
+        $inc: incObj,
+      },
+      { upsert: true, new: true, session: session || undefined }
+    );
+  };
+
+  if (sportType === 'Kabaddi' && action?.type === 'STRUCTURED_EVENT' && playerId) {
+    const pts = Math.max(0, Math.trunc(action.points || 0));
+    const bonusPart = Math.max(0, Math.min(pts, Math.trunc(action.bonusIncluded || 0)));
+    const inc: Record<string, number> = {};
+    if (action.eventType === 'BONUS_POINT') {
+      inc.bonusPoints = pts > 0 ? pts : 1;
+    } else if (action.eventType === 'SUPER_RAID') {
+      const total = Math.max(3, pts);
+      inc.superRaids = 1;
+      inc.raidPoints = total - Math.min(bonusPart, total);
+      if (bonusPart > 0) inc.bonusPoints = Math.min(bonusPart, total);
+    } else if (
+      ['SUCCESSFUL_TACKLE', 'TEAM_TACKLE', 'MULTI_POINT_TACKLE', 'CUSTOM_TACKLE'].includes(
+        action.eventType
+      )
+    ) {
+      inc.tacklePoints = pts > 0 ? pts : 1;
+    } else if (action.eventType === 'SUPER_TACKLE') {
+      inc.superTackles = 1;
+      inc.tacklePoints = pts >= 2 ? pts : 2;
+    } else if (
+      ['SUCCESSFUL_RAID', 'MULTI_POINT_RAID', 'DO_OR_DIE_RAID', 'CUSTOM_RAID'].includes(
+        action.eventType
+      )
+    ) {
+      if (pts >= 3) inc.superRaids = 1;
+      inc.raidPoints = Math.max(0, pts - bonusPart);
+      if (bonusPart > 0) inc.bonusPoints = bonusPart;
+    }
+    if (Object.keys(inc).length > 0) {
+      await incStat(playerId, action.team || '', inc);
+    }
+  } else if (sportType === 'Cricket' && action?.type === 'STRUCTURED_DELIVERY' && playerId) {
+    const batRuns = Math.max(0, Math.trunc(action.batRuns || 0));
+    const extraType = action.extraType || 'NONE';
+    const isLegal = extraType !== 'WIDE' && extraType !== 'NO_BALL';
+    const inc: Record<string, number> = {};
+    if (batRuns > 0) inc.runs = batRuns;
+    if (isLegal) inc.ballsFaced = 1;
+    if (batRuns === 4) inc.fours = 1;
+    if (batRuns === 6) inc.sixes = 1;
+    if (Object.keys(inc).length > 0) {
+      await incStat(playerId, '', inc);
+    }
+    if (action.isWicket && assistPlayerId) {
+      await incStat(assistPlayerId, '', { wickets: 1 });
+    }
+  } else if (sportType === 'Volleyball' && action?.type === 'STRUCTURED_POINT' && playerId) {
+    const inc: Record<string, number> = {};
+    if (action.eventType === 'ATTACK_POINT') inc.attackPoints = 1;
+    else if (action.eventType === 'BLOCK_POINT') inc.blockPoints = 1;
+    else if (action.eventType === 'SERVICE_ACE') inc.serveAces = 1;
+    if (Object.keys(inc).length > 0) {
+      await incStat(playerId, action.team || '', inc);
+    }
+  } else if (sportType === 'Football' && action?.type === 'STRUCTURED_EVENT') {
+    if (playerId) {
+      const inc: Record<string, number> = {};
+      if (action.eventType === 'GOAL' || action.eventType === 'PENALTY_GOAL') inc.goals = 1;
+      else if (action.eventType === 'YELLOW_CARD') inc.yellowCards = 1;
+      else if (action.eventType === 'RED_CARD') inc.redCards = 1;
+      else if (action.eventType === 'SECOND_YELLOW') {
+        inc.yellowCards = 1;
+        inc.redCards = 1;
+      }
+      if (Object.keys(inc).length > 0) {
+        await incStat(playerId, action.team || '', inc);
+      }
+    }
+    if (
+      assistPlayerId &&
+      (action.eventType === 'GOAL' || action.eventType === 'PENALTY_GOAL')
+    ) {
+      await incStat(assistPlayerId, action.team || '', { assists: 1 });
+    }
+  }
+}
+
+// GET /api/live/:id/score
+router.get('/:id/score', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
+    }
+
+    const score = await ensureLiveScore(id);
+    if (!score) {
+      res.status(404).json({ message: 'Stream not found.' });
+      return;
+    }
+
+    res.json({ score });
+  } catch (err) {
+    console.error('[Score] Get error:', err);
+    res.status(500).json({ message: 'Failed to load scoreboard.' });
+  }
+});
+
+// PATCH /api/live/:id/score
+router.patch(
+  '/:id/score',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to update scores for this stream.',
+        });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      if (typeof req.body.teamAScore === 'number' && Number.isFinite(req.body.teamAScore)) {
+        score.teamAScore = Math.max(0, Math.floor(req.body.teamAScore));
+      }
+      if (typeof req.body.teamBScore === 'number' && Number.isFinite(req.body.teamBScore)) {
+        score.teamBScore = Math.max(0, Math.floor(req.body.teamBScore));
+      }
+      if (
+        req.body.sportSpecificDetails &&
+        typeof req.body.sportSpecificDetails === 'object' &&
+        !Array.isArray(req.body.sportSpecificDetails)
+      ) {
+        score.sportSpecificDetails = req.body.sportSpecificDetails;
+      }
+      if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
+        score.matchStatus = sanitizeText(req.body.matchStatus, 80);
+      }
+      if (
+        typeof req.body.sportType === 'string' &&
+        ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'].includes(req.body.sportType)
+      ) {
+        score.sportType = req.body.sportType as SportType;
+      }
+      if (req.body.tossWinner === 'A' || req.body.tossWinner === 'B' || req.body.tossWinner === '') {
+        score.tossWinner = req.body.tossWinner;
+      }
+      if (typeof req.body.tossDecision === 'string') {
+        score.tossDecision = sanitizeText(req.body.tossDecision, 40);
+      }
+
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const actionLabel = sanitizeText(req.body.action, 200) || 'Score updated';
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'SCORE_UPDATE',
+        sportType: score.sportType,
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: actionLabel,
+        updatedBy: req.user!._id,
+      });
+
+      const populatedHistory = await ScoreHistory.findById(historyItem._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populatedHistory,
+      };
+
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Update error:', err);
+      res.status(500).json({ message: 'Failed to update score.' });
+    }
+  }
+);
+
+// POST /api/live/:id/score/event - Structured multi-point & delivery scoring with duplicate guard
+router.post(
+  '/:id/score/event',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to record score events for this stream.',
+        });
+        return;
+      }
+
+      const clientEventId = sanitizeText(req.body.clientEventId, 100);
+      if (clientEventId) {
+        const existingEvent = await ScoreHistory.findOne({
+          liveStreamId: id,
+          clientEventId,
+        })
+          .populate('updatedBy', 'name role')
+          .lean();
+        if (existingEvent) {
+          const existingScore = await LiveScore.findOne({ liveStreamId: id }).lean();
+          res.json({
+            streamId: id,
+            score: existingScore,
+            historyItem: existingEvent,
+            duplicatePrevented: true,
+          });
+          return;
+        }
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const playerId =
+        typeof req.body.playerId === 'string' && mongoose.Types.ObjectId.isValid(req.body.playerId)
+          ? req.body.playerId
+          : '';
+      const assistPlayerId =
+        typeof req.body.assistPlayerId === 'string' &&
+        mongoose.Types.ObjectId.isValid(req.body.assistPlayerId)
+          ? req.body.assistPlayerId
+          : '';
+
+      const actionPayload = req.body.action;
+      if (!actionPayload || typeof actionPayload !== 'object') {
+        res.status(400).json({ message: 'Valid scoring action payload is required.' });
+        return;
+      }
+
+      const txResult = await runWithOptionalTransaction(async (session) => {
+        const score = await ensureLiveScore(id, session);
+        if (!score) return null;
+
+        const sport = (req.body.sportType as SportType) || score.sportType || 'Other';
+        const previousSnapshot = {
+          sportType: score.sportType,
+          teamAScore: score.teamAScore,
+          teamBScore: score.teamBScore,
+          sportSpecificDetails: score.sportSpecificDetails,
+          matchStatus: score.matchStatus,
+        };
+
+        let nextDetails: Record<string, unknown> = (score.sportSpecificDetails || {}) as Record<
+          string,
+          unknown
+        >;
+        let nextTeamAScore = score.teamAScore;
+        let nextTeamBScore = score.teamBScore;
+        let label = sanitizeText(req.body.label, 240) || 'Score event recorded';
+        let pointsAwarded = 0;
+        let eventCategory = sanitizeText(req.body.eventCategory, 60) || sport.toUpperCase();
+        let eventType = sanitizeText(req.body.eventType, 80) || actionPayload.type || 'CUSTOM_EVENT';
+        let teamSide: 'A' | 'B' | '' =
+          actionPayload.team === 'A' || actionPayload.team === 'B' ? actionPayload.team : '';
+
+        if (sport === 'Kabaddi') {
+          const applied = applyKabaddiAction(
+            nextDetails as unknown as KabaddiDetails,
+            score.teamAScore,
+            score.teamBScore,
+            actionPayload
+          );
+          nextDetails = applied.details as unknown as Record<string, unknown>;
+          nextTeamAScore = applied.teamAScore;
+          nextTeamBScore = applied.teamBScore;
+          label = applied.label;
+          pointsAwarded = applied.pointsAwarded;
+          eventCategory = applied.eventCategory;
+          eventType = applied.eventType;
+        } else if (sport === 'Cricket') {
+          const applied = applyCricketAction(
+            nextDetails as unknown as CricketDetails,
+            actionPayload
+          );
+          nextDetails = applied.details as unknown as Record<string, unknown>;
+          nextTeamAScore = applied.teamAScore;
+          nextTeamBScore = applied.teamBScore;
+          label = applied.label;
+          pointsAwarded = applied.pointsAwarded;
+          eventCategory = applied.eventCategory;
+          eventType = applied.eventType;
+          teamSide = applied.details.battingTeam;
+          if (applied.details.tossWinner) score.tossWinner = applied.details.tossWinner;
+          if (applied.details.tossDecision) score.tossDecision = applied.details.tossDecision;
+        } else if (sport === 'Volleyball') {
+          const applied = applyVolleyballAction(
+            nextDetails as unknown as VolleyballDetails,
+            score.teamAScore,
+            score.teamBScore,
+            actionPayload
+          );
+          nextDetails = applied.details as unknown as Record<string, unknown>;
+          nextTeamAScore = applied.teamAScore;
+          nextTeamBScore = applied.teamBScore;
+          label = applied.label;
+          pointsAwarded = applied.pointsAwarded;
+          eventCategory = applied.eventCategory;
+          eventType = applied.eventType;
+        } else if (sport === 'Football') {
+          const applied = applyFootballAction(
+            nextDetails as unknown as FootballDetails,
+            score.teamAScore,
+            score.teamBScore,
+            actionPayload
+          );
+          nextDetails = applied.details as unknown as Record<string, unknown>;
+          nextTeamAScore = applied.teamAScore;
+          nextTeamBScore = applied.teamBScore;
+          label = applied.label;
+          pointsAwarded = applied.pointsAwarded;
+          eventCategory = applied.eventCategory;
+          eventType = applied.eventType;
+        } else {
+          const deltaA = Number(actionPayload.deltaA || 0);
+          const deltaB = Number(actionPayload.deltaB || 0);
+          nextTeamAScore = Math.max(0, score.teamAScore + (Number.isFinite(deltaA) ? deltaA : 0));
+          nextTeamBScore = Math.max(0, score.teamBScore + (Number.isFinite(deltaB) ? deltaB : 0));
+          pointsAwarded = (deltaA || 0) + (deltaB || 0);
+          if (actionPayload.description) {
+            label = sanitizeText(actionPayload.description, 240);
+          }
+        }
+
+        score.sportType = sport;
+        score.teamAScore = nextTeamAScore;
+        score.teamBScore = nextTeamBScore;
+        score.sportSpecificDetails = nextDetails;
+        if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
+          score.matchStatus = sanitizeText(req.body.matchStatus, 80);
+        }
+        score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+        score.lastUpdatedAt = new Date();
+        await score.save({ session: session || undefined });
+
+        const updatedSnapshot = {
+          sportType: score.sportType,
+          teamAScore: score.teamAScore,
+          teamBScore: score.teamBScore,
+          sportSpecificDetails: score.sportSpecificDetails,
+          matchStatus: score.matchStatus,
+        };
+
+        const teamId =
+          teamSide === 'A'
+            ? stream.teamAId || null
+            : teamSide === 'B'
+              ? stream.teamBId || null
+              : null;
+
+        const createdHistory = await ScoreHistory.create(
+          [
+            {
+              liveStreamId: score.liveStreamId,
+              entryType: 'SCORE_UPDATE',
+              sportType: score.sportType,
+              teamSide,
+              teamId,
+              eventCategory,
+              eventType,
+              pointsAwarded,
+              playerId: playerId ? new mongoose.Types.ObjectId(playerId) : null,
+              playerName: sanitizeText(
+                req.body.playerName || actionPayload.playerName || actionPayload.dismissedPlayer,
+                120
+              ),
+              assistPlayerId: assistPlayerId ? new mongoose.Types.ObjectId(assistPlayerId) : null,
+              assistPlayerName: sanitizeText(
+                req.body.assistPlayerName || actionPayload.assistPlayerName || actionPayload.bowler,
+                120
+              ),
+              eventPhase: sanitizeText(req.body.eventPhase, 60),
+              details: actionPayload,
+              clientEventId,
+              previousScore: previousSnapshot,
+              updatedScore: updatedSnapshot,
+              action: label.slice(0, 280),
+              updatedBy: req.user!._id,
+            },
+          ],
+          { session: session || undefined }
+        );
+
+        await applyStatUpdateForStructuredEvent({
+          stream,
+          sportType: sport,
+          action: actionPayload,
+          playerId,
+          assistPlayerId,
+          actorId: req.user!._id as mongoose.Types.ObjectId,
+          session,
+        });
+
+        return { score, historyId: createdHistory[0]._id };
+      });
+
+      if (!txResult) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const populatedHistory = await ScoreHistory.findById(txResult.historyId)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      const payload = {
+        streamId: id,
+        score: txResult.score.toObject(),
+        historyItem: populatedHistory,
+        duplicatePrevented: false,
+      };
+
+      emitStreamEvent(id, 'score:event:created', payload);
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+
+      res.status(201).json(payload);
+    } catch (err) {
+      console.error('[Score] Structured event error:', err);
+      res.status(500).json({ message: 'Failed to record scoring event.' });
+    }
+  }
+);
+
+// PATCH /api/live/:id/score/event/:eventId - Audited event correction without deleting history
+router.patch(
+  '/:id/score/event/:eventId',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id, eventId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(eventId)) {
+        res.status(400).json({ message: 'Invalid stream or event ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to correct events for this stream.',
+        });
+        return;
+      }
+
+      const correctionReason = sanitizeText(req.body.correctionReason, 280);
+      if (!correctionReason) {
+        res.status(400).json({ message: 'A correction reason is required for audit logs.' });
+        return;
+      }
+
+      const original = await ScoreHistory.findOne({ _id: eventId, liveStreamId: id });
+      if (!original) {
+        res.status(404).json({ message: 'Score history event not found.' });
+        return;
+      }
+      if (original.reverted) {
+        res.status(409).json({ message: 'This event has already been corrected/reverted.' });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Score record not found.' });
+        return;
+      }
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const revertPreviousDiff = req.body.revertToBeforeEvent === true;
+      if (revertPreviousDiff) {
+        const prevA = Number((original.previousScore as any)?.teamAScore ?? 0);
+        const updA = Number((original.updatedScore as any)?.teamAScore ?? 0);
+        const prevB = Number((original.previousScore as any)?.teamBScore ?? 0);
+        const updB = Number((original.updatedScore as any)?.teamBScore ?? 0);
+        const diffA = updA - prevA;
+        const diffB = updB - prevB;
+        score.teamAScore = Math.max(0, score.teamAScore - diffA);
+        score.teamBScore = Math.max(0, score.teamBScore - diffB);
+      }
+
+      if (typeof req.body.teamAScore === 'number' && Number.isFinite(req.body.teamAScore)) {
+        score.teamAScore = Math.max(0, Math.floor(req.body.teamAScore));
+      }
+      if (typeof req.body.teamBScore === 'number' && Number.isFinite(req.body.teamBScore)) {
+        score.teamBScore = Math.max(0, Math.floor(req.body.teamBScore));
+      }
+      if (
+        req.body.sportSpecificDetails &&
+        typeof req.body.sportSpecificDetails === 'object' &&
+        !Array.isArray(req.body.sportSpecificDetails)
+      ) {
+        score.sportSpecificDetails = req.body.sportSpecificDetails;
+      }
+
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      original.reverted = true;
+      await original.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const correctionLabel = `Corrected "${original.action}": ${correctionReason}`;
+      const correctionDoc = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'CORRECTION',
+        sportType: score.sportType,
+        teamSide: original.teamSide,
+        teamId: original.teamId || null,
+        eventCategory: 'CORRECTION',
+        eventType: 'EVENT_CORRECTION',
+        isCorrection: true,
+        correctionOfId: original._id,
+        correctionReason,
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: correctionLabel.slice(0, 280),
+        updatedBy: req.user!._id,
+      });
+
+      const populated = await ScoreHistory.findById(correctionDoc._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      await recordActivity(
+        req.user!,
+        'CORRECT_SCORE_EVENT',
+        'ScoreHistory',
+        eventId,
+        correctionLabel,
+        {
+          previousValue: {
+            teamAScore: previousSnapshot.teamAScore,
+            teamBScore: previousSnapshot.teamBScore,
+            originalAction: original.action,
+          },
+          newValue: {
+            teamAScore: updatedSnapshot.teamAScore,
+            teamBScore: updatedSnapshot.teamBScore,
+            reason: correctionReason,
+          },
+        }
+      );
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populated,
+        correctedEventId: eventId,
+      };
+
+      emitStreamEvent(id, 'score:event:corrected', payload);
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populated });
+
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Correction error:', err);
+      res.status(500).json({ message: 'Failed to correct scoring event.' });
+    }
+  }
+);
+
+// POST /api/live/:id/score/undo
+router.post(
+  '/:id/score/undo',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to undo scores for this stream.',
+        });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Stream not found.' });
+        return;
+      }
+
+      const latestHistory = await ScoreHistory.findOne({
+        liveStreamId: score.liveStreamId,
+        reverted: { $ne: true },
+        $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
+      }).sort({ createdAt: -1 });
+
+      if (!latestHistory) {
+        res.status(400).json({ message: 'No previous score update available to undo.' });
+        return;
+      }
+
+      const previousSnapshot = {
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+      };
+
+      const prev = latestHistory.previousScore as any;
+      score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
+      score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
+      score.sportSpecificDetails =
+        prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
+      if (prev.matchStatus) score.matchStatus = prev.matchStatus;
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      await ScoreHistory.deleteOne({ _id: latestHistory._id });
+
+      await recordActivity(
+        req.user!,
+        'UNDO_SCORE',
+        'LiveScore',
+        score._id.toString(),
+        `Undid: ${latestHistory.action}`,
+        {
+          previousValue: previousSnapshot,
+          newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
+        }
+      );
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        undoneAction: latestHistory.action,
+      };
+
+      emitStreamEvent(id, 'score:undo', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Undo error:', err);
+      res.status(500).json({ message: 'Failed to undo last score update.' });
+    }
+  }
+);
+
+// POST /api/live/:id/score/reset
+router.post(
+  '/:id/score/reset',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to reset scores for this stream.',
+        });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Stream not found.' });
+        return;
+      }
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      score.teamAScore = 0;
+      score.teamBScore = 0;
+      score.sportSpecificDetails = getInitialSportDetails(score.sportType);
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'SCORE_UPDATE',
+        sportType: score.sportType,
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: 'Scoreboard reset to zero',
+        updatedBy: req.user!._id,
+      });
+
+      await recordActivity(
+        req.user!,
+        'RESET_SCOREBOARD',
+        'LiveScore',
+        score._id.toString(),
+        'Reset scoreboard to zero',
+        {
+          previousValue: {
+            teamAScore: previousSnapshot.teamAScore,
+            teamBScore: previousSnapshot.teamBScore,
+          },
+          newValue: { teamAScore: 0, teamBScore: 0 },
+        }
+      );
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+      };
+
+      emitStreamEvent(id, 'score:reset', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Reset error:', err);
+      res.status(500).json({ message: 'Failed to reset scoreboard.' });
+    }
+  }
+);
+
+// GET /api/live/:id/score/history
+router.get('/:id/score/history', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
+    }
+
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 100));
+    const history = await ScoreHistory.find({ liveStreamId: id })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('updatedBy', 'name role')
+      .lean();
+
+    res.json({ history });
+  } catch (err) {
+    console.error('[Score] History error:', err);
+    res.status(500).json({ message: 'Failed to load score history.' });
+  }
+});
+
+// POST /api/live/:id/commentary - Submit live commentary snippet
+router.post(
+  '/:id/commentary',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to post commentary for this stream.',
+        });
+        return;
+      }
+
+      const snippet = sanitizeText(req.body.snippet ?? req.body.action, 280);
+      if (!snippet) {
+        res.status(400).json({ message: 'Commentary snippet cannot be empty.' });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const snapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'COMMENTARY',
+        sportType: score.sportType,
+        previousScore: snapshot,
+        updatedScore: snapshot,
+        action: snippet,
+        updatedBy: req.user!._id,
+      });
+
+      const populated = await ScoreHistory.findById(historyItem._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      await recordActivity(
+        req.user!,
+        'POST_COMMENTARY',
+        'LiveScore',
+        score._id.toString(),
+        snippet
+      );
+
+      const payload = {
+        streamId: id,
+        commentary: populated,
+      };
+
+      emitStreamEvent(id, 'commentary:added', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populated });
+      res.status(201).json(payload);
+    } catch (err) {
+      console.error('[Score] Commentary error:', err);
+      res.status(500).json({ message: 'Failed to submit commentary snippet.' });
+    }
+  }
+);
+
+// GET /api/live/:id/result - Get official match result status & metadata
+router.get('/:id/result', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
+    }
+
+    const score = await ensureLiveScore(id);
+    if (!score) {
+      res.status(404).json({ message: 'Stream not found.' });
+      return;
+    }
+
+    res.json({
+      streamId: id,
+      score: score.toObject(),
+      result: {
+        resultStatus: score.resultStatus || 'NOT_DECLARED',
+        resultType: score.resultType || '',
+        winnerTeamId: score.winnerTeamId || null,
+        winnerTeamName: score.winnerTeamName || '',
+        winningMargin: score.winningMargin || '',
+        resultDescription: score.resultDescription || '',
+        mvpPlayerId: score.mvpPlayerId || null,
+        mvpPlayerName: score.mvpPlayerName || '',
+        finalSummary: score.finalSummary || '',
+        declaredBy: score.declaredBy || null,
+        declaredByName: score.declaredByName || '',
+        declaredAt: score.declaredAt || null,
+      },
+    });
+  } catch (err) {
+    console.error('[Score] Get result error:', err);
+    res.status(500).json({ message: 'Failed to load match result.' });
+  }
+});
+
+// POST /api/live/:id/result - Explicitly declare or correct official match result & advance tournament fixture
+router.post(
+  '/:id/result',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'result');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to declare match results for this stream.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Live stream not found.' });
+        return;
+      }
+
+      const score = await ensureLiveScore(id);
+      if (!score) {
+        res.status(404).json({ message: 'Score record not found.' });
+        return;
+      }
+
+      const isCorrection = Boolean(score.resultStatus && score.resultStatus !== 'NOT_DECLARED');
+      if (isCorrection && req.body.confirmCorrection !== true) {
+        res.status(409).json({
+          message:
+            'A match result has already been declared. Confirm correction explicitly before overwriting.',
+          requiresCorrectionConfirmation: true,
+        });
+        return;
+      }
+
+      const rawType = typeof req.body.resultType === 'string' ? req.body.resultType.trim() : '';
+      const allowedTypes: MatchResultType[] = [
+        'TEAM_A_WON',
+        'TEAM_B_WON',
+        'DRAW',
+        'TIE',
+        'NO_RESULT',
+        'ABANDONED',
+      ];
+      if (!allowedTypes.includes(rawType as MatchResultType)) {
+        res.status(400).json({
+          message:
+            'Please select a valid match result (Team A Won, Team B Won, Draw, Tie, No Result, or Abandoned).',
+        });
+        return;
+      }
+
+      const resultType = rawType as MatchResultType;
+      const validation = validateMatchResult({
+        sportType: score.sportType,
+        resultType,
+        teamAName: stream.teamAName || 'Team A',
+        teamBName: stream.teamBName || 'Team B',
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: (score.sportSpecificDetails || {}) as Record<string, unknown>,
+      });
+
+      if (!validation.valid) {
+        res.status(400).json({ message: validation.error || 'Match result validation failed.' });
+        return;
+      }
+
+      const winningMargin = sanitizeText(req.body.winningMargin, 120);
+      const customDescription = sanitizeText(req.body.resultDescription, 300);
+      const finalSummary = sanitizeText(req.body.finalSummary, 500);
+
+      let mvpPlayerId: mongoose.Types.ObjectId | null = null;
+      let mvpPlayerName = sanitizeText(req.body.mvpPlayerName, 120);
+      if (req.body.mvpPlayerId && mongoose.Types.ObjectId.isValid(req.body.mvpPlayerId)) {
+        const mvpDoc = await Player.findById(req.body.mvpPlayerId);
+        if (mvpDoc) {
+          mvpPlayerId = mvpDoc._id as mongoose.Types.ObjectId;
+          if (!mvpPlayerName) mvpPlayerName = mvpDoc.name;
+        }
+      }
+
+      let defaultDescription = '';
+      if (validation.winnerSide === 'A' || validation.winnerSide === 'B') {
+        defaultDescription = winningMargin
+          ? `${validation.winnerName} won ${winningMargin}`
+          : `${validation.winnerName} won the match`;
+      } else if (validation.normalizedStatus === 'DRAW') {
+        defaultDescription = 'Match Drawn';
+      } else if (validation.normalizedStatus === 'TIE') {
+        defaultDescription = 'Match Tied';
+      } else if (validation.normalizedStatus === 'ABANDONED') {
+        defaultDescription = 'Match Abandoned';
+      } else if (validation.normalizedStatus === 'NO_RESULT') {
+        defaultDescription = 'No Result';
+      }
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+        resultStatus: score.resultStatus,
+        winnerTeamName: score.winnerTeamName,
+      };
+
+      score.resultStatus = validation.normalizedStatus;
+      score.resultType = resultType;
+      score.winnerTeamId =
+        validation.winnerSide === 'A'
+          ? stream.teamAId || null
+          : validation.winnerSide === 'B'
+            ? stream.teamBId || null
+            : null;
+      score.winnerTeamName = validation.winnerName;
+      score.winningMargin = winningMargin;
+      score.resultDescription = customDescription || defaultDescription;
+      score.mvpPlayerId = mvpPlayerId;
+      score.mvpPlayerName = mvpPlayerName;
+      score.finalSummary = finalSummary;
+      score.declaredBy = req.user!._id as mongoose.Types.ObjectId;
+      score.declaredByName = req.user!.name || req.user!.email;
+      score.declaredAt = new Date();
+      score.matchStatus =
+        validation.normalizedStatus === 'DRAW'
+          ? 'Drawn'
+          : validation.normalizedStatus === 'TIE'
+            ? 'Tied'
+            : validation.normalizedStatus === 'ABANDONED'
+              ? 'Abandoned'
+              : validation.normalizedStatus === 'NO_RESULT'
+                ? 'No Result'
+                : 'Completed';
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      await score.save();
+
+      if (mvpPlayerId) {
+        await PlayerMatchStat.findOneAndUpdate(
+          { liveStreamId: stream._id, playerId: mvpPlayerId },
+          {
+            $setOnInsert: {
+              liveStreamId: stream._id,
+              tournamentId: stream.tournamentId || null,
+              playerId: mvpPlayerId,
+              sportType: score.sportType,
+              appearances: 1,
+            },
+            $set: { isMvp: true, updatedBy: req.user!._id },
+          },
+          { upsert: true }
+        );
+      }
+
+      // Sync confirmed result to linked tournament Fixture and ONLY advance confirmed winners
+      const linkedFixture = await Fixture.findOne({ liveStreamId: stream._id });
+      if (linkedFixture) {
+        linkedFixture.status = 'COMPLETED';
+        linkedFixture.resultConfirmed = true;
+        linkedFixture.resultSummary = score.resultDescription;
+        linkedFixture.winnerTeamId = score.winnerTeamId || null;
+        linkedFixture.winnerTeamName = score.winnerTeamName || '';
+        linkedFixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+        await linkedFixture.save();
+
+        if (
+          linkedFixture.nextFixtureId &&
+          (validation.winnerSide === 'A' || validation.winnerSide === 'B')
+        ) {
+          const nextFixture = await Fixture.findById(linkedFixture.nextFixtureId);
+          if (nextFixture) {
+            const winnerTeamDoc = score.winnerTeamId
+              ? await Team.findById(score.winnerTeamId).lean()
+              : null;
+            const winLogo =
+              winnerTeamDoc?.logoUrl ||
+              (validation.winnerSide === 'A' ? stream.teamALogo : stream.teamBLogo) ||
+              '';
+            const winName = score.winnerTeamName || validation.winnerName;
+            if (linkedFixture.nextFixtureSlot === 'B') {
+              nextFixture.teamBId = score.winnerTeamId || null;
+              nextFixture.teamBName = winName;
+              nextFixture.teamBLogo = winLogo;
+            } else {
+              nextFixture.teamAId = score.winnerTeamId || null;
+              nextFixture.teamAName = winName;
+              nextFixture.teamALogo = winLogo;
+            }
+            nextFixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+            await nextFixture.save();
+          }
+        }
+      }
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+        resultStatus: score.resultStatus,
+        winnerTeamName: score.winnerTeamName,
+      };
+
+      const historyAction = isCorrection
+        ? `Result corrected: ${score.resultDescription}`
+        : `Official Result: ${score.resultDescription}`;
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'RESULT',
+        sportType: score.sportType,
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: historyAction,
+        updatedBy: req.user!._id,
+      });
+
+      const populatedHistory = await ScoreHistory.findById(historyItem._id)
+        .populate('updatedBy', 'name role')
+        .lean();
+
+      await recordActivity(
+        req.user!,
+        isCorrection ? 'UPDATE_MATCH_RESULT' : 'DECLARE_MATCH_RESULT',
+        'LiveScore',
+        score._id.toString(),
+        `${stream.matchTitle || stream.youtubeVideoId}: ${score.resultDescription}`,
+        {
+          previousValue: {
+            resultStatus: previousSnapshot.resultStatus,
+            winnerTeamName: previousSnapshot.winnerTeamName,
+          },
+          newValue: {
+            resultStatus: score.resultStatus,
+            winnerTeamName: score.winnerTeamName,
+            mvpPlayerName: score.mvpPlayerName,
+          },
+        }
+      );
+
+      await dispatchMatchNotifications({
+        type: 'MATCH_RESULT',
+        title: 'Official Match Result Declared',
+        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${score.resultDescription}`,
+        entityType: 'LiveStream',
+        entityId: stream._id.toString(),
+        link: `/live/${stream._id.toString()}`,
+        dedupeKey: `match-result-${stream._id.toString()}-${isCorrection ? Date.now() : 'v1'}`,
+        teamIds: [stream.teamAId, stream.teamBId],
+        includeAllSpectatorsIfNoFollowers: true,
+      });
+
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populatedHistory,
+        isCorrection,
+      };
+
+      emitStreamEvent(
+        id,
+        isCorrection ? 'match:result:updated' : 'match:result:declared',
+        payload
+      );
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Declare result error:', err);
+      res.status(500).json({ message: 'Failed to declare match result.' });
+    }
+  }
+);
+
+export default router;

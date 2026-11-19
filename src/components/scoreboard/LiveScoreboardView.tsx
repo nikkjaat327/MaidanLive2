@@ -1,0 +1,565 @@
+import { Clock, Trophy } from 'lucide-react';
+import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
+import { TeamAvatar } from '../common/TeamAvatar.tsx';
+import {
+  CricketDetails,
+  calculateCricketRunRate,
+  calculateRequiredRunRate,
+  createInitialCricketDetails,
+  formatCricketOvers,
+  getTotalExtras,
+} from '../../utils/cricketScoring.ts';
+import { KabaddiDetails, createInitialKabaddiDetails } from '../../utils/kabaddiScoring.ts';
+import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
+import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
+
+interface LiveScoreboardViewProps {
+  stream: LiveStreamData;
+  score: LiveScoreData | null;
+  socketConnected?: boolean;
+}
+
+export function LiveScoreboardView({
+  stream,
+  score,
+  socketConnected,
+}: LiveScoreboardViewProps) {
+  const sport = score?.sportType || stream.gameName || 'Other';
+  const teamA = stream.teamAName || 'Team A';
+  const teamB = stream.teamBName || 'Team B';
+  const details = (score?.sportSpecificDetails || {}) as Record<string, any>;
+
+  const updatedTimeStr = score?.lastUpdatedAt
+    ? new Date(score.lastUpdatedAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    : null;
+
+  return (
+    <section
+      aria-label="Live Scoreboard"
+      className="bg-slate-950 text-white rounded-xl border border-slate-800 overflow-hidden"
+    >
+      {/* Top status bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-3 bg-slate-900 border-b border-slate-800 text-xs">
+        <div className="flex items-center gap-2 text-slate-300">
+          <span className="font-semibold text-white">{sport}</span>
+          {score?.matchStatus && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-emerald-400 font-medium">{score.matchStatus}</span>
+            </>
+          )}
+          {typeof socketConnected === 'boolean' && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className={socketConnected ? 'text-emerald-400' : 'text-amber-400'}>
+                {socketConnected ? 'Live Sync Active' : 'Reconnecting...'}
+              </span>
+            </>
+          )}
+        </div>
+        {updatedTimeStr && (
+          <div className="flex items-center gap-1.5 text-slate-400 font-mono tabular-nums">
+            <Clock className="w-3.5 h-3.5" />
+            <span>Updated {updatedTimeStr}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Official Match Result Strip when declared */}
+      {score?.resultStatus && score.resultStatus !== 'NOT_DECLARED' && (
+        <div className="px-4 sm:px-5 py-2.5 bg-amber-400 text-slate-950 flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+          <div className="flex items-center gap-2">
+            <Trophy className="w-4 h-4 shrink-0" />
+            <span className="uppercase tracking-wide">
+              {score.resultStatus === 'DECLARED'
+                ? 'Official Winner:'
+                : score.resultStatus === 'DRAW'
+                  ? 'Match Drawn:'
+                  : score.resultStatus === 'TIE'
+                    ? 'Match Tied:'
+                    : 'No Result:'}
+            </span>
+            <span>{score.resultDescription || score.winnerTeamName}</span>
+          </div>
+          {score.declaredAt && (
+            <span className="text-[11px] font-semibold opacity-80">
+              Declared {new Date(score.declaredAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Sport-specific scoreboard body */}
+      <div className="p-4 sm:p-5">
+        {sport === 'Cricket' ? (
+          <CricketBoard
+            teamA={teamA}
+            teamB={teamB}
+            logoA={stream.teamALogo}
+            logoB={stream.teamBLogo}
+            details={{ ...createInitialCricketDetails(), ...(details as Partial<CricketDetails>) }}
+          />
+        ) : sport === 'Kabaddi' ? (
+          <KabaddiBoard
+            teamA={teamA}
+            teamB={teamB}
+            logoA={stream.teamALogo}
+            logoB={stream.teamBLogo}
+            scoreA={score?.teamAScore ?? 0}
+            scoreB={score?.teamBScore ?? 0}
+            details={{ ...createInitialKabaddiDetails(), ...(details as Partial<KabaddiDetails>) }}
+          />
+        ) : sport === 'Football' ? (
+          <FootballBoard
+            teamA={teamA}
+            teamB={teamB}
+            logoA={stream.teamALogo}
+            logoB={stream.teamBLogo}
+            scoreA={score?.teamAScore ?? 0}
+            scoreB={score?.teamBScore ?? 0}
+            details={{ ...createInitialFootballDetails(), ...(details as Partial<FootballDetails>) }}
+          />
+        ) : sport === 'Volleyball' ? (
+          <VolleyballBoard
+            teamA={teamA}
+            teamB={teamB}
+            logoA={stream.teamALogo}
+            logoB={stream.teamBLogo}
+            scoreA={score?.teamAScore ?? 0}
+            scoreB={score?.teamBScore ?? 0}
+            details={{
+              ...createInitialVolleyballDetails(),
+              ...(details as Partial<VolleyballDetails>),
+            }}
+          />
+        ) : (
+          <GenericBoard
+            teamA={teamA}
+            teamB={teamB}
+            logoA={stream.teamALogo}
+            logoB={stream.teamBLogo}
+            scoreA={score?.teamAScore ?? 0}
+            scoreB={score?.teamBScore ?? 0}
+            periodLabel={typeof details.periodLabel === 'string' ? details.periodLabel : ''}
+            notes={typeof details.notes === 'string' ? details.notes : ''}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CricketBoard({
+  teamA,
+  teamB,
+  logoA,
+  logoB,
+  details,
+}: {
+  teamA: string;
+  teamB: string;
+  logoA: string;
+  logoB: string;
+  details: CricketDetails;
+}) {
+  const isBattingA = details.battingTeam === 'A';
+  const activeRuns = isBattingA ? details.teamARuns : details.teamBRuns;
+  const activeBalls = isBattingA ? details.teamABalls : details.teamBBalls;
+  const crr = calculateCricketRunRate(activeRuns, activeBalls);
+  const rrr = calculateRequiredRunRate(details);
+  const activeExtras = isBattingA ? details.extrasA : details.extrasB;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div
+          className={`p-3.5 rounded-lg border ${
+            isBattingA
+              ? 'bg-slate-900 border-emerald-500/60'
+              : 'bg-slate-900/50 border-slate-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <TeamAvatar name={teamA} logoUrl={logoA} size="sm" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white truncate">{teamA}</p>
+                {isBattingA && (
+                  <p className="text-[11px] text-emerald-400 font-medium">Batting · Inn {details.innings}</p>
+                )}
+              </div>
+            </div>
+            <div className="text-right font-mono tabular-nums shrink-0">
+              <p className="text-2xl font-bold text-white leading-none">
+                {details.teamARuns}/{details.teamAWickets}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                {formatCricketOvers(details.teamABalls)} ov
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className={`p-3.5 rounded-lg border ${
+            !isBattingA
+              ? 'bg-slate-900 border-emerald-500/60'
+              : 'bg-slate-900/50 border-slate-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <TeamAvatar name={teamB} logoUrl={logoB} size="sm" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white truncate">{teamB}</p>
+                {!isBattingA && (
+                  <p className="text-[11px] text-emerald-400 font-medium">Batting · Inn {details.innings}</p>
+                )}
+              </div>
+            </div>
+            <div className="text-right font-mono tabular-nums shrink-0">
+              <p className="text-2xl font-bold text-white leading-none">
+                {details.teamBRuns}/{details.teamBWickets}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                {formatCricketOvers(details.teamBBalls)} ov
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Metrics row */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-3 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-300">
+        <span>CRR: <strong className="text-white">{crr}</strong></span>
+        {details.target > 0 && (
+          <span>Target: <strong className="text-amber-400">{details.target}</strong></span>
+        )}
+        {rrr && (
+          <span>RRR: <strong className="text-amber-400">{rrr}</strong></span>
+        )}
+        <span>
+          Extras: <strong className="text-white">{getTotalExtras(activeExtras)}</strong>{' '}
+          <span className="text-slate-400">
+            (Wd {activeExtras?.wides || 0}, Nb {activeExtras?.noBalls || 0}, B {activeExtras?.byes || 0}, Lb {activeExtras?.legByes || 0})
+          </span>
+        </span>
+      </div>
+
+      {(details.batsman1 || details.batsman2 || details.bowler) && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
+          {(details.batsman1 || details.batsman2) && (
+            <span>
+              Batters:{' '}
+              <strong className="text-white">
+                {[details.batsman1, details.batsman2].filter(Boolean).join(' & ')}
+              </strong>
+            </span>
+          )}
+          {details.bowler && (
+            <span>
+              Bowler: <strong className="text-white">{details.bowler}</strong>
+            </span>
+          )}
+        </div>
+      )}
+
+      {details.isSuperOver && (
+        <div className="px-3 py-2 rounded-lg bg-amber-500/15 border border-amber-400/30 text-xs font-mono tabular-nums text-amber-200">
+          Super Over: {teamA} {details.superOverTeamARuns}/{details.superOverTeamAWickets} · {teamB}{' '}
+          {details.superOverTeamBRuns}/{details.superOverTeamBWickets}
+        </div>
+      )}
+
+      {Array.isArray(details.recentBalls) && details.recentBalls.length > 0 && (
+        <div className="flex items-center gap-2 pt-2 border-t border-slate-800/80 overflow-x-auto">
+          <span className="text-xs text-slate-400 shrink-0">Recent:</span>
+          <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+            {details.recentBalls.map((ball, i) => (
+              <span
+                key={i}
+                className={`min-w-[28px] h-7 px-1.5 rounded flex items-center justify-center font-semibold ${
+                  ball === 'W'
+                    ? 'bg-red-600 text-white'
+                    : ball === '4' || ball === '6'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-800 text-slate-200'
+                }`}
+              >
+                {ball}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KabaddiBoard({
+  teamA,
+  teamB,
+  logoA,
+  logoB,
+  scoreA,
+  scoreB,
+  details,
+}: {
+  teamA: string;
+  teamB: string;
+  logoA: string;
+  logoB: string;
+  scoreA: number;
+  scoreB: number;
+  details: KabaddiDetails;
+}) {
+  const timer = `${String(details.timerMinutes).padStart(2, '0')}:${String(
+    details.timerSeconds
+  ).padStart(2, '0')}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 items-center gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <TeamAvatar name={teamA} logoUrl={logoA} />
+          <span className="text-sm sm:text-base font-semibold truncate">{teamA}</span>
+        </div>
+        <div className="text-center font-mono tabular-nums">
+          <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+            {scoreA} <span className="text-slate-600">-</span> {scoreB}
+          </div>
+          <div className="text-xs text-emerald-400 mt-1">
+            {details.half} · {timer}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2.5 min-w-0">
+          <span className="text-sm sm:text-base font-semibold truncate text-right">{teamB}</span>
+          <TeamAvatar name={teamB} logoUrl={logoB} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-300">
+        <div className="space-y-1">
+          <p className="text-slate-400 font-sans font-medium">{teamA} Breakdown</p>
+          <p>
+            Raid: <strong className="text-white">{details.teamA.raidPoints}</strong> · Tackle:{' '}
+            <strong className="text-white">{details.teamA.tacklePoints}</strong>
+          </p>
+          <p>
+            Bonus: <strong className="text-white">{details.teamA.bonusPoints}</strong> · All-Out:{' '}
+            <strong className="text-white">{details.teamA.allOutPoints}</strong> · Super Tackle:{' '}
+            <strong className="text-white">{details.teamA.superTackles}</strong>
+          </p>
+        </div>
+        <div className="space-y-1 text-right">
+          <p className="text-slate-400 font-sans font-medium">{teamB} Breakdown</p>
+          <p>
+            Raid: <strong className="text-white">{details.teamB.raidPoints}</strong> · Tackle:{' '}
+            <strong className="text-white">{details.teamB.tacklePoints}</strong>
+          </p>
+          <p>
+            Bonus: <strong className="text-white">{details.teamB.bonusPoints}</strong> · All-Out:{' '}
+            <strong className="text-white">{details.teamB.allOutPoints}</strong> · Super Tackle:{' '}
+            <strong className="text-white">{details.teamB.superTackles}</strong>
+          </p>
+        </div>
+      </div>
+      {(details.superRaidNote || details.isTieBreaker) && (
+        <div className="px-3 py-2 rounded-lg bg-amber-500/15 border border-amber-400/30 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-2">
+          {details.superRaidNote && <span className="font-semibold">{details.superRaidNote}</span>}
+          {details.isTieBreaker && (
+            <span className="font-mono tabular-nums font-semibold">
+              Tie-Breaker: {teamA} {details.tieBreakerScoreA} - {details.tieBreakerScoreB} {teamB}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FootballBoard({
+  teamA,
+  teamB,
+  logoA,
+  logoB,
+  scoreA,
+  scoreB,
+  details,
+}: {
+  teamA: string;
+  teamB: string;
+  logoA: string;
+  logoB: string;
+  scoreA: number;
+  scoreB: number;
+  details: FootballDetails;
+}) {
+  const timer = `${String(details.timerMinutes).padStart(2, '0')}:${String(
+    details.timerSeconds
+  ).padStart(2, '0')}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 items-center gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <TeamAvatar name={teamA} logoUrl={logoA} />
+          <div className="min-w-0">
+            <p className="text-sm sm:text-base font-semibold truncate">{teamA}</p>
+            <p className="text-xs text-slate-400 font-mono tabular-nums">
+              YC {details.teamAYellowCards} · RC {details.teamARedCards}
+            </p>
+          </div>
+        </div>
+        <div className="text-center font-mono tabular-nums">
+          <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+            {scoreA} <span className="text-slate-600">-</span> {scoreB}
+          </div>
+          <div className="text-xs text-emerald-400 mt-1">
+            {details.half} · {timer}
+            {details.extraTimeMinutes > 0 ? ` (+${details.extraTimeMinutes}')` : ''}
+          </div>
+          {(details.teamAPenalties > 0 || details.teamBPenalties > 0) && (
+            <div className="text-xs text-amber-400 mt-0.5">
+              Pens: {details.teamAPenalties} - {details.teamBPenalties}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2.5 min-w-0">
+          <div className="min-w-0 text-right">
+            <p className="text-sm sm:text-base font-semibold truncate">{teamB}</p>
+            <p className="text-xs text-slate-400 font-mono tabular-nums">
+              YC {details.teamBYellowCards} · RC {details.teamBRedCards}
+            </p>
+          </div>
+          <TeamAvatar name={teamB} logoUrl={logoB} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VolleyballBoard({
+  teamA,
+  teamB,
+  logoA,
+  logoB,
+  scoreA,
+  scoreB,
+  details,
+}: {
+  teamA: string;
+  teamB: string;
+  logoA: string;
+  logoB: string;
+  scoreA: number;
+  scoreB: number;
+  details: VolleyballDetails;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 items-center gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <TeamAvatar name={teamA} logoUrl={logoA} />
+          <div className="min-w-0">
+            <p className="text-sm sm:text-base font-semibold truncate">
+              {teamA}
+              {details.servingTeam === 'A' && (
+                <span className="text-[11px] text-amber-400 ml-1.5 font-medium">· Serving</span>
+              )}
+            </p>
+            <p className="text-xs text-emerald-400 font-mono tabular-nums">
+              Sets Won: {details.teamASetsWon}
+            </p>
+          </div>
+        </div>
+        <div className="text-center font-mono tabular-nums">
+          <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+            {scoreA} <span className="text-slate-600">-</span> {scoreB}
+          </div>
+          <div className="text-xs text-slate-300 mt-1">
+            Set {details.currentSet}/{details.bestOfSets || 5}
+            {details.currentSet === (details.bestOfSets || 5) ? ' · Decider' : ''}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2.5 min-w-0">
+          <div className="min-w-0 text-right">
+            <p className="text-sm sm:text-base font-semibold truncate">
+              {details.servingTeam === 'B' && (
+                <span className="text-[11px] text-amber-400 mr-1.5 font-medium">Serving ·</span>
+              )}
+              {teamB}
+            </p>
+            <p className="text-xs text-emerald-400 font-mono tabular-nums">
+              Sets Won: {details.teamBSetsWon}
+            </p>
+          </div>
+          <TeamAvatar name={teamB} logoUrl={logoB} />
+        </div>
+      </div>
+
+      {Array.isArray(details.setScores) && details.setScores.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-300">
+          <span className="text-slate-400 font-sans">Set Scores:</span>
+          {details.setScores.map((s) => (
+            <span
+              key={s.set}
+              className={`px-2 py-1 rounded ${
+                s.set === details.currentSet ? 'bg-slate-800 text-white' : 'text-slate-400'
+              }`}
+            >
+              S{s.set}: {s.teamA}-{s.teamB}
+              {s.winner ? ` (${s.winner === 'A' ? teamA : teamB})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GenericBoard({
+  teamA,
+  teamB,
+  logoA,
+  logoB,
+  scoreA,
+  scoreB,
+  periodLabel,
+  notes,
+}: {
+  teamA: string;
+  teamB: string;
+  logoA: string;
+  logoB: string;
+  scoreA: number;
+  scoreB: number;
+  periodLabel: string;
+  notes: string;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 items-center gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <TeamAvatar name={teamA} logoUrl={logoA} />
+          <span className="text-sm sm:text-base font-semibold truncate">{teamA}</span>
+        </div>
+        <div className="text-center font-mono tabular-nums">
+          <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+            {scoreA} <span className="text-slate-600">-</span> {scoreB}
+          </div>
+          {periodLabel && <div className="text-xs text-emerald-400 mt-1">{periodLabel}</div>}
+        </div>
+        <div className="flex items-center justify-end gap-2.5 min-w-0">
+          <span className="text-sm sm:text-base font-semibold truncate text-right">{teamB}</span>
+          <TeamAvatar name={teamB} logoUrl={logoB} />
+        </div>
+      </div>
+      {notes && <p className="text-xs text-slate-300 pt-2 border-t border-slate-800">{notes}</p>}
+    </div>
+  );
+}

@@ -1,0 +1,522 @@
+import type { UserRole } from '../constants/roles.ts';
+import type { SportOption } from '../constants/sports.ts';
+
+export type ScoreboardPosition = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
+
+export interface UserPermissions {
+  manageStreams: boolean;
+  manageScores: boolean;
+  manageTournaments: boolean;
+  manageTeams: boolean;
+  managePlayers: boolean;
+  moderateChat?: boolean;
+  manageSponsors?: boolean;
+  manageVenues?: boolean;
+  declareResults?: boolean;
+}
+
+export interface NotificationPreferences {
+  matchStart: boolean;
+  matchLive: boolean;
+  followedTeams: boolean;
+  scoreUpdates: boolean;
+  matchResults: boolean;
+  tournamentUpdates: boolean;
+  browserPushEnabled: boolean;
+}
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  permissions: UserPermissions;
+  assignedStreamIds?: string[];
+  assignedTournamentIds?: string[];
+  followedTeamIds?: string[];
+  notificationPreferences?: NotificationPreferences;
+  chatMutedUntil?: string | null;
+  chatMutedReason?: string;
+  isActive: boolean;
+  phone?: string;
+  favoriteSport?: string;
+  lastLoginAt?: string;
+  createdAt?: string;
+}
+
+export type StreamStatus = 'UPCOMING' | 'LIVE' | 'ENDED';
+
+export type MatchResultStatus =
+  | 'NOT_DECLARED'
+  | 'DECLARED'
+  | 'DRAW'
+  | 'TIE'
+  | 'NO_RESULT'
+  | 'ABANDONED';
+export type MatchResultType =
+  | 'TEAM_A_WON'
+  | 'TEAM_B_WON'
+  | 'DRAW'
+  | 'TIE'
+  | 'NO_RESULT'
+  | 'ABANDONED'
+  | '';
+
+export interface LiveScoreData {
+  _id?: string;
+  liveStreamId: string;
+  sportType: SportOption;
+  teamAScore: number;
+  teamBScore: number;
+  sportSpecificDetails: Record<string, any>;
+  matchStatus: string;
+  resultStatus?: MatchResultStatus;
+  resultType?: MatchResultType;
+  winnerTeamId?: string | null;
+  winnerTeamName?: string;
+  winningMargin?: string;
+  resultDescription?: string;
+  mvpPlayerId?: string | null;
+  mvpPlayerName?: string;
+  finalSummary?: string;
+  tossWinner?: 'A' | 'B' | '';
+  tossDecision?: string;
+  declaredBy?: string | null;
+  declaredByName?: string;
+  declaredAt?: string | null;
+  lastUpdatedBy?: string;
+  lastUpdatedAt: string;
+}
+
+export interface LiveStreamData {
+  id: string;
+  _id?: string;
+  youtubeVideoId: string;
+  youtubeInput: string;
+  teamAName: string;
+  teamBName: string;
+  teamAId?: string | null;
+  teamBId?: string | null;
+  teamALogo: string;
+  teamBLogo: string;
+  location: string;
+  venueId?: string | VenueData | null;
+  gameName: SportOption | '';
+  matchTitle: string;
+  tournamentName: string;
+  tournamentId?: string | null;
+  matchDate?: string | null;
+  matchDescription: string;
+  status: StreamStatus;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  replayVideoId: string;
+  replayInput: string;
+  replayAvailable: boolean;
+  replayPublished: boolean;
+  replayVerifiedAt?: string | null;
+  replayDescription?: string;
+  scoreboardVisibleByDefault?: boolean;
+  scoreboardPosition?: ScoreboardPosition;
+  chatEnabled?: boolean;
+  highlightsEnabled?: boolean;
+  totalViewsCount?: number;
+  replayViewsCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  score?: LiveScoreData | null;
+}
+
+export interface ScoreHistoryItem {
+  _id: string;
+  liveStreamId: string;
+  entryType?: 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION';
+  sportType?: SportOption;
+  teamSide?: 'A' | 'B' | '';
+  eventCategory?: string;
+  eventType?: string;
+  pointsAwarded?: number;
+  playerId?: string | null;
+  playerName?: string;
+  assistPlayerId?: string | null;
+  assistPlayerName?: string;
+  eventPhase?: string;
+  details?: Record<string, any>;
+  isCorrection?: boolean;
+  correctionOfId?: string | null;
+  correctionReason?: string;
+  reverted?: boolean;
+  previousScore: Record<string, any>;
+  updatedScore: Record<string, any>;
+  action: string;
+  updatedBy?: { _id: string; name: string; role: UserRole } | string;
+  createdAt: string;
+}
+
+export type TournamentFormat = 'KNOCKOUT' | 'LEAGUE' | 'GROUP_STAGE' | 'GROUP_KNOCKOUT';
+
+export interface TournamentData {
+  id: string;
+  _id?: string;
+  name: string;
+  sportType: SportOption;
+  format?: TournamentFormat;
+  logoUrl?: string;
+  location: string;
+  venueId?: string | VenueData | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  status: 'UPCOMING' | 'ONGOING' | 'COMPLETED';
+  description: string;
+  rules?: string;
+  groupCount?: number;
+  qualificationRules?: string;
+  organizerName: string;
+  season?: string;
+  isPublished?: boolean;
+  teamIds?: string[];
+  createdBy?: string;
+  createdAt: string;
+}
+
+export interface TeamData {
+  id: string;
+  _id?: string;
+  name: string;
+  shortName: string;
+  logoUrl: string;
+  sportType: SportOption;
+  city: string;
+  captainName: string;
+  bio?: string;
+  followersCount?: number;
+  tournamentId?: { _id: string; name: string } | string | null;
+  createdAt: string;
+}
+
+export interface PlayerData {
+  id: string;
+  _id?: string;
+  name: string;
+  teamId?: { _id: string; name: string; shortName?: string } | string | null;
+  sportType: SportOption;
+  role: string;
+  position?: string;
+  battingStyle?: string;
+  bowlingStyle?: string;
+  bio?: string;
+  jerseyNumber?: number | null;
+  avatarUrl: string;
+  createdAt: string;
+}
+
+export interface VenueData {
+  id: string;
+  _id?: string;
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  details?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  createdAt?: string;
+}
+
+export interface FixtureData {
+  id: string;
+  _id?: string;
+  tournamentId: string;
+  roundNumber: number;
+  roundName: string;
+  groupName?: string;
+  matchNumber: number;
+  teamAId?: string | null;
+  teamBId?: string | null;
+  teamAName: string;
+  teamBName: string;
+  teamALogo?: string;
+  teamBLogo?: string;
+  venueId?: string | VenueData | null;
+  location?: string;
+  scheduledAt?: string | null;
+  liveStreamId?: string | LiveStreamData | null;
+  status: 'SCHEDULED' | 'LIVE' | 'COMPLETED' | 'BYE' | 'CANCELLED';
+  isBye?: boolean;
+  winnerTeamId?: string | null;
+  winnerTeamName?: string;
+  nextFixtureId?: string | null;
+  nextFixtureSlot?: 'A' | 'B' | '';
+  resultConfirmed?: boolean;
+  resultSummary?: string;
+}
+
+export interface PointsTableRow {
+  teamId: string;
+  teamName: string;
+  shortName: string;
+  logoUrl: string;
+  groupName: string;
+  played: number;
+  won: number;
+  lost: number;
+  drawn: number;
+  tied: number;
+  noResult: number;
+  points: number;
+  scoreFor: number;
+  scoreAgainst: number;
+  scoreDiff: number;
+  netRunRate: number | null;
+  oversFacedBalls?: number;
+  oversBowledBalls?: number;
+}
+
+export interface MatchHighlightData {
+  id: string;
+  _id?: string;
+  liveStreamId: string;
+  eventType: string;
+  videoTimestampSeconds: number;
+  description: string;
+  teamSide?: 'A' | 'B' | '';
+  playerId?: string | null;
+  playerName?: string;
+  createdBy?: { _id: string; name: string } | string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PlayerMatchStatRecord {
+  _id?: string;
+  id?: string;
+  liveStreamId: string;
+  tournamentId?: string | null;
+  teamId?: string | null;
+  playerId: string | { _id: string; id?: string; name?: string };
+  sportType: SportOption;
+  runs: number;
+  ballsFaced: number;
+  fours: number;
+  sixes: number;
+  wickets: number;
+  oversBowledBalls: number;
+  runsConceded: number;
+  catches: number;
+  raidPoints: number;
+  tacklePoints: number;
+  bonusPoints: number;
+  superRaids: number;
+  superTackles: number;
+  attackPoints: number;
+  blockPoints: number;
+  serveAces: number;
+  goals: number;
+  assists: number;
+  yellowCards: number;
+  redCards: number;
+  saves: number;
+  isMvp: boolean;
+  appearances: number;
+}
+
+export interface LeaderboardEntry {
+  playerId: string;
+  playerName: string;
+  avatarUrl: string;
+  teamId?: string | null;
+  teamName: string;
+  teamShortName?: string;
+  sportType: SportOption;
+  matches: number;
+  runs?: number;
+  wickets?: number;
+  raidPoints?: number;
+  tacklePoints?: number;
+  totalKabaddiPoints?: number;
+  attackPoints?: number;
+  blockPoints?: number;
+  serveAces?: number;
+  goals?: number;
+  assists?: number;
+  mvpAwards?: number;
+}
+
+export interface ChatMessageData {
+  id: string;
+  _id?: string;
+  liveStreamId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  message: string;
+  isDeleted?: boolean;
+  reportedCount?: number;
+  createdAt: string;
+}
+
+export interface PollOptionData {
+  id: string;
+  label: string;
+  votes: number;
+}
+
+export interface PollData {
+  id: string;
+  _id?: string;
+  liveStreamId: string;
+  question: string;
+  options: PollOptionData[];
+  totalVotes: number;
+  userVotedOptionId?: string | null;
+  status: 'OPEN' | 'CLOSED';
+  createdAt: string;
+}
+
+export interface NotificationData {
+  id: string;
+  _id?: string;
+  type: string;
+  title: string;
+  message: string;
+  entityType?: string;
+  entityId?: string;
+  link?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface SponsorData {
+  id: string;
+  _id?: string;
+  name: string;
+  logoUrl: string;
+  websiteUrl: string;
+  contactInfo: string;
+  sponsorshipType: string;
+  tournamentId?: { _id: string; name: string } | string | null;
+  liveStreamId?: { _id: string; matchTitle?: string } | string | null;
+  isPublished: boolean;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface SponsorOverlayData {
+  id: string;
+  _id?: string;
+  sponsorId: string | SponsorData;
+  sponsor?: SponsorData | null;
+  liveStreamId?: { _id: string; matchTitle?: string; teamAName?: string; teamBName?: string } | string | null;
+  tournamentId?: { _id: string; name: string } | string | null;
+  position: ScoreboardPosition;
+  durationSeconds: number;
+  displayOrder: number;
+  mode: 'BANNER' | 'ANNOUNCEMENT';
+  announcementText?: string;
+  isVisible: boolean;
+}
+
+export interface MatchReportData {
+  id: string;
+  _id?: string;
+  liveStreamId:
+    | string
+    | { _id: string; matchTitle?: string; teamAName?: string; teamBName?: string; youtubeVideoId?: string; gameName?: string; status?: string };
+  stream?: { id?: string; matchTitle?: string; teamAName?: string; teamBName?: string; gameName?: string; status?: string } | null;
+  category: 'STREAM_DOWN' | 'WRONG_SCORE' | 'AUDIO_VIDEO_ISSUE' | 'CHAT_ABUSE' | 'OTHER';
+  description: string;
+  reporterName: string;
+  reporterEmail: string;
+  status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'DISMISSED';
+  resolutionNotes?: string;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ViewerAnalyticsSummary {
+  summary: {
+    totalActiveSocketViewers: number;
+    totalPlatformViews: number;
+    totalReplayViews: number;
+    totalWatchSeconds: number;
+    streamsTracked: number;
+    sourceNote: string;
+  };
+  perMatch: Array<{
+    streamId: string;
+    matchTitle: string;
+    gameName: string;
+    status: string;
+    liveSocketViewers: number;
+    totalViews: number;
+    replayViews: number;
+    uniqueSessions: number;
+    totalWatchSeconds: number;
+  }>;
+}
+
+export interface SubscriptionPlanData {
+  id: string;
+  _id?: string;
+  code: string;
+  name: string;
+  monthlyPrice: number;
+  currency: string;
+  maxActiveStreams: number;
+  maxTournaments: number;
+  features: string[];
+  isActive: boolean;
+}
+
+export interface OrganizerSubscriptionData {
+  id: string;
+  _id?: string;
+  organizerUserId: string | { _id: string; name: string; email: string };
+  planId: string | SubscriptionPlanData;
+  status: 'ACTIVE' | 'PENDING' | 'EXPIRED' | 'CANCELLED';
+  startedAt: string;
+  expiresAt?: string | null;
+  notes?: string;
+}
+
+export interface RevenueRecordData {
+  id: string;
+  _id?: string;
+  organizerUserId?: string;
+  tournamentId?: { _id: string; name: string } | string | null;
+  sourceType: 'SUBSCRIPTION' | 'SPONSORSHIP' | 'REGISTRATION' | 'OTHER';
+  description: string;
+  amount: number;
+  currency: string;
+  status: 'RECORDED' | 'PAID' | 'REFUNDED';
+  referenceNumber?: string;
+  recordedAt: string;
+}
+
+export interface DashboardStats {
+  totalStreams: number;
+  liveStreams: number;
+  endedStreams: number;
+  upcomingStreams: number;
+  availableReplays: number;
+  publishedReplays: number;
+  tournamentsCount: number;
+  teamsCount: number;
+  playersCount: number;
+  openReportsCount?: number;
+  totalPlatformViews?: number;
+}
+
+export interface ActivityLogItem {
+  _id: string;
+  actorName: string;
+  actorRole: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  details: string;
+  previousValue?: Record<string, any> | null;
+  newValue?: Record<string, any> | null;
+  createdAt: string;
+}

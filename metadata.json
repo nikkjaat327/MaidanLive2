@@ -1,0 +1,6 @@
+{
+  "name": "MaidanLive",
+  "description": "Live sports streaming and real-time multi-sport scoreboard platform with separate Admin and Customer portals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
