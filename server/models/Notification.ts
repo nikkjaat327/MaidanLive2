@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface INotification extends Document {
   userId: mongoose.Types.ObjectId;
@@ -54,4 +55,5 @@ const notificationSchema = new Schema<INotification>(
 notificationSchema.index({ userId: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, dedupeKey: 1 }, { unique: true, sparse: true });
 
-export const Notification = mongoose.model<INotification>('Notification', notificationSchema);
+const MongooseNotification = mongoose.model<INotification>('Notification', notificationSchema);
+export const Notification = createDualModel<INotification>('notifications', MongooseNotification);

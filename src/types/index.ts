@@ -2,6 +2,9 @@ import type { UserRole } from '../constants/roles.ts';
 import type { SportOption } from '../constants/sports.ts';
 
 export type ScoreboardPosition = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
+export type StreamingProvider = 'youtube' | 'mediamtx';
+export type ViewerCountVisibility = 'public' | 'admin_only' | 'hidden';
+export type SponsorPlacement = 'live_match' | 'home_feed' | 'tournament_banner';
 
 export interface UserPermissions {
   manageStreams: boolean;
@@ -31,6 +34,7 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   permissions: UserPermissions;
+  granularPermissions?: string[];
   assignedStreamIds?: string[];
   assignedTournamentIds?: string[];
   followedTeamIds?: string[];
@@ -40,6 +44,9 @@ export interface AuthUser {
   isActive: boolean;
   phone?: string;
   favoriteSport?: string;
+  totpEnabled?: boolean;
+  failedLoginAttempts?: number;
+  lockedUntil?: string | null;
   lastLoginAt?: string;
   createdAt?: string;
 }
@@ -61,6 +68,25 @@ export type MatchResultType =
   | 'NO_RESULT'
   | 'ABANDONED'
   | '';
+
+export interface StreamHealthData {
+  ok: boolean;
+  status: string;
+  checkedAt?: string | null;
+  latencyMs?: number;
+  detail?: string;
+}
+
+export interface ProviderSwitchHistoryItem {
+  fromProvider: StreamingProvider;
+  toProvider: StreamingProvider;
+  switchedBy: string;
+  switchedByName: string;
+  switchedAt: string;
+  reason: string;
+  status: 'SUCCESS' | 'REJECTED' | 'FAILED';
+  detail?: string;
+}
 
 export interface LiveScoreData {
   _id?: string;
@@ -91,8 +117,21 @@ export interface LiveScoreData {
 export interface LiveStreamData {
   id: string;
   _id?: string;
+  streamingProvider?: StreamingProvider;
+  activeStreamingProvider?: StreamingProvider;
   youtubeVideoId: string;
   youtubeInput: string;
+  youtubeStreamStatus?: 'UNKNOWN' | 'READY' | 'LIVE' | 'UNAVAILABLE';
+  mediamtxStreamPath?: string;
+  mediamtxPublishStatus?: 'IDLE' | 'PUBLISHING' | 'OFFLINE' | 'ERROR';
+  mediamtxPlaybackUrl?: string;
+  mediamtxWebrtcUrl?: string;
+  streamHealth?: StreamHealthData;
+  lastProviderSwitchAt?: string | null;
+  lastProviderSwitchByName?: string;
+  providerSwitchHistory?: ProviderSwitchHistoryItem[];
+  viewerCountVisibility?: ViewerCountVisibility;
+  activeViewers?: number | null;
   teamAName: string;
   teamBName: string;
   teamAId?: string | null;
@@ -105,11 +144,15 @@ export interface LiveStreamData {
   matchTitle: string;
   tournamentName: string;
   tournamentId?: string | null;
+  fixtureId?: string | null;
+  roundName?: string;
   matchDate?: string | null;
   matchDescription: string;
   status: StreamStatus;
   startedAt?: string | null;
   endedAt?: string | null;
+  authorizedScorerId?: string | null;
+  backupScorerId?: string | null;
   replayVideoId: string;
   replayInput: string;
   replayAvailable: boolean;
@@ -125,6 +168,63 @@ export interface LiveStreamData {
   createdAt: string;
   updatedAt: string;
   score?: LiveScoreData | null;
+}
+
+export interface NormalizedBroadcast {
+  id: string;
+  sourceType: 'match' | 'stream';
+  sport: SportOption;
+  status: StreamStatus;
+  title: string;
+  tournamentName: string;
+  tournamentId?: string | null;
+  roundName: string;
+  venueName: string;
+  matchDate?: string | null;
+  activeProvider: StreamingProvider;
+  youtubeVideoId: string;
+  replayVideoId: string;
+  replayAvailable: boolean;
+  replayPublished: boolean;
+  mediamtxPlaybackUrl: string;
+  mediamtxWebrtcUrl: string;
+  mediamtxPublishStatus: string;
+  viewerCountVisibility: ViewerCountVisibility;
+  activeViewers: number | null;
+  chatEnabled: boolean;
+  highlightsEnabled: boolean;
+  scoreboardVisibleByDefault: boolean;
+  teamA: {
+    id?: string | null;
+    name: string;
+    shortName: string;
+    logoUrl: string;
+    primaryText: string;
+    secondaryText: string;
+    badgeText?: string;
+  };
+  teamB: {
+    id?: string | null;
+    name: string;
+    shortName: string;
+    logoUrl: string;
+    primaryText: string;
+    secondaryText: string;
+    badgeText?: string;
+  };
+  centerMeta: {
+    statusLabel: string;
+    timerOrClock: string;
+    periodLabel: string;
+    isLive: boolean;
+  };
+  subStripItems: Array<{ label: string; value: string; accent?: 'orange' | 'emerald' | 'blue' | 'red' | 'slate' }>;
+  resultBannerText: string;
+  resultDeclared: boolean;
+  winnerName: string;
+  mvpName: string;
+  score: LiveScoreData | null;
+  raw: LiveStreamData;
 }
 
 export interface ScoreHistoryItem {
@@ -173,10 +273,50 @@ export interface TournamentData {
   qualificationRules?: string;
   organizerName: string;
   season?: string;
+  prizeMoney?: string;
+  registrationOpen?: boolean;
+  registrationFee?: number;
   isPublished?: boolean;
   teamIds?: string[];
   createdBy?: string;
   createdAt: string;
+}
+
+export interface RosterPlayerEntry {
+  name: string;
+  role: string;
+  jerseyNumber?: number | null;
+  dateOfBirth: string;
+  isMinor: boolean;
+  guardianName?: string;
+  guardianPhone?: string;
+  guardianConsent?: boolean;
+}
+
+export interface TournamentRegistrationData {
+  id: string;
+  _id?: string;
+  tournamentId: string | TournamentData;
+  tournament?: TournamentData | null;
+  captainUserId: string;
+  teamId?: string | null;
+  teamName: string;
+  teamShortName: string;
+  teamLogoUrl: string;
+  city: string;
+  captainName: string;
+  captainPhone?: string;
+  captainEmail?: string;
+  verificationDocUrl?: string;
+  verificationNotes?: string;
+  roster: RosterPlayerEntry[];
+  feeAmount: number;
+  feeStatus: 'WAIVED' | 'PENDING' | 'PAID';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+  reviewNotes?: string;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TeamData {
@@ -207,6 +347,9 @@ export interface PlayerData {
   bio?: string;
   jerseyNumber?: number | null;
   avatarUrl: string;
+  dateOfBirth?: string;
+  isMinor?: boolean;
+  isVerified?: boolean;
   createdAt: string;
 }
 
@@ -394,6 +537,11 @@ export interface SponsorData {
   websiteUrl: string;
   contactInfo: string;
   sponsorshipType: string;
+  placement?: SponsorPlacement;
+  tagline?: string;
+  ctaText?: string;
+  impressionsCount?: number;
+  clicksCount?: number;
   tournamentId?: { _id: string; name: string } | string | null;
   liveStreamId?: { _id: string; matchTitle?: string } | string | null;
   isPublished: boolean;
@@ -519,4 +667,47 @@ export interface ActivityLogItem {
   previousValue?: Record<string, any> | null;
   newValue?: Record<string, any> | null;
   createdAt: string;
+}
+
+export interface UserSessionData {
+  id: string;
+  portal: 'admin' | 'customer';
+  userAgent: string;
+  ipAddress: string;
+  isRevoked: boolean;
+  lastActiveAt: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface SecurityPolicyData {
+  enforceAdmin2FA: boolean;
+  maxFailedLoginAttempts: number;
+  lockoutMinutes: number;
+  providerSwitchGraceSeconds: number;
+  updatedByName?: string;
+  updatedAt?: string;
+}
+
+export interface DatabaseDiagnosticsData {
+  database: {
+    engine: 'mongodb' | 'sqlite';
+    mongoConfigured: boolean;
+    mongoConnected: boolean;
+    mongoReadyState: number;
+    lastMongoError: string | null;
+    lastRetryAt: string | null;
+    sqlitePath: string;
+    sqliteCounts: Record<string, number>;
+    totalSqliteRecords: number;
+    lastSyncSummary: { syncedCollections: number; syncedRecords: number; syncedAt: string } | null;
+  };
+  mediamtx: {
+    rtmpBase: string;
+    hlsBase: string;
+    webrtcBase: string;
+    apiConfigured: boolean;
+  };
+  nodeVersion: string;
+  uptimeSeconds: number;
 }

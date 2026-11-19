@@ -92,6 +92,23 @@ export const scoreboardService = {
     return data;
   },
 
+  async recordCricketBall(
+    streamId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ streamId: string; score: LiveScoreData; historyItem?: ScoreHistoryItem }> {
+    const { data } = await adminApi.post(`/live/${streamId}/cricket/ball`, payload);
+    return data;
+  },
+
+  async undoCricketBall(streamId: string): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    undoneAction: string;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/cricket/undo`);
+    return data;
+  },
+
   async resetScore(streamId: string): Promise<{ streamId: string; score: LiveScoreData }> {
     const { data } = await adminApi.post<{ streamId: string; score: LiveScoreData }>(
       `/live/${streamId}/score/reset`

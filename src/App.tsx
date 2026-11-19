@@ -1,5 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext.tsx';
+import { LanguageProvider } from './context/LanguageContext.tsx';
+import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
 import { AdminLayout, RequireAdminAuth } from './components/layout/AdminLayout.tsx';
 
@@ -30,6 +32,7 @@ import { AdminTournamentsPage } from './pages/admin/AdminTournamentsPage.tsx';
 import { AdminFixturesPage } from './pages/admin/AdminFixturesPage.tsx';
 import { AdminTeamsPage } from './pages/admin/AdminTeamsPage.tsx';
 import { AdminPlayersPage } from './pages/admin/AdminPlayersPage.tsx';
+import { AdminRegistrationsPage } from './pages/admin/AdminRegistrationsPage.tsx';
 import { AdminHighlightsPage } from './pages/admin/AdminHighlightsPage.tsx';
 import { AdminVenuesPage } from './pages/admin/AdminVenuesPage.tsx';
 import { AdminSponsorsPage } from './pages/admin/AdminSponsorsPage.tsx';
@@ -39,64 +42,71 @@ import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.tsx';
 import { AdminOrganizerMonetizationPage } from './pages/admin/AdminOrganizerMonetizationPage.tsx';
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage.tsx';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx';
+import { AdminPermissionsPage } from './pages/admin/AdminPermissionsPage.tsx';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.tsx';
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* Admin Portal Routes (Completely separate layout & auth) */}
-          <Route path="/admin/login" element={<AdminLoginPage />} />
-          <Route path="/admin" element={<RequireAdminAuth />}>
-            <Route element={<AdminLayout />}>
-              <Route index element={<Navigate to="/admin/dashboard" replace />} />
-              <Route path="dashboard" element={<AdminDashboardPage />} />
-              <Route path="live-streams" element={<AdminLiveStreamsPage />} />
-              <Route path="scoreboard" element={<AdminScoreboardPage />} />
-              <Route path="scoreboard/:id" element={<AdminScoreboardPage />} />
-              <Route path="tournaments" element={<AdminTournamentsPage />} />
-              <Route path="tournaments/:id/fixtures" element={<AdminFixturesPage />} />
-              <Route path="fixtures" element={<AdminFixturesPage />} />
-              <Route path="teams" element={<AdminTeamsPage />} />
-              <Route path="players" element={<AdminPlayersPage />} />
-              <Route path="highlights" element={<AdminHighlightsPage />} />
-              <Route path="venues" element={<AdminVenuesPage />} />
-              <Route path="sponsors" element={<AdminSponsorsPage />} />
-              <Route path="moderation" element={<AdminModerationPage />} />
-              <Route path="reports" element={<AdminReportsPage />} />
-              <Route path="analytics" element={<AdminAnalyticsPage />} />
-              <Route path="organizer" element={<AdminOrganizerMonetizationPage />} />
-              <Route path="audit-logs" element={<AdminAuditLogsPage />} />
-              <Route path="users" element={<AdminUsersPage />} />
-              <Route path="settings" element={<AdminSettingsPage />} />
-            </Route>
-          </Route>
+    <LanguageProvider>
+      <AdminThemeProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              {/* Admin Portal Routes (Completely separate layout & auth) */}
+              <Route path="/admin/login" element={<AdminLoginPage />} />
+              <Route path="/admin" element={<RequireAdminAuth />}>
+                <Route element={<AdminLayout />}>
+                  <Route index element={<Navigate to="/admin/dashboard" replace />} />
+                  <Route path="dashboard" element={<AdminDashboardPage />} />
+                  <Route path="live-streams" element={<AdminLiveStreamsPage />} />
+                  <Route path="scoreboard" element={<AdminScoreboardPage />} />
+                  <Route path="scoreboard/:id" element={<AdminScoreboardPage />} />
+                  <Route path="tournaments" element={<AdminTournamentsPage />} />
+                  <Route path="tournaments/:id/fixtures" element={<AdminFixturesPage />} />
+                  <Route path="fixtures" element={<AdminFixturesPage />} />
+                  <Route path="teams" element={<AdminTeamsPage />} />
+                  <Route path="players" element={<AdminPlayersPage />} />
+                  <Route path="registrations" element={<AdminRegistrationsPage />} />
+                  <Route path="highlights" element={<AdminHighlightsPage />} />
+                  <Route path="venues" element={<AdminVenuesPage />} />
+                  <Route path="sponsors" element={<AdminSponsorsPage />} />
+                  <Route path="moderation" element={<AdminModerationPage />} />
+                  <Route path="reports" element={<AdminReportsPage />} />
+                  <Route path="analytics" element={<AdminAnalyticsPage />} />
+                  <Route path="organizer" element={<AdminOrganizerMonetizationPage />} />
+                  <Route path="audit-logs" element={<AdminAuditLogsPage />} />
+                  <Route path="users" element={<AdminUsersPage />} />
+                  <Route path="permissions" element={<AdminPermissionsPage />} />
+                  <Route path="settings" element={<AdminSettingsPage />} />
+                </Route>
+              </Route>
 
-          {/* Customer Portal Routes */}
-          <Route element={<CustomerLayout />}>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/live" element={<LiveStreamsPage />} />
-            <Route path="/live/:id" element={<LiveMatchDetailPage />} />
-            <Route path="/tournaments" element={<TournamentsPage />} />
-            <Route path="/tournaments/:id" element={<TournamentDetailPage />} />
-            <Route path="/teams" element={<TeamsPage />} />
-            <Route path="/teams/:id" element={<TeamDetailPage />} />
-            <Route path="/players" element={<PlayersPage />} />
-            <Route path="/players/:id" element={<PlayerDetailPage />} />
-            <Route path="/leaderboards" element={<LeaderboardsPage />} />
-            <Route path="/following" element={<FollowingPage />} />
-            <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/replays" element={<ReplaysPage />} />
-            <Route path="/profile" element={<ProfilePage />} />
-            <Route path="/login" element={<CustomerLoginPage />} />
-            <Route path="/register" element={<CustomerRegisterPage />} />
-          </Route>
+              {/* Customer Portal Routes */}
+              <Route element={<CustomerLayout />}>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/live" element={<LiveStreamsPage />} />
+                <Route path="/live/:id" element={<LiveMatchDetailPage />} />
+                <Route path="/tournaments" element={<TournamentsPage />} />
+                <Route path="/tournaments/:id" element={<TournamentDetailPage />} />
+                <Route path="/teams" element={<TeamsPage />} />
+                <Route path="/teams/:id" element={<TeamDetailPage />} />
+                <Route path="/players" element={<PlayersPage />} />
+                <Route path="/players/:id" element={<PlayerDetailPage />} />
+                <Route path="/leaderboards" element={<LeaderboardsPage />} />
+                <Route path="/following" element={<FollowingPage />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/replays" element={<ReplaysPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/login" element={<CustomerLoginPage />} />
+                <Route path="/register" element={<CustomerRegisterPage />} />
+              </Route>
 
-          {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+              {/* Fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </AdminThemeProvider>
+    </LanguageProvider>
   );
 }

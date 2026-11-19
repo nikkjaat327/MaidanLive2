@@ -4,6 +4,12 @@ import { authService } from '../services/auth/authService.ts';
 import { platformOpsService } from '../services/platformOps/platformOpsService.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 
+interface LoginResult {
+  user?: AuthUser;
+  requires2FA?: boolean;
+  message?: string;
+}
+
 interface AuthContextValue {
   customerUser: AuthUser | null;
   customerLoading: boolean;
@@ -12,17 +18,18 @@ interface AuthContextValue {
   unreadNotifications: number;
   refreshNotifications: () => Promise<void>;
   updateCustomerUser: (user: AuthUser) => void;
-  loginCustomer: (email: string, password: string) => Promise<AuthUser>;
+  loginCustomer: (email: string, password: string, totpCode?: string) => Promise<LoginResult>;
   registerCustomer: (payload: {
     name: string;
     email: string;
     password: string;
     phone?: string;
     favoriteSport?: string;
+    role?: 'SPECTATOR' | 'CAPTAIN';
   }) => Promise<AuthUser>;
   logoutCustomer: () => void;
   refreshCustomer: () => Promise<void>;
-  loginAdmin: (email: string, password: string) => Promise<AuthUser>;
+  loginAdmin: (email: string, password: string, totpCode?: string) => Promise<LoginResult>;
   bootstrapSuperAdmin: (payload: {
     name: string;
     email: string;
@@ -143,12 +150,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const loginCustomer = useCallback(
-    async (email: string, password: string) => {
-      const res = await authService.loginCustomer({ email, password });
+    async (email: string, password: string, totpCode?: string): Promise<LoginResult> => {
+      const res = await authService.loginCustomer({ email, password, totpCode });
+      if (res.requires2FA) {
+        return { requires2FA: true, message: res.message };
+      }
       authService.saveCustomerToken(res.token);
       setCustomerUser(res.user);
       refreshNotifications();
-      return res.user;
+      return { user: res.user };
     },
     [refreshNotifications]
   );
@@ -160,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       password: string;
       phone?: string;
       favoriteSport?: string;
+      role?: 'SPECTATOR' | 'CAPTAIN';
     }) => {
       const res = await authService.registerCustomer(payload);
       authService.saveCustomerToken(res.token);
@@ -171,17 +182,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logoutCustomer = useCallback(() => {
+    authService.logoutSession('customer').catch(() => {});
     authService.clearCustomerToken();
     setCustomerUser(null);
     setUnreadNotifications(0);
   }, []);
 
-  const loginAdmin = useCallback(async (email: string, password: string) => {
-    const res = await authService.loginAdmin({ email, password });
-    authService.saveAdminToken(res.token);
-    setAdminUser(res.user);
-    return res.user;
-  }, []);
+  const loginAdmin = useCallback(
+    async (email: string, password: string, totpCode?: string): Promise<LoginResult> => {
+      const res = await authService.loginAdmin({ email, password, totpCode });
+      if (res.requires2FA) {
+        return { requires2FA: true, message: res.message };
+      }
+      authService.saveAdminToken(res.token);
+      setAdminUser(res.user);
+      return { user: res.user };
+    },
+    []
+  );
 
   const bootstrapSuperAdmin = useCallback(
     async (payload: { name: string; email: string; password: string; setupKey?: string }) => {
@@ -194,6 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logoutAdmin = useCallback(() => {
+    authService.logoutSession('admin').catch(() => {});
     authService.clearAdminToken();
     setAdminUser(null);
   }, []);

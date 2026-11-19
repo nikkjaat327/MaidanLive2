@@ -1,0 +1,56 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: maidanlive-mediamtx
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "1935:1935"     # RTMP ingest
+      - "8888:8888"     # LL-HLS playback (behind Nginx in production)
+      - "8889:8889"     # WebRTC WHEP HTTP signaling
+      - "8189:8189/udp" # WebRTC ICE/RTP media UDP
+      - "8189:8189/tcp" # WebRTC ICE/RTP media TCP
+      - "127.0.0.1:9997:9997" # Control API bound to localhost / internal Docker network
+
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: maidanlive-app
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      JWT_SECRET: "${JWT_SECRET:-change-this-in-production-to-64-chars}"
+      MONGODB_URI: "${MONGODB_URI:-}"
+      SQLITE_DB_PATH: "/data/maidanlive.db"
+      # Public endpoints advertised to browsers / OBS Studio
+      MEDIAMTX_RTMP_URL: "${MEDIAMTX_RTMP_URL:-rtmp://localhost:1935}"
+      MEDIAMTX_HLS_URL: "${MEDIAMTX_HLS_URL:-http://localhost:8888}"
+      MEDIAMTX_WEBRTC_URL: "${MEDIAMTX_WEBRTC_URL:-http://localhost:8889}"
+      # Internal Docker network Control API URL used by server health checks
+      MEDIAMTX_API_URL: "http://mediamtx:9997"
+      BOOTSTRAP_SUPER_ADMIN_EMAIL: "${BOOTSTRAP_SUPER_ADMIN_EMAIL:-}"
+      BOOTSTRAP_SUPER_ADMIN_PASSWORD: "${BOOTSTRAP_SUPER_ADMIN_PASSWORD:-}"
+      BOOTSTRAP_SUPER_ADMIN_NAME: "${BOOTSTRAP_SUPER_ADMIN_NAME:-Super Admin}"
+    volumes:
+      - maidanlive_data:/data
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  mongo:
+    image: mongo:7
+    container_name: maidanlive-mongo
+    profiles: ["mongo"]
+    restart: unless-stopped
+    volumes:
+      - maidanlive_mongo:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+
+volumes:
+  maidanlive_data:
+  maidanlive_mongo:

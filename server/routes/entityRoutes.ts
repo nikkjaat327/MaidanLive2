@@ -10,7 +10,7 @@ import { LiveScore } from '../models/LiveScore.ts';
 import { Fixture } from '../models/Fixture.ts';
 import { Venue } from '../models/Venue.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
-import { User } from '../models/User.ts';
+import { User, ALL_GRANULAR_PERMISSIONS } from '../models/User.ts';
 import type { UserRole } from '../models/User.ts';
 import { ActivityLog } from '../models/ActivityLog.ts';
 import {
@@ -293,6 +293,9 @@ router.post(
         qualificationRules: sanitizeText(req.body.qualificationRules, 400),
         organizerName: sanitizeText(req.body.organizerName, 120) || req.user!.name,
         season: sanitizeText(req.body.season, 60),
+        prizeMoney: sanitizeText(req.body.prizeMoney, 120),
+        registrationOpen: req.body.registrationOpen === true,
+        registrationFee: Math.max(0, Number(req.body.registrationFee) || 0),
         isPublished: req.body.isPublished === false ? false : true,
         teamIds,
         createdBy: req.user!._id,
@@ -409,6 +412,15 @@ router.patch(
         tournament.organizerName = sanitizeText(req.body.organizerName, 120);
       }
       if (req.body.season !== undefined) tournament.season = sanitizeText(req.body.season, 60);
+      if (req.body.prizeMoney !== undefined) {
+        tournament.prizeMoney = sanitizeText(req.body.prizeMoney, 120);
+      }
+      if (typeof req.body.registrationOpen === 'boolean') {
+        tournament.registrationOpen = req.body.registrationOpen;
+      }
+      if (req.body.registrationFee !== undefined) {
+        tournament.registrationFee = Math.max(0, Number(req.body.registrationFee) || 0);
+      }
       if (typeof req.body.isPublished === 'boolean') tournament.isPublished = req.body.isPublished;
       if (Array.isArray(req.body.teamIds)) {
         tournament.teamIds = req.body.teamIds.filter((tid: string) =>
@@ -846,6 +858,17 @@ router.post(
           ? Math.max(0, Math.min(999, Number(req.body.jerseyNumber)))
           : null;
 
+      const dob = sanitizeText(req.body.dateOfBirth, 30);
+      let isMinor = Boolean(req.body.isMinor);
+      if (dob) {
+        const parsedDob = new Date(dob);
+        if (!isNaN(parsedDob.getTime())) {
+          const ageMs = Date.now() - parsedDob.getTime();
+          const ageYears = ageMs / (365.25 * 24 * 60 * 60 * 1000);
+          isMinor = ageYears < 18;
+        }
+      }
+
       const player = await Player.create({
         name,
         teamId,
@@ -854,6 +877,10 @@ router.post(
         jerseyNumber,
         avatarUrl: sanitizeImageUrl(req.body.avatarUrl),
         bio: sanitizeText(req.body.bio, 500),
+        dateOfBirth: dob,
+        isMinor,
+        isVerified: Boolean(req.body.isVerified),
+        verifiedBy: req.body.isVerified ? req.user!._id : null,
         createdBy: req.user!._id,
         updatedBy: req.user!._id,
       });
@@ -916,6 +943,22 @@ router.patch(
             ? Math.max(0, Math.min(999, Number(req.body.jerseyNumber)))
             : null;
       }
+      if (req.body.dateOfBirth !== undefined) {
+        const dob = sanitizeText(req.body.dateOfBirth, 30);
+        player.dateOfBirth = dob;
+        if (dob) {
+          const parsedDob = new Date(dob);
+          if (!isNaN(parsedDob.getTime())) {
+            const ageYears = (Date.now() - parsedDob.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+            player.isMinor = ageYears < 18;
+          }
+        }
+      }
+      if (typeof req.body.isMinor === 'boolean') player.isMinor = req.body.isMinor;
+      if (typeof req.body.isVerified === 'boolean') {
+        player.isVerified = req.body.isVerified;
+        player.verifiedBy = req.body.isVerified ? (req.user!._id as mongoose.Types.ObjectId) : null;
+      }
       player.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await player.save();
 
@@ -957,25 +1000,66 @@ router.delete(
   }
 );
 
-// ==================== ADMIN USER MANAGEMENT (SUPER_ADMIN ONLY) ====================
+router.post(
+  '/players/:id/verify',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('managePlayers'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid player ID.' });
+        return;
+      }
+      const player = await Player.findById(id);
+      if (!player) {
+        res.status(404).json({ message: 'Player not found.' });
+        return;
+      }
+      player.isVerified = req.body.isVerified !== false;
+      player.verifiedBy = player.isVerified ? (req.user!._id as mongoose.Types.ObjectId) : null;
+      player.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await player.save();
+      await recordActivity(
+        req.user!,
+        player.isVerified ? 'VERIFY_PLAYER' : 'UNVERIFY_PLAYER',
+        'Player',
+        id,
+        player.name
+      );
+      res.json({ player: { ...player.toObject(), id: player._id.toString() } });
+    } catch (err) {
+      console.error('[Players] Verify error:', err);
+      res.status(500).json({ message: 'Failed to update player verification.' });
+    }
+  }
+);
+
+// ==================== ADMIN USER MANAGEMENT (SUPER_ADMIN / ADMIN VIEW) ====================
 router.get(
   '/admin/users',
   authenticate,
   requireAdminPortal,
-  requireRole('SUPER_ADMIN'),
+  requireRole('SUPER_ADMIN', 'ADMIN'),
   async (_req: AuthenticatedRequest, res: Response) => {
     try {
       const users = await User.find().sort({ createdAt: -1 }).lean();
       res.json({
+        allPermissions: ALL_GRANULAR_PERMISSIONS,
         users: users.map((u) => ({
           id: u._id.toString(),
           name: u.name,
           email: u.email,
           role: u.role,
           permissions: u.permissions,
+          granularPermissions: u.granularPermissions || [],
           assignedStreamIds: (u.assignedStreamIds || []).map((id) => id.toString()),
           assignedTournamentIds: (u.assignedTournamentIds || []).map((id) => id.toString()),
           isActive: u.isActive,
+          totpEnabled: Boolean(u.totpEnabled),
+          failedLoginAttempts: u.failedLoginAttempts || 0,
+          lockedUntil: u.lockedUntil || null,
           lastLoginAt: u.lastLoginAt,
           createdAt: u.createdAt,
         })),
@@ -1005,9 +1089,10 @@ router.post(
         'TOURNAMENT_ORGANIZER',
         'MODERATOR',
         'SCORER',
+        'CAPTAIN',
       ];
       if (!allowedRoles.includes(role)) {
-        res.status(400).json({ message: 'Invalid administrative role.' });
+        res.status(400).json({ message: 'Invalid role.' });
         return;
       }
 
@@ -1027,14 +1112,14 @@ router.post(
       const isManager = role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'TOURNAMENT_ORGANIZER';
       const defaultPerms = {
         manageStreams: isManager,
-        manageScores: role !== 'MODERATOR',
+        manageScores: role !== 'MODERATOR' && role !== 'CAPTAIN',
         manageTournaments: isManager,
         manageTeams: isManager,
         managePlayers: isManager,
         moderateChat: role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MODERATOR',
         manageSponsors: role === 'SUPER_ADMIN' || role === 'ADMIN',
         manageVenues: isManager,
-        declareResults: role !== 'MODERATOR',
+        declareResults: role !== 'MODERATOR' && role !== 'CAPTAIN',
       };
 
       const perms = req.body.permissions
@@ -1051,6 +1136,10 @@ router.post(
           }
         : defaultPerms;
 
+      const granularPermissions = Array.isArray(req.body.granularPermissions)
+        ? req.body.granularPermissions.filter((p: unknown): p is string => typeof p === 'string')
+        : [];
+
       const passwordHash = await bcrypt.hash(password, 10);
       const user = await User.create({
         name,
@@ -1058,6 +1147,7 @@ router.post(
         passwordHash,
         role,
         permissions: perms,
+        granularPermissions,
         assignedStreamIds: Array.isArray(req.body.assignedStreamIds)
           ? req.body.assignedStreamIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id))
           : [],
@@ -1083,6 +1173,7 @@ router.post(
           email: user.email,
           role: user.role,
           permissions: user.permissions,
+          granularPermissions: user.granularPermissions || [],
           isActive: user.isActive,
           createdAt: user.createdAt,
         },
@@ -1114,9 +1205,15 @@ router.patch(
 
       if (
         req.body.role &&
-        ['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'MODERATOR', 'SCORER', 'SPECTATOR'].includes(
-          req.body.role
-        )
+        [
+          'SUPER_ADMIN',
+          'ADMIN',
+          'TOURNAMENT_ORGANIZER',
+          'MODERATOR',
+          'SCORER',
+          'CAPTAIN',
+          'SPECTATOR',
+        ].includes(req.body.role)
       ) {
         user.role = req.body.role;
       }
@@ -1132,6 +1229,18 @@ router.patch(
           manageVenues: Boolean(req.body.permissions.manageVenues),
           declareResults: req.body.permissions.declareResults !== false,
         };
+      }
+      if (Array.isArray(req.body.granularPermissions)) {
+        user.granularPermissions = req.body.granularPermissions.filter(
+          (p: unknown): p is string => typeof p === 'string'
+        );
+      }
+      if (req.body.unlockAccount === true) {
+        user.failedLoginAttempts = 0;
+        user.lockedUntil = null;
+      }
+      if (typeof req.body.newPassword === 'string' && req.body.newPassword.length >= 6) {
+        user.passwordHash = await bcrypt.hash(req.body.newPassword, 10);
       }
       if (typeof req.body.isActive === 'boolean') {
         if (user._id.toString() === req.user!._id.toString() && !req.body.isActive) {
@@ -1162,9 +1271,13 @@ router.patch(
           email: user.email,
           role: user.role,
           permissions: user.permissions,
+          granularPermissions: user.granularPermissions || [],
           assignedStreamIds: user.assignedStreamIds,
           assignedTournamentIds: user.assignedTournamentIds,
           isActive: user.isActive,
+          totpEnabled: Boolean(user.totpEnabled),
+          failedLoginAttempts: user.failedLoginAttempts || 0,
+          lockedUntil: user.lockedUntil || null,
         },
       });
     } catch (err) {

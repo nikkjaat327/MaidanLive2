@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
+import { createDualModel } from '../db/dualModel.ts';
 
 export type TournamentFormat = 'KNOCKOUT' | 'LEAGUE' | 'GROUP_STAGE' | 'GROUP_KNOCKOUT';
 
@@ -16,6 +17,9 @@ export interface ITournament extends Document {
   status: 'UPCOMING' | 'ONGOING' | 'COMPLETED';
   description: string;
   rules: string;
+  prizeMoney: string;
+  registrationOpen: boolean;
+  registrationFee: number;
   groupCount: number;
   qualificationRules: string;
   organizerName: string;
@@ -55,6 +59,9 @@ const tournamentSchema = new Schema<ITournament>(
     },
     description: { type: String, trim: true, default: '', maxlength: 1500 },
     rules: { type: String, trim: true, default: '', maxlength: 2000 },
+    prizeMoney: { type: String, trim: true, default: '', maxlength: 120 },
+    registrationOpen: { type: Boolean, default: true },
+    registrationFee: { type: Number, default: 0, min: 0 },
     groupCount: { type: Number, default: 2, min: 1, max: 8 },
     qualificationRules: { type: String, trim: true, default: '', maxlength: 400 },
     organizerName: { type: String, trim: true, default: '', maxlength: 120 },
@@ -67,4 +74,5 @@ const tournamentSchema = new Schema<ITournament>(
   { timestamps: true }
 );
 
-export const Tournament = mongoose.model<ITournament>('Tournament', tournamentSchema);
+const MongooseTournament = mongoose.model<ITournament>('Tournament', tournamentSchema);
+export const Tournament = createDualModel<ITournament>('tournaments', MongooseTournament);

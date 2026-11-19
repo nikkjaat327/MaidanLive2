@@ -26,6 +26,9 @@ export function AdminTournamentsPage() {
   const [sportType, setSportType] = useState<SportOption>('Cricket');
   const [format, setFormat] = useState<TournamentFormat>('KNOCKOUT');
   const [season, setSeason] = useState('');
+  const [prizeMoney, setPrizeMoney] = useState('');
+  const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [registrationFee, setRegistrationFee] = useState('0');
   const [logoUrl, setLogoUrl] = useState('');
   const [venueId, setVenueId] = useState('');
   const [location, setLocation] = useState('');
@@ -72,6 +75,9 @@ export function AdminTournamentsPage() {
     setSportType('Cricket');
     setFormat('KNOCKOUT');
     setSeason('');
+    setPrizeMoney('');
+    setRegistrationOpen(false);
+    setRegistrationFee('0');
     setLogoUrl('');
     setVenueId('');
     setLocation('');
@@ -94,6 +100,9 @@ export function AdminTournamentsPage() {
     setSportType(t.sportType);
     setFormat(t.format || 'KNOCKOUT');
     setSeason(t.season || '');
+    setPrizeMoney(t.prizeMoney || '');
+    setRegistrationOpen(Boolean(t.registrationOpen));
+    setRegistrationFee(String(t.registrationFee ?? 0));
     setLogoUrl(t.logoUrl || '');
     setVenueId(
       typeof t.venueId === 'object' && t.venueId
@@ -128,6 +137,9 @@ export function AdminTournamentsPage() {
         sportType,
         format,
         season: season.trim(),
+        prizeMoney: prizeMoney.trim(),
+        registrationOpen,
+        registrationFee: Math.max(0, Number(registrationFee) || 0),
         logoUrl: logoUrl.trim(),
         venueId: venueId || null,
         location: location.trim(),
@@ -240,12 +252,24 @@ export function AdminTournamentsPage() {
                     </div>
                   </td>
                   <td className="py-3 px-4 text-slate-600">
-                    <span>{t.status}</span>
-                    {t.isPublished === false && (
-                      <span className="ml-2 text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
-                        Draft
-                      </span>
-                    )}
+                    <div>{t.status}</div>
+                    <div className="flex flex-wrap gap-1 mt-0.5">
+                      {t.isPublished === false && (
+                        <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                          Draft
+                        </span>
+                      )}
+                      {t.registrationOpen && (
+                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                          Reg Open{t.registrationFee ? ` (₹${t.registrationFee})` : ' (Free)'}
+                        </span>
+                      )}
+                      {t.prizeMoney && (
+                        <span className="text-[11px] font-semibold text-[#EA580C] bg-orange-50 px-1.5 py-0.5 rounded">
+                          Prize: {t.prizeMoney}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="py-3 px-4 text-slate-600">{t.location || '—'}</td>
                   <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -436,6 +460,31 @@ export function AdminTournamentsPage() {
                 className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Prize Money / Pool (Optional)
+              </label>
+              <input
+                type="text"
+                value={prizeMoney}
+                onChange={(e) => setPrizeMoney(e.target.value)}
+                placeholder="e.g. ₹50,000 + Trophy"
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Entry Registration Fee (₹)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={registrationFee}
+                onChange={(e) => setRegistrationFee(e.target.value)}
+                placeholder="0 for Free"
+                className="w-full min-h-[42px] px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+              />
+            </div>
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Tournament Logo URL (Optional)
@@ -508,15 +557,26 @@ export function AdminTournamentsPage() {
             </div>
           )}
 
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isPublished}
-              onChange={(e) => setIsPublished(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-            />
-            <span>Publish tournament publicly on Customer Portal</span>
-          </label>
+          <div className="flex flex-wrap items-center gap-6">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isPublished}
+                onChange={(e) => setIsPublished(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-emerald-600"
+              />
+              <span>Publish tournament publicly on Customer Portal</span>
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={registrationOpen}
+                onChange={(e) => setRegistrationOpen(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+              />
+              <span>Open Captain Team Registration</span>
+            </label>
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <button

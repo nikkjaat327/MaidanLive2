@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface IPlayerMatchStat extends Document {
   liveStreamId: mongoose.Types.ObjectId;
@@ -78,7 +79,11 @@ const playerMatchStatSchema = new Schema<IPlayerMatchStat>(
 
 playerMatchStatSchema.index({ liveStreamId: 1, playerId: 1 }, { unique: true });
 
-export const PlayerMatchStat = mongoose.model<IPlayerMatchStat>(
+const MongoosePlayerMatchStat = mongoose.model<IPlayerMatchStat>(
   'PlayerMatchStat',
   playerMatchStatSchema
+);
+export const PlayerMatchStat = createDualModel<IPlayerMatchStat>(
+  'playermatchstats',
+  MongoosePlayerMatchStat
 );

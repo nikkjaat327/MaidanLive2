@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface IPollOption {
   id: string;
@@ -50,4 +51,5 @@ const pollSchema = new Schema<IPoll>(
 
 pollSchema.index({ liveStreamId: 1, status: 1, createdAt: -1 });
 
-export const Poll = mongoose.model<IPoll>('Poll', pollSchema);
+const MongoosePoll = mongoose.model<IPoll>('Poll', pollSchema);
+export const Poll = createDualModel<IPoll>('polls', MongoosePoll);

@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface IPlayer extends Document {
   name: string;
@@ -13,6 +14,10 @@ export interface IPlayer extends Document {
   bio: string;
   jerseyNumber?: number | null;
   avatarUrl: string;
+  dateOfBirth?: string;
+  isMinor?: boolean;
+  isVerified?: boolean;
+  verifiedBy?: mongoose.Types.ObjectId | null;
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -36,10 +41,15 @@ const playerSchema = new Schema<IPlayer>(
     bio: { type: String, trim: true, default: '', maxlength: 600 },
     jerseyNumber: { type: Number, default: null, min: 0, max: 999 },
     avatarUrl: { type: String, trim: true, default: '' },
+    dateOfBirth: { type: String, trim: true, default: '' },
+    isMinor: { type: Boolean, default: false },
+    isVerified: { type: Boolean, default: false },
+    verifiedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }
 );
 
-export const Player = mongoose.model<IPlayer>('Player', playerSchema);
+const MongoosePlayer = mongoose.model<IPlayer>('Player', playerSchema);
+export const Player = createDualModel<IPlayer>('players', MongoosePlayer);

@@ -1,4 +1,5 @@
 import {
+  DatabaseDiagnosticsData,
   LeaderboardEntry,
   MatchReportData,
   NotificationData,
@@ -8,7 +9,9 @@ import {
   RevenueRecordData,
   SponsorData,
   SponsorOverlayData,
+  SponsorPlacement,
   SubscriptionPlanData,
+  TournamentRegistrationData,
   VenueData,
   ViewerAnalyticsSummary,
 } from '../../types/index.ts';
@@ -38,6 +41,22 @@ export const platformOpsService = {
       params: publishedOnly ? { publishedOnly: 'true' } : undefined,
     });
     return data.sponsors;
+  },
+  async listPublicSponsors(params?: {
+    placement?: SponsorPlacement;
+    tournamentId?: string;
+    liveStreamId?: string;
+  }): Promise<SponsorData[]> {
+    const { data } = await publicApi.get<{ sponsors: SponsorData[] }>('/v1/sponsors/public', {
+      params,
+    });
+    return data.sponsors;
+  },
+  async trackSponsorImpression(id: string): Promise<void> {
+    await publicApi.post(`/v1/sponsors/${id}/impression`).catch(() => {});
+  },
+  async trackSponsorClick(id: string): Promise<void> {
+    await publicApi.post(`/v1/sponsors/${id}/click`).catch(() => {});
   },
   async createSponsor(payload: Partial<SponsorData>): Promise<SponsorData> {
     const { data } = await adminApi.post<{ sponsor: SponsorData }>('/sponsors', payload);
@@ -183,6 +202,87 @@ export const platformOpsService = {
       payload
     );
     return data.stat;
+  },
+  async verifyPlayer(playerId: string, isVerified = true): Promise<any> {
+    const { data } = await adminApi.post(`/players/${playerId}/verify`, { isVerified });
+    return data.player;
+  },
+
+  // Diagnostics & Database Engine Control
+  async getDiagnostics(): Promise<DatabaseDiagnosticsData> {
+    const { data } = await adminApi.get<DatabaseDiagnosticsData>('/v1/admin/diagnostics');
+    return data;
+  },
+  async retryMongoConnection(): Promise<{
+    ok: boolean;
+    engine: 'mongodb' | 'sqlite';
+    message: string;
+    syncedRecords: number;
+    syncedCollections: number;
+  }> {
+    const { data } = await adminApi.post('/v1/admin/diagnostics/retry-mongo');
+    return data;
+  },
+
+  // Captain Tournament Registrations
+  async registerTeamForTournament(
+    tournamentId: string,
+    payload: Record<string, unknown>
+  ): Promise<{ registration: TournamentRegistrationData; message: string }> {
+    const { data } = await customerApi.post(`/v1/tournaments/${tournamentId}/register`, payload);
+    return data;
+  },
+  async getMyTournamentRegistration(
+    tournamentId: string
+  ): Promise<TournamentRegistrationData | null> {
+    const { data } = await customerApi.get<{ registration: TournamentRegistrationData | null }>(
+      `/v1/tournaments/${tournamentId}/my-registration`
+    );
+    return data.registration;
+  },
+  async listPublicTournamentRegistrations(
+    tournamentId: string
+  ): Promise<TournamentRegistrationData[]> {
+    const { data } = await publicApi.get<{ registrations: TournamentRegistrationData[] }>(
+      `/v1/tournaments/${tournamentId}/registrations`
+    );
+    return data.registrations;
+  },
+  async updateRegistration(
+    id: string,
+    payload: Record<string, unknown>
+  ): Promise<TournamentRegistrationData> {
+    const { data } = await customerApi.patch<{ registration: TournamentRegistrationData }>(
+      `/v1/registrations/${id}`,
+      payload
+    );
+    return data.registration;
+  },
+  async withdrawRegistration(id: string): Promise<TournamentRegistrationData> {
+    const { data } = await customerApi.post<{ registration: TournamentRegistrationData }>(
+      `/v1/registrations/${id}/withdraw`
+    );
+    return data.registration;
+  },
+  async listAdminRegistrations(params?: {
+    status?: string;
+    tournamentId?: string;
+  }): Promise<TournamentRegistrationData[]> {
+    const { data } = await adminApi.get<{ registrations: TournamentRegistrationData[] }>(
+      '/v1/admin/registrations',
+      { params }
+    );
+    return data.registrations;
+  },
+  async reviewAdminRegistration(
+    id: string,
+    payload: { decision: 'APPROVED' | 'REJECTED'; reviewNotes?: string }
+  ): Promise<TournamentRegistrationData> {
+    const { data } = await adminApi.post<{ registration: TournamentRegistrationData }>(
+      `/v1/admin/registrations/${id}/review`,
+      payload
+    );
+    return data.registration;
   },
 
   // Organizer Workspace & Monetization

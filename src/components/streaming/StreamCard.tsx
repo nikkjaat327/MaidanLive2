@@ -75,7 +75,18 @@ export function StreamCard({
               {useReplayThumbnail ? 'REPLAY' : 'ENDED'}
             </span>
           )}
+          {(stream.activeStreamingProvider || stream.streamingProvider) === 'mediamtx' &&
+            stream.status === 'LIVE' && (
+              <span className="inline-flex items-center px-2 py-1 rounded-md bg-slate-950/90 text-orange-300 text-[10px] font-bold uppercase tracking-wider">
+                DIRECT
+              </span>
+            )}
         </div>
+        {typeof stream.activeViewers === 'number' && stream.viewerCountVisibility === 'public' && (
+          <div className="absolute top-3 right-3 px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
+            {stream.activeViewers} watching
+          </div>
+        )}
         {score && (
           <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs font-mono tabular-nums">
             <span className="font-semibold truncate">
@@ -107,7 +118,7 @@ export function StreamCard({
             </div>
           )}
 
-          <h3 className="text-base font-semibold text-slate-900 leading-snug line-clamp-2 group-hover:text-emerald-700 transition-colors">
+          <h3 className="text-base font-semibold text-slate-900 leading-snug line-clamp-2 group-hover:text-[#EA580C] transition-colors">
             {displayTitle}
           </h3>
 

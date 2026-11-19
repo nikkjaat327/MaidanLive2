@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
 
 export interface IActivityLog extends Document {
   actorId: mongoose.Types.ObjectId;
@@ -31,4 +32,5 @@ const activityLogSchema = new Schema<IActivityLog>(
 
 activityLogSchema.index({ createdAt: -1 });
 
-export const ActivityLog = mongoose.model<IActivityLog>('ActivityLog', activityLogSchema);
+const MongooseActivityLog = mongoose.model<IActivityLog>('ActivityLog', activityLogSchema);
+export const ActivityLog = createDualModel<IActivityLog>('activitylogs', MongooseActivityLog);

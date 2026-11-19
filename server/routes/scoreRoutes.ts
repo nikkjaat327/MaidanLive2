@@ -27,7 +27,7 @@ import type { FootballDetails } from '../../src/utils/footballScoring.ts';
 import { validateMatchResult } from '../../src/utils/matchResultValidation.ts';
 import type { MatchResultType } from '../../src/utils/matchResultValidation.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
-import { emitStreamEvent } from '../socket/index.ts';
+import { emitStreamEvent, emitTournamentEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
@@ -314,13 +314,9 @@ router.patch(
 );
 
 // POST /api/live/:id/score/event - Structured multi-point & delivery scoring with duplicate guard
-router.post(
-  '/:id/score/event',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
+async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
         res.status(400).json({ message: 'Invalid stream ID.' });
         return;
@@ -567,6 +563,59 @@ router.post(
       console.error('[Score] Structured event error:', err);
       res.status(500).json({ message: 'Failed to record scoring event.' });
     }
+}
+
+router.post('/:id/score/event', authenticate, requireAdminPortal, handleStructuredScoreEvent);
+
+// POST /api/live/:id/cricket/ball - Dedicated Cricket ball-by-ball endpoint
+router.post(
+  '/:id/cricket/ball',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const body = req.body || {};
+    if (!body.action) {
+      const batRuns = Math.max(0, Math.floor(Number(body.batRuns ?? body.runs ?? 0) || 0));
+      const extraRuns = Math.max(0, Math.floor(Number(body.extraRuns ?? 0) || 0));
+      const rawExtra = String(body.extraType || body.extra || 'NONE').toUpperCase();
+      const extraType = ['WIDE', 'NO_BALL', 'BYE', 'LEG_BYE', 'PENALTY'].includes(rawExtra)
+        ? rawExtra
+        : 'NONE';
+      const isWicket = Boolean(body.isWicket);
+      const eventType = isWicket
+        ? 'WICKET'
+        : extraType === 'WIDE'
+          ? 'WIDE'
+          : extraType === 'NO_BALL'
+            ? 'NO_BALL'
+            : extraType === 'BYE'
+              ? 'BYE'
+              : extraType === 'LEG_BYE'
+                ? 'LEG_BYE'
+                : 'LEGAL_DELIVERY';
+
+      req.body = {
+        ...body,
+        sportType: 'Cricket',
+        action: {
+          type: 'STRUCTURED_DELIVERY',
+          eventType,
+          batRuns,
+          extraRuns,
+          extraType,
+          isWicket,
+          wicketType: sanitizeText(body.wicketType, 60),
+          dismissedPlayer: sanitizeText(body.dismissedPlayer, 120),
+          newBatsman: sanitizeText(body.newBatsman, 120),
+          bowler: sanitizeText(body.bowler, 120),
+          description: sanitizeText(body.description, 200),
+          countsAsLegalBall: body.countsAsLegalBall,
+        },
+      };
+    } else {
+      req.body.sportType = 'Cricket';
+    }
+    return handleStructuredScoreEvent(req, res);
   }
 );
 
@@ -723,88 +772,86 @@ router.patch(
   }
 );
 
-// POST /api/live/:id/score/undo
-router.post(
-  '/:id/score/undo',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        res.status(400).json({ message: 'Invalid stream ID.' });
-        return;
-      }
-
-      const allowed = await canManageStream(req.user!, id, 'score');
-      if (!allowed) {
-        res.status(403).json({
-          message: 'Forbidden: You are not authorized to undo scores for this stream.',
-        });
-        return;
-      }
-
-      const score = await ensureLiveScore(id);
-      if (!score) {
-        res.status(404).json({ message: 'Stream not found.' });
-        return;
-      }
-
-      const latestHistory = await ScoreHistory.findOne({
-        liveStreamId: score.liveStreamId,
-        reverted: { $ne: true },
-        $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
-      }).sort({ createdAt: -1 });
-
-      if (!latestHistory) {
-        res.status(400).json({ message: 'No previous score update available to undo.' });
-        return;
-      }
-
-      const previousSnapshot = {
-        teamAScore: score.teamAScore,
-        teamBScore: score.teamBScore,
-      };
-
-      const prev = latestHistory.previousScore as any;
-      score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
-      score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
-      score.sportSpecificDetails =
-        prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
-      if (prev.matchStatus) score.matchStatus = prev.matchStatus;
-      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
-      score.lastUpdatedAt = new Date();
-      await score.save();
-
-      await ScoreHistory.deleteOne({ _id: latestHistory._id });
-
-      await recordActivity(
-        req.user!,
-        'UNDO_SCORE',
-        'LiveScore',
-        score._id.toString(),
-        `Undid: ${latestHistory.action}`,
-        {
-          previousValue: previousSnapshot,
-          newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
-        }
-      );
-
-      const payload = {
-        streamId: id,
-        score: score.toObject(),
-        undoneAction: latestHistory.action,
-      };
-
-      emitStreamEvent(id, 'score:undo', payload);
-      emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
-      res.json(payload);
-    } catch (err) {
-      console.error('[Score] Undo error:', err);
-      res.status(500).json({ message: 'Failed to undo last score update.' });
+// POST /api/live/:id/score/undo & /cricket/undo
+async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
     }
+
+    const allowed = await canManageStream(req.user!, id, 'score');
+    if (!allowed) {
+      res.status(403).json({
+        message: 'Forbidden: You are not authorized to undo scores for this stream.',
+      });
+      return;
+    }
+
+    const score = await ensureLiveScore(id);
+    if (!score) {
+      res.status(404).json({ message: 'Stream not found.' });
+      return;
+    }
+
+    const latestHistory = await ScoreHistory.findOne({
+      liveStreamId: score.liveStreamId,
+      reverted: { $ne: true },
+      $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
+    }).sort({ createdAt: -1 });
+
+    if (!latestHistory) {
+      res.status(400).json({ message: 'No previous score update available to undo.' });
+      return;
+    }
+
+    const previousSnapshot = {
+      teamAScore: score.teamAScore,
+      teamBScore: score.teamBScore,
+    };
+
+    const prev = latestHistory.previousScore as any;
+    score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
+    score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
+    score.sportSpecificDetails =
+      prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
+    if (prev.matchStatus) score.matchStatus = prev.matchStatus;
+    score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+    score.lastUpdatedAt = new Date();
+    await score.save();
+
+    await ScoreHistory.deleteOne({ _id: latestHistory._id });
+
+    await recordActivity(
+      req.user!,
+      'UNDO_SCORE',
+      'LiveScore',
+      score._id.toString(),
+      `Undid: ${latestHistory.action}`,
+      {
+        previousValue: previousSnapshot,
+        newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
+      }
+    );
+
+    const payload = {
+      streamId: id,
+      score: score.toObject(),
+      undoneAction: latestHistory.action,
+    };
+
+    emitStreamEvent(id, 'score:undo', payload);
+    emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+    res.json(payload);
+  } catch (err) {
+    console.error('[Score] Undo error:', err);
+    res.status(500).json({ message: 'Failed to undo last score update.' });
   }
-);
+}
+
+router.post('/:id/score/undo', authenticate, requireAdminPortal, handleUndoScore);
+router.post('/:id/cricket/undo', authenticate, requireAdminPortal, handleUndoScore);
 
 // POST /api/live/:id/score/reset
 router.post(
@@ -1311,6 +1358,14 @@ router.post(
         payload
       );
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+      if (stream.tournamentId) {
+        emitTournamentEvent(stream.tournamentId.toString(), 'tournament:points_updated', {
+          tournamentId: stream.tournamentId.toString(),
+          streamId: id,
+          resultStatus: score.resultStatus,
+          winnerTeamId: score.winnerTeamId ? score.winnerTeamId.toString() : null,
+        });
+      }
       res.json(payload);
     } catch (err) {
       console.error('[Score] Declare result error:', err);

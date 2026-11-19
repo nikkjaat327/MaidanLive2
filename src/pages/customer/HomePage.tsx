@@ -1,31 +1,40 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Calendar, PlaySquare, Radio, Trophy } from 'lucide-react';
-import { HERO_BANNER_IMAGE } from '../../constants/sports.ts';
-import { LiveStreamData } from '../../types/index.ts';
+import { ArrowRight, Award, Calendar, PlaySquare, Radio, Trophy } from 'lucide-react';
+import { HERO_BANNER_IMAGE, SPORT_OPTIONS } from '../../constants/sports.ts';
+import { LiveStreamData, SponsorData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
+import { useLanguage } from '../../context/LanguageContext.tsx';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
+import { PWAInstallButton } from '../../components/common/PWAInstallButton.tsx';
 
 export function HomePage() {
+  const { t } = useLanguage();
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
+  const [homeSponsors, setHomeSponsors] = useState<SponsorData[]>([]);
+  const [selectedSport, setSelectedSport] = useState<string>('ALL');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const [allStreams, publishedReplays] = await Promise.all([
+      const [allStreams, publishedReplays, sponsors] = await Promise.all([
         liveStreamService.listStreams(),
         liveStreamService.listReplays(false),
+        platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
       ]);
       setStreams(allStreams);
       setReplays(publishedReplays);
+      setHomeSponsors(sponsors);
+      sponsors.forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
     } catch (err) {
       setError(extractApiError(err, 'Unable to load broadcasts from server.'));
     } finally {
@@ -65,12 +74,16 @@ export function HomePage() {
     };
   }, [loadData]);
 
-  const liveNow = streams.filter((s) => s.status === 'LIVE');
-  const upcoming = streams.filter((s) => s.status === 'UPCOMING');
-  const completed = streams.filter((s) => s.status === 'ENDED').slice(0, 6);
+  const filterBySport = (item: LiveStreamData) =>
+    selectedSport === 'ALL' || item.gameName === selectedSport || item.score?.sportType === selectedSport;
+
+  const liveNow = streams.filter((s) => s.status === 'LIVE' && filterBySport(s));
+  const upcoming = streams.filter((s) => s.status === 'UPCOMING' && filterBySport(s));
+  const completed = streams.filter((s) => s.status === 'ENDED' && filterBySport(s)).slice(0, 6);
+  const filteredReplays = replays.filter(filterBySport).slice(0, 6);
 
   return (
-    <div className="space-y-10 pb-10">
+    <div className="space-y-8 pb-10">
       {/* Hero Banner */}
       <section className="relative bg-slate-950 text-white overflow-hidden">
         <img
@@ -78,19 +91,18 @@ export function HomePage() {
           alt="Community sports ground under evening floodlights"
           className="absolute inset-0 w-full h-full object-cover opacity-55"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/65 to-slate-950/35" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/35" />
 
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-16 lg:py-20">
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-16 lg:py-20">
           <div className="max-w-2xl space-y-4">
-            <p className="text-xs sm:text-sm font-medium text-emerald-400 tracking-wide">
-              Community &amp; Tournament Sports Network
+            <p className="text-xs sm:text-sm font-bold text-[#EA580C] tracking-wide uppercase">
+              {t('hero.badge')}
             </p>
             <h1 className="font-display text-3xl sm:text-5xl font-bold tracking-tight leading-[1.08] text-balance">
-              Watch local matches live with real-time scoreboards
+              {t('hero.title')}
             </h1>
             <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-xl">
-              Follow Cricket, Kabaddi, Football, and Volleyball action directly from local grounds
-              with synchronized YouTube Live streams and ball-by-ball scoreboard updates.
+              {t('hero.subtitle')}
             </p>
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <Link
@@ -98,22 +110,52 @@ export function HomePage() {
                 className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
               >
                 <Radio className="w-4 h-4" />
-                <span>Explore Live Streams</span>
+                <span>{t('hero.watchLive')}</span>
               </Link>
               <Link
                 to="/tournaments"
                 className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-white/10 border border-white/20 rounded-lg hover:bg-white/20 transition-colors"
               >
                 <Trophy className="w-4 h-4" />
-                <span>View Tournaments</span>
+                <span>{t('hero.browseTournaments')}</span>
               </Link>
+              <PWAInstallButton />
             </div>
           </div>
         </div>
       </section>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 space-y-12">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 space-y-10">
         <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
+
+        {/* Sport Filter Strip */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setSelectedSport('ALL')}
+            className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
+              selectedSport === 'ALL'
+                ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            {t('common.allSports')}
+          </button>
+          {SPORT_OPTIONS.map((sp) => (
+            <button
+              key={sp}
+              type="button"
+              onClick={() => setSelectedSport(sp)}
+              className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
+                selectedSport === sp
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {sp}
+            </button>
+          ))}
+        </div>
 
         {/* Live Now Section */}
         <section aria-labelledby="live-now-heading" className="space-y-4">
@@ -130,7 +172,7 @@ export function HomePage() {
             </div>
             <Link
               to="/live"
-              className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 hover:text-emerald-800 whitespace-nowrap"
+              className="inline-flex items-center gap-1 text-sm font-medium text-[#EA580C] hover:underline whitespace-nowrap"
             >
               <span>All live</span>
               <ArrowRight className="w-4 h-4" />
@@ -142,8 +184,8 @@ export function HomePage() {
           ) : liveNow.length === 0 ? (
             <EmptyState
               icon={<Radio className="w-6 h-6" />}
-              title="No matches are live right now"
-              description="When a tournament organizer or broadcaster starts a stream, it will appear here immediately with real-time scores."
+              title={t('common.noMatches')}
+              description="When an organizer starts a live match stream, it will appear here immediately with real-time scoreboards."
               action={
                 <Link
                   to="/replays"
@@ -161,6 +203,49 @@ export function HomePage() {
             </div>
           )}
         </section>
+
+        {/* Home Feed Sponsors (if configured by organizers) */}
+        {homeSponsors.length > 0 && (
+          <section className="space-y-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1.5">
+              <Award className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>Featured Community Sponsors</span>
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {homeSponsors.map((sp) => (
+                <a
+                  key={sp.id}
+                  href={sp.websiteUrl || undefined}
+                  target={sp.websiteUrl ? '_blank' : undefined}
+                  rel="noopener noreferrer"
+                  onClick={() => platformOpsService.trackSponsorClick(sp.id)}
+                  className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3 hover:border-orange-300 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {sp.logoUrl && (
+                      <img
+                        src={sp.logoUrl}
+                        alt={sp.name}
+                        className="w-11 h-11 rounded-lg object-contain bg-slate-50 border border-slate-200 p-1 shrink-0"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-900 truncate">{sp.name}</p>
+                      <p className="text-xs text-slate-500 truncate">
+                        {sp.tagline || sp.sponsorshipType}
+                      </p>
+                    </div>
+                  </div>
+                  {sp.websiteUrl && (
+                    <span className="text-xs font-semibold text-[#EA580C] shrink-0">
+                      {sp.ctaText || 'Learn More'}
+                    </span>
+                  )}
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Upcoming Streams Section */}
         <section aria-labelledby="upcoming-heading" className="space-y-4">
@@ -219,7 +304,7 @@ export function HomePage() {
             </h2>
             <Link
               to="/replays"
-              className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 hover:text-emerald-800 whitespace-nowrap"
+              className="inline-flex items-center gap-1 text-sm font-medium text-[#EA580C] hover:underline whitespace-nowrap"
             >
               <span>All replays</span>
               <ArrowRight className="w-4 h-4" />
@@ -228,15 +313,15 @@ export function HomePage() {
 
           {loading ? (
             <CardGridSkeleton count={3} />
-          ) : replays.length === 0 ? (
+          ) : filteredReplays.length === 0 ? (
             <EmptyState
               icon={<PlaySquare className="w-6 h-6" />}
               title="No replays published yet"
-              description="Verified full-match YouTube replays published by organizers will be available here."
+              description="Verified full-match replays published by organizers will be available here."
             />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {replays.slice(0, 6).map((stream) => (
+              {filteredReplays.map((stream) => (
                 <StreamCard
                   key={stream.id}
                   stream={stream}
