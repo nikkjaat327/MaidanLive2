@@ -31,6 +31,7 @@ import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { notifyTournamentAdminsAndOrganizers, notifyUser } from '../utils/notifications.ts';
 import { emitStreamEvent } from '../socket/index.ts';
+import { isCloudinaryConfigured, uploadBufferToCloudinary } from '../services/cloudinaryService.ts';
 
 const router = Router();
 
@@ -143,7 +144,7 @@ async function createStoredFileFromRequest(params: {
 
   let fileName = '';
   let mimeType = '';
-  let base64Data = '';
+  let fileBuffer: Buffer | null = null;
   let sizeBytes = 0;
   let source: StoredFileSource = 'DEVICE';
   let driveFileId = '';
@@ -152,7 +153,7 @@ async function createStoredFileFromRequest(params: {
   if (uploadedFile) {
     fileName = sanitizeText(uploadedFile.originalname, 240) || 'document';
     mimeType = resolveMimeType(fileName, uploadedFile.mimetype || '');
-    base64Data = uploadedFile.buffer.toString('base64');
+    fileBuffer = uploadedFile.buffer;
     sizeBytes = uploadedFile.size;
     source = req.body?.source === 'GOOGLE_DRIVE' ? 'GOOGLE_DRIVE' : 'DEVICE';
     driveFileId = sanitizeText(req.body?.driveFileId, 200);
@@ -161,11 +162,10 @@ async function createStoredFileFromRequest(params: {
     const rawB64 = req.body.dataBase64.includes(',')
       ? req.body.dataBase64.split(',').pop() || ''
       : req.body.dataBase64;
-    const buffer = Buffer.from(rawB64.trim(), 'base64');
+    fileBuffer = Buffer.from(rawB64.trim(), 'base64');
     fileName = sanitizeText(req.body.fileName, 240) || 'document';
     mimeType = resolveMimeType(fileName, sanitizeText(req.body.mimeType, 120));
-    base64Data = buffer.toString('base64');
-    sizeBytes = buffer.length;
+    sizeBytes = fileBuffer.length;
     source = req.body.source === 'GOOGLE_DRIVE' ? 'GOOGLE_DRIVE' : 'DEVICE';
     driveFileId = sanitizeText(req.body.driveFileId, 200);
     driveWebViewLink = sanitizeText(req.body.driveWebViewLink, 400);
@@ -176,6 +176,33 @@ async function createStoredFileFromRequest(params: {
   const validationError = validateFileSpec({ purpose, fileName, mimeType, sizeBytes });
   if (validationError) {
     return { error: validationError, status: 400 };
+  }
+
+  if (!isCloudinaryConfigured()) {
+    return {
+      error:
+        'Cloudinary is not configured. Please add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET (or CLOUDINARY_URL) in Secrets.',
+      status: 503,
+    };
+  }
+
+  let cloudinaryUrl = '';
+  let cloudinaryPublicId = '';
+  try {
+    const uploaded = await uploadBufferToCloudinary({
+      buffer: fileBuffer,
+      fileName,
+      mimeType,
+      folder: `maidanlive/${purpose.toLowerCase()}`,
+    });
+    cloudinaryUrl = uploaded.url;
+    cloudinaryPublicId = uploaded.publicId;
+  } catch (err: any) {
+    console.error('[Cloudinary] Upload failed:', err);
+    return {
+      error: err?.message || 'Failed to upload file to Cloudinary.',
+      status: 502,
+    };
   }
 
   const stored = await StoredFile.create({
@@ -195,7 +222,9 @@ async function createStoredFileFromRequest(params: {
     sizeBytes,
     driveFileId,
     driveWebViewLink,
-    dataBase64: base64Data,
+    cloudinaryUrl,
+    cloudinaryPublicId,
+    dataBase64: '',
   });
 
   const meta: IStoredDocMeta = {
@@ -205,10 +234,47 @@ async function createStoredFileFromRequest(params: {
     sizeBytes: stored.sizeBytes,
     source: stored.source,
     driveFileId: stored.driveFileId || '',
+    url: stored.cloudinaryUrl || '',
+    cloudinaryPublicId: stored.cloudinaryPublicId || '',
     uploadedAt: stored.createdAt || new Date(),
   };
 
   return { doc: stored, meta };
+}
+
+async function sendStoredFileResponse(
+  res: Response,
+  file: {
+    fileName?: string;
+    mimeType?: string;
+    cloudinaryUrl?: string;
+    dataBase64?: string;
+  },
+  isDownload: boolean
+): Promise<void> {
+  const disposition = isDownload ? 'attachment' : 'inline';
+  const safeName = (file.fileName || 'document').replace(/["\r\n]/g, '_');
+
+  let buffer: Buffer;
+  if (file.cloudinaryUrl) {
+    const upstream = await fetch(file.cloudinaryUrl);
+    if (!upstream.ok) {
+      res.status(502).json({ message: 'Failed to retrieve file from Cloudinary.' });
+      return;
+    }
+    buffer = Buffer.from(await upstream.arrayBuffer());
+  } else if (file.dataBase64) {
+    buffer = Buffer.from(file.dataBase64, 'base64');
+  } else {
+    res.status(404).json({ message: 'File content is unavailable.' });
+    return;
+  }
+
+  res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+  res.setHeader('Content-Length', String(buffer.length));
+  res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(buffer);
 }
 
 function resolveTournamentPaymentConfig(tournament: any): {
@@ -574,7 +640,7 @@ router.get(
       }
 
       const file = await StoredFile.findById(fileId).select('+dataBase64').lean();
-      if (!file || !file.dataBase64) {
+      if (!file || (!file.cloudinaryUrl && !file.dataBase64)) {
         res.status(404).json({ message: 'Document not found.' });
         return;
       }
@@ -594,15 +660,7 @@ router.get(
         return;
       }
 
-      const buffer = Buffer.from(file.dataBase64, 'base64');
-      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
-      const safeName = (file.fileName || 'document').replace(/["\r\n]/g, '_');
-
-      res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Length', String(buffer.length));
-      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.send(buffer);
+      await sendStoredFileResponse(res, file, req.query.download === '1');
     } catch (err) {
       console.error('[Documents] Fetch error:', err);
       res.status(500).json({ message: 'Failed to retrieve document.' });
@@ -662,6 +720,7 @@ router.post(
 
       let verificationDocId: mongoose.Types.ObjectId | null = null;
       let verificationDocMeta: IStoredDocMeta | null = null;
+      let resolvedVerificationDocUrl = sanitizeImageUrl(req.body.verificationDocUrl);
       if (req.body.verificationDocId && mongoose.Types.ObjectId.isValid(req.body.verificationDocId)) {
         const stored = await StoredFile.findById(req.body.verificationDocId);
         if (stored && stored.ownerUserId.toString() === req.user!._id.toString()) {
@@ -673,8 +732,13 @@ router.post(
             sizeBytes: stored.sizeBytes,
             source: stored.source,
             driveFileId: stored.driveFileId || '',
+            url: stored.cloudinaryUrl || '',
+            cloudinaryPublicId: stored.cloudinaryPublicId || '',
             uploadedAt: stored.createdAt || new Date(),
           };
+          if (stored.cloudinaryUrl) {
+            resolvedVerificationDocUrl = stored.cloudinaryUrl;
+          }
           stored.tournamentId = tournament._id as mongoose.Types.ObjectId;
           await stored.save();
         }
@@ -702,7 +766,7 @@ router.post(
         captainName,
         captainPhone: sanitizeText(req.body.captainPhone, 30) || req.user!.phone || '',
         captainEmail: sanitizeText(req.body.captainEmail, 160) || req.user!.email,
-        verificationDocUrl: sanitizeImageUrl(req.body.verificationDocUrl),
+        verificationDocUrl: resolvedVerificationDocUrl,
         verificationDocId,
         verificationDocMeta,
         verificationNotes: sanitizeText(req.body.verificationNotes, 500),
@@ -930,8 +994,13 @@ router.patch(
               sizeBytes: stored.sizeBytes,
               source: stored.source,
               driveFileId: stored.driveFileId || '',
+              url: stored.cloudinaryUrl || '',
+              cloudinaryPublicId: stored.cloudinaryPublicId || '',
               uploadedAt: stored.createdAt || new Date(),
             };
+            if (stored.cloudinaryUrl) {
+              reg.verificationDocUrl = stored.cloudinaryUrl;
+            }
             stored.tournamentId = reg.tournamentId;
             stored.registrationId = reg._id as mongoose.Types.ObjectId;
             await stored.save();
@@ -1147,6 +1216,8 @@ router.post(
           sizeBytes: existingStored.sizeBytes,
           source: existingStored.source,
           driveFileId: existingStored.driveFileId || '',
+          url: existingStored.cloudinaryUrl || '',
+          cloudinaryPublicId: existingStored.cloudinaryPublicId || '',
           uploadedAt: existingStored.createdAt || new Date(),
         };
       } else {
@@ -1187,6 +1258,7 @@ router.post(
         notes: refNote || `Uploaded ${fileMeta.fileName}`,
         fileId: fileIdStr,
         fileName: fileMeta.fileName,
+        fileUrl: fileMeta.url || '',
       });
       reg.paymentHistory = history;
       await reg.save();
@@ -1258,20 +1330,12 @@ router.get(
       }
 
       const file = await StoredFile.findById(reg.paymentProofFileId).select('+dataBase64').lean();
-      if (!file || !file.dataBase64) {
+      if (!file || (!file.cloudinaryUrl && !file.dataBase64)) {
         res.status(404).json({ message: 'Payment proof file missing from storage.' });
         return;
       }
 
-      const buffer = Buffer.from(file.dataBase64, 'base64');
-      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
-      const safeName = (file.fileName || 'payment-proof').replace(/["\r\n]/g, '_');
-
-      res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Length', String(buffer.length));
-      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.send(buffer);
+      await sendStoredFileResponse(res, file, req.query.download === '1');
     } catch (err) {
       console.error('[Payments] Fetch proof error:', err);
       res.status(500).json({ message: 'Failed to retrieve payment proof.' });

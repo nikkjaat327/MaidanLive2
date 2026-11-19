@@ -16,6 +16,8 @@ export interface IStoredFile extends Document {
   sizeBytes: number;
   driveFileId: string;
   driveWebViewLink: string;
+  cloudinaryUrl: string;
+  cloudinaryPublicId: string;
   dataBase64: string;
   createdAt: Date;
   updatedAt: Date;
@@ -47,7 +49,9 @@ const storedFileSchema = new Schema<IStoredFile>(
     sizeBytes: { type: Number, required: true, min: 0 },
     driveFileId: { type: String, trim: true, default: '', maxlength: 200 },
     driveWebViewLink: { type: String, trim: true, default: '', maxlength: 500 },
-    dataBase64: { type: String, required: true, select: false },
+    cloudinaryUrl: { type: String, trim: true, default: '', maxlength: 1000 },
+    cloudinaryPublicId: { type: String, trim: true, default: '', maxlength: 300 },
+    dataBase64: { type: String, default: '', select: false },
   },
   { timestamps: true }
 );

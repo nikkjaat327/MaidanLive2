@@ -42,6 +42,8 @@ export interface IStoredDocMeta {
   sizeBytes: number;
   source: 'DEVICE' | 'GOOGLE_DRIVE';
   driveFileId?: string;
+  url?: string;
+  cloudinaryPublicId?: string;
   uploadedAt: Date;
 }
 
@@ -68,6 +70,7 @@ export interface IPaymentHistoryItem {
   notes?: string;
   fileId?: string;
   fileName?: string;
+  fileUrl?: string;
 }
 
 export interface ITournamentRegistration extends Document {
@@ -120,6 +123,8 @@ const storedDocMetaSchema = new Schema(
     sizeBytes: { type: Number, default: 0 },
     source: { type: String, enum: ['DEVICE', 'GOOGLE_DRIVE'], default: 'DEVICE' },
     driveFileId: { type: String, trim: true, default: '' },
+    url: { type: String, trim: true, default: '' },
+    cloudinaryPublicId: { type: String, trim: true, default: '' },
     uploadedAt: { type: Date, default: Date.now },
   },
   { _id: false }
@@ -215,6 +220,7 @@ const tournamentRegistrationSchema = new Schema<ITournamentRegistration>(
         notes: { type: String, trim: true, default: '' },
         fileId: { type: String, trim: true, default: '' },
         fileName: { type: String, trim: true, default: '' },
+        fileUrl: { type: String, trim: true, default: '' },
       },
     ],
     editCount: { type: Number, default: 0, min: 0 },

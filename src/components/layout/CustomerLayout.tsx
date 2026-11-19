@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -29,7 +29,11 @@ export function CustomerLayout() {
   const { customerUser, adminUser, unreadNotifications } = useAuth();
   const { language, toggleLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [swWaiting, setSwWaiting] = useState<ServiceWorker | null>(null);
+  const headerInnerRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const requiredWidthRef = useRef<number>(0);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
@@ -79,6 +83,49 @@ export function CustomerLayout() {
     ...(customerUser ? [{ to: '/following', label: t('nav.following'), icon: Heart }] : []),
   ];
 
+  // Re-evaluate inline nav fit when language, auth user, or link count changes
+  useEffect(() => {
+    requiredWidthRef.current = 0;
+    setNavCollapsed(false);
+  }, [language, customerUser?.name, desktopLinks.length]);
+
+  useLayoutEffect(() => {
+    const checkNavFit = () => {
+      if (typeof window === 'undefined') return;
+      const headerEl = headerInnerRef.current;
+      const navEl = navRef.current;
+
+      if (navCollapsed) {
+        if (requiredWidthRef.current > 0 && window.innerWidth >= requiredWidthRef.current) {
+          setNavCollapsed(false);
+        }
+        return;
+      }
+
+      if (!headerEl || !navEl) return;
+      const navVisible = window.getComputedStyle(navEl).display !== 'none';
+      if (!navVisible) return;
+
+      const overflowPx = Math.max(
+        navEl.scrollWidth - navEl.clientWidth,
+        headerEl.scrollWidth - headerEl.clientWidth
+      );
+      if (overflowPx > 2) {
+        requiredWidthRef.current = window.innerWidth + overflowPx + 24;
+        setNavCollapsed(true);
+      }
+    };
+
+    checkNavFit();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(checkNavFit) : null;
+    if (ro && headerInnerRef.current) ro.observe(headerInnerRef.current);
+    window.addEventListener('resize', checkNavFit);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', checkNavFit);
+    };
+  }, [navCollapsed, language, customerUser?.name, desktopLinks.length]);
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 pb-16 md:pb-0">
       <OfflineIndicator />
@@ -102,31 +149,39 @@ export function CustomerLayout() {
         data-app-nav="true"
         className="sticky top-0 z-30 h-14 md:h-16 bg-white/95 backdrop-blur-md border-b border-slate-200 safe-pt"
       >
-        <div className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 flex items-center justify-between gap-2 lg:gap-6">
-          {/* Left Zone: Mobile Top-Left Menu Trigger + Brand Wordmark */}
-          <div className="flex items-center gap-2 min-w-0">
+        <div
+          ref={headerInnerRef}
+          className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 flex items-center justify-between gap-2 lg:gap-5 overflow-hidden"
+        >
+          {/* Left Zone: Menu Trigger (Mobile/Tablet or when PC nav has insufficient space) + Brand Wordmark */}
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Open navigation menu"
-              className="md:hidden min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-100 active:scale-95 transition shrink-0"
+              className={`${
+                navCollapsed ? 'inline-flex' : 'inline-flex xl:hidden'
+              } min-h-[36px] min-w-[36px] items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-100 active:scale-95 transition shrink-0`}
             >
               <Menu className="w-4.5 h-4.5" />
             </button>
 
             <Link
               to="/"
-              className="font-display text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap flex items-center gap-1.5 min-w-0"
+              className="font-display text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap flex items-center gap-1.5 shrink-0"
             >
               <span className="h-2.5 w-2.5 rounded-full bg-[#EA580C] shrink-0" aria-hidden="true" />
-              <span className="truncate">MaidanLive</span>
+              <span>MaidanLive</span>
             </Link>
           </div>
 
-          {/* Center Zone: PC Navigation Links */}
+          {/* Center Zone: PC Navigation Links (hidden cleanly into Menu drawer whenever constrained — never shows a scrollbar) */}
           <nav
+            ref={navRef}
             aria-label="Primary Navigation"
-            className="hidden md:flex items-center gap-5 lg:gap-6 text-sm font-medium text-slate-600 overflow-x-auto"
+            className={`${
+              navCollapsed ? 'hidden' : 'hidden xl:flex'
+            } items-center gap-4 2xl:gap-6 text-sm font-medium text-slate-600 overflow-hidden min-w-0`}
           >
             {desktopLinks.slice(1).map((item) => (
               <NavLink
@@ -218,7 +273,7 @@ export function CustomerLayout() {
             onClick={(e) => {
               if (e.target === e.currentTarget) setMobileMenuOpen(false);
             }}
-            className="fixed inset-0 z-50 md:hidden bg-slate-950/60 backdrop-blur-xs flex"
+            className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex"
           >
             <motion.aside
               key="mobile-drawer-panel"

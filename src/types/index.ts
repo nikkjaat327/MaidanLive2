@@ -339,6 +339,8 @@ export interface StoredDocMeta {
   sizeBytes: number;
   source: 'DEVICE' | 'GOOGLE_DRIVE';
   driveFileId?: string;
+  url?: string;
+  cloudinaryPublicId?: string;
   uploadedAt: string;
 }
 
@@ -365,6 +367,7 @@ export interface PaymentHistoryItem {
   notes?: string;
   fileId?: string;
   fileName?: string;
+  fileUrl?: string;
 }
 
 export type PaymentVerificationStatus =
