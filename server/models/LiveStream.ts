@@ -1,49 +1,13 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export type SportType = 'Cricket' | 'Kabaddi' | 'Football' | 'Volleyball' | 'Other';
 export type StreamStatus = 'UPCOMING' | 'LIVE' | 'ENDED';
 export type ScoreboardPosition = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
-export type StreamingProvider = 'youtube' | 'mediamtx';
-export type ViewerCountVisibility = 'public' | 'admin_only' | 'hidden';
-
-export interface IProviderSwitchHistoryItem {
-  fromProvider: StreamingProvider;
-  toProvider: StreamingProvider;
-  switchedBy: string;
-  switchedByName: string;
-  switchedAt: Date;
-  reason: string;
-  status: 'SUCCESS' | 'REJECTED' | 'FAILED';
-  detail?: string;
-}
-
-export interface IStreamHealth {
-  ok: boolean;
-  status: string;
-  checkedAt?: Date | null;
-  latencyMs?: number;
-  detail?: string;
-}
 
 export interface ILiveStream extends Document {
-  streamingProvider: StreamingProvider;
-  activeStreamingProvider: StreamingProvider;
   youtubeVideoId: string;
   youtubeInput: string;
-  youtubeStreamStatus: 'UNKNOWN' | 'READY' | 'LIVE' | 'UNAVAILABLE';
-  mediamtxStreamPath: string;
-  mediamtxPublishStatus: 'IDLE' | 'PUBLISHING' | 'OFFLINE' | 'ERROR';
-  mediamtxPlaybackUrl: string;
-  mediamtxWebrtcUrl: string;
-  mediamtxStreamKey: string;
-  streamHealth: IStreamHealth;
-  lastProviderSwitchAt?: Date | null;
-  lastProviderSwitchBy?: mongoose.Types.ObjectId | null;
-  lastProviderSwitchByName: string;
-  providerSwitchHistory: IProviderSwitchHistoryItem[];
-  viewerCountVisibility: ViewerCountVisibility;
   teamAName: string;
   teamBName: string;
   teamAId?: mongoose.Types.ObjectId | null;
@@ -56,15 +20,11 @@ export interface ILiveStream extends Document {
   matchTitle: string;
   tournamentName: string;
   tournamentId?: mongoose.Types.ObjectId | null;
-  fixtureId?: mongoose.Types.ObjectId | null;
-  roundName: string;
   matchDate?: Date | null;
   matchDescription: string;
   status: StreamStatus;
   startedAt?: Date | null;
   endedAt?: Date | null;
-  authorizedScorerId?: mongoose.Types.ObjectId | null;
-  backupScorerId?: mongoose.Types.ObjectId | null;
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId | null;
   endedBy?: mongoose.Types.ObjectId | null;
@@ -86,60 +46,8 @@ export interface ILiveStream extends Document {
 
 const liveStreamSchema = new Schema<ILiveStream>(
   {
-    streamingProvider: {
-      type: String,
-      enum: ['youtube', 'mediamtx'],
-      default: 'youtube',
-    },
-    activeStreamingProvider: {
-      type: String,
-      enum: ['youtube', 'mediamtx'],
-      default: 'youtube',
-      index: true,
-    },
-    youtubeVideoId: { type: String, trim: true, default: '', maxlength: 20 },
+    youtubeVideoId: { type: String, required: true, trim: true, minlength: 11, maxlength: 11 },
     youtubeInput: { type: String, trim: true, default: '' },
-    youtubeStreamStatus: {
-      type: String,
-      enum: ['UNKNOWN', 'READY', 'LIVE', 'UNAVAILABLE'],
-      default: 'UNKNOWN',
-    },
-    mediamtxStreamPath: { type: String, trim: true, default: '', maxlength: 140 },
-    mediamtxPublishStatus: {
-      type: String,
-      enum: ['IDLE', 'PUBLISHING', 'OFFLINE', 'ERROR'],
-      default: 'IDLE',
-    },
-    mediamtxPlaybackUrl: { type: String, trim: true, default: '', maxlength: 500 },
-    mediamtxWebrtcUrl: { type: String, trim: true, default: '', maxlength: 500 },
-    mediamtxStreamKey: { type: String, trim: true, default: '', select: false },
-    streamHealth: {
-      ok: { type: Boolean, default: false },
-      status: { type: String, default: 'UNCHECKED' },
-      checkedAt: { type: Date, default: null },
-      latencyMs: { type: Number, default: 0 },
-      detail: { type: String, default: '' },
-    },
-    lastProviderSwitchAt: { type: Date, default: null },
-    lastProviderSwitchBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    lastProviderSwitchByName: { type: String, trim: true, default: '' },
-    providerSwitchHistory: [
-      {
-        fromProvider: { type: String, enum: ['youtube', 'mediamtx'] },
-        toProvider: { type: String, enum: ['youtube', 'mediamtx'] },
-        switchedBy: { type: String, default: '' },
-        switchedByName: { type: String, default: '' },
-        switchedAt: { type: Date, default: Date.now },
-        reason: { type: String, default: '' },
-        status: { type: String, enum: ['SUCCESS', 'REJECTED', 'FAILED'], default: 'SUCCESS' },
-        detail: { type: String, default: '' },
-      },
-    ],
-    viewerCountVisibility: {
-      type: String,
-      enum: ['public', 'admin_only', 'hidden'],
-      default: 'public',
-    },
     teamAName: { type: String, trim: true, default: '', maxlength: 100 },
     teamBName: { type: String, trim: true, default: '', maxlength: 100 },
     teamAId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
@@ -156,8 +64,6 @@ const liveStreamSchema = new Schema<ILiveStream>(
     matchTitle: { type: String, trim: true, default: '', maxlength: 180 },
     tournamentName: { type: String, trim: true, default: '', maxlength: 160 },
     tournamentId: { type: Schema.Types.ObjectId, ref: 'Tournament', default: null },
-    fixtureId: { type: Schema.Types.ObjectId, ref: 'Fixture', default: null },
-    roundName: { type: String, trim: true, default: '', maxlength: 100 },
     matchDate: { type: Date, default: null },
     matchDescription: { type: String, trim: true, default: '', maxlength: 1000 },
     status: {
@@ -168,8 +74,6 @@ const liveStreamSchema = new Schema<ILiveStream>(
     },
     startedAt: { type: Date, default: null },
     endedAt: { type: Date, default: null },
-    authorizedScorerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    backupScorerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     endedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
@@ -200,5 +104,4 @@ liveStreamSchema.index({ tournamentId: 1 });
 liveStreamSchema.index({ replayPublished: 1, endedAt: -1 });
 liveStreamSchema.index({ venueId: 1 });
 
-const MongooseLiveStream = mongoose.model<ILiveStream>('LiveStream', liveStreamSchema);
-export const LiveStream = createDualModel<ILiveStream>('livestreams', MongooseLiveStream);
+export const LiveStream = mongoose.model<ILiveStream>('LiveStream', liveStreamSchema);

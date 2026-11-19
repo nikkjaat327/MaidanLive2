@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export interface IChatReportItem {
   userId: mongoose.Types.ObjectId;
@@ -46,5 +45,4 @@ const chatMessageSchema = new Schema<IChatMessage>(
 chatMessageSchema.index({ liveStreamId: 1, createdAt: -1 });
 chatMessageSchema.index({ reportedCount: -1, createdAt: -1 });
 
-const MongooseChatMessage = mongoose.model<IChatMessage>('ChatMessage', chatMessageSchema);
-export const ChatMessage = createDualModel<IChatMessage>('chatmessages', MongooseChatMessage);
+export const ChatMessage = mongoose.model<IChatMessage>('ChatMessage', chatMessageSchema);

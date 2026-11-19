@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface TeamAvatarProps {
   name: string;
@@ -8,6 +8,10 @@ interface TeamAvatarProps {
 
 export function TeamAvatar({ name, logoUrl, size = 'md' }: TeamAvatarProps) {
   const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [logoUrl]);
 
   const dims =
     size === 'sm'

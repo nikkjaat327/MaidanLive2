@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export interface ISubscriptionPlan extends Document {
   name: string;
@@ -29,13 +28,9 @@ const subscriptionPlanSchema = new Schema<ISubscriptionPlan>(
   { timestamps: true }
 );
 
-const MongooseSubscriptionPlan = mongoose.model<ISubscriptionPlan>(
+export const SubscriptionPlan = mongoose.model<ISubscriptionPlan>(
   'SubscriptionPlan',
   subscriptionPlanSchema
-);
-export const SubscriptionPlan = createDualModel<ISubscriptionPlan>(
-  'subscriptionplans',
-  MongooseSubscriptionPlan
 );
 
 export interface IOrganizerSubscription extends Document {
@@ -70,13 +65,9 @@ const organizerSubscriptionSchema = new Schema<IOrganizerSubscription>(
 
 organizerSubscriptionSchema.index({ organizerUserId: 1, status: 1 });
 
-const MongooseOrganizerSubscription = mongoose.model<IOrganizerSubscription>(
+export const OrganizerSubscription = mongoose.model<IOrganizerSubscription>(
   'OrganizerSubscription',
   organizerSubscriptionSchema
-);
-export const OrganizerSubscription = createDualModel<IOrganizerSubscription>(
-  'organizersubscriptions',
-  MongooseOrganizerSubscription
 );
 
 export interface IRevenueRecord extends Document {
@@ -120,11 +111,4 @@ const revenueRecordSchema = new Schema<IRevenueRecord>(
   { timestamps: true }
 );
 
-const MongooseRevenueRecord = mongoose.model<IRevenueRecord>(
-  'RevenueRecord',
-  revenueRecordSchema
-);
-export const RevenueRecord = createDualModel<IRevenueRecord>(
-  'revenuerecords',
-  MongooseRevenueRecord
-);
+export const RevenueRecord = mongoose.model<IRevenueRecord>('RevenueRecord', revenueRecordSchema);

@@ -1,32 +1,14 @@
 import mongoose from 'mongoose';
 import type { ClientSession } from 'mongoose';
-import { getActiveDbEngine } from '../db/engineState.ts';
-import { getSqliteDb } from '../db/sqliteStore.ts';
 
 /**
- * Runs an async operation inside a MongoDB transaction when connected to a replica set,
- * or inside a SQLite BEGIN IMMEDIATE / COMMIT transaction when running on the SQLite fallback.
+ * Runs an async operation inside a MongoDB transaction when connected to a replica set
+ * or sharded cluster, and safely falls back to sequential execution on standalone mongod
+ * (such as single-node MongoMemoryServer in development).
  */
 export async function runWithOptionalTransaction<T>(
   work: (session: ClientSession | null) => Promise<T>
 ): Promise<T> {
-  if (getActiveDbEngine() === 'sqlite') {
-    const db = getSqliteDb();
-    db.exec('BEGIN IMMEDIATE;');
-    try {
-      const result = await work(null);
-      db.exec('COMMIT;');
-      return result;
-    } catch (err) {
-      try {
-        db.exec('ROLLBACK;');
-      } catch {
-        // Ignore rollback error if transaction already closed
-      }
-      throw err;
-    }
-  }
-
   const session = await mongoose.startSession();
   try {
     let result!: T;

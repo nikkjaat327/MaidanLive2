@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export interface IViewerMetric extends Document {
   liveStreamId: mongoose.Types.ObjectId;
@@ -33,8 +32,4 @@ const viewerMetricSchema = new Schema<IViewerMetric>(
 viewerMetricSchema.index({ liveStreamId: 1, sessionKey: 1 }, { unique: true });
 viewerMetricSchema.index({ liveStreamId: 1, mode: 1 });
 
-const MongooseViewerMetric = mongoose.model<IViewerMetric>(
-  'ViewerMetric',
-  viewerMetricSchema
-);
-export const ViewerMetric = createDualModel<IViewerMetric>('viewermetrics', MongooseViewerMetric);
+export const ViewerMetric = mongoose.model<IViewerMetric>('ViewerMetric', viewerMetricSchema);

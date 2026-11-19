@@ -1,22 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Award, BarChart3, BellPlus, Check } from 'lucide-react';
+import { ArrowLeft, Award, BarChart3 } from 'lucide-react';
 import { PlayerData, PlayerMatchStatRecord } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
-import { engagementService } from '../../services/engagement/engagementService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
-import { useAuth } from '../../hooks/useAuth.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { ShareButton } from '../../components/common/ShareButton.tsx';
 
 export function PlayerDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { customerUser, updateCustomerUser } = useAuth();
   const [player, setPlayer] = useState<PlayerData | null>(null);
   const [totals, setTotals] = useState<Record<string, number>>({});
   const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>([]);
-  const [followBusy, setFollowBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,27 +29,6 @@ export function PlayerDetailPage() {
       .catch((err) => setError(extractApiError(err, 'Unable to load player profile.')))
       .finally(() => setLoading(false));
   }, [id]);
-
-  async function handleToggleFollow() {
-    if (!player) return;
-    if (!customerUser) {
-      setError('Sign in to follow this player and receive match alerts.');
-      return;
-    }
-    const isFollowing = (customerUser.followedPlayerIds || []).includes(player.id);
-    try {
-      setFollowBusy(true);
-      const res = isFollowing
-        ? await engagementService.unfollowPlayer(player.id)
-        : await engagementService.followPlayer(player.id);
-      updateCustomerUser({ ...customerUser, followedPlayerIds: res.followedPlayerIds });
-      setPlayer((prev) => (prev ? { ...prev, followersCount: res.followersCount } : prev));
-    } catch (err) {
-      setError(extractApiError(err, 'Failed to update player follow status.'));
-    } finally {
-      setFollowBusy(false);
-    }
-  }
 
   if (loading) {
     return (
@@ -77,7 +52,6 @@ export function PlayerDetailPage() {
   }
 
   const teamObj = typeof player.teamId === 'object' && player.teamId ? player.teamId : null;
-  const isFollowing = Boolean(customerUser?.followedPlayerIds?.includes(player.id));
 
   const statSummaryCards =
     player.sportType === 'Cricket'
@@ -107,8 +81,6 @@ export function PlayerDetailPage() {
               { label: 'Blocks & Aces', val: (totals.blockPoints || 0) + (totals.serveAces || 0) },
               { label: 'MVP Awards', val: totals.mvpAwards || 0 },
             ];
-
-  const mvpMatches = matchStats.filter((st) => st.isMvp);
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
@@ -141,10 +113,6 @@ export function PlayerDetailPage() {
                   <span className="font-mono font-bold text-slate-800">#{player.jerseyNumber}</span>
                 </>
               )}
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">
-                {player.followersCount || 0} follower{(player.followersCount || 0) === 1 ? '' : 's'}
-              </span>
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900">
               {player.name}
@@ -165,35 +133,7 @@ export function PlayerDetailPage() {
             {player.bio && <p className="text-sm text-slate-600 pt-1 max-w-xl">{player.bio}</p>}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            disabled={followBusy}
-            onClick={handleToggleFollow}
-            className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
-              isFollowing
-                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                : 'bg-slate-900 text-white hover:bg-slate-800'
-            }`}
-          >
-            {isFollowing ? <Check className="w-4 h-4" /> : <BellPlus className="w-4 h-4" />}
-            <span>{isFollowing ? 'Following Player' : 'Follow Player'}</span>
-          </button>
-          <ShareButton
-            title={player.name}
-            text={`View ${player.name}'s stats on MaidanLive`}
-            shareCard={{
-              type: 'PLAYER_AWARD',
-              playerName: player.name,
-              sport: player.sportType,
-              teamName: teamObj?.name,
-              role: player.role,
-              jerseyNumber: player.jerseyNumber,
-              mvpAwards: totals.mvpAwards || 0,
-              stats: statSummaryCards.map((c) => ({ label: c.label, value: c.val })),
-            }}
-          />
-        </div>
+        <ShareButton title={player.name} text={`View ${player.name}'s stats on MaidanLive`} />
       </div>
 
       {/* Verified Stats */}
@@ -222,37 +162,6 @@ export function PlayerDetailPage() {
               </div>
             ))}
           </div>
-
-          {mvpMatches.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
-              <p className="text-xs font-bold text-amber-900 inline-flex items-center gap-1.5">
-                <Award className="w-4 h-4 text-amber-600" />
-                <span>Player of the Match Honours ({mvpMatches.length})</span>
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {mvpMatches.map((st) => {
-                  const streamObj =
-                    typeof st.liveStreamId === 'object' && st.liveStreamId
-                      ? (st.liveStreamId as any)
-                      : null;
-                  const streamId = streamObj?._id || st.liveStreamId;
-                  const title =
-                    streamObj?.matchTitle ||
-                    [streamObj?.teamAName, streamObj?.teamBName].filter(Boolean).join(' vs ') ||
-                    'Match';
-                  return (
-                    <Link
-                      key={st._id || st.id}
-                      to={`/live/${streamId}`}
-                      className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-xs font-semibold text-amber-950 hover:border-amber-400"
-                    >
-                      {title}
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">

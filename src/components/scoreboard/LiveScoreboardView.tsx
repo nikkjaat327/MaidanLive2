@@ -3,10 +3,11 @@ import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import {
   CricketDetails,
-  computeCricketChaseState,
+  calculateCricketRunRate,
+  calculateRequiredRunRate,
+  createInitialCricketDetails,
   formatCricketOvers,
   getTotalExtras,
-  normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
 import { KabaddiDetails, createInitialKabaddiDetails } from '../../utils/kabaddiScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
@@ -100,7 +101,7 @@ export function LiveScoreboardView({
             teamB={teamB}
             logoA={stream.teamALogo}
             logoB={stream.teamBLogo}
-            details={normalizeCricketDetails(details as Partial<CricketDetails>)}
+            details={{ ...createInitialCricketDetails(), ...(details as Partial<CricketDetails>) }}
           />
         ) : sport === 'Kabaddi' ? (
           <KabaddiBoard
@@ -165,17 +166,19 @@ function CricketBoard({
   logoB: string;
   details: CricketDetails;
 }) {
-  const chase = computeCricketChaseState(details, teamA, teamB);
   const isBattingA = details.battingTeam === 'A';
+  const activeRuns = isBattingA ? details.teamARuns : details.teamBRuns;
+  const activeBalls = isBattingA ? details.teamABalls : details.teamBBalls;
+  const crr = calculateCricketRunRate(activeRuns, activeBalls);
+  const rrr = calculateRequiredRunRate(details);
   const activeExtras = isBattingA ? details.extrasA : details.extrasB;
-  const activePlay = !chase.isInningsBreak && !chase.isMatchCompleted;
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div
           className={`p-3.5 rounded-lg border ${
-            isBattingA && activePlay
+            isBattingA
               ? 'bg-slate-900 border-emerald-500/60'
               : 'bg-slate-900/50 border-slate-800'
           }`}
@@ -185,10 +188,8 @@ function CricketBoard({
               <TeamAvatar name={teamA} logoUrl={logoA} size="sm" />
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-white truncate">{teamA}</p>
-                {isBattingA && activePlay && (
-                  <p className="text-[11px] text-emerald-400 font-medium">
-                    Batting · Inn {details.innings}
-                  </p>
+                {isBattingA && (
+                  <p className="text-[11px] text-emerald-400 font-medium">Batting · Inn {details.innings}</p>
                 )}
               </div>
             </div>
@@ -205,7 +206,7 @@ function CricketBoard({
 
         <div
           className={`p-3.5 rounded-lg border ${
-            !isBattingA && activePlay
+            !isBattingA
               ? 'bg-slate-900 border-emerald-500/60'
               : 'bg-slate-900/50 border-slate-800'
           }`}
@@ -215,10 +216,8 @@ function CricketBoard({
               <TeamAvatar name={teamB} logoUrl={logoB} size="sm" />
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-white truncate">{teamB}</p>
-                {!isBattingA && activePlay && (
-                  <p className="text-[11px] text-emerald-400 font-medium">
-                    Batting · Inn {details.innings}
-                  </p>
+                {!isBattingA && (
+                  <p className="text-[11px] text-emerald-400 font-medium">Batting · Inn {details.innings}</p>
                 )}
               </div>
             </div>
@@ -234,37 +233,15 @@ function CricketBoard({
         </div>
       </div>
 
-      {/* Chase / Innings Break Equation Banner */}
-      <div
-        className={`px-3.5 py-2.5 rounded-lg border text-xs font-semibold flex flex-wrap items-center justify-between gap-2 ${
-          chase.isInningsBreak
-            ? 'bg-orange-500/15 border-orange-400/30 text-orange-200'
-            : chase.isMatchCompleted
-              ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-200'
-              : 'bg-slate-900 border-slate-800 text-slate-200'
-        }`}
-      >
-        <span>{chase.chaseSummaryText}</span>
-        {chase.target > 0 && !chase.isMatchCompleted && (
-          <span className="font-mono tabular-nums text-amber-300">
-            Target: {chase.target}
-          </span>
-        )}
-      </div>
-
       {/* Metrics row */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-3 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-300">
-        <span>
-          CRR: <strong className="text-white">{chase.crr}</strong>
-        </span>
-        {chase.rrr !== null && (
-          <span>
-            RRR: <strong className="text-amber-400">{chase.rrr}</strong>
-          </span>
+        <span>CRR: <strong className="text-white">{crr}</strong></span>
+        {details.target > 0 && (
+          <span>Target: <strong className="text-amber-400">{details.target}</strong></span>
         )}
-        <span>
-          Overs Limit: <strong className="text-white">{chase.configuredOvers}</strong>
-        </span>
+        {rrr && (
+          <span>RRR: <strong className="text-amber-400">{rrr}</strong></span>
+        )}
         <span>
           Extras: <strong className="text-white">{getTotalExtras(activeExtras)}</strong>{' '}
           <span className="text-slate-400">
@@ -279,9 +256,7 @@ function CricketBoard({
             <span>
               Batters:{' '}
               <strong className="text-white">
-                {[details.batsman1 ? `${details.batsman1}*` : '', details.batsman2]
-                  .filter(Boolean)
-                  .join(' & ')}
+                {[details.batsman1, details.batsman2].filter(Boolean).join(' & ')}
               </strong>
             </span>
           )}

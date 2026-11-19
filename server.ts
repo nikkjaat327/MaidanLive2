@@ -6,10 +6,8 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 
-import { connectDatabase, disconnectDatabase, getDatabaseDiagnostics } from './server/config/db.ts';
+import { connectDatabase, disconnectDatabase } from './server/config/db.ts';
 import { initSocketServer } from './server/socket/index.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import liveStreamRoutes from './server/routes/liveStreamRoutes.ts';
@@ -18,7 +16,7 @@ import entityRoutes from './server/routes/entityRoutes.ts';
 import tournamentWorkflowRoutes from './server/routes/tournamentWorkflowRoutes.ts';
 import engagementRoutes from './server/routes/engagementRoutes.ts';
 import platformOpsRoutes from './server/routes/platformOpsRoutes.ts';
-import v1Routes from './server/routes/v1Routes.ts';
+import uploadRoutes from './server/routes/uploadRoutes.ts';
 import { User } from './server/models/User.ts';
 
 dotenv.config();
@@ -58,65 +56,24 @@ async function ensureEnvSuperAdminIfConfigured(): Promise<void> {
   console.log(`[Auth] Bootstrapped Super Admin from environment for ${email}`);
 }
 
-const STATIC_FILE_EXT_RE =
-  /\.(?:js|mjs|css|png|jpg|jpeg|webp|gif|svg|ico|json|woff|woff2|ttf|map|txt|webmanifest|m3u8|ts|mp4)$/i;
-
 async function startServer() {
   const dbInfo = await connectDatabase();
-  await ensureEnvSuperAdminIfConfigured();
+  if (dbInfo.mode !== 'offline') {
+    await ensureEnvSuperAdminIfConfigured();
+  }
 
   const app = express();
-  app.set('trust proxy', 1);
   const httpServer = http.createServer(app);
   initSocketServer(httpServer);
 
-  app.use(
-    helmet({
-      contentSecurityPolicy: false,
-      crossOriginEmbedderPolicy: false,
-      frameguard: false,
-    })
-  );
   app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
-  const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 60,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { message: 'Too many authentication requests. Please wait a few minutes.' },
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, dbMode: dbInfo.mode, timestamp: new Date().toISOString() });
   });
 
-  const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 400,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-
-  app.use('/api/auth/login', authLimiter);
-  app.use('/api/auth/admin/login', authLimiter);
-  app.use('/api/auth/forgot-password', authLimiter);
-  app.use('/api', apiLimiter);
-
-  app.get('/api/health', async (_req, res) => {
-    let diag: ReturnType<typeof getDatabaseDiagnostics> | null = null;
-    try {
-      diag = getDatabaseDiagnostics();
-    } catch {
-      diag = null;
-    }
-    res.json({
-      ok: true,
-      dbMode: diag?.engine || dbInfo.mode,
-      diagnostics: diag,
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  app.use('/api/v1', v1Routes);
   app.use('/api/auth', authRoutes);
   app.use('/api/live', liveStreamRoutes);
   app.use('/api/live', scoreRoutes);
@@ -124,8 +81,35 @@ async function startServer() {
   app.use('/api', tournamentWorkflowRoutes);
   app.use('/api', engagementRoutes);
   app.use('/api', platformOpsRoutes);
+  app.use('/api/uploads', uploadRoutes);
 
-  // API 404 handler (never return index.html for unknown /api routes)
+  // Graceful fallback when MongoDB is offline
+  app.use(
+    (
+      err: Error & { name?: string },
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (
+        err?.name === 'MongooseError' ||
+        err?.name === 'MongoNetworkError' ||
+        err?.message?.includes('buffering timed out') ||
+        err?.message?.includes('Client must be connected')
+      ) {
+        console.warn('[AI Studio] Database offline — returning mock empty response');
+        if (req.method === 'GET') {
+          return res.json(req.path.endsWith('s') || req.path.endsWith('s/') ? [] : {});
+        }
+        return res
+          .status(503)
+          .json({ message: 'Service temporarily unavailable (database offline)' });
+      }
+      next(err);
+    }
+  );
+
+  // API 404 handler (prevent HTML fallback for unknown /api routes)
   app.use('/api', (_req, res) => {
     res.status(404).json({ message: 'API endpoint not found.' });
   });
@@ -139,112 +123,16 @@ async function startServer() {
       fs.existsSync(distIndex));
 
   if (!isProd) {
-    app.get('/@vite/client', (_req, res) => {
-      res.type('application/javascript');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.send(`
-const sheetsMap = new Map();
-export function updateStyle(id, content) {
-  let style = sheetsMap.get(id);
-  if (!style) {
-    style = document.createElement('style');
-    style.setAttribute('type', 'text/css');
-    style.setAttribute('data-vite-dev-id', id);
-    style.textContent = content;
-    document.head.appendChild(style);
-    sheetsMap.set(id, style);
-  } else if (style.textContent !== content) {
-    style.textContent = content;
-  }
-}
-export function removeStyle(id) {
-  const style = sheetsMap.get(id);
-  if (style) {
-    style.remove();
-    sheetsMap.delete(id);
-  }
-}
-export function createHotContext() {
-  const noop = () => {};
-  return {
-    data: {},
-    accept: noop,
-    acceptExports: noop,
-    dispose: noop,
-    prune: noop,
-    decline: noop,
-    invalidate: noop,
-    on: noop,
-    off: noop,
-    send: noop,
-  };
-}
-export function injectQuery(url, queryToInject) {
-  if (!url || (url[0] !== '.' && url[0] !== '/')) return url;
-  const pathname = url.replace(/[?#].*$/, '');
-  const { search, hash } = new URL(url, 'http://vite.dev');
-  return pathname + '?' + queryToInject + (search ? '&' + search.slice(1) : '') + (hash || '');
-}
-export class ErrorOverlay extends HTMLElement {}
-`);
-    });
-
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false, ws: false },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    // 1. Immutable 1-year cache for Vite hashed /assets/* and strict 404 on missing files
-    const assetsDir = path.join(distDir, 'assets');
-    app.use(
-      '/assets',
-      express.static(assetsDir, {
-        maxAge: '1y',
-        immutable: true,
-        fallthrough: false,
-      })
-    );
-    app.use('/assets', (_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-      res.status(404).send('Asset not found.');
-    });
-
-    // 2. Service worker & manifest must NEVER be cached stale
-    app.get(['/sw.js', '/registerSW.js'], (req, res) => {
-      const target = path.join(distDir, req.path.replace(/^\/+/, ''));
-      if (!fs.existsSync(target)) {
-        res.status(404).send('Service worker not found.');
-        return;
-      }
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.type('application/javascript');
-      res.sendFile(target);
-    });
-
-    // 3. Other built static files in dist/
-    app.use(
-      express.static(distDir, {
-        index: false,
-        setHeaders(res, filePath) {
-          if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-          } else if (filePath.endsWith('manifest.webmanifest')) {
-            res.setHeader('Content-Type', 'application/manifest+json');
-            res.setHeader('Cache-Control', 'no-cache');
-          }
-        },
-      })
-    );
-
-    // 4. Strictly 404 missing static extensions or /assets/* (never return index.html)
-    app.get('*', (req, res) => {
-      if (req.path.startsWith('/assets/') || STATIC_FILE_EXT_RE.test(req.path)) {
-        res.status(404).send('Static resource not found.');
-        return;
-      }
+    app.use(express.static(distDir));
+    app.get('*', (_req, res) => {
       if (fs.existsSync(distIndex)) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.sendFile(distIndex);
       } else {
         res.status(404).send('Build output not found.');
@@ -255,7 +143,7 @@ export class ErrorOverlay extends HTMLElement {}
   const PORT = Number(process.env.PORT) || 3000;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(
-      `[MaidanLive] Server listening on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'}, db=${dbInfo.mode})`
+      `[MaidanLive] Server listening on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`
     );
   });
 

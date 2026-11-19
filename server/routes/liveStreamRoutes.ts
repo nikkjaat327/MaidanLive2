@@ -2,42 +2,23 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import { LiveStream } from '../models/LiveStream.ts';
-import type {
-  ScoreboardPosition,
-  SportType,
-  StreamStatus,
-  StreamingProvider,
-  ViewerCountVisibility,
-} from '../models/LiveStream.ts';
+import type { ScoreboardPosition, SportType, StreamStatus } from '../models/LiveStream.ts';
 import { LiveScore } from '../models/LiveScore.ts';
 import { Team } from '../models/Team.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Venue } from '../models/Venue.ts';
-import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
 import {
   authenticate,
   canManageStream,
-  optionalAuthenticate,
   requireAdminPortal,
   requirePermission,
 } from '../middleware/auth.ts';
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { extractYouTubeVideoId } from '../../src/utils/youtube.ts';
 import { verifyYouTubeVideoAvailability } from '../utils/youtubeVerify.ts';
-import { verifyYouTubeStream } from '../services/youtubeService.ts';
-import {
-  buildMediaMTXConfig,
-  getMediaMTXEnvConfig,
-  stripPrivateMediaMTXFields,
-  verifyMediaMTXStreamHealth,
-} from '../services/mediamtxService.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
-import {
-  emitStreamEvent,
-  getActiveRoomViewerCount,
-  invalidateViewerVisibilityCache,
-} from '../socket/index.ts';
+import { emitStreamEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
 
@@ -45,11 +26,6 @@ const router = Router();
 
 const VALID_SPORTS: SportType[] = ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'];
 const VALID_POSITIONS: ScoreboardPosition[] = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'];
-const VALID_PROVIDERS: StreamingProvider[] = ['youtube', 'mediamtx'];
-const VALID_VISIBILITY: ViewerCountVisibility[] = ['public', 'admin_only', 'hidden'];
-
-// Per-match concurrency lock for mid-match provider switching
-const activeProviderSwitches = new Set<string>();
 
 function normalizeSport(val: unknown): SportType | '' {
   if (typeof val !== 'string') return '';
@@ -64,44 +40,16 @@ function normalizePosition(val: unknown): ScoreboardPosition {
   return 'TOP';
 }
 
-function normalizeProvider(val: unknown): StreamingProvider {
-  return val === 'mediamtx' ? 'mediamtx' : 'youtube';
-}
-
-function normalizeVisibility(val: unknown): ViewerCountVisibility {
-  if (typeof val === 'string' && VALID_VISIBILITY.includes(val.trim() as ViewerCountVisibility)) {
-    return val.trim() as ViewerCountVisibility;
-  }
-  return 'public';
-}
-
-function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isAdminViewer = false) {
-  const clean = stripPrivateMediaMTXFields(streamObj);
-  const id = (clean._id || clean.id)?.toString();
-  const vis: ViewerCountVisibility = clean.viewerCountVisibility || 'public';
-  const rawActive = getActiveRoomViewerCount(id);
-  const activeViewers =
-    vis === 'public' || (vis === 'admin_only' && isAdminViewer) ? rawActive : null;
-
-  return {
-    ...clean,
-    id,
-    streamingProvider: clean.streamingProvider || 'youtube',
-    activeStreamingProvider: clean.activeStreamingProvider || clean.streamingProvider || 'youtube',
-    viewerCountVisibility: vis,
-    activeViewers,
-    ...extra,
-  };
-}
-
-async function attachScoresToStreams(streams: any[], isAdminViewer = false) {
+async function attachScoresToStreams(streams: any[]) {
   if (streams.length === 0) return [];
   const ids = streams.map((s) => s._id);
   const scores = await LiveScore.find({ liveStreamId: { $in: ids } }).lean();
   const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
-  return streams.map((s) =>
-    formatPublicStream(s, { score: scoreMap.get(s._id.toString()) || null }, isAdminViewer)
-  );
+  return streams.map((s) => ({
+    ...s,
+    id: s._id.toString(),
+    score: scoreMap.get(s._id.toString()) || null,
+  }));
 }
 
 // Verify YouTube Video ID or URL availability & embeddability
@@ -121,7 +69,7 @@ router.post(
   }
 );
 
-// POST /api/live - Start or schedule a LiveStream (supports YouTube and/or MediaMTX)
+// POST /api/live - Start or schedule a LiveStream (only YouTube Video ID/URL is mandatory)
 router.post(
   '/',
   authenticate,
@@ -129,10 +77,6 @@ router.post(
   requirePermission('manageStreams'),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const streamingProvider = normalizeProvider(
-        req.body.streamingProvider ?? req.body.activeStreamingProvider
-      );
-
       const rawYoutube =
         typeof req.body.youtubeInput === 'string'
           ? req.body.youtubeInput
@@ -140,19 +84,10 @@ router.post(
             ? req.body.youtubeVideoId
             : '';
 
-      let parsedYtId = '';
-      if (rawYoutube.trim()) {
-        const parsedYt = extractYouTubeVideoId(rawYoutube);
-        if (!parsedYt.valid || !parsedYt.videoId) {
-          res.status(400).json({
-            message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
-          });
-          return;
-        }
-        parsedYtId = parsedYt.videoId;
-      } else if (streamingProvider === 'youtube') {
+      const parsedYt = extractYouTubeVideoId(rawYoutube);
+      if (!parsedYt.valid || !parsedYt.videoId) {
         res.status(400).json({
-          message: 'A valid YouTube Video ID or URL is required when YouTube is the active provider.',
+          message: parsedYt.error || 'A valid YouTube Video ID or URL is required.',
         });
         return;
       }
@@ -160,15 +95,14 @@ router.post(
       const requestedStatus: StreamStatus =
         req.body.status === 'UPCOMING' ? 'UPCOMING' : 'LIVE';
 
-      if (requestedStatus === 'LIVE' && parsedYtId && streamingProvider === 'youtube') {
+      if (requestedStatus === 'LIVE') {
         const duplicate = await LiveStream.findOne({
-          youtubeVideoId: parsedYtId,
+          youtubeVideoId: parsedYt.videoId,
           status: 'LIVE',
-          activeStreamingProvider: 'youtube',
         });
         if (duplicate) {
           res.status(409).json({
-            message: `An active LIVE stream already exists for YouTube Video ID "${parsedYtId}".`,
+            message: `An active LIVE stream already exists for YouTube Video ID "${parsedYt.videoId}".`,
             existingStreamId: duplicate._id.toString(),
           });
           return;
@@ -224,39 +158,13 @@ router.post(
 
       const gameName = normalizeSport(req.body.gameName);
       const scoreSport: SportType = gameName || 'Other';
-      const parsedOversLimit =
-        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
-          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
-          : undefined;
-      const parsedPlayersPerSide =
-        req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
-          ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
-          : undefined;
 
       const matchDate = req.body.matchDate ? new Date(req.body.matchDate) : null;
       const validMatchDate = matchDate && !isNaN(matchDate.getTime()) ? matchDate : null;
 
-      const tempObjectId = new mongoose.Types.ObjectId();
-      const customPath = sanitizeText(req.body.mediamtxStreamPath, 140);
-      const mtxCfg = buildMediaMTXConfig(tempObjectId.toString(), customPath);
-      const mediamtxPlaybackUrl =
-        sanitizeText(req.body.mediamtxPlaybackUrl, 500) || mtxCfg.hlsPlaybackUrl;
-      const mediamtxWebrtcUrl =
-        sanitizeText(req.body.mediamtxWebrtcUrl, 500) || mtxCfg.webrtcPlaybackUrl;
-
       const stream = await LiveStream.create({
-        _id: tempObjectId,
-        streamingProvider,
-        activeStreamingProvider: streamingProvider,
-        youtubeVideoId: parsedYtId,
+        youtubeVideoId: parsedYt.videoId,
         youtubeInput: sanitizeText(rawYoutube, 300),
-        youtubeStreamStatus: parsedYtId ? 'READY' : 'UNKNOWN',
-        mediamtxStreamPath: mtxCfg.streamPath,
-        mediamtxPublishStatus: 'IDLE',
-        mediamtxPlaybackUrl,
-        mediamtxWebrtcUrl,
-        mediamtxStreamKey: mtxCfg.streamKey,
-        viewerCountVisibility: normalizeVisibility(req.body.viewerCountVisibility),
         teamAName,
         teamBName,
         teamAId,
@@ -269,23 +177,10 @@ router.post(
         matchTitle: sanitizeText(req.body.matchTitle, 180),
         tournamentName,
         tournamentId,
-        fixtureId:
-          req.body.fixtureId && mongoose.Types.ObjectId.isValid(req.body.fixtureId)
-            ? req.body.fixtureId
-            : null,
-        roundName: sanitizeText(req.body.roundName, 100),
         matchDate: validMatchDate,
         matchDescription: sanitizeText(req.body.matchDescription, 1000),
         status: requestedStatus,
         startedAt: requestedStatus === 'LIVE' ? new Date() : null,
-        authorizedScorerId:
-          req.body.authorizedScorerId && mongoose.Types.ObjectId.isValid(req.body.authorizedScorerId)
-            ? req.body.authorizedScorerId
-            : null,
-        backupScorerId:
-          req.body.backupScorerId && mongoose.Types.ObjectId.isValid(req.body.backupScorerId)
-            ? req.body.backupScorerId
-            : null,
         scoreboardVisibleByDefault:
           req.body.scoreboardVisibleByDefault === false ? false : true,
         scoreboardPosition: normalizePosition(req.body.scoreboardPosition),
@@ -301,10 +196,7 @@ router.post(
         sportType: scoreSport,
         teamAScore: 0,
         teamBScore: 0,
-        sportSpecificDetails: getInitialSportDetails(scoreSport, {
-          oversLimit: parsedOversLimit,
-          playersPerSide: parsedPlayersPerSide,
-        }),
+        sportSpecificDetails: getInitialSportDetails(scoreSport),
         matchStatus: requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
         lastUpdatedBy: req.user!._id,
         lastUpdatedAt: new Date(),
@@ -315,27 +207,25 @@ router.post(
         requestedStatus === 'LIVE' ? 'START_STREAM' : 'SCHEDULE_STREAM',
         'LiveStream',
         stream._id.toString(),
-        `${stream.matchTitle || parsedYtId || mtxCfg.streamPath} (${scoreSport} · ${streamingProvider})`,
+        `${stream.matchTitle || parsedYt.videoId} (${scoreSport})`,
         {
           newValue: {
             status: requestedStatus,
-            streamingProvider,
-            youtubeVideoId: parsedYtId,
-            mediamtxStreamPath: mtxCfg.streamPath,
+            youtubeVideoId: parsedYt.videoId,
             gameName: scoreSport,
             scoreboardPosition: stream.scoreboardPosition,
           },
         }
       );
 
-      const publicPayload = formatPublicStream(
-        stream.toObject(),
-        { score: initialScore.toObject() },
-        true
-      );
+      const responsePayload = {
+        ...stream.toObject(),
+        id: stream._id.toString(),
+        score: initialScore.toObject(),
+      };
 
       if (requestedStatus === 'LIVE') {
-        emitStreamEvent(stream._id.toString(), 'live:started', publicPayload);
+        emitStreamEvent(stream._id.toString(), 'live:started', responsePayload);
         await dispatchMatchNotifications({
           type: 'MATCH_LIVE',
           title: 'Match is Live Now',
@@ -351,7 +241,7 @@ router.post(
           includeAllSpectatorsIfNoFollowers: true,
         });
       } else {
-        emitStreamEvent(stream._id.toString(), 'live:updated', publicPayload);
+        emitStreamEvent(stream._id.toString(), 'live:updated', responsePayload);
         if (teamAId || teamBId) {
           await dispatchMatchNotifications({
             type: 'MATCH_STARTING',
@@ -369,18 +259,7 @@ router.post(
         }
       }
 
-      // Include RTMP publish credentials in creation response ONLY for admin creator
-      const { rtmpBase } = getMediaMTXEnvConfig();
-      res.status(201).json({
-        stream: publicPayload,
-        adminStreamConfig: {
-          mediamtxStreamPath: mtxCfg.streamPath,
-          mediamtxStreamKey: mtxCfg.streamKey,
-          mediamtxRtmpPublishUrl: `${rtmpBase}/${mtxCfg.streamPath}?key=${mtxCfg.streamKey}`,
-          mediamtxPlaybackUrl,
-          mediamtxWebrtcUrl,
-        },
-      });
+      res.status(201).json({ stream: responsePayload });
     } catch (err) {
       console.error('[LiveStream] Create error:', err);
       res.status(500).json({ message: 'Failed to create live stream.' });
@@ -389,7 +268,7 @@ router.post(
 );
 
 // GET /api/live - List streams (with optional status/gameName/tournamentId/search/pagination)
-router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const query: Record<string, unknown> = {};
     if (
@@ -435,10 +314,7 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
       LiveStream.countDocuments(query),
     ]);
 
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams);
     res.json({ streams: enriched, total, page, limit });
   } catch (err) {
     console.error('[LiveStream] List error:', err);
@@ -447,15 +323,12 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
 });
 
 // GET /api/live/active - Active LIVE streams
-router.get('/active', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/active', async (_req: Request, res: Response) => {
   try {
     const streams = await LiveStream.find({ status: 'LIVE' })
       .sort({ startedAt: -1, createdAt: -1 })
       .lean();
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams);
     res.json({ streams: enriched });
   } catch (err) {
     console.error('[LiveStream] Active error:', err);
@@ -464,16 +337,13 @@ router.get('/active', optionalAuthenticate, async (req: AuthenticatedRequest, re
 });
 
 // GET /api/live/history - Ended streams
-router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/history', async (_req: Request, res: Response) => {
   try {
     const streams = await LiveStream.find({ status: 'ENDED' })
       .sort({ endedAt: -1, updatedAt: -1 })
       .limit(100)
       .lean();
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams);
     res.json({ streams: enriched });
   } catch (err) {
     console.error('[LiveStream] History error:', err);
@@ -482,7 +352,7 @@ router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, r
 });
 
 // GET /api/live/replays - Published available replays for Customer Portal
-router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/replays', async (req: Request, res: Response) => {
   try {
     const includeAll = req.query.all === 'true';
     const query: Record<string, unknown> = includeAll
@@ -500,10 +370,7 @@ router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, r
       .sort({ endedAt: -1, updatedAt: -1 })
       .limit(100)
       .lean();
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams);
     res.json({ replays: enriched });
   } catch (err) {
     console.error('[LiveStream] Replays error:', err);
@@ -511,8 +378,8 @@ router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, r
   }
 });
 
-// GET /api/live/:id - Get single stream + score + venue (strictly strips private MediaMTX RTMP keys)
-router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+// GET /api/live/:id - Get single stream + score + venue
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -530,19 +397,13 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
       LiveScore.findOne({ liveStreamId: stream._id }).lean(),
       stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
     ]);
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
-
     res.json({
-      stream: formatPublicStream(
-        stream,
-        {
-          score: score || null,
-          venue: venue ? { ...venue, id: venue._id.toString() } : null,
-        },
-        isAdminViewer
-      ),
+      stream: {
+        ...stream,
+        id: stream._id.toString(),
+        score: score || null,
+        venue: venue ? { ...venue, id: venue._id.toString() } : null,
+      },
     });
   } catch (err) {
     console.error('[LiveStream] Get error:', err);
@@ -550,428 +411,7 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
   }
 });
 
-// GET /api/live/:id/stream-config - Admin-only private MediaMTX & YouTube stream configuration
-router.get(
-  '/:id/stream-config',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        res.status(400).json({ message: 'Invalid stream ID.' });
-        return;
-      }
-
-      const allowed = await canManageStream(req.user!, id, 'stream');
-      if (!allowed) {
-        res.status(403).json({
-          message: 'Forbidden: Only authorized broadcast admins may access private stream keys.',
-        });
-        return;
-      }
-
-      const stream = await LiveStream.findById(id).select('+mediamtxStreamKey');
-      if (!stream) {
-        res.status(404).json({ message: 'Stream not found.' });
-        return;
-      }
-
-      if (!stream.mediamtxStreamPath || !stream.mediamtxStreamKey) {
-        const cfg = buildMediaMTXConfig(
-          stream._id.toString(),
-          stream.mediamtxStreamPath,
-          stream.mediamtxStreamKey
-        );
-        stream.mediamtxStreamPath = cfg.streamPath;
-        stream.mediamtxStreamKey = cfg.streamKey;
-        if (!stream.mediamtxPlaybackUrl) stream.mediamtxPlaybackUrl = cfg.hlsPlaybackUrl;
-        if (!stream.mediamtxWebrtcUrl) stream.mediamtxWebrtcUrl = cfg.webrtcPlaybackUrl;
-        await stream.save();
-      }
-
-      const { rtmpBase } = getMediaMTXEnvConfig();
-      res.json({
-        streamId: stream._id.toString(),
-        streamingProvider: stream.streamingProvider,
-        activeStreamingProvider: stream.activeStreamingProvider,
-        youtubeVideoId: stream.youtubeVideoId,
-        youtubeStreamStatus: stream.youtubeStreamStatus,
-        mediamtxStreamPath: stream.mediamtxStreamPath,
-        mediamtxStreamKey: stream.mediamtxStreamKey,
-        mediamtxRtmpPublishUrl: `${rtmpBase}/${stream.mediamtxStreamPath}?key=${stream.mediamtxStreamKey}`,
-        mediamtxRtmpServerUrl: `${rtmpBase}/${stream.mediamtxStreamPath}`,
-        mediamtxPlaybackUrl: stream.mediamtxPlaybackUrl,
-        mediamtxWebrtcUrl: stream.mediamtxWebrtcUrl,
-        mediamtxPublishStatus: stream.mediamtxPublishStatus,
-        streamHealth: stream.streamHealth,
-        providerSwitchHistory: stream.providerSwitchHistory || [],
-        viewerCountVisibility: stream.viewerCountVisibility || 'public',
-      });
-    } catch (err) {
-      console.error('[LiveStream] Stream config error:', err);
-      res.status(500).json({ message: 'Failed to load stream configuration.' });
-    }
-  }
-);
-
-// POST /api/live/:id/verify-health - Check health of YouTube or MediaMTX feed before going live or switching
-router.post(
-  '/:id/verify-health',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        res.status(400).json({ message: 'Invalid stream ID.' });
-        return;
-      }
-
-      const allowed = await canManageStream(req.user!, id, 'stream');
-      if (!allowed) {
-        res.status(403).json({ message: 'Forbidden: Not authorized to verify stream health.' });
-        return;
-      }
-
-      const stream = await LiveStream.findById(id);
-      if (!stream) {
-        res.status(404).json({ message: 'Stream not found.' });
-        return;
-      }
-
-      const targetProvider: StreamingProvider = VALID_PROVIDERS.includes(req.body.provider)
-        ? req.body.provider
-        : stream.activeStreamingProvider || 'youtube';
-
-      const startedAtMs = Date.now();
-      if (targetProvider === 'mediamtx') {
-        const mtxRes = await verifyMediaMTXStreamHealth({
-          streamPath: stream.mediamtxStreamPath,
-          hlsPlaybackUrl: stream.mediamtxPlaybackUrl,
-          webrtcPlaybackUrl: stream.mediamtxWebrtcUrl,
-        });
-        stream.mediamtxPublishStatus = mtxRes.publishStatus;
-        stream.streamHealth = {
-          ok: mtxRes.ok,
-          status: mtxRes.publishStatus,
-          checkedAt: new Date(),
-          latencyMs: mtxRes.latencyMs,
-          detail: mtxRes.message,
-        };
-        await stream.save();
-
-        const healthPayload = {
-          streamId: stream._id.toString(),
-          provider: 'mediamtx' as const,
-          mediamtxPublishStatus: stream.mediamtxPublishStatus,
-          streamHealth: stream.streamHealth,
-          latencyMs: stream.streamHealth.latencyMs,
-          checkedAt: stream.streamHealth.checkedAt,
-        };
-        emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', healthPayload);
-        emitStreamEvent(stream._id.toString(), 'stream:health_updated', healthPayload);
-
-        res.json({
-          provider: 'mediamtx',
-          ...mtxRes,
-          streamHealth: stream.streamHealth,
-        });
-        return;
-      }
-
-      // YouTube verification
-      const ytInput = stream.youtubeVideoId || stream.youtubeInput;
-      if (!ytInput) {
-        res.json({
-          provider: 'youtube',
-          ok: false,
-          playable: false,
-          latencyMs: Date.now() - startedAtMs,
-          checkedAt: new Date().toISOString(),
-          message: 'No YouTube Video ID configured for this stream.',
-        });
-        return;
-      }
-
-      const ytRes = await verifyYouTubeStream(ytInput);
-      const isOk = ytRes.available && ytRes.embeddable;
-      stream.youtubeStreamStatus = isOk
-        ? ytRes.liveBroadcastStatus === 'LIVE'
-          ? 'LIVE'
-          : 'READY'
-        : 'UNAVAILABLE';
-      stream.streamHealth = {
-        ok: isOk,
-        status: stream.youtubeStreamStatus,
-        checkedAt: new Date(),
-        latencyMs: Date.now() - startedAtMs,
-        detail: ytRes.message,
-      };
-      await stream.save();
-
-      emitStreamEvent(stream._id.toString(), 'stream:health_updated', {
-        streamId: stream._id.toString(),
-        provider: 'youtube',
-        youtubeStreamStatus: stream.youtubeStreamStatus,
-        streamHealth: stream.streamHealth,
-        latencyMs: stream.streamHealth.latencyMs,
-        checkedAt: stream.streamHealth.checkedAt,
-      });
-
-      res.json({
-        provider: 'youtube',
-        ok: isOk,
-        playable: isOk,
-        liveBroadcastStatus: ytRes.liveBroadcastStatus,
-        available: ytRes.available,
-        embeddable: ytRes.embeddable,
-        title: ytRes.title,
-        latencyMs: stream.streamHealth.latencyMs,
-        checkedAt: stream.streamHealth.checkedAt,
-        message: ytRes.message,
-        streamHealth: stream.streamHealth,
-      });
-    } catch (err) {
-      console.error('[LiveStream] Verify health error:', err);
-      res.status(500).json({ message: 'Failed to verify stream health.' });
-    }
-  }
-);
-
-// POST /api/live/:id/switch-provider - Mid-match live streaming provider switching with strict validation & lock
-router.post(
-  '/:id/switch-provider',
-  authenticate,
-  requireAdminPortal,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      res.status(400).json({ message: 'Invalid stream ID.' });
-      return;
-    }
-
-    const allowed = await canManageStream(req.user!, id, 'stream');
-    if (!allowed) {
-      res.status(403).json({
-        message: 'Forbidden: matches:manage_stream permission is required to switch streaming provider.',
-      });
-      return;
-    }
-
-    const toProvider = req.body.toProvider as StreamingProvider;
-    if (!VALID_PROVIDERS.includes(toProvider)) {
-      res.status(400).json({ message: 'toProvider must be either "youtube" or "mediamtx".' });
-      return;
-    }
-
-    if (activeProviderSwitches.has(id)) {
-      res.status(409).json({
-        message: 'A provider switch is already in progress for this match. Please wait.',
-      });
-      return;
-    }
-
-    activeProviderSwitches.add(id);
-    try {
-      const stream = await LiveStream.findById(id).select('+mediamtxStreamKey');
-      if (!stream) {
-        res.status(404).json({ message: 'Stream not found.' });
-        return;
-      }
-
-      const fromProvider: StreamingProvider = stream.activeStreamingProvider || 'youtube';
-      const reason = sanitizeText(req.body.reason, 240) || 'Admin live broadcast failover switch';
-
-      // Apply optional target URL / video ID supplied during switch modal
-      if (toProvider === 'youtube' && (req.body.youtubeInput || req.body.youtubeVideoId)) {
-        const rawYt = String(req.body.youtubeInput || req.body.youtubeVideoId || '');
-        const parsed = extractYouTubeVideoId(rawYt);
-        if (!parsed.valid || !parsed.videoId) {
-          res.status(400).json({ message: parsed.error || 'Invalid target YouTube Video ID or URL.' });
-          return;
-        }
-        stream.youtubeVideoId = parsed.videoId;
-        stream.youtubeInput = sanitizeText(rawYt, 300);
-      }
-
-      if (toProvider === 'mediamtx') {
-        if (req.body.mediamtxStreamPath) {
-          stream.mediamtxStreamPath = sanitizeText(req.body.mediamtxStreamPath, 140);
-        }
-        if (!stream.mediamtxStreamPath || !stream.mediamtxStreamKey) {
-          const cfg = buildMediaMTXConfig(
-            stream._id.toString(),
-            stream.mediamtxStreamPath,
-            stream.mediamtxStreamKey
-          );
-          stream.mediamtxStreamPath = cfg.streamPath;
-          stream.mediamtxStreamKey = cfg.streamKey;
-          if (!stream.mediamtxPlaybackUrl) stream.mediamtxPlaybackUrl = cfg.hlsPlaybackUrl;
-          if (!stream.mediamtxWebrtcUrl) stream.mediamtxWebrtcUrl = cfg.webrtcPlaybackUrl;
-        }
-        if (req.body.mediamtxPlaybackUrl) {
-          stream.mediamtxPlaybackUrl = sanitizeText(req.body.mediamtxPlaybackUrl, 500);
-        }
-        if (req.body.mediamtxWebrtcUrl) {
-          stream.mediamtxWebrtcUrl = sanitizeText(req.body.mediamtxWebrtcUrl, 500);
-        }
-      }
-
-      // Mandatory destination verification: reject & retain existing provider if destination is NOT live/playable
-      let verifiedOk = false;
-      let verifyDetail = '';
-      let latencyMs = 0;
-
-      if (toProvider === 'youtube') {
-        const t0 = Date.now();
-        if (!stream.youtubeVideoId) {
-          verifyDetail = 'No YouTube Video ID configured for destination.';
-        } else {
-          const ytCheck = await verifyYouTubeStream(stream.youtubeVideoId);
-          latencyMs = Date.now() - t0;
-          verifiedOk = ytCheck.available && ytCheck.embeddable;
-          verifyDetail = ytCheck.message;
-          stream.youtubeStreamStatus = verifiedOk
-            ? ytCheck.liveBroadcastStatus === 'LIVE'
-              ? 'LIVE'
-              : 'READY'
-            : 'UNAVAILABLE';
-        }
-      } else {
-        const mtxCheck = await verifyMediaMTXStreamHealth({
-          streamPath: stream.mediamtxStreamPath,
-          hlsPlaybackUrl: stream.mediamtxPlaybackUrl,
-          webrtcPlaybackUrl: stream.mediamtxWebrtcUrl,
-        });
-        latencyMs = mtxCheck.latencyMs;
-        verifiedOk = mtxCheck.playable && mtxCheck.ok;
-        verifyDetail = mtxCheck.message;
-        stream.mediamtxPublishStatus = mtxCheck.publishStatus;
-      }
-
-      if (!verifiedOk) {
-        // Retain existing active provider and record rejected switch attempt
-        stream.providerSwitchHistory = [
-          ...(stream.providerSwitchHistory || []).slice(-19),
-          {
-            fromProvider,
-            toProvider,
-            switchedBy: req.user!._id.toString(),
-            switchedByName: req.user!.name || req.user!.email,
-            switchedAt: new Date(),
-            reason,
-            status: 'REJECTED',
-            detail: verifyDetail,
-          },
-        ];
-        await stream.save();
-
-        await recordActivity(
-          req.user!,
-          'SWITCH_STREAM_PROVIDER_REJECTED',
-          'LiveStream',
-          stream._id.toString(),
-          `Rejected switch ${fromProvider} -> ${toProvider}: ${verifyDetail}`
-        );
-
-        res.status(422).json({
-          message: `Cannot switch to ${toProvider === 'mediamtx' ? 'MediaMTX' : 'YouTube'}: ${verifyDetail} Existing provider (${fromProvider}) retained.`,
-          retainedProvider: fromProvider,
-          verificationDetail: verifyDetail,
-          stream: formatPublicStream(stream.toObject(), {}, true),
-        });
-        return;
-      }
-
-      // Switch confirmed and verified
-      stream.streamingProvider = toProvider;
-      stream.activeStreamingProvider = toProvider;
-      stream.lastProviderSwitchAt = new Date();
-      stream.lastProviderSwitchBy = req.user!._id as mongoose.Types.ObjectId;
-      stream.lastProviderSwitchByName = req.user!.name || req.user!.email;
-      stream.streamHealth = {
-        ok: true,
-        status: toProvider === 'mediamtx' ? 'PUBLISHING' : stream.youtubeStreamStatus,
-        checkedAt: new Date(),
-        latencyMs,
-        detail: verifyDetail,
-      };
-      stream.providerSwitchHistory = [
-        ...(stream.providerSwitchHistory || []).slice(-19),
-        {
-          fromProvider,
-          toProvider,
-          switchedBy: req.user!._id.toString(),
-          switchedByName: req.user!.name || req.user!.email,
-          switchedAt: new Date(),
-          reason,
-          status: 'SUCCESS',
-          detail: verifyDetail,
-        },
-      ];
-      stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
-      await stream.save();
-
-      await recordActivity(
-        req.user!,
-        'SWITCH_STREAM_PROVIDER',
-        'LiveStream',
-        stream._id.toString(),
-        `Switched broadcast provider ${fromProvider} -> ${toProvider} (${reason})`,
-        {
-          previousValue: { activeStreamingProvider: fromProvider },
-          newValue: { activeStreamingProvider: toProvider, reason },
-        }
-      );
-
-      const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
-      const publicPayload = formatPublicStream(stream.toObject(), { score }, true);
-
-      emitStreamEvent(stream._id.toString(), 'streaming_provider_changed', {
-        streamId: stream._id.toString(),
-        fromProvider,
-        toProvider,
-        activeStreamingProvider: toProvider,
-        youtubeVideoId: stream.youtubeVideoId,
-        mediamtxPlaybackUrl: stream.mediamtxPlaybackUrl,
-        mediamtxWebrtcUrl: stream.mediamtxWebrtcUrl,
-        switchedAt: stream.lastProviderSwitchAt,
-        switchedByName: stream.lastProviderSwitchByName,
-        reason,
-        stream: publicPayload,
-      });
-
-      const switchHealthPayload = {
-        streamId: stream._id.toString(),
-        provider: toProvider,
-        mediamtxPublishStatus: stream.mediamtxPublishStatus,
-        youtubeStreamStatus: stream.youtubeStreamStatus,
-        streamHealth: stream.streamHealth,
-        latencyMs: stream.streamHealth.latencyMs,
-        checkedAt: stream.streamHealth.checkedAt,
-      };
-      emitStreamEvent(stream._id.toString(), 'stream:health_updated', switchHealthPayload);
-      if (toProvider === 'mediamtx') {
-        emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', switchHealthPayload);
-      }
-
-      res.json({
-        message: `Broadcast switched from ${fromProvider} to ${toProvider}.`,
-        fromProvider,
-        toProvider,
-        stream: publicPayload,
-      });
-    } catch (err) {
-      console.error('[LiveStream] Switch provider error:', err);
-      res.status(500).json({ message: 'Failed to switch streaming provider.' });
-    } finally {
-      activeProviderSwitches.delete(id);
-    }
-  }
-);
-
-// PATCH /api/live/:id - Edit optional match info, go live from UPCOMING, or update YouTube/MediaMTX settings
+// PATCH /api/live/:id - Edit optional match info, go live from UPCOMING, or update YouTube ID
 router.patch(
   '/:id',
   authenticate,
@@ -1001,8 +441,6 @@ router.patch(
       const previousValue = {
         status: stream.status,
         youtubeVideoId: stream.youtubeVideoId,
-        activeStreamingProvider: stream.activeStreamingProvider,
-        viewerCountVisibility: stream.viewerCountVisibility,
         matchTitle: stream.matchTitle,
         scoreboardPosition: stream.scoreboardPosition,
         scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
@@ -1016,46 +454,15 @@ router.patch(
             : typeof req.body.youtubeVideoId === 'string'
               ? req.body.youtubeVideoId
               : '';
-        if (rawYt.trim()) {
-          const parsedYt = extractYouTubeVideoId(rawYt);
-          if (!parsedYt.valid || !parsedYt.videoId) {
-            res.status(400).json({
-              message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
-            });
-            return;
-          }
-          stream.youtubeVideoId = parsedYt.videoId;
-          stream.youtubeInput = sanitizeText(rawYt, 300);
-        } else {
-          stream.youtubeVideoId = '';
-          stream.youtubeInput = '';
+        const parsedYt = extractYouTubeVideoId(rawYt);
+        if (!parsedYt.valid || !parsedYt.videoId) {
+          res.status(400).json({
+            message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
+          });
+          return;
         }
-      }
-
-      if (req.body.mediamtxStreamPath !== undefined) {
-        stream.mediamtxStreamPath = sanitizeText(req.body.mediamtxStreamPath, 140);
-      }
-      if (req.body.mediamtxPlaybackUrl !== undefined) {
-        stream.mediamtxPlaybackUrl = sanitizeText(req.body.mediamtxPlaybackUrl, 500);
-      }
-      if (req.body.mediamtxWebrtcUrl !== undefined) {
-        stream.mediamtxWebrtcUrl = sanitizeText(req.body.mediamtxWebrtcUrl, 500);
-      }
-      if (req.body.viewerCountVisibility !== undefined) {
-        stream.viewerCountVisibility = normalizeVisibility(req.body.viewerCountVisibility);
-        invalidateViewerVisibilityCache(id);
-      }
-      if (req.body.authorizedScorerId !== undefined) {
-        stream.authorizedScorerId =
-          req.body.authorizedScorerId && mongoose.Types.ObjectId.isValid(req.body.authorizedScorerId)
-            ? req.body.authorizedScorerId
-            : null;
-      }
-      if (req.body.backupScorerId !== undefined) {
-        stream.backupScorerId =
-          req.body.backupScorerId && mongoose.Types.ObjectId.isValid(req.body.backupScorerId)
-            ? req.body.backupScorerId
-            : null;
+        stream.youtubeVideoId = parsedYt.videoId;
+        stream.youtubeInput = sanitizeText(rawYt, 300);
       }
 
       if (req.body.teamAName !== undefined) stream.teamAName = sanitizeText(req.body.teamAName, 100);
@@ -1066,9 +473,6 @@ router.patch(
       if (req.body.matchTitle !== undefined) stream.matchTitle = sanitizeText(req.body.matchTitle, 180);
       if (req.body.tournamentName !== undefined) {
         stream.tournamentName = sanitizeText(req.body.tournamentName, 160);
-      }
-      if (req.body.roundName !== undefined) {
-        stream.roundName = sanitizeText(req.body.roundName, 100);
       }
       if (req.body.matchDescription !== undefined) {
         stream.matchDescription = sanitizeText(req.body.matchDescription, 1000);
@@ -1165,46 +569,14 @@ router.patch(
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
 
-      const reqOversLimit =
-        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
-          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
-          : undefined;
-      const reqPlayersPerSide =
-        req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
-          ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
-          : undefined;
-
       if (sportChangedTo) {
         const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
         if (existingScore && existingScore.sportType !== sportChangedTo) {
           existingScore.sportType = sportChangedTo;
-          existingScore.sportSpecificDetails = getInitialSportDetails(sportChangedTo, {
-            oversLimit: reqOversLimit,
-            playersPerSide: reqPlayersPerSide,
-          });
+          existingScore.sportSpecificDetails = getInitialSportDetails(sportChangedTo);
           existingScore.lastUpdatedAt = new Date();
           existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
           await existingScore.save();
-        }
-      } else if (
-        stream.gameName === 'Cricket' &&
-        (reqOversLimit !== undefined || reqPlayersPerSide !== undefined)
-      ) {
-        const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
-        if (existingScore) {
-          const prevDetails = (existingScore.sportSpecificDetails || {}) as Record<string, unknown>;
-          existingScore.sportSpecificDetails = {
-            ...prevDetails,
-            ...(reqOversLimit !== undefined ? { oversLimit: reqOversLimit } : {}),
-            ...(reqPlayersPerSide !== undefined ? { playersPerSide: reqPlayersPerSide } : {}),
-          };
-          existingScore.lastUpdatedAt = new Date();
-          existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
-          await existingScore.save();
-          emitStreamEvent(stream._id.toString(), 'score:updated', {
-            streamId: stream._id.toString(),
-            score: existingScore.toObject(),
-          });
         }
       }
 
@@ -1216,21 +588,19 @@ router.patch(
       }
 
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
-      const payload = formatPublicStream(stream.toObject(), { score }, true);
+      const payload = { ...stream.toObject(), id: stream._id.toString(), score };
 
       await recordActivity(
         req.user!,
         becameLive ? 'START_STREAM' : 'UPDATE_STREAM',
         'LiveStream',
         stream._id.toString(),
-        stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath,
+        stream.matchTitle || stream.youtubeVideoId,
         {
           previousValue,
           newValue: {
             status: stream.status,
             youtubeVideoId: stream.youtubeVideoId,
-            activeStreamingProvider: stream.activeStreamingProvider,
-            viewerCountVisibility: stream.viewerCountVisibility,
             matchTitle: stream.matchTitle,
             scoreboardPosition: stream.scoreboardPosition,
             scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
@@ -1319,19 +689,19 @@ router.patch(
         'END_STREAM',
         'LiveStream',
         stream._id.toString(),
-        `Ended MaidanLive stream (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`,
+        `Ended MaidanLive stream (${stream.matchTitle || stream.youtubeVideoId})`,
         {
           previousValue: { status: 'LIVE' },
           newValue: { status: 'ENDED', endedAt: stream.endedAt },
         }
       );
 
-      const payload = formatPublicStream(stream.toObject(), { score }, true);
+      const payload = { ...stream.toObject(), id: stream._id.toString(), score };
       emitStreamEvent(stream._id.toString(), 'live:ended', payload);
 
       res.json({
         stream: payload,
-        note: 'MaidanLive stream ended and moved to history. Stop your encoder/YouTube Studio separately if still broadcasting.',
+        note: 'MaidanLive stream ended and moved to history. Stop your encoder/YouTube Studio separately if still broadcasting on YouTube.',
       });
     } catch (err) {
       console.error('[LiveStream] End error:', err);
@@ -1392,7 +762,7 @@ router.patch(
           res.status(422).json({
             message: `Cannot publish replay: ${verification.message}`,
             verification,
-            stream: formatPublicStream(stream.toObject(), {}, true),
+            stream: { ...stream.toObject(), id: stream._id.toString() },
           });
           return;
         }
@@ -1420,7 +790,7 @@ router.patch(
       );
 
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
-      const payload = formatPublicStream(stream.toObject(), { score }, true);
+      const payload = { ...stream.toObject(), id: stream._id.toString(), score };
       emitStreamEvent(stream._id.toString(), 'live:updated', payload);
 
       res.json({ stream: payload });

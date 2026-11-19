@@ -1,8 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
-
-export type SponsorPlacement = 'live_match' | 'home_feed' | 'tournament_banner';
 
 export interface ISponsor extends Document {
   name: string;
@@ -10,11 +7,6 @@ export interface ISponsor extends Document {
   websiteUrl: string;
   contactInfo: string;
   sponsorshipType: string;
-  placement: SponsorPlacement;
-  tagline: string;
-  ctaText: string;
-  impressionsCount: number;
-  clicksCount: number;
   tournamentId?: mongoose.Types.ObjectId | null;
   liveStreamId?: mongoose.Types.ObjectId | null;
   isPublished: boolean;
@@ -31,16 +23,6 @@ const sponsorSchema = new Schema<ISponsor>(
     websiteUrl: { type: String, trim: true, default: '', maxlength: 300 },
     contactInfo: { type: String, trim: true, default: '', maxlength: 200 },
     sponsorshipType: { type: String, trim: true, default: 'Broadcast Partner', maxlength: 80 },
-    placement: {
-      type: String,
-      enum: ['live_match', 'home_feed', 'tournament_banner'],
-      default: 'live_match',
-      index: true,
-    },
-    tagline: { type: String, trim: true, default: '', maxlength: 200 },
-    ctaText: { type: String, trim: true, default: 'Visit Partner', maxlength: 60 },
-    impressionsCount: { type: Number, default: 0, min: 0 },
-    clicksCount: { type: Number, default: 0, min: 0 },
     tournamentId: { type: Schema.Types.ObjectId, ref: 'Tournament', default: null, index: true },
     liveStreamId: { type: Schema.Types.ObjectId, ref: 'LiveStream', default: null, index: true },
     isPublished: { type: Boolean, default: true, index: true },
@@ -50,8 +32,7 @@ const sponsorSchema = new Schema<ISponsor>(
   { timestamps: true }
 );
 
-const MongooseSponsor = mongoose.model<ISponsor>('Sponsor', sponsorSchema);
-export const Sponsor = createDualModel<ISponsor>('sponsors', MongooseSponsor);
+export const Sponsor = mongoose.model<ISponsor>('Sponsor', sponsorSchema);
 
 export interface ISponsorOverlay extends Document {
   sponsorId: mongoose.Types.ObjectId;
@@ -84,8 +65,4 @@ const sponsorOverlaySchema = new Schema<ISponsorOverlay>(
   { timestamps: true }
 );
 
-const MongooseSponsorOverlay = mongoose.model<ISponsorOverlay>('SponsorOverlay', sponsorOverlaySchema);
-export const SponsorOverlay = createDualModel<ISponsorOverlay>(
-  'sponsoroverlays',
-  MongooseSponsorOverlay
-);
+export const SponsorOverlay = mongoose.model<ISponsorOverlay>('SponsorOverlay', sponsorOverlaySchema);

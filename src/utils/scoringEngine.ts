@@ -5,16 +5,10 @@ import { createInitialVolleyballDetails } from './volleyballScoring.ts';
 
 export type SportType = 'Cricket' | 'Kabaddi' | 'Football' | 'Volleyball' | 'Other';
 
-export function getInitialSportDetails(
-  sportType: SportType,
-  options?: { oversLimit?: number; playersPerSide?: number }
-): Record<string, unknown> {
+export function getInitialSportDetails(sportType: SportType): Record<string, unknown> {
   switch (sportType) {
     case 'Cricket':
-      return createInitialCricketDetails(
-        options?.oversLimit,
-        options?.playersPerSide
-      ) as unknown as Record<string, unknown>;
+      return createInitialCricketDetails() as unknown as Record<string, unknown>;
     case 'Kabaddi':
       return createInitialKabaddiDetails() as unknown as Record<string, unknown>;
     case 'Football':

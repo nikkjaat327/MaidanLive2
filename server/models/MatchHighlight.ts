@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export interface IMatchHighlightAudit {
   action: 'CREATED' | 'UPDATED' | 'DELETED';
@@ -56,11 +55,4 @@ const matchHighlightSchema = new Schema<IMatchHighlight>(
 
 matchHighlightSchema.index({ liveStreamId: 1, videoTimestampSeconds: 1 });
 
-const MongooseMatchHighlight = mongoose.model<IMatchHighlight>(
-  'MatchHighlight',
-  matchHighlightSchema
-);
-export const MatchHighlight = createDualModel<IMatchHighlight>(
-  'matchhighlights',
-  MongooseMatchHighlight
-);
+export const MatchHighlight = mongoose.model<IMatchHighlight>('MatchHighlight', matchHighlightSchema);

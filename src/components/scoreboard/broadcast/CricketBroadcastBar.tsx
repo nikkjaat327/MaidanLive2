@@ -1,10 +1,11 @@
 import { LiveScoreData, LiveStreamData } from '../../../types/index.ts';
 import {
   CricketDetails,
-  computeCricketChaseState,
+  calculateCricketRunRate,
+  calculateRequiredRunRate,
+  createInitialCricketDetails,
   formatCricketOvers,
   getTotalExtras,
-  normalizeCricketDetails,
 } from '../../../utils/cricketScoring.ts';
 import { deriveShortTeamName } from '../../../utils/matchResultValidation.ts';
 import { BroadcastLogo } from './BroadcastLogo.tsx';
@@ -16,15 +17,15 @@ interface CricketBroadcastBarProps {
 }
 
 export function CricketBroadcastBar({ stream, score, compact = false }: CricketBroadcastBarProps) {
-  const d: CricketDetails = normalizeCricketDetails(
-    (score.sportSpecificDetails || {}) as Partial<CricketDetails>
-  );
+  const d: CricketDetails = {
+    ...createInitialCricketDetails(),
+    ...(score.sportSpecificDetails || {}),
+  };
 
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
   const shortA = d.teamAShortName || deriveShortTeamName(nameA, 'TMA');
   const shortB = d.teamBShortName || deriveShortTeamName(nameB, 'TMB');
-  const chase = computeCricketChaseState(d, nameA, nameB);
 
   const isBattingA = d.battingTeam === 'A';
   const batShort = isBattingA ? shortA : shortB;
@@ -36,19 +37,16 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
   const balls = isBattingA ? d.teamABalls : d.teamBBalls;
   const extras = isBattingA ? getTotalExtras(d.extrasA) : getTotalExtras(d.extrasB);
 
+  const crr = calculateCricketRunRate(runs, balls);
+  const rrr = calculateRequiredRunRate(d);
+  const runsNeeded = d.innings === 2 && d.target > 0 ? Math.max(0, d.target - runs) : null;
+  const remainingBalls = Math.max(0, (d.oversLimit || 20) * 6 - balls);
+
   const lastOver = d.lastOverSummary && d.lastOverSummary.length > 0
     ? d.lastOverSummary
     : d.recentBalls.slice(-6);
 
   const hasPlayers = Boolean(d.batsman1 || d.batsman2 || d.bowler);
-
-  const phaseBadge = d.isSuperOver
-    ? 'S/O'
-    : chase.isInningsBreak
-      ? 'BRK'
-      : chase.isMatchCompleted || score.resultStatus !== 'NOT_DECLARED'
-        ? 'FIN'
-        : `${d.innings === 2 ? '2ND' : '1ST'}`;
 
   return (
     <div className="w-full max-w-[780px] bg-slate-950/90 backdrop-blur-md text-white rounded-md shadow-xl overflow-hidden border border-white/10">
@@ -56,14 +54,8 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2.5 sm:px-3.5 py-1.5">
         {/* Left: Batting Team + Score + Overs */}
         <div className="flex items-center gap-2 min-w-0">
-          <span
-            className={`text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded shrink-0 ${
-              chase.isInningsBreak
-                ? 'bg-orange-400 text-slate-950'
-                : 'bg-emerald-500 text-slate-950'
-            }`}
-          >
-            {phaseBadge}
+          <span className="text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950 shrink-0">
+            {d.isSuperOver ? 'S/O' : `${d.innings === 2 ? '2ND' : '1ST'}`}
           </span>
           <BroadcastLogo logoUrl={batLogo} alt={batShort} />
           <span className="font-display font-bold text-xs sm:text-sm tracking-wide uppercase truncate">
@@ -86,25 +78,19 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
               ? `${d.teamBRuns}/${d.teamBWickets} (${formatCricketOvers(d.teamBBalls)})`
               : `${d.teamARuns}/${d.teamAWickets} (${formatCricketOvers(d.teamABalls)})`}
           </span>
-          <span className="text-emerald-300 font-semibold">CRR {chase.crr}</span>
-          {chase.rrr !== null && (
-            <span className="text-amber-300 font-semibold">RRR {chase.rrr}</span>
+          <span className="text-emerald-300 font-semibold">CRR {crr}</span>
+          {rrr !== null && (
+            <span className="text-amber-300 font-semibold">RRR {rrr}</span>
           )}
-          {chase.target > 0 && !chase.isMatchCompleted && (
-            <span className="hidden sm:inline text-white font-semibold">TGT {chase.target}</span>
+          {d.target > 0 && (
+            <span className="hidden sm:inline text-white font-semibold">TGT {d.target}</span>
           )}
           <span className="hidden md:inline text-slate-400">EXT {extras}</span>
         </div>
       </div>
 
-      {/* Sub-strip: Target Chase / Innings Break / Super Over / Batters & Bowler / Last Over */}
-      {(chase.isInningsBreak ||
-        (chase.isSecondInnings && chase.target > 0) ||
-        chase.isMatchCompleted ||
-        d.isSuperOver ||
-        hasPlayers ||
-        lastOver.length > 0) &&
-        !compact && (
+      {/* Sub-strip: Target Chase / Super Over / Batters & Bowler / Last Over */}
+      {(runsNeeded !== null || d.isSuperOver || hasPlayers || lastOver.length > 0) && !compact && (
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2.5 sm:px-3.5 py-1 bg-white/[0.06] border-t border-white/10 text-[10px] sm:text-[11px] text-slate-200">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 min-w-0">
             {d.isSuperOver && (
@@ -112,30 +98,22 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
                 SUPER OVER: {shortA} {d.superOverTeamARuns}/{d.superOverTeamAWickets} · {shortB} {d.superOverTeamBRuns}/{d.superOverTeamBWickets}
               </span>
             )}
-            {chase.isInningsBreak && (
-              <span className="font-semibold text-orange-300">
-                INNINGS BREAK · Target {chase.target}
-              </span>
-            )}
-            {chase.isSecondInnings && !chase.isMatchCompleted && chase.target > 0 && score.resultStatus === 'NOT_DECLARED' && (
+            {runsNeeded !== null && score.resultStatus === 'NOT_DECLARED' && (
               <span className="font-semibold text-amber-200">
-                Need {chase.runsRequired} in {chase.ballsRemaining}b
+                Need {runsNeeded} in {remainingBalls}b
               </span>
             )}
-            {chase.isMatchCompleted && (
-              <span className="font-semibold text-emerald-300">{chase.chaseSummaryText}</span>
-            )}
-            {d.batsman1 && !chase.isInningsBreak && (
+            {d.batsman1 && (
               <span className="truncate max-w-[140px]">
                 <span className="text-emerald-400 font-semibold">*</span> {d.batsman1}
               </span>
             )}
-            {d.batsman2 && !chase.isInningsBreak && (
+            {d.batsman2 && (
               <span className="hidden sm:inline truncate max-w-[130px] text-slate-300">
                 {d.batsman2}
               </span>
             )}
-            {d.bowler && !chase.isInningsBreak && (
+            {d.bowler && (
               <span className="truncate max-w-[140px] text-slate-300">
                 BWL: <span className="text-white">{d.bowler}</span>
               </span>

@@ -1,7 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
-import { createDualModel } from '../db/dualModel.ts';
 
 export type ResultStatus =
   | 'NOT_DECLARED'
@@ -92,5 +91,4 @@ const liveScoreSchema = new Schema<ILiveScore>(
   { timestamps: true }
 );
 
-const MongooseLiveScore = mongoose.model<ILiveScore>('LiveScore', liveScoreSchema);
-export const LiveScore = createDualModel<ILiveScore>('livescores', MongooseLiveScore);
+export const LiveScore = mongoose.model<ILiveScore>('LiveScore', liveScoreSchema);

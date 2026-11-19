@@ -1,23 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BadgeCheck, Edit3, Plus, ShieldAlert, Trash2, UserCheck } from 'lucide-react';
+import { Edit3, Plus, Trash2, UserCheck } from 'lucide-react';
 import { PlayerData, TeamData } from '../../types/index.ts';
 import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { entityService } from '../../services/entities/entityService.ts';
-import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { Modal } from '../../components/common/Modal.tsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
-
-function computeIsMinor(dob: string): boolean {
-  if (!dob) return false;
-  const parsed = new Date(dob);
-  if (isNaN(parsed.getTime())) return false;
-  const ageYears = (Date.now() - parsed.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-  return ageYears < 18;
-}
+import { FileUploadField } from '../../components/common/FileUploadField.tsx';
 
 export function AdminPlayersPage() {
   const [players, setPlayers] = useState<PlayerData[]>([]);
@@ -33,8 +25,6 @@ export function AdminPlayersPage() {
   const [sportType, setSportType] = useState<SportOption>('Cricket');
   const [role, setRole] = useState('');
   const [jerseyNumber, setJerseyNumber] = useState('');
-  const [dateOfBirth, setDateOfBirth] = useState('');
-  const [isVerified, setIsVerified] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -68,8 +58,6 @@ export function AdminPlayersPage() {
     setSportType('Cricket');
     setRole('');
     setJerseyNumber('');
-    setDateOfBirth('');
-    setIsVerified(false);
     setAvatarUrl('');
     setModalOpen(true);
   }
@@ -89,8 +77,6 @@ export function AdminPlayersPage() {
         ? String(player.jerseyNumber)
         : ''
     );
-    setDateOfBirth(player.dateOfBirth ? player.dateOfBirth.slice(0, 10) : '');
-    setIsVerified(Boolean(player.isVerified));
     setAvatarUrl(player.avatarUrl || '');
     setModalOpen(true);
   }
@@ -106,9 +92,6 @@ export function AdminPlayersPage() {
         sportType,
         role: role.trim(),
         jerseyNumber: jerseyNumber !== '' ? Number(jerseyNumber) : null,
-        dateOfBirth: dateOfBirth || '',
-        isMinor: computeIsMinor(dateOfBirth),
-        isVerified,
         avatarUrl: avatarUrl.trim(),
       };
       if (editing) {
@@ -127,21 +110,6 @@ export function AdminPlayersPage() {
     }
   }
 
-  async function handleToggleVerify(player: PlayerData) {
-    try {
-      setError(null);
-      await platformOpsService.verifyPlayer(player.id, !player.isVerified);
-      setSuccess(
-        !player.isVerified
-          ? `Verified player "${player.name}".`
-          : `Removed verification from "${player.name}".`
-      );
-      await loadData();
-    } catch (err) {
-      setError(extractApiError(err, 'Failed to update verification status.'));
-    }
-  }
-
   async function handleDelete() {
     if (!deleteTarget) return;
     try {
@@ -157,25 +125,21 @@ export function AdminPlayersPage() {
     }
   }
 
-  const dobMinor = computeIsMinor(dateOfBirth);
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900">
-            Players &amp; Eligibility
-          </h1>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900">Players</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Manage athlete rosters, age/minor status (&lt;18), and organizer verification badges.
+            Manage athlete rosters and positions in MongoDB.
           </p>
         </div>
         <button
           type="button"
           onClick={openCreate}
-          className="min-h-[36px] inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
+          className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className="w-4 h-4" />
           <span>Add Player</span>
         </button>
       </div>
@@ -194,7 +158,7 @@ export function AdminPlayersPage() {
             <button
               type="button"
               onClick={openCreate}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg"
+              className="min-h-[42px] px-4 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg"
             >
               Add First Player
             </button>
@@ -205,10 +169,10 @@ export function AdminPlayersPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
-                <th className="py-3 px-4">Player</th>
+                <th className="py-3 px-4">Name</th>
                 <th className="py-3 px-4">Team</th>
-                <th className="py-3 px-4">Sport / Role</th>
-                <th className="py-3 px-4">Eligibility</th>
+                <th className="py-3 px-4">Sport</th>
+                <th className="py-3 px-4">Position / Role</th>
                 <th className="py-3 px-4">Jersey</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
@@ -219,51 +183,10 @@ export function AdminPlayersPage() {
                   typeof p.teamId === 'object' && p.teamId ? p.teamId.name : 'Unassigned';
                 return (
                   <tr key={p.id} className="hover:bg-slate-50">
-                    <td className="py-3 px-4 font-medium text-slate-900">
-                      <div className="flex items-center gap-1.5">
-                        <span>{p.name}</span>
-                        {p.isVerified && (
-                          <span title="Verified Athlete">
-                            <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                          </span>
-                        )}
-                      </div>
-                      {p.dateOfBirth && (
-                        <div className="text-[11px] font-mono text-slate-400">
-                          DOB: {p.dateOfBirth.slice(0, 10)}
-                        </div>
-                      )}
-                    </td>
+                    <td className="py-3 px-4 font-medium text-slate-900">{p.name}</td>
                     <td className="py-3 px-4 text-slate-600">{teamName}</td>
-                    <td className="py-3 px-4 text-slate-600">
-                      <div>{p.sportType}</div>
-                      {p.role && <div className="text-xs text-slate-400">{p.role}</div>}
-                    </td>
-                    <td className="py-3 px-4 text-xs">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {p.isMinor ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-orange-100 text-orange-800 font-semibold">
-                            <ShieldAlert className="w-3 h-3" />
-                            Minor (&lt;18)
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
-                            Standard
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleVerify(p)}
-                          className={`px-2 py-0.5 rounded font-semibold transition-colors ${
-                            p.isVerified
-                              ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {p.isVerified ? 'Verified' : 'Verify'}
-                        </button>
-                      </div>
-                    </td>
+                    <td className="py-3 px-4 text-slate-600">{p.sportType}</td>
+                    <td className="py-3 px-4 text-slate-600">{p.role || '—'}</td>
                     <td className="py-3 px-4 font-mono tabular-nums text-slate-600">
                       {p.jerseyNumber !== null && p.jerseyNumber !== undefined
                         ? `#${p.jerseyNumber}`
@@ -357,22 +280,6 @@ export function AdminPlayersPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Date of Birth (Optional)
-              </label>
-              <input
-                type="date"
-                value={dateOfBirth}
-                onChange={(e) => setDateOfBirth(e.target.value)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-              {dateOfBirth && (
-                <p className={`text-[11px] mt-1 font-semibold ${dobMinor ? 'text-orange-600' : 'text-emerald-600'}`}>
-                  {dobMinor ? 'Auto-detected: Minor (<18 years)' : 'Auto-detected: Adult (18+)'}
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
                 Jersey Number
               </label>
               <input
@@ -385,40 +292,29 @@ export function AdminPlayersPage() {
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Photo URL (Optional)
-              </label>
-              <input
-                type="url"
+              <FileUploadField
+                label="Player Photo (Optional)"
                 value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={setAvatarUrl}
+                folder="players"
+                portal="admin"
+                placeholder="Upload photo or paste https://..."
               />
             </div>
           </div>
-
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isVerified}
-              onChange={(e) => setIsVerified(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-            />
-            <span>Mark athlete ID &amp; eligibility as Organizer Verified</span>
-          </label>
 
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={() => setModalOpen(false)}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+              className="min-h-[42px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
+              className="min-h-[42px] px-5 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Player'}
             </button>
@@ -432,7 +328,7 @@ export function AdminPlayersPage() {
         onConfirm={handleDelete}
         loading={deleting}
         title="Delete Player"
-        message={`Delete "${deleteTarget?.name}" from database?`}
+        message={`Delete "${deleteTarget?.name}" from MongoDB?`}
         confirmLabel="Delete"
       />
     </div>

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Calendar,
-  Edit3,
   ExternalLink,
   GitBranch,
   Link2,
@@ -66,7 +65,6 @@ export function AdminFixturesPage() {
   const [roundNumber, setRoundNumber] = useState('1');
   const [roundName, setRoundName] = useState('Round 1');
   const [groupName, setGroupName] = useState('');
-  const [matchFormat, setMatchFormat] = useState('');
   const [matchNumber, setMatchNumber] = useState('1');
   const [teamAId, setTeamAId] = useState('');
   const [teamBId, setTeamBId] = useState('');
@@ -74,21 +72,6 @@ export function AdminFixturesPage() {
   const [location, setLocation] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [savingFixture, setSavingFixture] = useState(false);
-
-  // Edit fixture modal
-  const [editTarget, setEditTarget] = useState<FixtureData | null>(null);
-  const [editRoundNumber, setEditRoundNumber] = useState('1');
-  const [editMatchNumber, setEditMatchNumber] = useState('1');
-  const [editRoundName, setEditRoundName] = useState('');
-  const [editGroupName, setEditGroupName] = useState('');
-  const [editMatchFormat, setEditMatchFormat] = useState('');
-  const [editTeamAId, setEditTeamAId] = useState('');
-  const [editTeamBId, setEditTeamBId] = useState('');
-  const [editVenueId, setEditVenueId] = useState('');
-  const [editLocation, setEditLocation] = useState('');
-  const [editScheduledAt, setEditScheduledAt] = useState('');
-  const [editStatus, setEditStatus] = useState<FixtureData['status']>('SCHEDULED');
-  const [updatingFixture, setUpdatingFixture] = useState(false);
 
   // Link live stream modal
   const [linkTarget, setLinkTarget] = useState<FixtureData | null>(null);
@@ -184,19 +167,10 @@ export function AdminFixturesPage() {
     setGenOpen(true);
   }
 
-  function toLocalDatetimeInput(iso?: string | null): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
   function openCreateModal() {
     setRoundNumber('1');
     setRoundName('Round 1');
     setGroupName('');
-    setMatchFormat('');
     setMatchNumber(String(fixtures.length + 1));
     setTeamAId('');
     setTeamBId('');
@@ -204,25 +178,6 @@ export function AdminFixturesPage() {
     setLocation(selectedTournament?.location || '');
     setScheduledAt('');
     setCreateOpen(true);
-  }
-
-  function openEditModal(fx: FixtureData) {
-    setEditTarget(fx);
-    setEditRoundNumber(String(fx.roundNumber || 1));
-    setEditMatchNumber(String(fx.matchNumber || 1));
-    setEditRoundName(fx.roundName || '');
-    setEditGroupName(fx.groupName || '');
-    setEditMatchFormat(fx.matchFormat || '');
-    setEditTeamAId(fx.teamAId ? String(fx.teamAId) : '');
-    setEditTeamBId(fx.teamBId ? String(fx.teamBId) : '');
-    setEditVenueId(
-      typeof fx.venueId === 'object' && fx.venueId
-        ? fx.venueId.id || fx.venueId._id || ''
-        : fx.venueId || ''
-    );
-    setEditLocation(fx.location || '');
-    setEditScheduledAt(toLocalDatetimeInput(fx.scheduledAt));
-    setEditStatus(fx.status || 'SCHEDULED');
   }
 
   async function handleGenerate(e: React.FormEvent) {
@@ -263,7 +218,6 @@ export function AdminFixturesPage() {
         roundNumber: Math.max(1, Number(roundNumber) || 1),
         roundName: roundName.trim() || `Round ${roundNumber}`,
         groupName: groupName.trim(),
-        matchFormat: matchFormat.trim(),
         matchNumber: Math.max(1, Number(matchNumber) || 1),
         teamAId: teamAId || null,
         teamBId: teamBId || null,
@@ -271,7 +225,7 @@ export function AdminFixturesPage() {
         teamBName: tB?.name || 'TBD',
         venueId: venueId || null,
         location: location.trim(),
-        scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : null,
+        scheduledAt: scheduledAt || null,
       });
       setCreateOpen(false);
       setSuccess('Fixture scheduled.');
@@ -280,43 +234,6 @@ export function AdminFixturesPage() {
       setError(extractApiError(err, 'Failed to create fixture.'));
     } finally {
       setSavingFixture(false);
-    }
-  }
-
-  async function handleUpdateFixture(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editTarget) return;
-    if (editTeamAId && editTeamBId && editTeamAId === editTeamBId) {
-      setError('Team A and Team B cannot be the same team.');
-      return;
-    }
-    try {
-      setUpdatingFixture(true);
-      setError(null);
-      const tA = teams.find((t) => t.id === editTeamAId);
-      const tB = teams.find((t) => t.id === editTeamBId);
-      await tournamentWorkflowService.updateFixture(editTarget.id, {
-        roundNumber: Math.max(1, Number(editRoundNumber) || 1),
-        matchNumber: Math.max(1, Number(editMatchNumber) || 1),
-        roundName: editRoundName.trim() || `Round ${editRoundNumber}`,
-        groupName: editGroupName.trim(),
-        matchFormat: editMatchFormat.trim(),
-        teamAId: editTeamAId || null,
-        teamBId: editTeamBId || null,
-        teamAName: tA?.name || 'TBD',
-        teamBName: tB?.name || 'TBD',
-        venueId: editVenueId || null,
-        location: editLocation.trim(),
-        scheduledAt: editScheduledAt ? new Date(editScheduledAt).toISOString() : null,
-        status: editStatus,
-      });
-      setEditTarget(null);
-      setSuccess('Fixture updated and affected teams notified.');
-      await loadTournamentFixtures(selectedId);
-    } catch (err) {
-      setError(extractApiError(err, 'Failed to update fixture.'));
-    } finally {
-      setUpdatingFixture(false);
     }
   }
 
@@ -380,17 +297,17 @@ export function AdminFixturesPage() {
               <button
                 type="button"
                 onClick={openGenerateModal}
-                className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
+                className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
               >
-                <Sparkles className="w-3.5 h-3.5" />
+                <Sparkles className="w-4 h-4" />
                 <span>Auto-Generate</span>
               </button>
               <button
                 type="button"
                 onClick={openCreateModal}
-                className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
+                className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-4 h-4" />
                 <span>Add Fixture</span>
               </button>
             </>
@@ -565,7 +482,6 @@ export function AdminFixturesPage() {
                           <div className="text-xs text-slate-500 font-mono">
                             Match #{fx.matchNumber}
                             {fx.groupName ? ` · ${fx.groupName}` : ''}
-                            {fx.matchFormat ? ` · ${fx.matchFormat}` : ''}
                           </div>
                         </td>
                         <td className="py-3 px-4 font-medium text-slate-900">
@@ -601,18 +517,10 @@ export function AdminFixturesPage() {
                           )}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(fx)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-md mr-1"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            <span>Edit Fixture</span>
-                          </button>
                           {linkedStreamId ? (
                             <Link
                               to={`/admin/scoreboard/${linkedStreamId}`}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-md mr-1"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-md mr-1"
                             >
                               <Radio className="w-3.5 h-3.5" />
                               <span>Scoreboard</span>
@@ -626,7 +534,7 @@ export function AdminFixturesPage() {
                                   setLinkStreamId('');
                                   setLinkYoutubeInput('');
                                 }}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-md mr-1"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-md mr-1"
                               >
                                 <Link2 className="w-3.5 h-3.5" />
                                 <span>Link Stream</span>
@@ -636,7 +544,7 @@ export function AdminFixturesPage() {
                           <button
                             type="button"
                             onClick={() => setDeleteTarget(fx)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded-md"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-md"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             <span>Delete</span>
@@ -863,196 +771,22 @@ export function AdminFixturesPage() {
                 className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
               />
             </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Match Format (Optional)
-              </label>
-              <input
-                type="text"
-                value={matchFormat}
-                onChange={(e) => setMatchFormat(e.target.value)}
-                placeholder="e.g. T20, 10 Overs, Best of 3 Sets, 20m x 2"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={() => setCreateOpen(false)}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+              className="min-h-[42px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={savingFixture}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
+              className="min-h-[42px] px-5 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
             >
               {savingFixture ? 'Saving...' : 'Create Fixture'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Edit Fixture Modal */}
-      <Modal
-        open={Boolean(editTarget)}
-        onClose={() => setEditTarget(null)}
-        title={`Edit Fixture · Match #${editTarget?.matchNumber || ''}`}
-        subtitle="Changes automatically update linked streams, schedules, and notify affected teams."
-      >
-        <form onSubmit={handleUpdateFixture} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Round #</label>
-              <input
-                type="number"
-                min={1}
-                value={editRoundNumber}
-                onChange={(e) => setEditRoundNumber(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Match #</label>
-              <input
-                type="number"
-                min={1}
-                value={editMatchNumber}
-                onChange={(e) => setEditMatchNumber(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Round Name</label>
-              <input
-                type="text"
-                value={editRoundName}
-                onChange={(e) => setEditRoundName(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Group</label>
-              <input
-                type="text"
-                value={editGroupName}
-                onChange={(e) => setEditGroupName(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Team A</label>
-              <select
-                value={editTeamAId}
-                onChange={(e) => setEditTeamAId(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">TBD</option>
-                {teams.map((tm) => (
-                  <option key={tm.id} value={tm.id}>
-                    {tm.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Team B</label>
-              <select
-                value={editTeamBId}
-                onChange={(e) => setEditTeamBId(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">TBD</option>
-                {teams.map((tm) => (
-                  <option key={tm.id} value={tm.id}>
-                    {tm.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Venue</label>
-              <select
-                value={editVenueId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setEditVenueId(id);
-                  const found = venues.find((v) => v.id === id);
-                  if (found) setEditLocation([found.name, found.city].filter(Boolean).join(', '));
-                }}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">Manual location</option>
-                {venues.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Location</label>
-              <input
-                type="text"
-                value={editLocation}
-                onChange={(e) => setEditLocation(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Match Date &amp; Time
-              </label>
-              <input
-                type="datetime-local"
-                value={editScheduledAt}
-                onChange={(e) => setEditScheduledAt(e.target.value)}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Match Format</label>
-              <input
-                type="text"
-                value={editMatchFormat}
-                onChange={(e) => setEditMatchFormat(e.target.value)}
-                placeholder="e.g. 15 Overs, Best of 3"
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-600 mb-1">Fixture Status</label>
-              <select
-                value={editStatus}
-                onChange={(e) => setEditStatus(e.target.value as FixtureData['status'])}
-                className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="SCHEDULED">SCHEDULED</option>
-                <option value="LIVE">LIVE</option>
-                <option value="COMPLETED">COMPLETED</option>
-                <option value="BYE">BYE</option>
-                <option value="CANCELLED">CANCELLED</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setEditTarget(null)}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={updatingFixture}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
-            >
-              {updatingFixture ? 'Updating...' : 'Save Changes'}
             </button>
           </div>
         </form>

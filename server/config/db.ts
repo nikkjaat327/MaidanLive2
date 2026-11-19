@@ -1,165 +1,111 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import mongoose from 'mongoose';
-import {
-  getActiveDbEngine,
-  getEngineDiagnostics,
-  setActiveDbEngine,
-  updateEngineDiagnostics,
-} from '../db/engineState.ts';
-import {
-  closeSqliteDb,
-  getSqliteCollectionStats,
-  getSqliteDb,
-  getSqliteFilePath,
-  syncSqliteToMongo,
-} from '../db/sqliteStore.ts';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 
-mongoose.set('bufferCommands', false);
+let memoryServer: MongoMemoryServer | null = null;
+let isConnected = false;
+
+function resolveEmbeddedDbDir(): string {
+  const preferred = path.resolve(process.cwd(), '.data', 'mongodb');
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch {
+    const fallback = path.join(os.tmpdir(), 'maidanlive-mongodb');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
 
 export async function connectDatabase(): Promise<{
   uri: string;
-  mode: 'mongodb' | 'sqlite';
-  sqlitePath: string;
+  mode: 'external' | 'embedded' | 'offline';
 }> {
-  const externalUri = process.env.MONGODB_URI?.trim() || '';
-  updateEngineDiagnostics({
-    mongoConfigured: Boolean(externalUri),
-    lastRetryAt: new Date().toISOString(),
-  });
+  if (isConnected && mongoose.connection.readyState === 1) {
+    return {
+      uri: process.env.MONGODB_URI || 'embedded-mongodb',
+      mode: process.env.MONGODB_URI ? 'external' : 'embedded',
+    };
+  }
 
-  // Always initialize SQLite store so fallback & diagnostics are immediately available
-  getSqliteDb();
-  const sqlitePath = getSqliteFilePath();
+  const externalUri = process.env.MONGODB_URI?.trim();
 
   if (externalUri) {
     try {
       await mongoose.connect(externalUri, {
-        serverSelectionTimeoutMS: 6000,
+        serverSelectionTimeoutMS: 5000,
       });
-      setActiveDbEngine('mongodb');
-      updateEngineDiagnostics({
-        engine: 'mongodb',
-        mongoConnected: true,
-        lastMongoError: null,
-      });
-      const syncResult = await syncSqliteToMongo();
-      if (syncResult.syncedRecords > 0) {
-        updateEngineDiagnostics({
-          lastSyncSummary: {
-            ...syncResult,
-            syncedAt: new Date().toISOString(),
-          },
-        });
-      }
-      console.log('[DB] Connected to primary MongoDB');
-      return { uri: externalUri, mode: 'mongodb', sqlitePath };
-    } catch (err: any) {
-      const message = err?.message || 'Unable to connect to MongoDB.';
-      console.warn(`[DB] MongoDB unavailable (${message}); falling back to SQLite at ${sqlitePath}`);
-      setActiveDbEngine('sqlite');
-      updateEngineDiagnostics({
-        engine: 'sqlite',
-        mongoConnected: false,
-        lastMongoError: message,
-      });
-      return { uri: sqlitePath, mode: 'sqlite', sqlitePath };
+      isConnected = true;
+      console.log('[DB] Connected to external MongoDB');
+      return { uri: externalUri, mode: 'external' };
+    } catch (err) {
+      console.warn(
+        '[DB] External MongoDB unreachable — falling back to embedded MongoDB:',
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
-  setActiveDbEngine('sqlite');
-  updateEngineDiagnostics({
-    engine: 'sqlite',
-    mongoConnected: false,
-    lastMongoError: 'MONGODB_URI is not configured.',
-  });
-  console.log(`[DB] MONGODB_URI not set — running on SQLite fallback at ${sqlitePath}`);
-  return { uri: sqlitePath, mode: 'sqlite', sqlitePath };
-}
+  const dbDir = resolveEmbeddedDbDir();
 
-export async function retryMongoConnection(): Promise<{
-  ok: boolean;
-  engine: 'mongodb' | 'sqlite';
-  message: string;
-  syncedRecords: number;
-  syncedCollections: number;
-}> {
-  const externalUri = process.env.MONGODB_URI?.trim() || '';
-  updateEngineDiagnostics({
-    mongoConfigured: Boolean(externalUri),
-    lastRetryAt: new Date().toISOString(),
-  });
+  try {
+    memoryServer = await MongoMemoryServer.create({
+      binary: {
+        version: '7.0.14',
+      },
+      instance: {
+        dbPath: dbDir,
+        storageEngine: 'wiredTiger',
+        dbName: 'maidanlive',
+      },
+    });
 
-  if (!externalUri) {
-    return {
-      ok: false,
-      engine: getActiveDbEngine(),
-      message: 'MONGODB_URI is not configured in environment variables.',
-      syncedRecords: 0,
-      syncedCollections: 0,
-    };
+    const uri = memoryServer.getUri('maidanlive');
+    await mongoose.connect(uri);
+    isConnected = true;
+    console.log(`[DB] Connected to persistent local MongoDB at ${dbDir}`);
+
+    return { uri, mode: 'embedded' };
+  } catch (err) {
+    console.warn(
+      '[DB] Persistent embedded MongoDB failed — retrying ephemeral instance:',
+      err instanceof Error ? err.message : err
+    );
   }
 
   try {
-    if (mongoose.connection.readyState !== 1) {
-      await mongoose.connect(externalUri, {
-        serverSelectionTimeoutMS: 6000,
-      });
-    }
-    const syncResult = await syncSqliteToMongo();
-    setActiveDbEngine('mongodb');
-    updateEngineDiagnostics({
-      engine: 'mongodb',
-      mongoConnected: true,
-      lastMongoError: null,
-      lastSyncSummary: {
-        ...syncResult,
-        syncedAt: new Date().toISOString(),
+    memoryServer = await MongoMemoryServer.create({
+      binary: {
+        version: '7.0.14',
+      },
+      instance: {
+        dbName: 'maidanlive',
       },
     });
-    return {
-      ok: true,
-      engine: 'mongodb',
-      message:
-        syncResult.syncedRecords > 0
-          ? `Connected to MongoDB and synced ${syncResult.syncedRecords} fallback records.`
-          : 'Connected to MongoDB.',
-      syncedRecords: syncResult.syncedRecords,
-      syncedCollections: syncResult.syncedCollections,
-    };
-  } catch (err: any) {
-    const message = err?.message || 'MongoDB connection failed.';
-    setActiveDbEngine('sqlite');
-    updateEngineDiagnostics({
-      engine: 'sqlite',
-      mongoConnected: false,
-      lastMongoError: message,
-    });
-    return {
-      ok: false,
-      engine: 'sqlite',
-      message: `MongoDB retry failed (${message}). Continuing on SQLite without data loss.`,
-      syncedRecords: 0,
-      syncedCollections: 0,
-    };
+    const uri = memoryServer.getUri('maidanlive');
+    await mongoose.connect(uri);
+    isConnected = true;
+    console.log('[DB] Connected to ephemeral in-memory MongoDB');
+    return { uri, mode: 'embedded' };
+  } catch (err) {
+    console.warn(
+      '[DB] MongoDB unavailable — starting in offline fallback mode:',
+      err instanceof Error ? err.message : err
+    );
+    mongoose.set('bufferCommands', false);
+    return { uri: 'mock://offline', mode: 'offline' };
   }
-}
-
-export function getDatabaseDiagnostics() {
-  const diag = getEngineDiagnostics();
-  const sqliteCounts = getSqliteCollectionStats();
-  const totalSqliteRecords = Object.values(sqliteCounts).reduce((a, b) => a + b, 0);
-  return {
-    ...diag,
-    mongoReadyState: mongoose.connection.readyState,
-    sqlitePath: getSqliteFilePath(),
-    sqliteCounts,
-    totalSqliteRecords,
-  };
 }
 
 export async function disconnectDatabase(): Promise<void> {
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
-  closeSqliteDb();
-  updateEngineDiagnostics({ mongoConnected: false });
+  if (memoryServer) {
+    await memoryServer.stop();
+    memoryServer = null;
+  }
+  isConnected = false;
 }

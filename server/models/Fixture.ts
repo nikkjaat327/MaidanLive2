@@ -1,6 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
-import { createDualModel } from '../db/dualModel.ts';
 
 export type FixtureStatus = 'SCHEDULED' | 'LIVE' | 'COMPLETED' | 'BYE' | 'CANCELLED';
 
@@ -9,7 +8,6 @@ export interface IFixture extends Document {
   roundNumber: number;
   roundName: string;
   groupName: string;
-  matchFormat: string;
   matchNumber: number;
   teamAId?: mongoose.Types.ObjectId | null;
   teamBId?: mongoose.Types.ObjectId | null;
@@ -21,8 +19,6 @@ export interface IFixture extends Document {
   location: string;
   scheduledAt?: Date | null;
   liveStreamId?: mongoose.Types.ObjectId | null;
-  authorizedScorerId?: mongoose.Types.ObjectId | null;
-  backupScorerId?: mongoose.Types.ObjectId | null;
   status: FixtureStatus;
   isBye: boolean;
   winnerTeamId?: mongoose.Types.ObjectId | null;
@@ -48,7 +44,6 @@ const fixtureSchema = new Schema<IFixture>(
     roundNumber: { type: Number, required: true, min: 1 },
     roundName: { type: String, required: true, trim: true, maxlength: 100 },
     groupName: { type: String, trim: true, default: '', maxlength: 60 },
-    matchFormat: { type: String, trim: true, default: '', maxlength: 80 },
     matchNumber: { type: Number, required: true, min: 1 },
     teamAId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
     teamBId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
@@ -60,8 +55,6 @@ const fixtureSchema = new Schema<IFixture>(
     location: { type: String, trim: true, default: '', maxlength: 160 },
     scheduledAt: { type: Date, default: null },
     liveStreamId: { type: Schema.Types.ObjectId, ref: 'LiveStream', default: null, index: true },
-    authorizedScorerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    backupScorerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     status: {
       type: String,
       enum: ['SCHEDULED', 'LIVE', 'COMPLETED', 'BYE', 'CANCELLED'],
@@ -83,5 +76,4 @@ const fixtureSchema = new Schema<IFixture>(
 
 fixtureSchema.index({ tournamentId: 1, roundNumber: 1, matchNumber: 1 });
 
-const MongooseFixture = mongoose.model<IFixture>('Fixture', fixtureSchema);
-export const Fixture = createDualModel<IFixture>('fixtures', MongooseFixture);
+export const Fixture = mongoose.model<IFixture>('Fixture', fixtureSchema);
