@@ -20,7 +20,7 @@ import {
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
-import { emitUserNotification } from '../socket/index.ts';
+import { emitStreamEvent, emitUserNotification } from '../socket/index.ts';
 import { Notification } from '../models/Notification.ts';
 
 const router = Router();
@@ -94,12 +94,106 @@ router.post('/mediamtx/auth', async (req: Request, res: Response) => {
         detail: 'RTMP encoder authenticated and publishing to MediaMTX.',
       };
       await stream.save();
+
+      const healthPayload = {
+        streamId: stream._id.toString(),
+        provider: 'mediamtx',
+        mediamtxPublishStatus: stream.mediamtxPublishStatus,
+        streamHealth: stream.streamHealth,
+      };
+      emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', healthPayload);
+      emitStreamEvent(stream._id.toString(), 'stream:health_updated', healthPayload);
     }
 
     res.status(200).json({ ok: true, streamId: stream._id.toString() });
   } catch (err) {
     console.error('[MediaMTX Auth] Error:', err);
     res.status(500).json({ ok: false, message: 'MediaMTX auth validation error.' });
+  }
+});
+
+// ==================== MEDIAMTX STATUS & HEALTH WEBHOOK ====================
+// Receives MediaMTX lifecycle events (ready / not_ready / publish / unpublish / error)
+router.post('/mediamtx/webhook', async (req: Request, res: Response) => {
+  try {
+    const rawPath = String(req.body?.path || req.body?.streamPath || '').replace(/^\/+/, '').trim();
+    const rawStreamId = String(req.body?.streamId || '').trim();
+    const rawEvent = String(req.body?.event || req.body?.action || '').toLowerCase().trim();
+    const rawQuery = String(req.body?.query || '');
+    const suppliedKey =
+      extractKeyFromQueryString(rawQuery) ||
+      String(req.body?.streamKey || req.body?.key || req.body?.password || '').trim();
+    const configuredSecret = process.env.MEDIAMTX_WEBHOOK_SECRET?.trim() || '';
+    const suppliedSecret = String(req.headers['x-mediamtx-secret'] || '').trim();
+
+    if (!rawPath && !rawStreamId) {
+      res.status(400).json({ ok: false, message: 'MediaMTX stream path or streamId is required.' });
+      return;
+    }
+
+    const queryFilter = rawStreamId && mongoose.Types.ObjectId.isValid(rawStreamId)
+      ? { _id: rawStreamId }
+      : { mediamtxStreamPath: rawPath };
+    const stream = await LiveStream.findOne(queryFilter).select('+mediamtxStreamKey');
+    if (!stream) {
+      res.status(404).json({ ok: false, message: 'Matching live stream not found.' });
+      return;
+    }
+
+    const secretMatches = Boolean(configuredSecret && suppliedSecret && configuredSecret === suppliedSecret);
+    const keyMatches = Boolean(stream.mediamtxStreamKey && suppliedKey && stream.mediamtxStreamKey === suppliedKey);
+    if (!secretMatches && !keyMatches) {
+      res.status(403).json({ ok: false, message: 'Invalid MediaMTX webhook credentials.' });
+      return;
+    }
+
+    let publishStatus: 'PUBLISHING' | 'OFFLINE' | 'ERROR' = 'OFFLINE';
+    let ok = false;
+    let detail = sanitizeText(req.body?.detail || req.body?.message, 300);
+
+    if (rawEvent === 'publish' || rawEvent === 'ready' || rawEvent === 'publishing') {
+      publishStatus = 'PUBLISHING';
+      ok = true;
+      if (!detail) detail = 'MediaMTX ingest active and stream ready for playback.';
+    } else if (rawEvent === 'error' || rawEvent === 'failed') {
+      publishStatus = 'ERROR';
+      ok = false;
+      if (!detail) detail = 'MediaMTX ingest reported a stream error.';
+    } else {
+      publishStatus = 'OFFLINE';
+      ok = false;
+      if (!detail) detail = 'MediaMTX publisher disconnected.';
+    }
+
+    const latencyMs = Number.isFinite(Number(req.body?.latencyMs))
+      ? Math.max(0, Number(req.body.latencyMs))
+      : stream.streamHealth?.latencyMs || 0;
+
+    stream.mediamtxPublishStatus = publishStatus;
+    stream.streamHealth = {
+      ok,
+      status: publishStatus,
+      checkedAt: new Date(),
+      latencyMs,
+      detail,
+    };
+    await stream.save();
+
+    const healthPayload = {
+      streamId: stream._id.toString(),
+      provider: 'mediamtx',
+      mediamtxPublishStatus: stream.mediamtxPublishStatus,
+      streamHealth: stream.streamHealth,
+      latencyMs,
+      checkedAt: stream.streamHealth.checkedAt,
+    };
+    emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', healthPayload);
+    emitStreamEvent(stream._id.toString(), 'stream:health_updated', healthPayload);
+
+    res.status(200).json({ ok: true, ...healthPayload });
+  } catch (err) {
+    console.error('[MediaMTX Webhook] Error:', err);
+    res.status(500).json({ ok: false, message: 'Failed to process MediaMTX status event.' });
   }
 });
 

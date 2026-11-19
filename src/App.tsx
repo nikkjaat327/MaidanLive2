@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext.tsx';
 import { LanguageProvider } from './context/LanguageContext.tsx';
 import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
+import { offlineScoreService } from './services/scoreboard/offlineScoreService.ts';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
 import { AdminLayout, RequireAdminAuth } from './components/layout/AdminLayout.tsx';
 
@@ -19,6 +21,8 @@ import { LeaderboardsPage } from './pages/customer/LeaderboardsPage.tsx';
 import { FollowingPage } from './pages/customer/FollowingPage.tsx';
 import { NotificationsPage } from './pages/customer/NotificationsPage.tsx';
 import { ReplaysPage } from './pages/customer/ReplaysPage.tsx';
+import { SearchPage } from './pages/customer/SearchPage.tsx';
+import { CalendarPage } from './pages/customer/CalendarPage.tsx';
 import { ProfilePage } from './pages/customer/ProfilePage.tsx';
 import { CustomerLoginPage } from './pages/customer/CustomerLoginPage.tsx';
 import { CustomerRegisterPage } from './pages/customer/CustomerRegisterPage.tsx';
@@ -27,6 +31,7 @@ import { CustomerRegisterPage } from './pages/customer/CustomerRegisterPage.tsx'
 import { AdminLoginPage } from './pages/admin/AdminLoginPage.tsx';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage.tsx';
 import { AdminLiveStreamsPage } from './pages/admin/AdminLiveStreamsPage.tsx';
+import { AdminMatchHealthPage } from './pages/admin/AdminMatchHealthPage.tsx';
 import { AdminScoreboardPage } from './pages/admin/AdminScoreboardPage.tsx';
 import { AdminTournamentsPage } from './pages/admin/AdminTournamentsPage.tsx';
 import { AdminFixturesPage } from './pages/admin/AdminFixturesPage.tsx';
@@ -46,6 +51,10 @@ import { AdminPermissionsPage } from './pages/admin/AdminPermissionsPage.tsx';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.tsx';
 
 export default function App() {
+  useEffect(() => {
+    offlineScoreService.ensureLifecycleListeners();
+  }, []);
+
   return (
     <LanguageProvider>
       <AdminThemeProvider>
@@ -59,6 +68,7 @@ export default function App() {
                   <Route index element={<Navigate to="/admin/dashboard" replace />} />
                   <Route path="dashboard" element={<AdminDashboardPage />} />
                   <Route path="live-streams" element={<AdminLiveStreamsPage />} />
+                  <Route path="match-health" element={<AdminMatchHealthPage />} />
                   <Route path="scoreboard" element={<AdminScoreboardPage />} />
                   <Route path="scoreboard/:id" element={<AdminScoreboardPage />} />
                   <Route path="tournaments" element={<AdminTournamentsPage />} />
@@ -96,6 +106,8 @@ export default function App() {
                 <Route path="/following" element={<FollowingPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/replays" element={<ReplaysPage />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/calendar" element={<CalendarPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/login" element={<CustomerLoginPage />} />
                 <Route path="/register" element={<CustomerRegisterPage />} />

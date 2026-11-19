@@ -25,6 +25,7 @@ export interface ITournament extends Document {
   organizerName: string;
   season: string;
   isPublished: boolean;
+  followersCount?: number;
   teamIds: mongoose.Types.ObjectId[];
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId | null;
@@ -67,6 +68,7 @@ const tournamentSchema = new Schema<ITournament>(
     organizerName: { type: String, trim: true, default: '', maxlength: 120 },
     season: { type: String, trim: true, default: '', maxlength: 60 },
     isPublished: { type: Boolean, default: true, index: true },
+    followersCount: { type: Number, default: 0, min: 0 },
     teamIds: [{ type: Schema.Types.ObjectId, ref: 'Team' }],
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },

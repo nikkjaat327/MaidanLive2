@@ -18,6 +18,7 @@ export interface IPlayer extends Document {
   isMinor?: boolean;
   isVerified?: boolean;
   verifiedBy?: mongoose.Types.ObjectId | null;
+  followersCount?: number;
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -45,6 +46,7 @@ const playerSchema = new Schema<IPlayer>(
     isMinor: { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },
     verifiedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    followersCount: { type: Number, default: 0, min: 0 },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

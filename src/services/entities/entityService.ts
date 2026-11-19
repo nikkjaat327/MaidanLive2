@@ -7,8 +7,10 @@ import {
   PlayerData,
   PlayerMatchStatRecord,
   PointsTableRow,
+  SearchResultsPayload,
   TeamData,
   TournamentData,
+  TournamentTemplateData,
   VenueData,
 } from '../../types/index.ts';
 import { adminApi, publicApi } from '../api/httpClient.ts';
@@ -162,5 +164,33 @@ export const entityService = {
   },
   async deleteUser(id: string): Promise<void> {
     await adminApi.delete(`/admin/users/${id}`);
+  },
+
+  // Global Unified Search
+  async globalSearch(q: string, type = 'all'): Promise<SearchResultsPayload> {
+    const { data } = await publicApi.get<SearchResultsPayload>('/search', {
+      params: { q, type },
+    });
+    return data;
+  },
+
+  // Tournament Templates
+  async listTournamentTemplates(): Promise<TournamentTemplateData[]> {
+    const { data } = await adminApi.get<{ templates: TournamentTemplateData[] }>(
+      '/tournament-templates'
+    );
+    return data.templates;
+  },
+  async createTournamentTemplate(
+    payload: Partial<TournamentTemplateData>
+  ): Promise<TournamentTemplateData> {
+    const { data } = await adminApi.post<{ template: TournamentTemplateData }>(
+      '/tournament-templates',
+      payload
+    );
+    return data.template;
+  },
+  async deleteTournamentTemplate(id: string): Promise<void> {
+    await adminApi.delete(`/tournament-templates/${id}`);
   },
 };

@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   Flag,
+  HeartPulse,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -78,6 +79,7 @@ export function AdminLayout() {
     },
     { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: true },
     { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: true },
+    { to: '/admin/match-health', label: 'Match Health', icon: HeartPulse, show: true },
     { to: '/admin/scoreboard', label: 'Live Score Control', icon: SlidersHorizontal, show: true },
     {
       to: '/admin/sponsors',

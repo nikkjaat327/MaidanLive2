@@ -88,10 +88,15 @@ export function serializeUser(user: any) {
     assignedStreamIds: (user.assignedStreamIds || []).map((id: any) => id.toString()),
     assignedTournamentIds: (user.assignedTournamentIds || []).map((id: any) => id.toString()),
     followedTeamIds: (user.followedTeamIds || []).map((id: any) => id.toString()),
+    followedPlayerIds: (user.followedPlayerIds || []).map((id: any) => id.toString()),
+    followedTournamentIds: (user.followedTournamentIds || []).map((id: any) => id.toString()),
     notificationPreferences: {
       matchStart: user.notificationPreferences?.matchStart !== false,
       matchLive: user.notificationPreferences?.matchLive !== false,
+      matchDelayed: user.notificationPreferences?.matchDelayed !== false,
+      matchResumed: user.notificationPreferences?.matchResumed !== false,
       followedTeams: user.notificationPreferences?.followedTeams !== false,
+      favoritePlayers: user.notificationPreferences?.favoritePlayers !== false,
       scoreUpdates: Boolean(user.notificationPreferences?.scoreUpdates),
       matchResults: user.notificationPreferences?.matchResults !== false,
       tournamentUpdates: user.notificationPreferences?.tournamentUpdates !== false,
@@ -873,9 +878,12 @@ router.get(
   '/customer/preferences',
   authenticate,
   async (req: AuthenticatedRequest, res: Response) => {
+    const serialized = serializeUser(req.user);
     res.json({
-      notificationPreferences: serializeUser(req.user).notificationPreferences,
-      followedTeamIds: serializeUser(req.user).followedTeamIds,
+      notificationPreferences: serialized.notificationPreferences,
+      followedTeamIds: serialized.followedTeamIds,
+      followedPlayerIds: serialized.followedPlayerIds,
+      followedTournamentIds: serialized.followedTournamentIds,
     });
   }
 );
@@ -896,10 +904,22 @@ router.patch(
           typeof prefs.matchLive === 'boolean'
             ? prefs.matchLive
             : user.notificationPreferences?.matchLive !== false,
+        matchDelayed:
+          typeof prefs.matchDelayed === 'boolean'
+            ? prefs.matchDelayed
+            : user.notificationPreferences?.matchDelayed !== false,
+        matchResumed:
+          typeof prefs.matchResumed === 'boolean'
+            ? prefs.matchResumed
+            : user.notificationPreferences?.matchResumed !== false,
         followedTeams:
           typeof prefs.followedTeams === 'boolean'
             ? prefs.followedTeams
             : user.notificationPreferences?.followedTeams !== false,
+        favoritePlayers:
+          typeof prefs.favoritePlayers === 'boolean'
+            ? prefs.favoritePlayers
+            : user.notificationPreferences?.favoritePlayers !== false,
         scoreUpdates:
           typeof prefs.scoreUpdates === 'boolean'
             ? prefs.scoreUpdates

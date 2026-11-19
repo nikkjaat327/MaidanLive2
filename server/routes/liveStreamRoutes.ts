@@ -650,6 +650,17 @@ router.post(
         };
         await stream.save();
 
+        const healthPayload = {
+          streamId: stream._id.toString(),
+          provider: 'mediamtx' as const,
+          mediamtxPublishStatus: stream.mediamtxPublishStatus,
+          streamHealth: stream.streamHealth,
+          latencyMs: stream.streamHealth.latencyMs,
+          checkedAt: stream.streamHealth.checkedAt,
+        };
+        emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', healthPayload);
+        emitStreamEvent(stream._id.toString(), 'stream:health_updated', healthPayload);
+
         res.json({
           provider: 'mediamtx',
           ...mtxRes,
@@ -687,6 +698,15 @@ router.post(
         detail: ytRes.message,
       };
       await stream.save();
+
+      emitStreamEvent(stream._id.toString(), 'stream:health_updated', {
+        streamId: stream._id.toString(),
+        provider: 'youtube',
+        youtubeStreamStatus: stream.youtubeStreamStatus,
+        streamHealth: stream.streamHealth,
+        latencyMs: stream.streamHealth.latencyMs,
+        checkedAt: stream.streamHealth.checkedAt,
+      });
 
       res.json({
         provider: 'youtube',
@@ -910,6 +930,20 @@ router.post(
         reason,
         stream: publicPayload,
       });
+
+      const switchHealthPayload = {
+        streamId: stream._id.toString(),
+        provider: toProvider,
+        mediamtxPublishStatus: stream.mediamtxPublishStatus,
+        youtubeStreamStatus: stream.youtubeStreamStatus,
+        streamHealth: stream.streamHealth,
+        latencyMs: stream.streamHealth.latencyMs,
+        checkedAt: stream.streamHealth.checkedAt,
+      };
+      emitStreamEvent(stream._id.toString(), 'stream:health_updated', switchHealthPayload);
+      if (toProvider === 'mediamtx') {
+        emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', switchHealthPayload);
+      }
 
       res.json({
         message: `Broadcast switched from ${fromProvider} to ${toProvider}.`,

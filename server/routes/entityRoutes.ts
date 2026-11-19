@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { Tournament } from '../models/Tournament.ts';
+import { TournamentTemplate } from '../models/TournamentTemplate.ts';
 import { Team } from '../models/Team.ts';
 import { Player } from '../models/Player.ts';
 import { LiveStream } from '../models/LiveStream.ts';
@@ -1313,6 +1314,224 @@ router.delete(
     } catch (err) {
       console.error('[AdminUsers] Delete error:', err);
       res.status(500).json({ message: 'Failed to delete user.' });
+    }
+  }
+);
+
+// ==================== GLOBAL UNIFIED SEARCH ====================
+router.get('/search', async (req: Request, res: Response) => {
+  try {
+    const rawQ = typeof req.query.q === 'string' ? sanitizeText(req.query.q, 80) : '';
+    const category = typeof req.query.type === 'string' ? req.query.type.trim().toLowerCase() : 'all';
+
+    if (!rawQ) {
+      res.json({
+        query: '',
+        matches: [],
+        tournaments: [],
+        teams: [],
+        players: [],
+        venues: [],
+        organizers: [],
+      });
+      return;
+    }
+
+    const regex = new RegExp(rawQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const want = (k: string) => category === 'all' || category === k;
+
+    const [streams, tournaments, teams, players, venues] = await Promise.all([
+      want('matches')
+        ? LiveStream.find({
+            $or: [
+              { matchTitle: regex },
+              { teamAName: regex },
+              { teamBName: regex },
+              { tournamentName: regex },
+              { location: regex },
+              { gameName: regex },
+            ],
+          })
+            .sort({ status: 1, matchDate: -1, createdAt: -1 })
+            .limit(20)
+            .lean()
+        : Promise.resolve([]),
+      want('tournaments') || want('organizers')
+        ? Tournament.find({
+            isPublished: { $ne: false },
+            $or: [{ name: regex }, { location: regex }, { organizerName: regex }, { sportType: regex }],
+          })
+            .sort({ createdAt: -1 })
+            .limit(25)
+            .lean()
+        : Promise.resolve([]),
+      want('teams')
+        ? Team.find({
+            $or: [{ name: regex }, { shortName: regex }, { city: regex }, { captainName: regex }],
+          })
+            .sort({ name: 1 })
+            .limit(20)
+            .lean()
+        : Promise.resolve([]),
+      want('players')
+        ? Player.find({
+            $or: [{ name: regex }, { role: regex }, { position: regex }],
+          })
+            .populate('teamId', 'name shortName logoUrl')
+            .sort({ name: 1 })
+            .limit(20)
+            .lean()
+        : Promise.resolve([]),
+      want('venues')
+        ? Venue.find({
+            $or: [{ name: regex }, { city: regex }, { state: regex }, { address: regex }],
+          })
+            .sort({ name: 1 })
+            .limit(15)
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const streamIds = streams.map((s) => s._id);
+    const scores =
+      streamIds.length > 0
+        ? await LiveScore.find({ liveStreamId: { $in: streamIds } }).lean()
+        : [];
+    const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
+
+    // Build distinct organizers list in JS (dualModel compatibility without .aggregate/.distinct)
+    const orgMap = new Map<
+      string,
+      { name: string; tournamentCount: number; sports: Set<string>; latestTournamentId: string }
+    >();
+    if (want('organizers')) {
+      for (const tr of tournaments) {
+        const org = (tr.organizerName || '').trim();
+        if (!org || !regex.test(org)) continue;
+        const key = org.toLowerCase();
+        const cur = orgMap.get(key) || {
+          name: org,
+          tournamentCount: 0,
+          sports: new Set<string>(),
+          latestTournamentId: tr._id.toString(),
+        };
+        cur.tournamentCount += 1;
+        if (tr.sportType) cur.sports.add(tr.sportType);
+        orgMap.set(key, cur);
+      }
+    }
+
+    res.json({
+      query: rawQ,
+      matches: streams.map((s) => ({
+        ...s,
+        id: s._id.toString(),
+        score: scoreMap.get(s._id.toString()) || null,
+      })),
+      tournaments: want('tournaments')
+        ? tournaments.map((t) => ({ ...t, id: t._id.toString() }))
+        : [],
+      teams: teams.map((tm) => ({ ...tm, id: tm._id.toString() })),
+      players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      venues: venues.map((v) => ({ ...v, id: v._id.toString() })),
+      organizers: Array.from(orgMap.values()).map((o) => ({
+        name: o.name,
+        tournamentCount: o.tournamentCount,
+        sports: Array.from(o.sports),
+        latestTournamentId: o.latestTournamentId,
+      })),
+    });
+  } catch (err) {
+    console.error('[Search] Global search error:', err);
+    res.status(500).json({ message: 'Failed to execute global search.' });
+  }
+});
+
+// ==================== TOURNAMENT TEMPLATES ====================
+router.get(
+  '/tournament-templates',
+  authenticate,
+  requireAdminPortal,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const templates = await TournamentTemplate.find().sort({ createdAt: -1 }).lean();
+      res.json({
+        templates: templates.map((tpl) => ({ ...tpl, id: tpl._id.toString() })),
+      });
+    } catch (err) {
+      console.error('[Templates] List error:', err);
+      res.status(500).json({ message: 'Failed to load tournament templates.' });
+    }
+  }
+);
+
+router.post(
+  '/tournament-templates',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('manageTournaments'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const name = sanitizeText(req.body.name, 140);
+      if (!name) {
+        res.status(400).json({ message: 'Template name is required.' });
+        return;
+      }
+      const sportType = VALID_SPORTS.includes(req.body.sportType) ? req.body.sportType : 'Cricket';
+      const format = VALID_FORMATS.includes(req.body.format) ? req.body.format : 'KNOCKOUT';
+
+      const template = await TournamentTemplate.create({
+        name,
+        sportType,
+        format,
+        groupCount: Math.max(1, Math.min(8, Number(req.body.groupCount) || 2)),
+        location: sanitizeText(req.body.location, 160),
+        prizeMoney: sanitizeText(req.body.prizeMoney, 120),
+        registrationFee: Math.max(0, Number(req.body.registrationFee) || 0),
+        rules: sanitizeText(req.body.rules, 2000),
+        qualificationRules: sanitizeText(req.body.qualificationRules, 400),
+        description: sanitizeText(req.body.description, 1500),
+        createdBy: req.user!._id,
+      });
+
+      await recordActivity(
+        req.user!,
+        'CREATE_TOURNAMENT_TEMPLATE',
+        'TournamentTemplate',
+        template._id.toString(),
+        name
+      );
+      res
+        .status(201)
+        .json({ template: { ...template.toObject(), id: template._id.toString() } });
+    } catch (err) {
+      console.error('[Templates] Create error:', err);
+      res.status(500).json({ message: 'Failed to save tournament template.' });
+    }
+  }
+);
+
+router.delete(
+  '/tournament-templates/:id',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('manageTournaments'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid template ID.' });
+        return;
+      }
+      const deleted = await TournamentTemplate.findByIdAndDelete(id);
+      if (!deleted) {
+        res.status(404).json({ message: 'Template not found.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[Templates] Delete error:', err);
+      res.status(500).json({ message: 'Failed to delete tournament template.' });
     }
   }
 );

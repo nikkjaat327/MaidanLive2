@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Award, Calendar, PlaySquare, Radio, Trophy } from 'lucide-react';
+import { ArrowRight, Award, Calendar, History, MapPin, PlaySquare, Radio, Trophy } from 'lucide-react';
 import { HERO_BANNER_IMAGE, SPORT_OPTIONS } from '../../constants/sports.ts';
-import { LiveStreamData, SponsorData } from '../../types/index.ts';
+import { LiveStreamData, SponsorData, TournamentData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
@@ -13,26 +14,35 @@ import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { PWAInstallButton } from '../../components/common/PWAInstallButton.tsx';
+import { RecentMatchEntry, recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
+import { MatchStatusBadge } from '../../components/common/MatchStatusBadge.tsx';
 
 export function HomePage() {
   const { t } = useLanguage();
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
+  const [tournaments, setTournaments] = useState<TournamentData[]>([]);
   const [homeSponsors, setHomeSponsors] = useState<SponsorData[]>([]);
   const [selectedSport, setSelectedSport] = useState<string>('ALL');
+  const [locationFilter, setLocationFilter] = useState<string>('ALL');
+  const [recentMatches, setRecentMatches] = useState<RecentMatchEntry[]>(() =>
+    recentlyWatchedStore.getMatches()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const [allStreams, publishedReplays, sponsors] = await Promise.all([
+      const [allStreams, publishedReplays, allTournaments, sponsors] = await Promise.all([
         liveStreamService.listStreams(),
         liveStreamService.listReplays(false),
+        entityService.listTournaments().catch(() => []),
         platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
       ]);
       setStreams(allStreams);
       setReplays(publishedReplays);
+      setTournaments(allTournaments);
       setHomeSponsors(sponsors);
       sponsors.forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
     } catch (err) {
@@ -74,13 +84,47 @@ export function HomePage() {
     };
   }, [loadData]);
 
-  const filterBySport = (item: LiveStreamData) =>
-    selectedSport === 'ALL' || item.gameName === selectedSport || item.score?.sportType === selectedSport;
+  const availableLocations = Array.from(
+    new Set(
+      streams
+        .map((s) => (s.location || '').split(',').pop()?.trim() || '')
+        .filter(Boolean)
+    )
+  ).slice(0, 8);
 
-  const liveNow = streams.filter((s) => s.status === 'LIVE' && filterBySport(s));
-  const upcoming = streams.filter((s) => s.status === 'UPCOMING' && filterBySport(s));
-  const completed = streams.filter((s) => s.status === 'ENDED' && filterBySport(s)).slice(0, 6);
-  const filteredReplays = replays.filter(filterBySport).slice(0, 6);
+  const filterItem = (item: LiveStreamData) => {
+    const sportMatch =
+      selectedSport === 'ALL' ||
+      item.gameName === selectedSport ||
+      item.score?.sportType === selectedSport;
+    const locMatch =
+      locationFilter === 'ALL' ||
+      (item.location || '').toLowerCase().includes(locationFilter.toLowerCase());
+    return sportMatch && locMatch;
+  };
+
+  const liveNow = streams.filter((s) => s.status === 'LIVE' && filterItem(s));
+  const upcoming = streams.filter((s) => s.status === 'UPCOMING' && filterItem(s));
+  const completed = streams.filter((s) => s.status === 'ENDED' && filterItem(s)).slice(0, 6);
+  const filteredReplays = replays.filter(filterItem).slice(0, 6);
+
+  const todayStr = new Date().toDateString();
+  const todaysMatches = streams
+    .filter((s) => {
+      if (!filterItem(s)) return false;
+      const d = s.matchDate || s.startedAt;
+      return d ? new Date(d).toDateString() === todayStr : s.status === 'LIVE';
+    })
+    .slice(0, 4);
+
+  const featuredTournaments = tournaments
+    .filter(
+      (tour) =>
+        (selectedSport === 'ALL' || tour.sportType === selectedSport) &&
+        (locationFilter === 'ALL' ||
+          (tour.location || '').toLowerCase().includes(locationFilter.toLowerCase()))
+    )
+    .slice(0, 3);
 
   return (
     <div className="space-y-8 pb-10">
@@ -128,34 +172,172 @@ export function HomePage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 space-y-10">
         <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
 
-        {/* Sport Filter Strip */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
-            onClick={() => setSelectedSport('ALL')}
-            className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
-              selectedSport === 'ALL'
-                ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            {t('common.allSports')}
-          </button>
-          {SPORT_OPTIONS.map((sp) => (
+        {/* Sport + Optional Location Filter Strip */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
             <button
-              key={sp}
               type="button"
-              onClick={() => setSelectedSport(sp)}
+              onClick={() => setSelectedSport('ALL')}
               className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
-                selectedSport === sp
-                  ? 'bg-slate-900 text-white border-slate-900'
+                selectedSport === 'ALL'
+                  ? 'bg-[#EA580C] text-white border-[#EA580C]'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
               }`}
             >
-              {sp}
+              {t('common.allSports')}
             </button>
-          ))}
+            {SPORT_OPTIONS.map((sp) => (
+              <button
+                key={sp}
+                type="button"
+                onClick={() => setSelectedSport(sp)}
+                className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
+                  selectedSport === sp
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {sp}
+              </button>
+            ))}
+          </div>
+
+          {availableLocations.length > 0 && (
+            <div className="flex items-center gap-2 shrink-0">
+              <MapPin className="w-4 h-4 text-slate-400" />
+              <select
+                value={locationFilter}
+                onChange={(e) => setLocationFilter(e.target.value)}
+                aria-label="Filter by city or ground"
+                className="min-h-[40px] px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 rounded-lg text-slate-700"
+              >
+                <option value="ALL">All Locations</option>
+                {availableLocations.map((loc) => (
+                  <option key={loc} value={loc}>
+                    {loc}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
+
+        {/* Continue Watching / Recently Watched */}
+        {recentMatches.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="font-display text-lg font-bold text-slate-900 inline-flex items-center gap-2">
+                <History className="w-4 h-4 text-[#EA580C]" />
+                <span>Continue Watching</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  recentlyWatchedStore.clearMatches();
+                  setRecentMatches([]);
+                }}
+                className="text-xs font-medium text-slate-500 hover:text-slate-800"
+              >
+                Clear history
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {recentMatches.slice(0, 4).map((m) => (
+                <Link
+                  key={m.id}
+                  to={`/live/${m.id}`}
+                  className="bg-white border border-slate-200 rounded-xl p-3.5 hover:border-orange-300 transition-colors flex flex-col justify-between gap-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-[#EA580C] uppercase">{m.sport}</span>
+                    <MatchStatusBadge rawStatus={m.status} compact />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-900 line-clamp-1">{m.title}</p>
+                  {m.tournamentName && (
+                    <p className="text-xs text-slate-500 truncate">{m.tournamentName}</p>
+                  )}
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Today's Matches Strip */}
+        {!loading && todaysMatches.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="font-display text-xl font-bold text-slate-900">Today&apos;s Matches</h2>
+              <Link
+                to="/calendar"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-[#EA580C] hover:underline"
+              >
+                <span>Full schedule</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {todaysMatches.map((m) => (
+                <Link
+                  key={`today-${m.id}`}
+                  to={`/live/${m.id}`}
+                  className="bg-white border border-slate-200 rounded-xl p-3.5 hover:border-slate-300 transition-colors space-y-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-slate-600 uppercase">
+                      {m.gameName || 'Match'}
+                    </span>
+                    <MatchStatusBadge stream={m} score={m.score} compact />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-900 truncate">
+                    {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
+                  </p>
+                  {m.score && (
+                    <p className="font-mono text-xs font-bold tabular-nums text-slate-700">
+                      {m.score.teamAScore} - {m.score.teamBScore}
+                    </p>
+                  )}
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Featured Tournaments */}
+        {!loading && featuredTournaments.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="font-display text-xl font-bold text-slate-900">Featured Tournaments</h2>
+              <Link
+                to="/tournaments"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-[#EA580C] hover:underline"
+              >
+                <span>Explore all</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {featuredTournaments.map((tour) => (
+                <Link
+                  key={tour.id}
+                  to={`/tournaments/${tour.id}`}
+                  className="bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-300 transition-colors flex flex-col justify-between gap-2"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-[#EA580C] uppercase">{tour.sportType}</span>
+                    <span className="font-semibold text-slate-600">{tour.status}</span>
+                  </div>
+                  <h3 className="font-display text-base font-bold text-slate-900 line-clamp-1">
+                    {tour.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate">
+                    {tour.location || 'Local Ground'}
+                    {tour.prizeMoney ? ` · Prize: ${tour.prizeMoney}` : ''}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Live Now Section */}
         <section aria-labelledby="live-now-heading" className="space-y-4">

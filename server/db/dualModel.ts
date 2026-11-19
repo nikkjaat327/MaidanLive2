@@ -40,6 +40,7 @@ function refNameToCollection(refName: string): string {
     SubscriptionPlan: 'subscriptionplans',
     OrganizerSubscription: 'organizersubscriptions',
     RevenueRecord: 'revenuerecords',
+    TournamentTemplate: 'tournamenttemplates',
   };
   return map[refName] || `${refName.toLowerCase()}s`;
 }

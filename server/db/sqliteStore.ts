@@ -33,6 +33,7 @@ const KNOWN_COLLECTIONS = [
   'subscriptionplans',
   'organizersubscriptions',
   'revenuerecords',
+  'tournamenttemplates',
 ];
 
 export function resolveSqliteDbPath(): string {

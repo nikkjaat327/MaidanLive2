@@ -66,7 +66,10 @@ export interface UserPermissions {
 export interface INotificationPreferences {
   matchStart: boolean;
   matchLive: boolean;
+  matchDelayed?: boolean;
+  matchResumed?: boolean;
   followedTeams: boolean;
+  favoritePlayers?: boolean;
   scoreUpdates: boolean;
   matchResults: boolean;
   tournamentUpdates: boolean;
@@ -83,6 +86,8 @@ export interface IUser extends Document {
   assignedStreamIds: mongoose.Types.ObjectId[];
   assignedTournamentIds: mongoose.Types.ObjectId[];
   followedTeamIds: mongoose.Types.ObjectId[];
+  followedPlayerIds: mongoose.Types.ObjectId[];
+  followedTournamentIds: mongoose.Types.ObjectId[];
   notificationPreferences: INotificationPreferences;
   chatMutedUntil?: Date | null;
   chatMutedReason: string;
@@ -142,10 +147,15 @@ const userSchema = new Schema<IUser>(
     assignedStreamIds: [{ type: Schema.Types.ObjectId, ref: 'LiveStream' }],
     assignedTournamentIds: [{ type: Schema.Types.ObjectId, ref: 'Tournament' }],
     followedTeamIds: [{ type: Schema.Types.ObjectId, ref: 'Team', index: true }],
+    followedPlayerIds: [{ type: Schema.Types.ObjectId, ref: 'Player', index: true }],
+    followedTournamentIds: [{ type: Schema.Types.ObjectId, ref: 'Tournament', index: true }],
     notificationPreferences: {
       matchStart: { type: Boolean, default: true },
       matchLive: { type: Boolean, default: true },
+      matchDelayed: { type: Boolean, default: true },
+      matchResumed: { type: Boolean, default: true },
       followedTeams: { type: Boolean, default: true },
+      favoritePlayers: { type: Boolean, default: true },
       scoreUpdates: { type: Boolean, default: false },
       matchResults: { type: Boolean, default: true },
       tournamentUpdates: { type: Boolean, default: true },

@@ -4,7 +4,9 @@ import {
   AlertTriangle,
   ArrowLeft,
   Award,
+  BellPlus,
   Calendar,
+  Check,
   CheckCircle2,
   ClipboardCheck,
   ExternalLink,
@@ -29,11 +31,13 @@ import {
   VenueData,
 } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
+import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
+import { recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -70,8 +74,9 @@ function emptyPlayer(): RosterPlayerEntry {
 
 export function TournamentDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { customerUser } = useAuth();
+  const { customerUser, updateCustomerUser } = useAuth();
   const { t } = useLanguage();
+  const [followBusy, setFollowBusy] = useState(false);
 
   const [tournament, setTournament] = useState<TournamentData | null>(null);
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
@@ -117,6 +122,14 @@ export function TournamentDetailPage() {
         platformOpsService.listPublicTournamentRegistrations(id).catch(() => []),
       ]);
       setTournament(res.tournament);
+      if (res.tournament) {
+        recentlyWatchedStore.recordTournament({
+          id: res.tournament.id,
+          name: res.tournament.name,
+          sportType: res.tournament.sportType,
+          location: res.tournament.location,
+        });
+      }
       setStreams(res.streams);
       setTeams(res.teams);
       setFixtures(res.fixtures || []);
@@ -277,6 +290,27 @@ export function TournamentDetailPage() {
     }
   }
 
+  async function handleToggleFollowTournament() {
+    if (!tournament) return;
+    if (!customerUser) {
+      setError('Sign in to follow this tournament and get schedule/result alerts.');
+      return;
+    }
+    const isFollowing = (customerUser.followedTournamentIds || []).includes(tournament.id);
+    try {
+      setFollowBusy(true);
+      const res = isFollowing
+        ? await engagementService.unfollowTournament(tournament.id)
+        : await engagementService.followTournament(tournament.id);
+      updateCustomerUser({ ...customerUser, followedTournamentIds: res.followedTournamentIds });
+      setTournament((prev) => (prev ? { ...prev, followersCount: res.followersCount } : prev));
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to update tournament follow status.'));
+    } finally {
+      setFollowBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 animate-pulse space-y-4">
@@ -369,23 +403,50 @@ export function TournamentDetailPage() {
               {tournament.organizerName && (
                 <p className="text-xs text-slate-500">Organized by {tournament.organizerName}</p>
               )}
+              <p className="text-xs text-slate-500 font-mono tabular-nums">
+                {tournament.followersCount || 0} follower{(tournament.followersCount || 0) === 1 ? '' : 's'}
+              </p>
             </div>
           </div>
 
-          {regOpen && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setActiveTab('register')}
-              className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#EA580C] text-white text-xs font-bold hover:bg-orange-700 transition-colors shrink-0"
+              disabled={followBusy}
+              onClick={handleToggleFollowTournament}
+              className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+                customerUser?.followedTournamentIds?.includes(tournament.id)
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  : 'bg-slate-900 text-white hover:bg-slate-800'
+              }`}
             >
-              <ClipboardCheck className="w-4 h-4" />
+              {customerUser?.followedTournamentIds?.includes(tournament.id) ? (
+                <Check className="w-4 h-4" />
+              ) : (
+                <BellPlus className="w-4 h-4" />
+              )}
               <span>
-                {myRegistration
-                  ? `Registration: ${myRegistration.status}`
-                  : t('tournament.registerTeam')}
+                {customerUser?.followedTournamentIds?.includes(tournament.id)
+                  ? 'Following Tournament'
+                  : 'Follow Tournament'}
               </span>
             </button>
-          )}
+
+            {regOpen && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('register')}
+                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#EA580C] text-white text-xs font-bold hover:bg-orange-700 transition-colors shrink-0"
+              >
+                <ClipboardCheck className="w-4 h-4" />
+                <span>
+                  {myRegistration
+                    ? `Registration: ${myRegistration.status}`
+                    : t('tournament.registerTeam')}
+                </span>
+              </button>
+            )}
+          </div>
         </div>
 
         {tournament.description && (

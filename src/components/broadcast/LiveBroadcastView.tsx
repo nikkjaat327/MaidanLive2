@@ -15,14 +15,20 @@ import {
   Minimize2,
   Radio,
   Sparkles,
+  Sun,
   Trophy,
   Users,
+  Video,
+  VideoOff,
   Wifi,
 } from 'lucide-react';
 import {
+  FixtureData,
   LiveScoreData,
   LiveStreamData,
   MatchHighlightData,
+  PlayerData,
+  PlayerMatchStatRecord,
   ScoreHistoryItem,
   SponsorData,
   SponsorOverlayData,
@@ -33,11 +39,16 @@ import { useLanguage } from '../../context/LanguageContext.tsx';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
-import { LiveStreamPlayer } from './LiveStreamPlayer.tsx';
+import { entityService } from '../../services/entities/entityService.ts';
+import { tournamentWorkflowService } from '../../services/tournaments/tournamentWorkflowService.ts';
+import { LiveStreamPlayer, type PlayerPlaybackSignal } from './LiveStreamPlayer.tsx';
+import { StreamStatusIndicator } from './StreamStatusIndicator.tsx';
 import { BroadcastScoreboard } from './BroadcastScoreboard.tsx';
 import { BroadcastSportStrip } from './BroadcastSportStrip.tsx';
 import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
+import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
+import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { StartingSoonGraphic } from '../streaming/StartingSoonGraphic.tsx';
 import { SponsorOverlayBanner } from '../streaming/SponsorOverlayBanner.tsx';
 import { LiveChatAndPollsPanel } from '../engagement/LiveChatAndPollsPanel.tsx';
@@ -87,7 +98,7 @@ function buildGoogleMapsUrl(venue: VenueData | null, fallbackLocation?: string):
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
-type DetailTab = 'commentary' | 'chat' | 'highlights' | 'info';
+type DetailTab = 'commentary' | 'stats' | 'lineups' | 'chat' | 'highlights' | 'fixtures' | 'info';
 
 export function LiveBroadcastView({
   stream,
@@ -125,8 +136,18 @@ export function LiveBroadcastView({
   const [isExpandedFallback, setIsExpandedFallback] = useState(false);
   const [showUpcomingPreview, setShowUpcomingPreview] = useState(false);
   const [lowDataMode, setLowDataMode] = useState(false);
+  const [videoDisabled, setVideoDisabled] = useState(false);
+  const [playerSignal, setPlayerSignal] = useState<PlayerPlaybackSignal>('ok');
+  const [wakeLockActive, setWakeLockActive] = useState(false);
+  const wakeLockRef = useRef<any>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>('commentary');
   const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>([]);
+  const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>([]);
+  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>({
+    teamA: [],
+    teamB: [],
+  });
+  const [upcomingFixtures, setUpcomingFixtures] = useState<FixtureData[]>([]);
   const [followBusyId, setFollowBusyId] = useState<string | null>(null);
   const [followFeedback, setFollowFeedback] = useState<string | null>(null);
 
@@ -135,6 +156,7 @@ export function LiveBroadcastView({
     wantsReplay && broadcast.replayPublished && broadcast.replayVideoId
       ? broadcast.replayVideoId
       : broadcast.youtubeVideoId;
+  const wakeLockSupported = typeof navigator !== 'undefined' && 'wakeLock' in navigator;
 
   useEffect(() => {
     try {
@@ -199,7 +221,7 @@ export function LiveBroadcastView({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isExpandedFallback]);
 
-  // Load live_match sponsors & record impressions
+  // Load live_match sponsors, match player stats, lineups, and upcoming fixtures
   useEffect(() => {
     if (!broadcast.id) return;
     platformOpsService
@@ -213,7 +235,69 @@ export function LiveBroadcastView({
         list.forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
       })
       .catch(() => {});
-  }, [broadcast.id, broadcast.tournamentId]);
+
+    platformOpsService
+      .listMatchPlayerStats(broadcast.id)
+      .then(setMatchStats)
+      .catch(() => setMatchStats([]));
+
+    if (broadcast.teamA.id || broadcast.teamB.id) {
+      Promise.all([
+        broadcast.teamA.id
+          ? entityService.listPlayers({ teamId: broadcast.teamA.id }).catch(() => [])
+          : Promise.resolve([]),
+        broadcast.teamB.id
+          ? entityService.listPlayers({ teamId: broadcast.teamB.id }).catch(() => [])
+          : Promise.resolve([]),
+      ]).then(([teamA, teamB]) => setLineupPlayers({ teamA, teamB }));
+    }
+
+    if (broadcast.tournamentId) {
+      tournamentWorkflowService
+        .listFixtures(broadcast.tournamentId)
+        .then((fxList) =>
+          setUpcomingFixtures(
+            fxList.filter((f) => f.status === 'SCHEDULED' || f.status === 'LIVE').slice(0, 6)
+          )
+        )
+        .catch(() => setUpcomingFixtures([]));
+    }
+  }, [broadcast.id, broadcast.tournamentId, broadcast.teamA.id, broadcast.teamB.id]);
+
+  // Screen Wake Lock lifecycle
+  const toggleWakeLock = useCallback(async () => {
+    if (!wakeLockSupported) return;
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch {
+        // ignore
+      }
+      wakeLockRef.current = null;
+      setWakeLockActive(false);
+      return;
+    }
+    try {
+      const sentinel = await (navigator as any).wakeLock.request('screen');
+      wakeLockRef.current = sentinel;
+      setWakeLockActive(true);
+      sentinel.addEventListener?.('release', () => {
+        wakeLockRef.current = null;
+        setWakeLockActive(false);
+      });
+    } catch {
+      setWakeLockActive(false);
+    }
+  }, [wakeLockSupported]);
+
+  useEffect(() => {
+    return () => {
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    };
+  }, []);
 
   const toggleScoreboard = useCallback(() => {
     setScoreboardVisible((prev) => {
@@ -366,46 +450,70 @@ export function LiveBroadcastView({
               startSeconds={startSeconds}
               jumpKey={jumpKey}
               lowDataMode={lowDataMode}
+              videoDisabled={videoDisabled}
+              onEnableVideo={() => setVideoDisabled(false)}
               switchingBanner={switchingBanner}
+              onPlaybackHealthChange={setPlayerSignal}
             />
 
-            {broadcast.status === 'UPCOMING' && !showUpcomingPreview && (
+            {broadcast.status === 'UPCOMING' && !showUpcomingPreview && !videoDisabled && (
               <StartingSoonGraphic
                 stream={stream}
                 onShowPreview={() => setShowUpcomingPreview(true)}
               />
             )}
 
-            {/* Top-Left Live / Viewer / Sync Badge */}
+            {/* Top-Left Live / Viewer / Stream Connectivity Indicator */}
             <div className="pointer-events-none absolute top-2.5 left-2.5 z-30 flex flex-wrap items-center gap-1.5">
-              {broadcast.centerMeta.isLive && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-red-600/95 text-white text-[10px] font-extrabold uppercase tracking-wider shadow">
-                  <Radio className="w-3 h-3 animate-pulse" />
-                  <span>{t('broadcast.live')}</span>
-                </span>
-              )}
+              <MatchStatusBadge stream={stream} score={score} dark compact />
               {canSeeViewers && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-950/85 border border-white/15 text-white font-mono text-[10px] font-semibold tabular-nums backdrop-blur-md">
                   <Users className="w-3 h-3 text-emerald-400" />
                   <span>{broadcast.activeViewers}</span>
                 </span>
               )}
-              <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-950/85 border border-white/15 text-[10px] font-semibold backdrop-blur-md ${
-                  connected ? 'text-emerald-300' : 'text-amber-300'
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    connected ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                />
-                <span>{broadcast.activeProvider === 'mediamtx' ? 'MediaMTX' : 'YouTube'}</span>
-              </span>
+              <StreamStatusIndicator
+                stream={stream}
+                socketConnected={connected}
+                playerSignal={playerSignal}
+                dark
+              />
             </div>
 
             {/* Top-Right Viewer Controls */}
             <div className="pointer-events-none absolute top-2.5 right-2.5 z-30 flex items-center gap-1.5">
+              {wakeLockSupported && (
+                <button
+                  type="button"
+                  onClick={toggleWakeLock}
+                  title="Keep screen awake while watching"
+                  aria-pressed={wakeLockActive}
+                  className={`pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border backdrop-blur-md transition cursor-pointer ${
+                    wakeLockActive
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                      : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
+                  }`}
+                >
+                  <Sun className="w-3 h-3" />
+                  <span className="hidden md:inline">AWAKE</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setVideoDisabled((v) => !v)}
+                title="Disable video and retain live scores only"
+                aria-pressed={videoDisabled}
+                className={`pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border backdrop-blur-md transition cursor-pointer ${
+                  videoDisabled
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                    : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
+                }`}
+              >
+                {videoDisabled ? <Video className="w-3 h-3" /> : <VideoOff className="w-3 h-3" />}
+                <span className="hidden sm:inline">{videoDisabled ? 'VIDEO ON' : 'SCORE ONLY'}</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setLowDataMode((v) => !v)}
@@ -510,10 +618,11 @@ export function LiveBroadcastView({
         </div>
       </div>
 
-      {/* 2. PORTRAIT / DEFAULT HIERARCHY: SCOREBOARD STRIP -> SPORT STRIP -> RESULT BAR */}
+      {/* 2. PORTRAIT / DEFAULT HIERARCHY: SCOREBOARD STRIP -> SPORT STRIP -> SUMMARY -> RESULT BAR */}
       <div className="px-3 sm:px-0 space-y-3">
         {scoreboardVisible && <BroadcastScoreboard broadcast={broadcast} />}
         <BroadcastSportStrip broadcast={broadcast} />
+        <ScoreboardSummary stream={stream} score={score} variant="detail" />
         <BroadcastResultBar broadcast={broadcast} />
 
         {/* Match Header & Quick Actions */}
@@ -521,6 +630,7 @@ export function LiveBroadcastView({
           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <MatchStatusBadge stream={stream} score={score} />
                 <span className="font-bold text-[#EA580C] uppercase tracking-wide">
                   {broadcast.sport}
                 </span>
@@ -553,6 +663,38 @@ export function LiveBroadcastView({
                 title={broadcast.title}
                 text={`Watch ${broadcast.sport} live on MaidanLive`}
                 compact
+                shareCard={
+                  broadcast.resultDeclared
+                    ? {
+                        type: 'MATCH_RESULT',
+                        title: broadcast.title,
+                        sport: broadcast.sport,
+                        tournamentName: broadcast.tournamentName,
+                        resultText: broadcast.resultBannerText || 'Match Completed',
+                        winnerName: broadcast.winnerName,
+                        mvpName: broadcast.mvpName,
+                        teamAName: broadcast.teamA.name,
+                        teamBName: broadcast.teamB.name,
+                        teamAScore: broadcast.teamA.primaryText,
+                        teamBScore: broadcast.teamB.primaryText,
+                        teamASecondary: broadcast.teamA.secondaryText,
+                        teamBSecondary: broadcast.teamB.secondaryText,
+                      }
+                    : {
+                        type: 'LIVE_SCORE',
+                        title: broadcast.title,
+                        sport: broadcast.sport,
+                        tournamentName: broadcast.tournamentName,
+                        statusLabel: broadcast.centerMeta.statusLabel,
+                        teamAName: broadcast.teamA.name,
+                        teamBName: broadcast.teamB.name,
+                        teamAScore: broadcast.teamA.primaryText,
+                        teamBScore: broadcast.teamB.primaryText,
+                        teamASecondary: broadcast.teamA.secondaryText,
+                        teamBSecondary: broadcast.teamB.secondaryText,
+                        venueName: broadcast.venueName,
+                      }
+                }
               />
               <button
                 type="button"
@@ -591,13 +733,21 @@ export function LiveBroadcastView({
           </div>
         </div>
 
-        {/* 3. DETAIL TABS: COMMENTARY | CHAT & POLLS | HIGHLIGHTS | TEAMS & PARTNERS */}
+        {/* 3. MATCH CENTER TABS */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {[
             { id: 'commentary' as const, label: `Commentary (${history.length})` },
+            { id: 'stats' as const, label: `Player Stats (${matchStats.length})` },
+            {
+              id: 'lineups' as const,
+              label: `Lineups (${lineupPlayers.teamA.length + lineupPlayers.teamB.length})`,
+            },
             { id: 'chat' as const, label: 'Live Chat & Polls' },
             ...(broadcast.highlightsEnabled && highlights.length > 0
               ? [{ id: 'highlights' as const, label: `Highlights (${highlights.length})` }]
+              : []),
+            ...(upcomingFixtures.length > 0
+              ? [{ id: 'fixtures' as const, label: `Upcoming (${upcomingFixtures.length})` }]
               : []),
             { id: 'info' as const, label: 'Teams & Partners' },
           ].map((tab) => (
@@ -617,6 +767,197 @@ export function LiveBroadcastView({
         </div>
 
         {activeTab === 'commentary' && <LiveCommentaryFeed history={history} />}
+
+        {activeTab === 'stats' && (
+          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+            <h2 className="font-display text-sm font-bold text-slate-900">
+              Match Player Statistics
+            </h2>
+            {matchStats.length === 0 ? (
+              <p className="text-sm text-slate-500 py-4 text-center">
+                No verified player statistics recorded for this match yet.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <th className="py-2.5 px-3">Player</th>
+                      <th className="py-2.5 px-3">Team</th>
+                      {broadcast.sport === 'Cricket' && (
+                        <>
+                          <th className="py-2.5 px-3 font-mono">Runs</th>
+                          <th className="py-2.5 px-3 font-mono">Balls</th>
+                          <th className="py-2.5 px-3 font-mono">4s/6s</th>
+                          <th className="py-2.5 px-3 font-mono">Wkts</th>
+                        </>
+                      )}
+                      {broadcast.sport === 'Kabaddi' && (
+                        <>
+                          <th className="py-2.5 px-3 font-mono">Raid</th>
+                          <th className="py-2.5 px-3 font-mono">Tackle</th>
+                          <th className="py-2.5 px-3 font-mono">Bonus</th>
+                        </>
+                      )}
+                      {broadcast.sport === 'Football' && (
+                        <>
+                          <th className="py-2.5 px-3 font-mono">Goals</th>
+                          <th className="py-2.5 px-3 font-mono">Assists</th>
+                          <th className="py-2.5 px-3 font-mono">Cards</th>
+                        </>
+                      )}
+                      {broadcast.sport === 'Volleyball' && (
+                        <>
+                          <th className="py-2.5 px-3 font-mono">Attack</th>
+                          <th className="py-2.5 px-3 font-mono">Block</th>
+                          <th className="py-2.5 px-3 font-mono">Aces</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {matchStats.map((st) => {
+                      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
+                      const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
+                      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
+                      return (
+                        <tr key={st.id} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3 font-semibold text-slate-900">
+                            {pId ? (
+                              <Link to={`/players/${pId}`} className="hover:text-[#EA580C]">
+                                {pObj?.name || 'Player'}
+                              </Link>
+                            ) : (
+                              <span>{pObj?.name || 'Player'}</span>
+                            )}
+                            {st.isMvp && (
+                              <span className="ml-1.5 text-[10px] font-bold text-amber-700">
+                                POTM
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">
+                            {tObj?.shortName || tObj?.name || '—'}
+                          </td>
+                          {broadcast.sport === 'Cricket' && (
+                            <>
+                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.runs}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.ballsFaced}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">
+                                {st.fours}/{st.sixes}
+                              </td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.wickets}</td>
+                            </>
+                          )}
+                          {broadcast.sport === 'Kabaddi' && (
+                            <>
+                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.raidPoints}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.tacklePoints}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.bonusPoints}</td>
+                            </>
+                          )}
+                          {broadcast.sport === 'Football' && (
+                            <>
+                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.goals}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.assists}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">
+                                Y:{st.yellowCards} R:{st.redCards}
+                              </td>
+                            </>
+                          )}
+                          {broadcast.sport === 'Volleyball' && (
+                            <>
+                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.attackPoints}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.blockPoints}</td>
+                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.serveAces}</td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'lineups' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[
+              { team: broadcast.teamA, roster: lineupPlayers.teamA },
+              { team: broadcast.teamB, roster: lineupPlayers.teamB },
+            ].map((side, idx) => (
+              <div
+                key={side.team.id || idx}
+                className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"
+              >
+                <div className="flex items-center gap-2.5 border-b border-slate-100 pb-2.5">
+                  <TeamAvatar name={side.team.name} logoUrl={side.team.logoUrl} size="sm" />
+                  <h3 className="font-display text-sm font-bold text-slate-900 truncate">
+                    {side.team.name}
+                  </h3>
+                  <span className="ml-auto text-xs text-slate-500 font-mono">
+                    {side.roster.length} players
+                  </span>
+                </div>
+                {side.roster.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-3">Squad list not published yet.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {side.roster.map((p) => (
+                      <Link
+                        key={p.id}
+                        to={`/players/${p.id}`}
+                        className="py-2 flex items-center justify-between gap-2 text-xs hover:bg-slate-50 px-1 rounded"
+                      >
+                        <span className="font-medium text-slate-900 truncate">
+                          {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}
+                          {p.name}
+                        </span>
+                        <span className="text-slate-500 shrink-0">{p.role || 'Player'}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeTab === 'fixtures' && (
+          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-sm font-bold text-slate-900">
+                Tournament Schedule
+              </h2>
+              {broadcast.tournamentId && (
+                <Link
+                  to={`/tournaments/${broadcast.tournamentId}`}
+                  className="text-xs font-semibold text-[#EA580C] hover:underline"
+                >
+                  Full Tournament
+                </Link>
+              )}
+            </div>
+            <div className="divide-y divide-slate-100">
+              {upcomingFixtures.map((fx) => (
+                <div key={fx.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 truncate">
+                      {fx.teamAName || 'TBD'} vs {fx.teamBName || 'TBD'}
+                    </p>
+                    <p className="text-slate-500 mt-0.5">
+                      {fx.roundName || `Round ${fx.roundNumber}`}
+                      {fx.scheduledAt ? ` · ${new Date(fx.scheduledAt).toLocaleString()}` : ''}
+                    </p>
+                  </div>
+                  <span className="font-semibold text-slate-600 shrink-0">{fx.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {activeTab === 'chat' && (
           <LiveChatAndPollsPanel streamId={broadcast.id} chatEnabled={broadcast.chatEnabled} />

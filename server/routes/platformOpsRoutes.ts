@@ -7,6 +7,7 @@ import { Notification } from '../models/Notification.ts';
 import { MatchReport } from '../models/MatchReport.ts';
 import { ViewerMetric } from '../models/ViewerMetric.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { LiveScore } from '../models/LiveScore.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Player } from '../models/Player.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
@@ -650,6 +651,29 @@ router.post(
   }
 );
 
+router.delete(
+  '/notifications/:id',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid notification ID.' });
+        return;
+      }
+      const deleted = await Notification.findOneAndDelete({ _id: id, userId: req.user!._id });
+      if (!deleted) {
+        res.status(404).json({ message: 'Notification not found.' });
+        return;
+      }
+      res.json({ ok: true, id });
+    } catch (err) {
+      console.error('[Notifications] Delete error:', err);
+      res.status(500).json({ message: 'Failed to delete notification.' });
+    }
+  }
+);
+
 router.patch(
   '/notifications/preferences',
   authenticate,
@@ -666,10 +690,22 @@ router.patch(
           typeof prefs.matchLive === 'boolean'
             ? prefs.matchLive
             : user.notificationPreferences?.matchLive !== false,
+        matchDelayed:
+          typeof prefs.matchDelayed === 'boolean'
+            ? prefs.matchDelayed
+            : user.notificationPreferences?.matchDelayed !== false,
+        matchResumed:
+          typeof prefs.matchResumed === 'boolean'
+            ? prefs.matchResumed
+            : user.notificationPreferences?.matchResumed !== false,
         followedTeams:
           typeof prefs.followedTeams === 'boolean'
             ? prefs.followedTeams
             : user.notificationPreferences?.followedTeams !== false,
+        favoritePlayers:
+          typeof prefs.favoritePlayers === 'boolean'
+            ? prefs.favoritePlayers
+            : user.notificationPreferences?.favoritePlayers !== false,
         scoreUpdates:
           typeof prefs.scoreUpdates === 'boolean'
             ? prefs.scoreUpdates
@@ -1380,6 +1416,99 @@ router.post(
     } catch (err) {
       console.error('[Monetization] Revenue record error:', err);
       res.status(500).json({ message: 'Failed to record revenue entry.' });
+    }
+  }
+);
+
+// ==================== ADMIN MATCH HEALTH MONITOR ====================
+router.get(
+  '/admin/match-health',
+  authenticate,
+  requireAdminPortal,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const activeCounts = getAllActiveViewerCounts();
+      const [streams, scores] = await Promise.all([
+        LiveStream.find()
+          .populate('authorizedScorerId', 'name email')
+          .populate('backupScorerId', 'name email')
+          .sort({ status: 1, updatedAt: -1 })
+          .limit(80)
+          .lean(),
+        LiveScore.find().lean(),
+      ]);
+
+      const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
+
+      const matches = streams.map((s: any) => {
+        const sid = s._id.toString();
+        const sc = scoreMap.get(sid) || null;
+        const activeProvider = s.activeStreamingProvider || s.streamingProvider || 'youtube';
+        const sh = s.streamHealth || { ok: false, status: 'UNKNOWN', checkedAt: null };
+        const viewers = activeCounts[sid] || 0;
+
+        let healthGrade: 'Healthy' | 'Degraded' | 'Offline' | 'Unknown' = 'Unknown';
+        if (s.status === 'ENDED') {
+          healthGrade = 'Offline';
+        } else if (activeProvider === 'mediamtx') {
+          if (s.mediamtxPublishStatus === 'PUBLISHING' || sh.ok) {
+            healthGrade = 'Healthy';
+          } else if (s.mediamtxPublishStatus === 'ERROR' || s.mediamtxPublishStatus === 'OFFLINE') {
+            healthGrade = 'Offline';
+          } else if (sh.checkedAt) {
+            healthGrade = sh.ok ? 'Healthy' : 'Degraded';
+          }
+        } else {
+          if (sh.checkedAt) {
+            if (sh.ok) healthGrade = 'Healthy';
+            else if (s.youtubeStreamStatus === 'UNAVAILABLE') healthGrade = 'Offline';
+            else healthGrade = 'Degraded';
+          } else if (s.youtubeStreamStatus === 'UNAVAILABLE') {
+            healthGrade = 'Offline';
+          } else if (s.youtubeStreamStatus === 'LIVE') {
+            healthGrade = 'Healthy';
+          }
+        }
+
+        return {
+          id: sid,
+          matchTitle:
+            s.matchTitle || [s.teamAName, s.teamBName].filter(Boolean).join(' vs ') || 'Match',
+          teamAName: s.teamAName || 'Team A',
+          teamBName: s.teamBName || 'Team B',
+          sport: s.gameName || 'Other',
+          tournamentName: s.tournamentName || '',
+          status: s.status,
+          matchStatus: sc?.matchStatus || s.status,
+          activeStreamingProvider: activeProvider,
+          streamHealth: sh,
+          youtubeVideoId: s.youtubeVideoId || '',
+          youtubeStreamStatus: s.youtubeStreamStatus || 'UNKNOWN',
+          mediamtxStreamPath: s.mediamtxStreamPath || '',
+          mediamtxPublishStatus: s.mediamtxPublishStatus || 'IDLE',
+          activeSocketViewers: viewers,
+          scoreUpdatedAt: sc?.lastUpdatedAt || null,
+          authorizedScorer:
+            typeof s.authorizedScorerId === 'object' && s.authorizedScorerId
+              ? { id: s.authorizedScorerId._id?.toString(), name: s.authorizedScorerId.name }
+              : null,
+          backupScorer:
+            typeof s.backupScorerId === 'object' && s.backupScorerId
+              ? { id: s.backupScorerId._id?.toString(), name: s.backupScorerId.name }
+              : null,
+          healthGrade,
+        };
+      });
+
+      res.json({
+        generatedAt: new Date().toISOString(),
+        totalStreams: matches.length,
+        liveCount: matches.filter((m) => m.status === 'LIVE').length,
+        matches,
+      });
+    } catch (err) {
+      console.error('[MatchHealth] Overview error:', err);
+      res.status(500).json({ message: 'Failed to load match health diagnostics.' });
     }
   }
 );

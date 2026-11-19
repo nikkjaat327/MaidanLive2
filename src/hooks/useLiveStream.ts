@@ -85,22 +85,56 @@ export function useLiveStream(streamId?: string) {
       );
     };
 
+    const handleHealthUpdated = (payload: {
+      streamId?: string;
+      provider?: 'youtube' | 'mediamtx';
+      mediamtxPublishStatus?: LiveStreamData['mediamtxPublishStatus'];
+      youtubeStreamStatus?: LiveStreamData['youtubeStreamStatus'];
+      streamHealth?: LiveStreamData['streamHealth'];
+    }) => {
+      if (payload?.streamId !== streamId) return;
+      setStream((prev) =>
+        prev
+          ? {
+              ...prev,
+              mediamtxPublishStatus: payload.mediamtxPublishStatus ?? prev.mediamtxPublishStatus,
+              youtubeStreamStatus: payload.youtubeStreamStatus ?? prev.youtubeStreamStatus,
+              streamHealth: payload.streamHealth ?? prev.streamHealth,
+            }
+          : prev
+      );
+    };
+
+    let hasConnectedOnce = socket.connected;
+    const handleConnect = () => {
+      if (hasConnectedOnce) {
+        fetchStream();
+      }
+      hasConnectedOnce = true;
+    };
+
     socket.on('live:updated', handleUpdated);
     socket.on('live:started', handleUpdated);
     socket.on('live:ended', handleEnded);
     socket.on('streaming_provider_changed', handleProviderChanged);
+    socket.on('mediamtx:status_changed', handleHealthUpdated);
+    socket.on('stream:health_updated', handleHealthUpdated);
     socket.on('stream:viewers', handleViewerUpdate);
     socket.on('viewer:count_updated', handleViewerUpdate);
+    socket.on('connect', handleConnect);
 
     return () => {
       socket.off('live:updated', handleUpdated);
       socket.off('live:started', handleUpdated);
       socket.off('live:ended', handleEnded);
       socket.off('streaming_provider_changed', handleProviderChanged);
+      socket.off('mediamtx:status_changed', handleHealthUpdated);
+      socket.off('stream:health_updated', handleHealthUpdated);
       socket.off('stream:viewers', handleViewerUpdate);
       socket.off('viewer:count_updated', handleViewerUpdate);
+      socket.off('connect', handleConnect);
     };
-  }, [streamId]);
+  }, [streamId, fetchStream]);
 
   return { stream, setStream, loading, error, switchingBanner, refetch: fetchStream };
 }

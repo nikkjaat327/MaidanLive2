@@ -35,10 +35,21 @@ export async function dispatchMatchNotifications(params: {
   link: string;
   dedupeKey: string;
   teamIds?: Array<mongoose.Types.ObjectId | string | null | undefined>;
+  tournamentId?: mongoose.Types.ObjectId | string | null;
+  playerIds?: Array<mongoose.Types.ObjectId | string | null | undefined>;
   includeAllSpectatorsIfNoFollowers?: boolean;
 }): Promise<number> {
   try {
     const validTeamIds = (params.teamIds || [])
+      .map((id) => (id ? id.toString() : ''))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+    const validTournamentId =
+      params.tournamentId && mongoose.Types.ObjectId.isValid(params.tournamentId.toString())
+        ? params.tournamentId.toString()
+        : '';
+
+    const validPlayerIds = (params.playerIds || [])
       .map((id) => (id ? id.toString() : ''))
       .filter((id) => mongoose.Types.ObjectId.isValid(id));
 
@@ -48,13 +59,22 @@ export async function dispatchMatchNotifications(params: {
       [`notificationPreferences.${prefField}`]: { $ne: false },
     };
 
-    if (validTeamIds.length > 0 && !params.includeAllSpectatorsIfNoFollowers) {
-      query.followedTeamIds = { $in: validTeamIds };
-    } else if (validTeamIds.length > 0 && params.includeAllSpectatorsIfNoFollowers) {
-      query.$or = [
-        { followedTeamIds: { $in: validTeamIds } },
-        { role: 'SPECTATOR' },
-      ];
+    const orConditions: Record<string, unknown>[] = [];
+    if (validTeamIds.length > 0) {
+      orConditions.push({ followedTeamIds: { $in: validTeamIds } });
+    }
+    if (validTournamentId) {
+      orConditions.push({ followedTournamentIds: validTournamentId });
+    }
+    if (validPlayerIds.length > 0) {
+      orConditions.push({ followedPlayerIds: { $in: validPlayerIds } });
+    }
+
+    if (orConditions.length > 0) {
+      if (params.includeAllSpectatorsIfNoFollowers) {
+        orConditions.push({ role: 'SPECTATOR' });
+      }
+      query.$or = orConditions;
     }
 
     const recipients = await User.find(query).select('_id').limit(500).lean();

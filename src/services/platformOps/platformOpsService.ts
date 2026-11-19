@@ -1,6 +1,7 @@
 import {
   DatabaseDiagnosticsData,
   LeaderboardEntry,
+  MatchHealthItem,
   MatchReportData,
   NotificationData,
   NotificationPreferences,
@@ -120,6 +121,9 @@ export const platformOpsService = {
   async markAllNotificationsRead(): Promise<void> {
     await customerApi.post('/notifications/read-all');
   },
+  async deleteNotification(id: string): Promise<void> {
+    await customerApi.delete(`/notifications/${id}`);
+  },
   async updateNotificationPreferences(
     prefs: Partial<NotificationPreferences>
   ): Promise<NotificationPreferences> {
@@ -176,6 +180,15 @@ export const platformOpsService = {
   },
   async getAdminAnalytics(): Promise<ViewerAnalyticsSummary> {
     const { data } = await adminApi.get<ViewerAnalyticsSummary>('/admin/analytics');
+    return data;
+  },
+  async getMatchHealthOverview(): Promise<{
+    generatedAt: string;
+    totalStreams: number;
+    liveCount: number;
+    matches: MatchHealthItem[];
+  }> {
+    const { data } = await adminApi.get('/admin/match-health');
     return data;
   },
 

@@ -6,6 +6,9 @@ import { MatchHighlight } from '../models/MatchHighlight.ts';
 import { ChatMessage } from '../models/ChatMessage.ts';
 import { Poll } from '../models/Poll.ts';
 import { Team } from '../models/Team.ts';
+import { Player } from '../models/Player.ts';
+import { Tournament } from '../models/Tournament.ts';
+import { LiveScore } from '../models/LiveScore.ts';
 import { User } from '../models/User.ts';
 import {
   authenticate,
@@ -772,39 +775,238 @@ router.delete(
   }
 );
 
-router.get('/customer/following', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+// ==================== PLAYER & TOURNAMENT FOLLOWING ====================
+router.post('/players/:id/follow', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const teamIds = req.user!.followedTeamIds || [];
-    if (teamIds.length === 0) {
-      res.json({ teams: [], upcomingMatches: [], liveMatches: [], recentResults: [] });
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid player ID.' });
+      return;
+    }
+    const player = await Player.findById(id);
+    if (!player) {
+      res.status(404).json({ message: 'Player not found.' });
       return;
     }
 
-    const [teams, streams] = await Promise.all([
-      Team.find({ _id: { $in: teamIds } }).sort({ name: 1 }).lean(),
-      LiveStream.find({
-        $or: [{ teamAId: { $in: teamIds } }, { teamBId: { $in: teamIds } }],
-      })
-        .sort({ startedAt: -1, matchDate: 1, createdAt: -1 })
-        .limit(40)
-        .lean(),
+    const userUpdate = await User.updateOne(
+      { _id: req.user!._id, followedPlayerIds: { $ne: player._id } },
+      { $addToSet: { followedPlayerIds: player._id } }
+    );
+    if (userUpdate.modifiedCount > 0) {
+      player.followersCount = (player.followersCount || 0) + 1;
+      await player.save();
+    }
+
+    const updatedUser = await User.findById(req.user!._id).select('followedPlayerIds').lean();
+    res.json({
+      followed: true,
+      followersCount: player.followersCount || 0,
+      followedPlayerIds: (updatedUser?.followedPlayerIds || []).map((pid) => pid.toString()),
+    });
+  } catch (err) {
+    console.error('[Follow] Follow player error:', err);
+    res.status(500).json({ message: 'Failed to follow player.' });
+  }
+});
+
+router.delete(
+  '/players/:id/follow',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid player ID.' });
+        return;
+      }
+      const player = await Player.findById(id);
+      if (!player) {
+        res.status(404).json({ message: 'Player not found.' });
+        return;
+      }
+
+      const userUpdate = await User.updateOne(
+        { _id: req.user!._id, followedPlayerIds: player._id },
+        { $pull: { followedPlayerIds: player._id } }
+      );
+      if (userUpdate.modifiedCount > 0) {
+        player.followersCount = Math.max(0, (player.followersCount || 0) - 1);
+        await player.save();
+      }
+
+      const updatedUser = await User.findById(req.user!._id).select('followedPlayerIds').lean();
+      res.json({
+        followed: false,
+        followersCount: player.followersCount || 0,
+        followedPlayerIds: (updatedUser?.followedPlayerIds || []).map((pid) => pid.toString()),
+      });
+    } catch (err) {
+      console.error('[Follow] Unfollow player error:', err);
+      res.status(500).json({ message: 'Failed to unfollow player.' });
+    }
+  }
+);
+
+router.post(
+  '/tournaments/:id/follow',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid tournament ID.' });
+        return;
+      }
+      const tournament = await Tournament.findById(id);
+      if (!tournament) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
+
+      const userUpdate = await User.updateOne(
+        { _id: req.user!._id, followedTournamentIds: { $ne: tournament._id } },
+        { $addToSet: { followedTournamentIds: tournament._id } }
+      );
+      if (userUpdate.modifiedCount > 0) {
+        tournament.followersCount = (tournament.followersCount || 0) + 1;
+        await tournament.save();
+      }
+
+      const updatedUser = await User.findById(req.user!._id)
+        .select('followedTournamentIds')
+        .lean();
+      res.json({
+        followed: true,
+        followersCount: tournament.followersCount || 0,
+        followedTournamentIds: (updatedUser?.followedTournamentIds || []).map((tid) =>
+          tid.toString()
+        ),
+      });
+    } catch (err) {
+      console.error('[Follow] Follow tournament error:', err);
+      res.status(500).json({ message: 'Failed to follow tournament.' });
+    }
+  }
+);
+
+router.delete(
+  '/tournaments/:id/follow',
+  authenticate,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid tournament ID.' });
+        return;
+      }
+      const tournament = await Tournament.findById(id);
+      if (!tournament) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
+
+      const userUpdate = await User.updateOne(
+        { _id: req.user!._id, followedTournamentIds: tournament._id },
+        { $pull: { followedTournamentIds: tournament._id } }
+      );
+      if (userUpdate.modifiedCount > 0) {
+        tournament.followersCount = Math.max(0, (tournament.followersCount || 0) - 1);
+        await tournament.save();
+      }
+
+      const updatedUser = await User.findById(req.user!._id)
+        .select('followedTournamentIds')
+        .lean();
+      res.json({
+        followed: false,
+        followersCount: tournament.followersCount || 0,
+        followedTournamentIds: (updatedUser?.followedTournamentIds || []).map((tid) =>
+          tid.toString()
+        ),
+      });
+    } catch (err) {
+      console.error('[Follow] Unfollow tournament error:', err);
+      res.status(500).json({ message: 'Failed to unfollow tournament.' });
+    }
+  }
+);
+
+router.get('/customer/following', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const teamIds = req.user!.followedTeamIds || [];
+    const playerIds = req.user!.followedPlayerIds || [];
+    const tournamentIds = req.user!.followedTournamentIds || [];
+
+    if (teamIds.length === 0 && playerIds.length === 0 && tournamentIds.length === 0) {
+      res.json({
+        teams: [],
+        players: [],
+        tournaments: [],
+        upcomingMatches: [],
+        liveMatches: [],
+        recentResults: [],
+      });
+      return;
+    }
+
+    const [teams, players, tournaments] = await Promise.all([
+      teamIds.length > 0 ? Team.find({ _id: { $in: teamIds } }).sort({ name: 1 }).lean() : Promise.resolve([]),
+      playerIds.length > 0
+        ? Player.find({ _id: { $in: playerIds } })
+            .populate('teamId', 'name shortName logoUrl')
+            .sort({ name: 1 })
+            .lean()
+        : Promise.resolve([]),
+      tournamentIds.length > 0
+        ? Tournament.find({ _id: { $in: tournamentIds } }).sort({ startDate: 1, name: 1 }).lean()
+        : Promise.resolve([]),
     ]);
+
+    const playerTeamIds = players
+      .map((p: any) => (p.teamId?._id ? p.teamId._id : p.teamId))
+      .filter(Boolean);
+    const combinedTeamIds = [...teamIds, ...playerTeamIds];
+
+    const streamOr: Record<string, unknown>[] = [];
+    if (combinedTeamIds.length > 0) {
+      streamOr.push({ teamAId: { $in: combinedTeamIds } }, { teamBId: { $in: combinedTeamIds } });
+    }
+    if (tournamentIds.length > 0) {
+      streamOr.push({ tournamentId: { $in: tournamentIds } });
+    }
+
+    const streams =
+      streamOr.length > 0
+        ? await LiveStream.find({ $or: streamOr })
+            .sort({ startedAt: -1, matchDate: 1, createdAt: -1 })
+            .limit(50)
+            .lean()
+        : [];
+
+    const streamIds = streams.map((s) => s._id);
+    const scores =
+      streamIds.length > 0
+        ? await LiveScore.find({ liveStreamId: { $in: streamIds } }).lean()
+        : [];
+    const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
+    const enrichedStreams = streams.map((s) => ({
+      ...s,
+      id: s._id.toString(),
+      score: scoreMap.get(s._id.toString()) || null,
+    }));
 
     res.json({
       teams: teams.map((t) => ({ ...t, id: t._id.toString() })),
-      liveMatches: streams
-        .filter((s) => s.status === 'LIVE')
-        .map((s) => ({ ...s, id: s._id.toString() })),
-      upcomingMatches: streams
-        .filter((s) => s.status === 'UPCOMING')
-        .map((s) => ({ ...s, id: s._id.toString() })),
-      recentResults: streams
-        .filter((s) => s.status === 'ENDED')
-        .map((s) => ({ ...s, id: s._id.toString() })),
+      players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      tournaments: tournaments.map((tr) => ({ ...tr, id: tr._id.toString() })),
+      liveMatches: enrichedStreams.filter((s) => s.status === 'LIVE'),
+      upcomingMatches: enrichedStreams.filter((s) => s.status === 'UPCOMING'),
+      recentResults: enrichedStreams.filter((s) => s.status === 'ENDED'),
     });
   } catch (err) {
     console.error('[Follow] Following feed error:', err);
-    res.status(500).json({ message: 'Failed to load followed teams.' });
+    res.status(500).json({ message: 'Failed to load favorites feed.' });
   }
 });
 

@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Edit3, GitBranch, Plus, Trash2, Trophy } from 'lucide-react';
-import { TeamData, TournamentData, TournamentFormat, VenueData } from '../../types/index.ts';
+import { BookmarkPlus, Edit3, GitBranch, Plus, Trash2, Trophy } from 'lucide-react';
+import {
+  TeamData,
+  TournamentData,
+  TournamentFormat,
+  TournamentTemplateData,
+  VenueData,
+} from '../../types/index.ts';
 import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
@@ -16,6 +22,10 @@ export function AdminTournamentsPage() {
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
   const [venues, setVenues] = useState<VenueData[]>([]);
   const [teams, setTeams] = useState<TeamData[]>([]);
+  const [templates, setTemplates] = useState<TournamentTemplateData[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -50,14 +60,16 @@ export function AdminTournamentsPage() {
   const loadTournaments = useCallback(async () => {
     try {
       setError(null);
-      const [data, allVenues, allTeams] = await Promise.all([
+      const [data, allVenues, allTeams, allTemplates] = await Promise.all([
         entityService.listTournaments(),
         platformOpsService.listVenues().catch(() => [] as VenueData[]),
         entityService.listTeams().catch(() => [] as TeamData[]),
+        entityService.listTournamentTemplates().catch(() => [] as TournamentTemplateData[]),
       ]);
       setTournaments(data);
       setVenues(allVenues);
       setTeams(allTeams);
+      setTemplates(allTemplates);
     } catch (err) {
       setError(extractApiError(err, 'Failed to load tournaments.'));
     } finally {
@@ -71,6 +83,8 @@ export function AdminTournamentsPage() {
 
   function openCreate() {
     setEditing(null);
+    setSelectedTemplateId('');
+    setTemplateName('');
     setName('');
     setSportType('Cricket');
     setFormat('KNOCKOUT');
@@ -125,6 +139,59 @@ export function AdminTournamentsPage() {
 
   function toggleTeamId(id: string) {
     setTeamIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  }
+
+  function handleApplyTemplate(tplId: string) {
+    setSelectedTemplateId(tplId);
+    const tpl = templates.find((item) => item.id === tplId);
+    if (!tpl) return;
+    setSportType(tpl.sportType);
+    setFormat(tpl.format);
+    setGroupCount(String(tpl.groupCount || 2));
+    if (tpl.location) setLocation(tpl.location);
+    if (tpl.prizeMoney) setPrizeMoney(tpl.prizeMoney);
+    setRegistrationFee(String(tpl.registrationFee ?? 0));
+    setRules(tpl.rules || '');
+    setQualificationRules(tpl.qualificationRules || '');
+    setDescription(tpl.description || '');
+  }
+
+  async function handleSaveAsTemplate() {
+    const label = templateName.trim() || `${sportType} ${format.replace('_', ' ')} Preset`;
+    try {
+      setSavingTemplate(true);
+      setError(null);
+      const created = await entityService.createTournamentTemplate({
+        name: label,
+        sportType,
+        format,
+        groupCount: Math.max(1, Number(groupCount) || 2),
+        location: location.trim(),
+        prizeMoney: prizeMoney.trim(),
+        registrationFee: Math.max(0, Number(registrationFee) || 0),
+        rules: rules.trim(),
+        qualificationRules: qualificationRules.trim(),
+        description: description.trim(),
+      });
+      setTemplates((prev) => [created, ...prev]);
+      setSelectedTemplateId(created.id);
+      setTemplateName('');
+      setSuccess(`Template "${created.name}" saved.`);
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to save tournament template.'));
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  async function handleDeleteTemplate(tplId: string) {
+    try {
+      await entityService.deleteTournamentTemplate(tplId);
+      setTemplates((prev) => prev.filter((item) => item.id !== tplId));
+      if (selectedTemplateId === tplId) setSelectedTemplateId('');
+    } catch (err) {
+      setError(extractApiError(err, 'Unable to delete template.'));
+    }
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -311,6 +378,60 @@ export function AdminTournamentsPage() {
         maxWidthClass="max-w-2xl"
       >
         <form onSubmit={handleSave} className="space-y-4">
+          {/* Saved Templates Bar */}
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
+                <BookmarkPlus className="w-3.5 h-3.5 text-[#EA580C]" />
+                <span>Tournament Templates</span>
+              </span>
+              {templates.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e) => handleApplyTemplate(e.target.value)}
+                    className="min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="">Apply saved template...</option>
+                    {templates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name} ({tpl.sportType})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedTemplateId && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTemplate(selectedTemplateId)}
+                      title="Delete selected template"
+                      className="min-h-[34px] px-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="Template name (e.g. Weekend Turf Knockout)"
+                className="flex-1 min-w-[180px] min-h-[36px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
+              />
+              <button
+                type="button"
+                disabled={savingTemplate}
+                onClick={handleSaveAsTemplate}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
+              >
+                {savingTemplate ? 'Saving...' : 'Save as Template'}
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-slate-700 mb-1">

@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PlaySquare, Radio, SlidersHorizontal, Trophy, UserCheck, Users } from 'lucide-react';
+import {
+  Award,
+  ClipboardCheck,
+  HeartPulse,
+  PlaySquare,
+  Radio,
+  SlidersHorizontal,
+  Trophy,
+  UserCheck,
+  Users,
+} from 'lucide-react';
 import { ActivityLogItem, DashboardStats } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -38,6 +48,65 @@ export function AdminDashboardPage() {
     { label: 'Teams', value: stats?.teamsCount ?? 0, icon: Users, accent: 'text-slate-900' },
     { label: 'Players', value: stats?.playersCount ?? 0, icon: UserCheck, accent: 'text-slate-900' },
     { label: 'Upcoming Streams', value: stats?.upcomingStreams ?? 0, icon: Radio, accent: 'text-amber-700' },
+  ];
+
+  const quickActions = [
+    {
+      to: '/admin/tournaments',
+      label: 'Create Tournament',
+      desc: 'Launch cups with saved templates',
+      icon: Trophy,
+      tone: 'text-[#EA580C]',
+    },
+    {
+      to: '/admin/live-streams',
+      label: 'Broadcasts & Streams',
+      desc: 'Schedule YouTube or MediaMTX feeds',
+      icon: Radio,
+      tone: 'text-red-600',
+    },
+    {
+      to: '/admin/scoreboard',
+      label: 'Live Score Console',
+      desc: 'Score matches & post commentary',
+      icon: SlidersHorizontal,
+      tone: 'text-emerald-600',
+    },
+    {
+      to: '/admin/match-health',
+      label: 'Match Health Monitor',
+      desc: 'Verify stream & scorer sync status',
+      icon: HeartPulse,
+      tone: 'text-rose-600',
+    },
+    {
+      to: '/admin/registrations',
+      label: 'Registration Queue',
+      desc: 'Approve captain squad submissions',
+      icon: ClipboardCheck,
+      tone: 'text-amber-600',
+    },
+    {
+      to: '/admin/teams',
+      label: 'Teams & Squads',
+      desc: 'Manage participating club rosters',
+      icon: Users,
+      tone: 'text-sky-600',
+    },
+    {
+      to: '/admin/players',
+      label: 'Players & Eligibility',
+      desc: 'Verify players & age eligibility',
+      icon: UserCheck,
+      tone: 'text-indigo-600',
+    },
+    {
+      to: '/admin/sponsors',
+      label: 'Sponsors & Overlays',
+      desc: 'Configure tournament & live banners',
+      icon: Award,
+      tone: 'text-purple-600',
+    },
   ];
 
   return (
@@ -92,6 +161,33 @@ export function AdminDashboardPage() {
           );
         })}
       </div>
+
+      {/* Quick Actions Grid */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">
+          Quick Operations
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {quickActions.map((act) => {
+            const Icon = act.icon;
+            return (
+              <Link
+                key={act.to}
+                to={act.to}
+                className="bg-white border border-slate-200 rounded-xl p-4 hover:border-[#EA580C] transition-colors flex items-start gap-3"
+              >
+                <div className="p-2 rounded-lg bg-slate-50 border border-slate-100 shrink-0">
+                  <Icon className={`w-4 h-4 ${act.tone}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-900">{act.label}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{act.desc}</p>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </section>
 
       {/* Recent Admin Audit Log */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">

@@ -140,6 +140,8 @@ export type CricketActionPayload =
   | { type: 'BYE'; runs: number }
   | { type: 'LEG_BYE'; runs: number }
   | { type: 'WICKET' }
+  | { type: 'CHANGE_STRIKER' }
+  | { type: 'END_OVER' }
   | {
       type: 'STRUCTURED_DELIVERY';
       eventType: CricketDeliveryEventType;
@@ -302,6 +304,33 @@ export function applyCricketAction(
       }
       pointsAwarded = 0;
       label = 'Wicket!';
+      break;
+    }
+    case 'CHANGE_STRIKER': {
+      eventCategory = 'META';
+      const temp = next.batsman1;
+      next.batsman1 = next.batsman2;
+      next.batsman2 = temp;
+      label = next.batsman1
+        ? `Striker rotated: ${next.batsman1} on strike`
+        : 'Striker rotated';
+      break;
+    }
+    case 'END_OVER': {
+      eventCategory = 'META';
+      const activeBalls = isA ? next.teamABalls : next.teamBBalls;
+      const rem = activeBalls % 6;
+      if (rem !== 0) {
+        const pad = 6 - rem;
+        if (isA) next.teamABalls += pad;
+        else next.teamBBalls += pad;
+      }
+      const temp = next.batsman1;
+      next.batsman1 = next.batsman2;
+      next.batsman2 = temp;
+      next.lastOverSummary = next.recentBalls.slice(-6);
+      const oversDone = Math.floor((isA ? next.teamABalls : next.teamBBalls) / 6);
+      label = `End of Over ${oversDone}`;
       break;
     }
     case 'STRUCTURED_DELIVERY': {

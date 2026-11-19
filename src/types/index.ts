@@ -21,7 +21,10 @@ export interface UserPermissions {
 export interface NotificationPreferences {
   matchStart: boolean;
   matchLive: boolean;
+  matchDelayed?: boolean;
+  matchResumed?: boolean;
   followedTeams: boolean;
+  favoritePlayers?: boolean;
   scoreUpdates: boolean;
   matchResults: boolean;
   tournamentUpdates: boolean;
@@ -38,6 +41,8 @@ export interface AuthUser {
   assignedStreamIds?: string[];
   assignedTournamentIds?: string[];
   followedTeamIds?: string[];
+  followedPlayerIds?: string[];
+  followedTournamentIds?: string[];
   notificationPreferences?: NotificationPreferences;
   chatMutedUntil?: string | null;
   chatMutedReason?: string;
@@ -277,6 +282,7 @@ export interface TournamentData {
   registrationOpen?: boolean;
   registrationFee?: number;
   isPublished?: boolean;
+  followersCount?: number;
   teamIds?: string[];
   createdBy?: string;
   createdAt: string;
@@ -350,6 +356,7 @@ export interface PlayerData {
   dateOfBirth?: string;
   isMinor?: boolean;
   isVerified?: boolean;
+  followersCount?: number;
   createdAt: string;
 }
 
@@ -435,7 +442,7 @@ export interface PlayerMatchStatRecord {
   id?: string;
   liveStreamId: string;
   tournamentId?: string | null;
-  teamId?: string | null;
+  teamId?: string | { _id: string; id?: string; name?: string; shortName?: string } | null;
   playerId: string | { _id: string; id?: string; name?: string };
   sportType: SportOption;
   runs: number;
@@ -710,4 +717,59 @@ export interface DatabaseDiagnosticsData {
   };
   nodeVersion: string;
   uptimeSeconds: number;
+}
+
+export interface SearchOrganizerResult {
+  name: string;
+  tournamentCount: number;
+  sports: string[];
+  latestTournamentId: string;
+}
+
+export interface SearchResultsPayload {
+  query: string;
+  matches: LiveStreamData[];
+  tournaments: TournamentData[];
+  teams: TeamData[];
+  players: PlayerData[];
+  venues: VenueData[];
+  organizers: SearchOrganizerResult[];
+}
+
+export interface TournamentTemplateData {
+  id: string;
+  _id?: string;
+  name: string;
+  sportType: SportOption;
+  format: TournamentFormat;
+  groupCount: number;
+  location: string;
+  prizeMoney: string;
+  registrationFee: number;
+  rules: string;
+  qualificationRules: string;
+  description: string;
+  createdAt?: string;
+}
+
+export interface MatchHealthItem {
+  id: string;
+  matchTitle: string;
+  teamAName: string;
+  teamBName: string;
+  sport: string;
+  tournamentName: string;
+  status: StreamStatus;
+  matchStatus: string;
+  activeStreamingProvider: StreamingProvider;
+  streamHealth: StreamHealthData;
+  youtubeVideoId: string;
+  youtubeStreamStatus: string;
+  mediamtxStreamPath: string;
+  mediamtxPublishStatus: string;
+  activeSocketViewers: number;
+  scoreUpdatedAt: string | null;
+  authorizedScorer: { id: string; name: string } | null;
+  backupScorer: { id: string; name: string } | null;
+  healthGrade: 'Healthy' | 'Degraded' | 'Offline' | 'Unknown';
 }

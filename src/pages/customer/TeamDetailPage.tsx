@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, BellPlus, Check, Trophy, Users } from 'lucide-react';
+import { ArrowLeft, BellPlus, Calendar, Check, Trophy, Users } from 'lucide-react';
 import { FixtureData, LiveStreamData, PlayerData, TeamData } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
+import { recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
@@ -39,6 +40,14 @@ export function TeamDetailPage() {
         setStreams(res.streams || []);
         setFixtures(res.fixtures || []);
         setRecord(res.record || { played: 0, won: 0, lost: 0, drawn: 0 });
+        if (res.team) {
+          recentlyWatchedStore.recordTeam({
+            id: res.team.id,
+            name: res.team.name,
+            sportType: res.team.sportType,
+            logoUrl: res.team.logoUrl,
+          });
+        }
       })
       .catch((err) => setError(extractApiError(err, 'Unable to load team profile.')))
       .finally(() => setLoading(false));
@@ -222,6 +231,52 @@ export function TeamDetailPage() {
         )}
       </section>
 
+      {/* Upcoming Fixtures */}
+      {fixtures.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-amber-600" />
+            <h2 className="font-display text-xl font-bold text-slate-900">
+              Scheduled Fixtures ({fixtures.length})
+            </h2>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
+            {fixtures.map((fx) => {
+              const linkedStreamId =
+                typeof fx.liveStreamId === 'object' && fx.liveStreamId
+                  ? (fx.liveStreamId as any)._id || (fx.liveStreamId as any).id
+                  : fx.liveStreamId;
+              return (
+                <div key={fx.id} className="p-4 flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 text-sm truncate">
+                      {fx.teamAName || 'TBD'} vs {fx.teamBName || 'TBD'}
+                    </p>
+                    <p className="text-slate-500 mt-0.5">
+                      {fx.roundName || `Round ${fx.roundNumber}`}
+                      {fx.scheduledAt ? ` · ${new Date(fx.scheduledAt).toLocaleString()}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold">
+                      {fx.status}
+                    </span>
+                    {linkedStreamId && (
+                      <Link
+                        to={`/live/${linkedStreamId}`}
+                        className="px-2.5 py-1 rounded bg-slate-900 text-white font-semibold hover:bg-slate-800"
+                      >
+                        Match Center
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Team Broadcasts */}
       <section className="space-y-4">
         <div className="flex items-center gap-2">
@@ -230,9 +285,9 @@ export function TeamDetailPage() {
             Matches &amp; Broadcasts ({streams.length})
           </h2>
         </div>
-        {streams.length === 0 && fixtures.length === 0 ? (
+        {streams.length === 0 ? (
           <div className="p-6 bg-white border border-slate-200 rounded-xl text-sm text-slate-500">
-            No broadcasts or scheduled fixtures linked to this team yet.
+            No live or archived broadcasts linked to this team yet.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">

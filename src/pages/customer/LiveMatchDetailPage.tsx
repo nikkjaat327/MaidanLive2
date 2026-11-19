@@ -10,6 +10,7 @@ import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { LiveBroadcastView } from '../../components/broadcast/LiveBroadcastView.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { MatchReportModal } from '../../components/engagement/MatchReportModal.tsx';
+import { recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
 
 export function LiveMatchDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -88,6 +89,24 @@ export function LiveMatchDetailPage() {
       socket.off('sponsor:updated', refreshSponsors);
     };
   }, [id]);
+
+  useEffect(() => {
+    if (!stream?.id) return;
+    const title =
+      stream.matchTitle ||
+      (stream.teamAName && stream.teamBName
+        ? `${stream.teamAName} vs ${stream.teamBName}`
+        : 'Live Match');
+    recentlyWatchedStore.recordMatch({
+      id: stream.id,
+      title,
+      teamAName: stream.teamAName || 'Team A',
+      teamBName: stream.teamBName || 'Team B',
+      sport: stream.gameName || score?.sportType || 'Other',
+      status: stream.status,
+      tournamentName: stream.tournamentName,
+    });
+  }, [stream?.id, stream?.matchTitle, stream?.teamAName, stream?.teamBName, stream?.gameName, stream?.status, stream?.tournamentName, score?.sportType]);
 
   // Platform viewer session tracking (debounced once per mount + 20s watch heartbeat)
   useEffect(() => {

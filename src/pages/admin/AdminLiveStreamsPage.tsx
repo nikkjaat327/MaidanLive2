@@ -39,6 +39,7 @@ import { platformOpsService } from '../../services/platformOps/platformOpsServic
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { extractYouTubeVideoId } from '../../utils/youtube.ts';
 import { YouTubePlayer } from '../../components/streaming/YouTubePlayer.tsx';
+import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -671,6 +672,9 @@ export function AdminLiveStreamsPage() {
                         </>
                       )}
                     </span>
+                    {stream.status !== 'ENDED' && (
+                      <StreamStatusIndicator stream={stream} />
+                    )}
                     {stream.youtubeVideoId && (
                       <span className="font-mono text-slate-600">YT: {stream.youtubeVideoId}</span>
                     )}
@@ -1357,6 +1361,7 @@ export function AdminLiveStreamsPage() {
                 ))}
 
                 <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                  <StreamStatusIndicator stream={configTarget} variant="detailed" />
                   <p className="font-semibold text-slate-800">Verify Destination Stream Health</p>
                   <div className="flex flex-wrap items-center gap-2">
                     <select

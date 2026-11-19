@@ -27,8 +27,10 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
+import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
 import { normalizeBroadcast } from '../../utils/normalizeBroadcast.ts';
 import { LiveScoreboardView } from '../../components/scoreboard/LiveScoreboardView.tsx';
+import { ScoreboardSummary } from '../../components/scoreboard/ScoreboardSummary.tsx';
 import { BroadcastScoreboardOverlay } from '../../components/scoreboard/broadcast/BroadcastScoreboardOverlay.tsx';
 import { ScoreMomentumCharts } from '../../components/scoreboard/ScoreMomentumCharts.tsx';
 import { ScoreControlPanel } from '../../components/scoreboard/ScoreControlPanel.tsx';
@@ -217,6 +219,7 @@ export function AdminScoreboardPage() {
           )}
           {stream && (
             <>
+              <StreamStatusIndicator stream={stream} socketConnected={connected} />
               <button
                 type="button"
                 onClick={() => {
@@ -331,6 +334,8 @@ export function AdminScoreboardPage() {
           )}
 
           <LiveScoreboardView stream={stream} score={score} socketConnected={connected} />
+
+          <ScoreboardSummary stream={stream} score={score} variant="compact" />
 
           {showMomentumCharts && (
             <ScoreMomentumCharts stream={stream} score={score} history={history} />

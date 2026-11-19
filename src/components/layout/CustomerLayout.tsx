@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Award,
   Bell,
+  Calendar,
   Heart,
   Home,
   Languages,
   Menu,
   PlaySquare,
   Radio,
+  RefreshCw,
+  Search,
   Shield,
   Trophy,
   User,
@@ -26,10 +29,48 @@ export function CustomerLayout() {
   const { customerUser, adminUser, unreadNotifications } = useAuth();
   const { language, toggleLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [swWaiting, setSwWaiting] = useState<ServiceWorker | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    let cancelled = false;
+
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg || cancelled) return;
+      if (reg.waiting) {
+        setSwWaiting(reg.waiting);
+      }
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', () => {
+          if (installing.state === 'installed' && navigator.serviceWorker.controller && !cancelled) {
+            setSwWaiting(reg.waiting || installing);
+          }
+        });
+      });
+    });
+
+    const onControllerChange = () => {
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+    return () => {
+      cancelled = true;
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+    };
+  }, []);
+
+  function handleApplySwUpdate() {
+    if (!swWaiting) return;
+    swWaiting.postMessage({ type: 'SKIP_WAITING' });
+    setSwWaiting(null);
+  }
 
   const desktopLinks = [
     { to: '/', label: t('nav.home'), icon: Home, end: true },
     { to: '/live', label: t('nav.live'), icon: Radio },
+    { to: '/calendar', label: 'Schedule', icon: Calendar },
     { to: '/tournaments', label: t('nav.tournaments'), icon: Trophy },
     { to: '/teams', label: t('nav.teams'), icon: Users },
     { to: '/players', label: t('nav.players'), icon: UserCheck },
@@ -41,6 +82,20 @@ export function CustomerLayout() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 pb-16 md:pb-0">
       <OfflineIndicator />
+
+      {swWaiting && (
+        <div className="bg-slate-900 text-white px-4 py-2 text-xs flex items-center justify-center gap-3 border-b border-slate-800">
+          <span>A new MaidanLive version is ready.</span>
+          <button
+            type="button"
+            onClick={handleApplySwUpdate}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#EA580C] text-white font-bold hover:bg-orange-600"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>Reload</span>
+          </button>
+        </div>
+      )}
 
       {/* Desktop & Mobile Top Navigation */}
       <header
@@ -90,8 +145,16 @@ export function CustomerLayout() {
             ))}
           </nav>
 
-          {/* Right Zone: Language Toggle, PWA Install, Notifications & Account */}
+          {/* Right Zone: Search, Language Toggle, PWA Install, Notifications & Account */}
           <div className="flex items-center gap-2 shrink-0">
+            <Link
+              to="/search"
+              aria-label="Search MaidanLive"
+              className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              <Search className="w-4 h-4" />
+            </Link>
+
             <button
               type="button"
               onClick={toggleLanguage}
@@ -204,6 +267,19 @@ export function CustomerLayout() {
                     </NavLink>
                   );
                 })}
+
+                <NavLink
+                  to="/search"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={({ isActive }) =>
+                    `min-h-[44px] flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                      isActive ? 'bg-orange-50 text-[#EA580C]' : 'text-slate-700 hover:bg-slate-100'
+                    }`
+                  }
+                >
+                  <Search className="w-4 h-4 shrink-0" />
+                  <span>Search</span>
+                </NavLink>
 
                 {customerUser && (
                   <NavLink
