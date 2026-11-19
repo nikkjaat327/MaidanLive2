@@ -4,6 +4,31 @@ import type { SportType } from './LiveStream.ts';
 import { createDualModel } from '../db/dualModel.ts';
 
 export type TournamentFormat = 'KNOCKOUT' | 'LEAGUE' | 'GROUP_STAGE' | 'GROUP_KNOCKOUT';
+export type TournamentPaymentMode = 'NONE' | 'ENTRY_FEE' | 'SECURITY_DEPOSIT';
+
+export interface ITournamentPosition {
+  rank: number;
+  label: string;
+  teamId?: mongoose.Types.ObjectId | null;
+  teamName: string;
+  prizeNote?: string;
+}
+
+export interface ITournamentBestPlayer {
+  mode: 'NONE' | 'PLAYER' | 'MANUAL';
+  playerId?: mongoose.Types.ObjectId | null;
+  playerName: string;
+  teamId?: mongoose.Types.ObjectId | null;
+  teamName?: string;
+  title?: string;
+  performanceNote?: string;
+}
+
+export interface ITournamentCustomAwardField {
+  id: string;
+  label: string;
+  value: string;
+}
 
 export interface ITournament extends Document {
   name: string;
@@ -11,6 +36,7 @@ export interface ITournament extends Document {
   format: TournamentFormat;
   logoUrl: string;
   location: string;
+  googleMapsUrl: string;
   venueId?: mongoose.Types.ObjectId | null;
   startDate?: Date | null;
   endDate?: Date | null;
@@ -19,7 +45,11 @@ export interface ITournament extends Document {
   rules: string;
   prizeMoney: string;
   registrationOpen: boolean;
+  paymentMode: TournamentPaymentMode;
   registrationFee: number;
+  securityDepositAmount: number;
+  refundPolicy: string;
+  paymentInstructions: string;
   groupCount: number;
   qualificationRules: string;
   organizerName: string;
@@ -27,6 +57,9 @@ export interface ITournament extends Document {
   isPublished: boolean;
   followersCount?: number;
   teamIds: mongoose.Types.ObjectId[];
+  positions: ITournamentPosition[];
+  bestPlayer?: ITournamentBestPlayer | null;
+  customAwardFields: ITournamentCustomAwardField[];
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -49,6 +82,7 @@ const tournamentSchema = new Schema<ITournament>(
     },
     logoUrl: { type: String, trim: true, default: '' },
     location: { type: String, trim: true, default: '', maxlength: 160 },
+    googleMapsUrl: { type: String, trim: true, default: '', maxlength: 600 },
     venueId: { type: Schema.Types.ObjectId, ref: 'Venue', default: null },
     startDate: { type: Date, default: null },
     endDate: { type: Date, default: null },
@@ -62,7 +96,15 @@ const tournamentSchema = new Schema<ITournament>(
     rules: { type: String, trim: true, default: '', maxlength: 2000 },
     prizeMoney: { type: String, trim: true, default: '', maxlength: 120 },
     registrationOpen: { type: Boolean, default: true },
+    paymentMode: {
+      type: String,
+      enum: ['NONE', 'ENTRY_FEE', 'SECURITY_DEPOSIT'],
+      default: 'NONE',
+    },
     registrationFee: { type: Number, default: 0, min: 0 },
+    securityDepositAmount: { type: Number, default: 0, min: 0 },
+    refundPolicy: { type: String, trim: true, default: '', maxlength: 600 },
+    paymentInstructions: { type: String, trim: true, default: '', maxlength: 600 },
     groupCount: { type: Number, default: 2, min: 1, max: 8 },
     qualificationRules: { type: String, trim: true, default: '', maxlength: 400 },
     organizerName: { type: String, trim: true, default: '', maxlength: 120 },
@@ -70,6 +112,31 @@ const tournamentSchema = new Schema<ITournament>(
     isPublished: { type: Boolean, default: true, index: true },
     followersCount: { type: Number, default: 0, min: 0 },
     teamIds: [{ type: Schema.Types.ObjectId, ref: 'Team' }],
+    positions: [
+      {
+        rank: { type: Number, required: true, min: 1 },
+        label: { type: String, trim: true, required: true, maxlength: 80 },
+        teamId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
+        teamName: { type: String, trim: true, default: '', maxlength: 140 },
+        prizeNote: { type: String, trim: true, default: '', maxlength: 240 },
+      },
+    ],
+    bestPlayer: {
+      mode: { type: String, enum: ['NONE', 'PLAYER', 'MANUAL'], default: 'NONE' },
+      playerId: { type: Schema.Types.ObjectId, ref: 'Player', default: null },
+      playerName: { type: String, trim: true, default: '', maxlength: 140 },
+      teamId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
+      teamName: { type: String, trim: true, default: '', maxlength: 140 },
+      title: { type: String, trim: true, default: 'Player of the Tournament', maxlength: 100 },
+      performanceNote: { type: String, trim: true, default: '', maxlength: 240 },
+    },
+    customAwardFields: [
+      {
+        id: { type: String, trim: true, required: true, maxlength: 60 },
+        label: { type: String, trim: true, required: true, maxlength: 100 },
+        value: { type: String, trim: true, default: '', maxlength: 240 },
+      },
+    ],
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

@@ -151,21 +151,21 @@ export function TeamDetailPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto md:justify-end">
           <button
             type="button"
             disabled={followBusy}
             onClick={handleToggleFollow}
-            className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+            className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
               isFollowing
                 ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                 : 'bg-slate-900 text-white hover:bg-slate-800'
             }`}
           >
-            {isFollowing ? <Check className="w-4 h-4" /> : <BellPlus className="w-4 h-4" />}
+            {isFollowing ? <Check className="w-3.5 h-3.5" /> : <BellPlus className="w-3.5 h-3.5" />}
             <span>{isFollowing ? 'Following Team' : 'Follow Team'}</span>
           </button>
-          <ShareButton title={team.name} text={`Follow ${team.name} on MaidanLive`} />
+          <ShareButton compact title={team.name} text={`Follow ${team.name} on MaidanLive`} />
         </div>
       </div>
 

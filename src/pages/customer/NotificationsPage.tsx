@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Bell, Check, CheckCheck, Settings, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Bell, Check, CheckCheck, ExternalLink, Settings, Trash2 } from 'lucide-react';
 import { NotificationData, NotificationPreferences } from '../../types/index.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
+import { resolveNotificationTarget } from '../../utils/notificationNav.ts';
 
 const DEFAULT_PREFS: NotificationPreferences = {
   matchStart: true,
@@ -24,6 +25,7 @@ const DEFAULT_PREFS: NotificationPreferences = {
 type FilterTab = 'all' | 'unread' | 'read';
 
 export function NotificationsPage() {
+  const navigate = useNavigate();
   const { customerUser, customerLoading, refreshNotifications, updateCustomerUser } = useAuth();
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
@@ -49,7 +51,7 @@ export function NotificationsPage() {
     }
     setLoading(true);
     platformOpsService
-      .listNotifications()
+      .listNotifications('customer')
       .then((res) => setNotifications(res.notifications || []))
       .catch((err) => setError(extractApiError(err, 'Failed to load notifications.')))
       .finally(() => setLoading(false));
@@ -57,7 +59,7 @@ export function NotificationsPage() {
 
   async function handleMarkRead(id: string) {
     try {
-      await platformOpsService.markNotificationRead(id);
+      await platformOpsService.markNotificationRead(id, 'customer');
       setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
       refreshNotifications();
     } catch (err) {
@@ -65,9 +67,21 @@ export function NotificationsPage() {
     }
   }
 
+  async function handleNotificationClick(n: NotificationData) {
+    if (!n.isRead) {
+      setNotifications((prev) => prev.map((item) => (item.id === n.id ? { ...item, isRead: true } : item)));
+      platformOpsService
+        .markNotificationRead(n.id, 'customer')
+        .then(() => refreshNotifications())
+        .catch(() => {});
+    }
+    const target = resolveNotificationTarget(n, 'customer');
+    navigate(target);
+  }
+
   async function handleMarkAllRead() {
     try {
-      await platformOpsService.markAllNotificationsRead();
+      await platformOpsService.markAllNotificationsRead('customer');
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       refreshNotifications();
     } catch (err) {
@@ -77,7 +91,7 @@ export function NotificationsPage() {
 
   async function handleDeleteNotification(id: string) {
     try {
-      await platformOpsService.deleteNotification(id);
+      await platformOpsService.deleteNotification(id, 'customer');
       setNotifications((prev) => prev.filter((n) => n.id !== id));
       refreshNotifications();
     } catch (err) {
@@ -170,10 +184,10 @@ export function NotificationsPage() {
           <button
             type="button"
             onClick={handleMarkAllRead}
-            className="min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
+            className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
           >
-            <CheckCheck className="w-4 h-4" />
-            <span>Mark All Read ({unreadCount})</span>
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>Read All ({unreadCount})</span>
           </button>
         )}
       </div>
@@ -183,7 +197,7 @@ export function NotificationsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         <div className="lg:col-span-8 space-y-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
             {[
               { id: 'all' as const, label: `All (${notifications.length})` },
               { id: 'unread' as const, label: `Unread (${unreadCount})` },
@@ -193,7 +207,7 @@ export function NotificationsPage() {
                 key={tab.id}
                 type="button"
                 onClick={() => setFilterTab(tab.id)}
-                className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
                   filterTab === tab.id
                     ? 'bg-slate-900 text-white border-slate-900'
                     : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
@@ -216,11 +230,20 @@ export function NotificationsPage() {
                 {visibleNotifications.map((n) => (
                   <div
                     key={n.id}
-                    className={`p-4 flex items-start justify-between gap-3 ${
-                      !n.isRead ? 'bg-emerald-50/40' : 'bg-white'
+                    onClick={() => handleNotificationClick(n)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleNotificationClick(n);
+                      }
+                    }}
+                    className={`p-4 flex items-start justify-between gap-3 cursor-pointer transition-colors hover:bg-slate-50 ${
+                      !n.isRead ? 'bg-emerald-50/45' : 'bg-white'
                     }`}
                   >
-                    <div className="min-w-0 space-y-1">
+                    <div className="min-w-0 space-y-1 flex-1">
                       <div className="flex items-center gap-2">
                         {!n.isRead && <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />}
                         <p className="text-sm font-bold text-slate-900">{n.title}</p>
@@ -228,23 +251,25 @@ export function NotificationsPage() {
                       <p className="text-xs text-slate-600">{n.message}</p>
                       <div className="flex items-center gap-3 text-[11px] text-slate-400">
                         <span>{new Date(n.createdAt).toLocaleString()}</span>
-                        {n.link && (
-                          <Link to={n.link} className="text-emerald-700 font-semibold hover:underline">
-                            View Match
-                          </Link>
-                        )}
+                        <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                          <span>Open</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div
+                      className="flex items-center gap-1.5 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {!n.isRead && (
                         <button
                           type="button"
                           onClick={() => handleMarkRead(n.id)}
                           title="Mark as read"
-                          className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                          className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
                         >
-                          <Check className="w-3.5 h-3.5" />
+                          <Check className="w-3 h-3" />
                           <span>Read</span>
                         </button>
                       )}
@@ -253,7 +278,7 @@ export function NotificationsPage() {
                         onClick={() => handleDeleteNotification(n.id)}
                         title="Delete notification"
                         aria-label="Delete notification"
-                        className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-red-600 hover:bg-red-50"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

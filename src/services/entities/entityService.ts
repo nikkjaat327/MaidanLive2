@@ -56,6 +56,7 @@ export const entityService = {
     tournament: TournamentData;
     streams: LiveStreamData[];
     teams: TeamData[];
+    players?: PlayerData[];
     fixtures: FixtureData[];
     pointsTable: PointsTableRow[];
     venue: VenueData | null;
@@ -72,6 +73,22 @@ export const entityService = {
   async updateTournament(id: string, payload: Partial<TournamentData>): Promise<TournamentData> {
     const { data } = await adminApi.patch<{ tournament: TournamentData }>(
       `/tournaments/${id}`,
+      payload
+    );
+    return data.tournament;
+  },
+
+  async updateTournamentResultsAwards(
+    id: string,
+    payload: {
+      positions?: TournamentData['positions'];
+      bestPlayer?: TournamentData['bestPlayer'];
+      customAwardFields?: TournamentData['customAwardFields'];
+      status?: TournamentData['status'];
+    }
+  ): Promise<TournamentData> {
+    const { data } = await adminApi.patch<{ tournament: TournamentData }>(
+      `/tournaments/${id}/results-awards`,
       payload
     );
     return data.tournament;

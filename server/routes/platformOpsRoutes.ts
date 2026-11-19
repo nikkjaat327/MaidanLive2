@@ -643,7 +643,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       await Notification.updateMany({ userId: req.user!._id, isRead: false }, { isRead: true });
-      res.json({ message: 'All notifications marked as read.' });
+      res.json({ message: 'All notifications marked as read.', unreadCount: 0 });
     } catch (err) {
       console.error('[Notifications] Read-all error:', err);
       res.status(500).json({ message: 'Failed to mark notifications as read.' });

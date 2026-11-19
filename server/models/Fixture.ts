@@ -9,6 +9,7 @@ export interface IFixture extends Document {
   roundNumber: number;
   roundName: string;
   groupName: string;
+  matchFormat: string;
   matchNumber: number;
   teamAId?: mongoose.Types.ObjectId | null;
   teamBId?: mongoose.Types.ObjectId | null;
@@ -47,6 +48,7 @@ const fixtureSchema = new Schema<IFixture>(
     roundNumber: { type: Number, required: true, min: 1 },
     roundName: { type: String, required: true, trim: true, maxlength: 100 },
     groupName: { type: String, trim: true, default: '', maxlength: 60 },
+    matchFormat: { type: String, trim: true, default: '', maxlength: 80 },
     matchNumber: { type: Number, required: true, min: 1 },
     teamAId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
     teamBId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },

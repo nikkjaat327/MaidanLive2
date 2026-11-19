@@ -38,6 +38,8 @@ import { AdminFixturesPage } from './pages/admin/AdminFixturesPage.tsx';
 import { AdminTeamsPage } from './pages/admin/AdminTeamsPage.tsx';
 import { AdminPlayersPage } from './pages/admin/AdminPlayersPage.tsx';
 import { AdminRegistrationsPage } from './pages/admin/AdminRegistrationsPage.tsx';
+import { AdminPaymentsPage } from './pages/admin/AdminPaymentsPage.tsx';
+import { AdminNotificationsPage } from './pages/admin/AdminNotificationsPage.tsx';
 import { AdminHighlightsPage } from './pages/admin/AdminHighlightsPage.tsx';
 import { AdminVenuesPage } from './pages/admin/AdminVenuesPage.tsx';
 import { AdminSponsorsPage } from './pages/admin/AdminSponsorsPage.tsx';
@@ -77,6 +79,8 @@ export default function App() {
                   <Route path="teams" element={<AdminTeamsPage />} />
                   <Route path="players" element={<AdminPlayersPage />} />
                   <Route path="registrations" element={<AdminRegistrationsPage />} />
+                  <Route path="payments" element={<AdminPaymentsPage />} />
+                  <Route path="notifications" element={<AdminNotificationsPage />} />
                   <Route path="highlights" element={<AdminHighlightsPage />} />
                   <Route path="venues" element={<AdminVenuesPage />} />
                   <Route path="sponsors" element={<AdminSponsorsPage />} />

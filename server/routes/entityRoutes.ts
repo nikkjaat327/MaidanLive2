@@ -11,6 +11,7 @@ import { LiveScore } from '../models/LiveScore.ts';
 import { Fixture } from '../models/Fixture.ts';
 import { Venue } from '../models/Venue.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
+import { TournamentRegistration } from '../models/TournamentRegistration.ts';
 import { User, ALL_GRANULAR_PERMISSIONS } from '../models/User.ts';
 import type { UserRole } from '../models/User.ts';
 import { ActivityLog } from '../models/ActivityLog.ts';
@@ -22,7 +23,7 @@ import {
   requireRole,
 } from '../middleware/auth.ts';
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
-import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
+import { sanitizeGoogleMapsUrl, sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { calculatePointsTable } from '../../src/utils/tournamentEngine.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
@@ -30,6 +31,220 @@ import { dispatchMatchNotifications } from '../utils/notifications.ts';
 const router = Router();
 const VALID_SPORTS = ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'];
 const VALID_FORMATS = ['KNOCKOUT', 'LEAGUE', 'GROUP_STAGE', 'GROUP_KNOCKOUT'];
+
+function resolveTournamentPaymentInput(body: any, existing?: any): {
+  error?: string;
+  paymentMode: 'NONE' | 'ENTRY_FEE' | 'SECURITY_DEPOSIT';
+  registrationFee: number;
+  securityDepositAmount: number;
+  refundPolicy: string;
+  paymentInstructions: string;
+} {
+  const hasExplicitMode = ['NONE', 'ENTRY_FEE', 'SECURITY_DEPOSIT'].includes(body.paymentMode);
+  let paymentMode: 'NONE' | 'ENTRY_FEE' | 'SECURITY_DEPOSIT' = hasExplicitMode
+    ? body.paymentMode
+    : existing?.paymentMode || (Number(body.registrationFee) > 0 ? 'ENTRY_FEE' : 'NONE');
+
+  const rawFee =
+    body.registrationFee !== undefined
+      ? Math.max(0, Number(body.registrationFee) || 0)
+      : Math.max(0, Number(existing?.registrationFee) || 0);
+  const rawDeposit =
+    body.securityDepositAmount !== undefined
+      ? Math.max(0, Number(body.securityDepositAmount) || 0)
+      : Math.max(0, Number(existing?.securityDepositAmount) || 0);
+
+  if (
+    !hasExplicitMode &&
+    body.registrationFee !== undefined &&
+    Number(body.registrationFee) > 0 &&
+    body.securityDepositAmount !== undefined &&
+    Number(body.securityDepositAmount) > 0
+  ) {
+    return {
+      error: 'Entry fee and refundable security deposit are mutually exclusive. Choose only one.',
+      paymentMode: 'NONE',
+      registrationFee: 0,
+      securityDepositAmount: 0,
+      refundPolicy: '',
+      paymentInstructions: '',
+    };
+  }
+
+  if (!hasExplicitMode && body.securityDepositAmount !== undefined && Number(body.securityDepositAmount) > 0) {
+    paymentMode = 'SECURITY_DEPOSIT';
+  }
+
+  const refundPolicy =
+    body.refundPolicy !== undefined
+      ? sanitizeText(body.refundPolicy, 600)
+      : sanitizeText(existing?.refundPolicy, 600);
+  const paymentInstructions =
+    body.paymentInstructions !== undefined
+      ? sanitizeText(body.paymentInstructions, 600)
+      : sanitizeText(existing?.paymentInstructions, 600);
+
+  if (paymentMode === 'ENTRY_FEE') {
+    return {
+      paymentMode: 'ENTRY_FEE',
+      registrationFee: rawFee,
+      securityDepositAmount: 0,
+      refundPolicy: '',
+      paymentInstructions,
+    };
+  }
+  if (paymentMode === 'SECURITY_DEPOSIT') {
+    return {
+      paymentMode: 'SECURITY_DEPOSIT',
+      registrationFee: 0,
+      securityDepositAmount: rawDeposit,
+      refundPolicy:
+        refundPolicy ||
+        'Refundable security deposit is held during the tournament and returned after completion/compliance.',
+      paymentInstructions,
+    };
+  }
+  return {
+    paymentMode: 'NONE',
+    registrationFee: 0,
+    securityDepositAmount: 0,
+    refundPolicy: '',
+    paymentInstructions: '',
+  };
+}
+
+async function normalizeTournamentAwardsInput(body: any) {
+  let positions:
+    | Array<{
+        rank: number;
+        label: string;
+        teamId: mongoose.Types.ObjectId | null;
+        teamName: string;
+        prizeNote: string;
+      }>
+    | undefined;
+
+  if (Array.isArray(body.positions)) {
+    positions = [];
+    for (let i = 0; i < body.positions.length; i++) {
+      const p = body.positions[i];
+      if (!p || typeof p !== 'object') continue;
+      const rank = Math.max(1, Math.floor(Number(p.rank) || i + 1));
+      const label =
+        sanitizeText(p.label, 80) ||
+        `${rank}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'} Position`;
+      let teamId: mongoose.Types.ObjectId | null = null;
+      let teamName = sanitizeText(p.teamName, 140);
+      if (p.teamId && mongoose.Types.ObjectId.isValid(p.teamId)) {
+        const tm = await Team.findById(p.teamId).select('name').lean();
+        if (tm) {
+          teamId = tm._id as mongoose.Types.ObjectId;
+          if (!teamName) teamName = tm.name;
+        }
+      }
+      const prizeNote = sanitizeText(p.prizeNote ?? p.notes, 240);
+      if (!teamName && !teamId && !prizeNote) continue;
+      positions.push({
+        rank,
+        label,
+        teamId,
+        teamName,
+        prizeNote,
+      });
+    }
+    positions.sort((a, b) => a.rank - b.rank);
+  }
+
+  let bestPlayer:
+    | {
+        mode: 'NONE' | 'PLAYER' | 'MANUAL';
+        playerId: mongoose.Types.ObjectId | null;
+        playerName: string;
+        teamId: mongoose.Types.ObjectId | null;
+        teamName: string;
+        title: string;
+        performanceNote: string;
+      }
+    | null
+    | undefined;
+
+  if (body.bestPlayer !== undefined) {
+    const bp = body.bestPlayer;
+    if (
+      !bp ||
+      bp.mode === 'NONE' ||
+      (!bp.playerId && !sanitizeText(bp.playerName, 140))
+    ) {
+      bestPlayer = {
+        mode: 'NONE',
+        playerId: null,
+        playerName: '',
+        teamId: null,
+        teamName: '',
+        title: '',
+        performanceNote: '',
+      };
+    } else {
+      let playerId: mongoose.Types.ObjectId | null = null;
+      let playerName = sanitizeText(bp.playerName, 140);
+      let teamId: mongoose.Types.ObjectId | null =
+        bp.teamId && mongoose.Types.ObjectId.isValid(bp.teamId)
+          ? new mongoose.Types.ObjectId(bp.teamId)
+          : null;
+      let teamName = sanitizeText(bp.teamName, 140);
+      if (bp.mode !== 'MANUAL' && !bp.isManual && bp.playerId && mongoose.Types.ObjectId.isValid(bp.playerId)) {
+        const pl = await Player.findById(bp.playerId).populate('teamId', 'name').lean();
+        if (pl) {
+          playerId = pl._id as mongoose.Types.ObjectId;
+          if (!playerName) playerName = pl.name;
+          if (pl.teamId && typeof pl.teamId === 'object') {
+            teamId = (pl.teamId as any)._id || teamId;
+            if (!teamName) teamName = (pl.teamId as any).name || '';
+          }
+        }
+      }
+      const mode: 'PLAYER' | 'MANUAL' = playerId ? 'PLAYER' : 'MANUAL';
+      bestPlayer = playerName
+        ? {
+            mode,
+            playerId,
+            playerName,
+            teamId,
+            teamName,
+            title: sanitizeText(bp.title, 100) || 'Player of the Tournament',
+            performanceNote: sanitizeText(bp.performanceNote, 240),
+          }
+        : {
+            mode: 'NONE',
+            playerId: null,
+            playerName: '',
+            teamId: null,
+            teamName: '',
+            title: '',
+            performanceNote: '',
+          };
+    }
+  }
+
+  let customAwardFields: Array<{ id: string; label: string; value: string }> | undefined;
+  if (Array.isArray(body.customAwardFields)) {
+    customAwardFields = [];
+    for (let i = 0; i < body.customAwardFields.length; i++) {
+      const f = body.customAwardFields[i];
+      if (!f || typeof f !== 'object') continue;
+      const label = sanitizeText(f.label, 100);
+      const value = sanitizeText(f.value, 240);
+      if (!label) continue;
+      customAwardFields.push({
+        id: sanitizeText(f.id, 60) || `custom-${Date.now()}-${i}`,
+        label,
+        value,
+      });
+    }
+  }
+
+  return { positions, bestPlayer, customAwardFields };
+}
 
 // ==================== ADMIN DASHBOARD STATS & AUDIT LOGS ====================
 router.get(
@@ -169,14 +384,26 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
         ? { $or: [{ tournamentId: id }, { _id: { $in: tournament.teamIds } }] }
         : { tournamentId: id };
 
-    const [streams, teams, fixtures, venue] = await Promise.all([
+    const [streams, rawTeams, fixtures, venue, nonApprovedRegs] = await Promise.all([
       LiveStream.find({ tournamentId: id }).sort({ createdAt: -1 }).lean(),
       Team.find(teamFilter).sort({ name: 1 }).lean(),
       Fixture.find({ tournamentId: id })
         .sort({ roundNumber: 1, matchNumber: 1 })
         .lean(),
       tournament.venueId ? Venue.findById(tournament.venueId).lean() : Promise.resolve(null),
+      TournamentRegistration.find({
+        tournamentId: id,
+        status: { $ne: 'APPROVED' },
+        teamId: { $ne: null },
+      })
+        .select('teamId')
+        .lean(),
     ]);
+
+    const suspendedTeamIds = new Set(
+      nonApprovedRegs.map((r: any) => r.teamId?.toString()).filter(Boolean)
+    );
+    const teams = rawTeams.filter((t) => !suspendedTeamIds.has(t._id.toString()));
 
     const streamIds = streams.map((s) => s._id);
     const scores =
@@ -232,10 +459,20 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
       fixtureGroupMap
     );
 
+    const teamObjectIds = teams.map((t) => t._id);
+    const players =
+      teamObjectIds.length > 0
+        ? await Player.find({ teamId: { $in: teamObjectIds } })
+            .populate('teamId', 'name shortName')
+            .sort({ name: 1 })
+            .lean()
+        : [];
+
     res.json({
       tournament: { ...tournament, id: tournament._id.toString() },
       streams: enrichedStreams,
       teams: teams.map((t) => ({ ...t, id: t._id.toString() })),
+      players: players.map((p) => ({ ...p, id: p._id.toString() })),
       fixtures: fixtures.map((f) => ({ ...f, id: f._id.toString() })),
       pointsTable,
       venue: venue ? { ...venue, id: venue._id.toString() } : null,
@@ -274,6 +511,21 @@ router.post(
         }
       }
 
+      const mapsCheck = sanitizeGoogleMapsUrl(req.body.googleMapsUrl);
+      if (!mapsCheck.valid) {
+        res.status(400).json({
+          message:
+            'Invalid Google Maps URL. Provide a valid Google Maps link (e.g. https://maps.google.com/... or https://maps.app.goo.gl/...).',
+        });
+        return;
+      }
+
+      const payCfg = resolveTournamentPaymentInput(req.body);
+      if (payCfg.error) {
+        res.status(400).json({ message: payCfg.error });
+        return;
+      }
+
       const teamIds = Array.isArray(req.body.teamIds)
         ? req.body.teamIds.filter((tid: string) => mongoose.Types.ObjectId.isValid(tid))
         : [];
@@ -284,6 +536,7 @@ router.post(
         format,
         logoUrl: sanitizeImageUrl(req.body.logoUrl),
         location,
+        googleMapsUrl: mapsCheck.url,
         venueId,
         startDate: req.body.startDate ? new Date(req.body.startDate) : null,
         endDate: req.body.endDate ? new Date(req.body.endDate) : null,
@@ -296,7 +549,11 @@ router.post(
         season: sanitizeText(req.body.season, 60),
         prizeMoney: sanitizeText(req.body.prizeMoney, 120),
         registrationOpen: req.body.registrationOpen === true,
-        registrationFee: Math.max(0, Number(req.body.registrationFee) || 0),
+        paymentMode: payCfg.paymentMode,
+        registrationFee: payCfg.registrationFee,
+        securityDepositAmount: payCfg.securityDepositAmount,
+        refundPolicy: payCfg.refundPolicy,
+        paymentInstructions: payCfg.paymentInstructions,
         isPublished: req.body.isPublished === false ? false : true,
         teamIds,
         createdBy: req.user!._id,
@@ -360,6 +617,37 @@ router.patch(
         return;
       }
 
+      if (req.body.googleMapsUrl !== undefined) {
+        const mapsCheck = sanitizeGoogleMapsUrl(req.body.googleMapsUrl);
+        if (!mapsCheck.valid) {
+          res.status(400).json({
+            message:
+              'Invalid Google Maps URL. Provide a valid Google Maps link (e.g. https://maps.google.com/... or https://maps.app.goo.gl/...).',
+          });
+          return;
+        }
+        tournament.googleMapsUrl = mapsCheck.url;
+      }
+
+      if (
+        req.body.paymentMode !== undefined ||
+        req.body.registrationFee !== undefined ||
+        req.body.securityDepositAmount !== undefined ||
+        req.body.refundPolicy !== undefined ||
+        req.body.paymentInstructions !== undefined
+      ) {
+        const payCfg = resolveTournamentPaymentInput(req.body, tournament);
+        if (payCfg.error) {
+          res.status(400).json({ message: payCfg.error });
+          return;
+        }
+        tournament.paymentMode = payCfg.paymentMode;
+        tournament.registrationFee = payCfg.registrationFee;
+        tournament.securityDepositAmount = payCfg.securityDepositAmount;
+        tournament.refundPolicy = payCfg.refundPolicy;
+        tournament.paymentInstructions = payCfg.paymentInstructions;
+      }
+
       const previousValue = {
         name: tournament.name,
         format: tournament.format,
@@ -419,9 +707,6 @@ router.patch(
       if (typeof req.body.registrationOpen === 'boolean') {
         tournament.registrationOpen = req.body.registrationOpen;
       }
-      if (req.body.registrationFee !== undefined) {
-        tournament.registrationFee = Math.max(0, Number(req.body.registrationFee) || 0);
-      }
       if (typeof req.body.isPublished === 'boolean') tournament.isPublished = req.body.isPublished;
       if (Array.isArray(req.body.teamIds)) {
         tournament.teamIds = req.body.teamIds.filter((tid: string) =>
@@ -457,6 +742,63 @@ router.patch(
     } catch (err) {
       console.error('[Tournaments] Update error:', err);
       res.status(500).json({ message: 'Failed to update tournament.' });
+    }
+  }
+);
+
+router.patch(
+  '/tournaments/:id/results-awards',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('manageTournaments'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid tournament ID.' });
+        return;
+      }
+      const allowed = await canManageTournament(req.user!, id);
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to update awards for this tournament.',
+        });
+        return;
+      }
+      const tournament = await Tournament.findById(id);
+      if (!tournament) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
+
+      const normalized = await normalizeTournamentAwardsInput(req.body);
+      if (normalized.positions !== undefined) {
+        tournament.positions = normalized.positions;
+      }
+      if (normalized.bestPlayer !== undefined) {
+        tournament.bestPlayer = normalized.bestPlayer;
+      }
+      if (normalized.customAwardFields !== undefined) {
+        tournament.customAwardFields = normalized.customAwardFields;
+      }
+      if (req.body.status && ['UPCOMING', 'ONGOING', 'COMPLETED'].includes(req.body.status)) {
+        tournament.status = req.body.status;
+      }
+      tournament.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await tournament.save();
+
+      await recordActivity(
+        req.user!,
+        'UPDATE_TOURNAMENT_RESULTS_AWARDS',
+        'Tournament',
+        id,
+        `${tournament.name} results & awards updated`
+      );
+
+      res.json({ tournament: { ...tournament.toObject(), id: tournament._id.toString() } });
+    } catch (err) {
+      console.error('[Tournaments] Results & awards error:', err);
+      res.status(500).json({ message: 'Failed to update tournament results & awards.' });
     }
   }
 );

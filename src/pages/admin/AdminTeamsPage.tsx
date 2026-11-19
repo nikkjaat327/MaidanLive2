@@ -137,9 +137,9 @@ export function AdminTeamsPage() {
         <button
           type="button"
           onClick={openCreate}
-          className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+          className="min-h-[36px] inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-3.5 h-3.5" />
           <span>New Team</span>
         </button>
       </div>
@@ -158,7 +158,7 @@ export function AdminTeamsPage() {
             <button
               type="button"
               onClick={openCreate}
-              className="min-h-[42px] px-4 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg"
+              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg"
             >
               Create First Team
             </button>
@@ -317,14 +317,14 @@ export function AdminTeamsPage() {
             <button
               type="button"
               onClick={() => setModalOpen(false)}
-              className="min-h-[42px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+              className="min-h-[36px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="min-h-[42px] px-5 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
+              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Team'}
             </button>

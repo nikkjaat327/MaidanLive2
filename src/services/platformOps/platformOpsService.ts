@@ -1,5 +1,6 @@
 import {
   DatabaseDiagnosticsData,
+  DepositRefundStatus,
   LeaderboardEntry,
   MatchHealthItem,
   MatchReportData,
@@ -11,6 +12,7 @@ import {
   SponsorData,
   SponsorOverlayData,
   SponsorPlacement,
+  StoredDocMeta,
   SubscriptionPlanData,
   TournamentRegistrationData,
   VenueData,
@@ -104,25 +106,29 @@ export const platformOpsService = {
     await adminApi.delete(`/admin/sponsor-overlays/${id}`);
   },
 
-  // Notifications
-  async listNotifications(): Promise<{
+  // Notifications (supports both customer and admin portals cleanly)
+  async listNotifications(portal: 'customer' | 'admin' = 'customer'): Promise<{
     notifications: NotificationData[];
     unreadCount: number;
   }> {
-    const { data } = await customerApi.get<{
+    const client = portal === 'admin' ? adminApi : customerApi;
+    const { data } = await client.get<{
       notifications: NotificationData[];
       unreadCount: number;
     }>('/notifications');
     return data;
   },
-  async markNotificationRead(id: string): Promise<void> {
-    await customerApi.patch(`/notifications/${id}/read`);
+  async markNotificationRead(id: string, portal: 'customer' | 'admin' = 'customer'): Promise<void> {
+    const client = portal === 'admin' ? adminApi : customerApi;
+    await client.patch(`/notifications/${id}/read`);
   },
-  async markAllNotificationsRead(): Promise<void> {
-    await customerApi.post('/notifications/read-all');
+  async markAllNotificationsRead(portal: 'customer' | 'admin' = 'customer'): Promise<void> {
+    const client = portal === 'admin' ? adminApi : customerApi;
+    await client.post('/notifications/read-all');
   },
-  async deleteNotification(id: string): Promise<void> {
-    await customerApi.delete(`/notifications/${id}`);
+  async deleteNotification(id: string, portal: 'customer' | 'admin' = 'customer'): Promise<void> {
+    const client = portal === 'admin' ? adminApi : customerApi;
+    await client.delete(`/notifications/${id}`);
   },
   async updateNotificationPreferences(
     prefs: Partial<NotificationPreferences>
@@ -237,7 +243,60 @@ export const platformOpsService = {
     return data;
   },
 
-  // Captain Tournament Registrations
+  // Secure Document Upload & Authenticated Retrieval
+  async uploadDocument(params: {
+    file: File;
+    purpose?: 'VERIFICATION_DOC' | 'PAYMENT_PROOF';
+    source?: 'DEVICE' | 'GOOGLE_DRIVE';
+    driveFileId?: string;
+    driveWebViewLink?: string;
+    tournamentId?: string;
+    registrationId?: string;
+    onProgress?: (pct: number) => void;
+  }): Promise<StoredDocMeta & { id: string }> {
+    const formData = new FormData();
+    formData.append('file', params.file);
+    if (params.purpose) formData.append('purpose', params.purpose);
+    if (params.source) formData.append('source', params.source);
+    if (params.driveFileId) formData.append('driveFileId', params.driveFileId);
+    if (params.driveWebViewLink) formData.append('driveWebViewLink', params.driveWebViewLink);
+    if (params.tournamentId) formData.append('tournamentId', params.tournamentId);
+    if (params.registrationId) formData.append('registrationId', params.registrationId);
+
+    const { data } = await customerApi.post<{ file: StoredDocMeta & { id: string } }>(
+      '/v1/documents/upload',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (evt) => {
+          if (evt.total && params.onProgress) {
+            params.onProgress(Math.min(100, Math.round((evt.loaded / evt.total) * 100)));
+          }
+        },
+      }
+    );
+    return data.file;
+  },
+
+  async fetchProtectedFileBlob(
+    urlPath: string,
+    portal: 'customer' | 'admin' = 'customer'
+  ): Promise<{ blob: Blob; objectUrl: string; mimeType: string }> {
+    const client = portal === 'admin' ? adminApi : customerApi;
+    const response = await client.get(urlPath, { responseType: 'blob' });
+    const blob: Blob = response.data;
+    const objectUrl = URL.createObjectURL(blob);
+    const headerCt = response.headers['content-type'];
+    return {
+      blob,
+      objectUrl,
+      mimeType:
+        blob.type ||
+        (typeof headerCt === 'string' ? headerCt : 'application/octet-stream'),
+    };
+  },
+
+  // Captain Tournament Registrations & Payments
   async registerTeamForTournament(
     tournamentId: string,
     payload: Record<string, unknown>
@@ -264,18 +323,56 @@ export const platformOpsService = {
   async updateRegistration(
     id: string,
     payload: Record<string, unknown>
-  ): Promise<TournamentRegistrationData> {
-    const { data } = await customerApi.patch<{ registration: TournamentRegistrationData }>(
-      `/v1/registrations/${id}`,
-      payload
-    );
-    return data.registration;
+  ): Promise<{ registration: TournamentRegistrationData; message?: string }> {
+    const { data } = await customerApi.patch<{
+      registration: TournamentRegistrationData;
+      message?: string;
+    }>(`/v1/registrations/${id}`, payload);
+    return data;
   },
   async withdrawRegistration(id: string): Promise<TournamentRegistrationData> {
     const { data } = await customerApi.post<{ registration: TournamentRegistrationData }>(
       `/v1/registrations/${id}/withdraw`
     );
     return data.registration;
+  },
+  async submitPaymentProof(
+    registrationId: string,
+    params: {
+      file?: File;
+      storedFileId?: string;
+      source?: 'DEVICE' | 'GOOGLE_DRIVE';
+      driveFileId?: string;
+      referenceNote?: string;
+      onProgress?: (pct: number) => void;
+    }
+  ): Promise<{ registration: TournamentRegistrationData; message: string }> {
+    if (params.storedFileId && !params.file) {
+      const { data } = await customerApi.post(`/v1/registrations/${registrationId}/payment-proof`, {
+        storedFileId: params.storedFileId,
+        referenceNote: params.referenceNote || '',
+      });
+      return data;
+    }
+    const formData = new FormData();
+    if (params.file) formData.append('file', params.file);
+    if (params.source) formData.append('source', params.source);
+    if (params.driveFileId) formData.append('driveFileId', params.driveFileId);
+    if (params.referenceNote) formData.append('referenceNote', params.referenceNote);
+
+    const { data } = await customerApi.post(
+      `/v1/registrations/${registrationId}/payment-proof`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (evt) => {
+          if (evt.total && params.onProgress) {
+            params.onProgress(Math.min(100, Math.round((evt.loaded / evt.total) * 100)));
+          }
+        },
+      }
+    );
+    return data;
   },
   async listAdminRegistrations(params?: {
     status?: string;
@@ -293,6 +390,40 @@ export const platformOpsService = {
   ): Promise<TournamentRegistrationData> {
     const { data } = await adminApi.post<{ registration: TournamentRegistrationData }>(
       `/v1/admin/registrations/${id}/review`,
+      payload
+    );
+    return data.registration;
+  },
+  async listAdminPayments(params?: {
+    paymentStatus?: string;
+    tournamentId?: string;
+  }): Promise<TournamentRegistrationData[]> {
+    const { data } = await adminApi.get<{ payments: TournamentRegistrationData[] }>(
+      '/v1/admin/payments',
+      { params }
+    );
+    return data.payments;
+  },
+  async verifyAdminPayment(
+    registrationId: string,
+    payload: {
+      decision: 'UNDER_VERIFICATION' | 'APPROVE' | 'REJECT';
+      rejectionReason?: string;
+      notes?: string;
+    }
+  ): Promise<{ registration: TournamentRegistrationData; message: string }> {
+    const { data } = await adminApi.post<{
+      registration: TournamentRegistrationData;
+      message: string;
+    }>(`/v1/admin/payments/${registrationId}/verify`, payload);
+    return data;
+  },
+  async updateDepositRefundStatus(
+    registrationId: string,
+    payload: { refundStatus: DepositRefundStatus; notes?: string }
+  ): Promise<TournamentRegistrationData> {
+    const { data } = await adminApi.patch<{ registration: TournamentRegistrationData }>(
+      `/v1/admin/payments/${registrationId}/refund`,
       payload
     );
     return data.registration;

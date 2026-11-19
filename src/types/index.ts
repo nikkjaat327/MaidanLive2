@@ -259,6 +259,31 @@ export interface ScoreHistoryItem {
 }
 
 export type TournamentFormat = 'KNOCKOUT' | 'LEAGUE' | 'GROUP_STAGE' | 'GROUP_KNOCKOUT';
+export type TournamentPaymentMode = 'NONE' | 'ENTRY_FEE' | 'SECURITY_DEPOSIT';
+
+export interface TournamentPositionEntry {
+  rank: number;
+  label: string;
+  teamId?: string | null;
+  teamName: string;
+  prizeNote?: string;
+}
+
+export interface TournamentBestPlayerEntry {
+  mode: 'NONE' | 'PLAYER' | 'MANUAL';
+  playerId?: string | null;
+  playerName: string;
+  teamId?: string | null;
+  teamName?: string;
+  title?: string;
+  performanceNote?: string;
+}
+
+export interface TournamentCustomAwardField {
+  id: string;
+  label: string;
+  value: string;
+}
 
 export interface TournamentData {
   id: string;
@@ -268,6 +293,7 @@ export interface TournamentData {
   format?: TournamentFormat;
   logoUrl?: string;
   location: string;
+  googleMapsUrl?: string;
   venueId?: string | VenueData | null;
   startDate?: string | null;
   endDate?: string | null;
@@ -280,7 +306,14 @@ export interface TournamentData {
   season?: string;
   prizeMoney?: string;
   registrationOpen?: boolean;
+  paymentMode?: TournamentPaymentMode;
   registrationFee?: number;
+  securityDepositAmount?: number;
+  refundPolicy?: string;
+  paymentInstructions?: string;
+  positions?: TournamentPositionEntry[];
+  bestPlayer?: TournamentBestPlayerEntry | null;
+  customAwardFields?: TournamentCustomAwardField[];
   isPublished?: boolean;
   followersCount?: number;
   teamIds?: string[];
@@ -299,6 +332,56 @@ export interface RosterPlayerEntry {
   guardianConsent?: boolean;
 }
 
+export interface StoredDocMeta {
+  fileId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  source: 'DEVICE' | 'GOOGLE_DRIVE';
+  driveFileId?: string;
+  uploadedAt: string;
+}
+
+export interface TeamEditHistoryItem {
+  editNumber: number;
+  editedBy: string;
+  editedByName: string;
+  editedAt: string;
+  previousStatus: string;
+  changesSummary: string;
+  previousData?: Record<string, any>;
+  reviewStatus?: 'PENDING_REAPPROVAL' | 'APPROVED' | 'REJECTED';
+  reviewedByName?: string;
+  reviewedAt?: string | null;
+  reviewNotes?: string;
+}
+
+export interface PaymentHistoryItem {
+  action: string;
+  status: string;
+  actorId: string;
+  actorName: string;
+  timestamp: string;
+  notes?: string;
+  fileId?: string;
+  fileName?: string;
+}
+
+export type PaymentVerificationStatus =
+  | 'NOT_REQUIRED'
+  | 'PAYMENT_PENDING'
+  | 'PROOF_SUBMITTED'
+  | 'UNDER_VERIFICATION'
+  | 'PAYMENT_APPROVED'
+  | 'PAYMENT_REJECTED';
+
+export type DepositRefundStatus =
+  | 'NOT_APPLICABLE'
+  | 'HELD'
+  | 'REFUND_INITIATED'
+  | 'REFUNDED'
+  | 'FORFEITED';
+
 export interface TournamentRegistrationData {
   id: string;
   _id?: string;
@@ -314,11 +397,27 @@ export interface TournamentRegistrationData {
   captainPhone?: string;
   captainEmail?: string;
   verificationDocUrl?: string;
+  verificationDocId?: string | null;
+  verificationDocMeta?: StoredDocMeta | null;
   verificationNotes?: string;
   roster: RosterPlayerEntry[];
   feeAmount: number;
   feeStatus: 'WAIVED' | 'PENDING' | 'PAID';
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+  paymentType?: TournamentPaymentMode;
+  paymentStatus?: PaymentVerificationStatus;
+  refundStatus?: DepositRefundStatus;
+  paymentProofFileId?: string | null;
+  paymentProofMeta?: StoredDocMeta | null;
+  paymentSubmittedAt?: string | null;
+  paymentVerifiedByName?: string;
+  paymentVerifiedAt?: string | null;
+  paymentRejectionReason?: string;
+  paymentReferenceNote?: string;
+  paymentHistory?: PaymentHistoryItem[];
+  editCount?: number;
+  maxEditsAfterApproval?: number;
+  editHistory?: TeamEditHistoryItem[];
+  status: 'PENDING' | 'PENDING_REAPPROVAL' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
   reviewNotes?: string;
   reviewedAt?: string | null;
   createdAt: string;
@@ -380,6 +479,7 @@ export interface FixtureData {
   roundNumber: number;
   roundName: string;
   groupName?: string;
+  matchFormat?: string;
   matchNumber: number;
   teamAId?: string | null;
   teamBId?: string | null;
@@ -532,6 +632,7 @@ export interface NotificationData {
   entityType?: string;
   entityId?: string;
   link?: string;
+  metadata?: Record<string, string>;
   isRead: boolean;
   createdAt: string;
 }

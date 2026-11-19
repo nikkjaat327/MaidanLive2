@@ -2,26 +2,36 @@ import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
 
+export type NotificationType =
+  | 'MATCH_STARTING'
+  | 'MATCH_LIVE'
+  | 'FOLLOWED_TEAM'
+  | 'SCORE_UPDATE'
+  | 'WICKET'
+  | 'INNINGS_BREAK'
+  | 'SECOND_INNINGS_STARTED'
+  | 'MATCH_RESULT'
+  | 'MATCH_COMPLETED'
+  | 'TOURNAMENT_PUBLISHED'
+  | 'FIXTURE_PUBLISHED'
+  | 'FIXTURE_UPDATED'
+  | 'TEAM_EDITED'
+  | 'REGISTRATION_SUBMITTED'
+  | 'REGISTRATION_REVIEWED'
+  | 'PAYMENT_SUBMITTED'
+  | 'PAYMENT_APPROVED'
+  | 'PAYMENT_REJECTED'
+  | 'SYSTEM';
+
 export interface INotification extends Document {
   userId: mongoose.Types.ObjectId;
-  type:
-    | 'MATCH_STARTING'
-    | 'MATCH_LIVE'
-    | 'FOLLOWED_TEAM'
-    | 'SCORE_UPDATE'
-    | 'WICKET'
-    | 'INNINGS_BREAK'
-    | 'SECOND_INNINGS_STARTED'
-    | 'MATCH_RESULT'
-    | 'MATCH_COMPLETED'
-    | 'TOURNAMENT_PUBLISHED'
-    | 'FIXTURE_PUBLISHED'
-    | 'SYSTEM';
+  type: NotificationType;
   title: string;
   message: string;
   entityType: string;
   entityId: string;
   link: string;
+  metadata?: Record<string, string>;
   dedupeKey: string;
   isRead: boolean;
   createdAt: Date;
@@ -45,6 +55,13 @@ const notificationSchema = new Schema<INotification>(
         'MATCH_COMPLETED',
         'TOURNAMENT_PUBLISHED',
         'FIXTURE_PUBLISHED',
+        'FIXTURE_UPDATED',
+        'TEAM_EDITED',
+        'REGISTRATION_SUBMITTED',
+        'REGISTRATION_REVIEWED',
+        'PAYMENT_SUBMITTED',
+        'PAYMENT_APPROVED',
+        'PAYMENT_REJECTED',
         'SYSTEM',
       ],
       default: 'SYSTEM',
@@ -54,6 +71,7 @@ const notificationSchema = new Schema<INotification>(
     entityType: { type: String, trim: true, default: '' },
     entityId: { type: String, trim: true, default: '' },
     link: { type: String, trim: true, default: '' },
+    metadata: { type: Schema.Types.Mixed, default: {} },
     dedupeKey: { type: String, trim: true, default: '' },
     isRead: { type: Boolean, default: false, index: true },
   },

@@ -24,7 +24,8 @@ import {
 } from '../../src/utils/tournamentEngine.ts';
 import type { TournamentTeamInput } from '../../src/utils/tournamentEngine.ts';
 import { extractYouTubeVideoId } from '../../src/utils/youtube.ts';
-import { dispatchMatchNotifications } from '../utils/notifications.ts';
+import { dispatchMatchNotifications, notifyUser } from '../utils/notifications.ts';
+import { TournamentRegistration } from '../models/TournamentRegistration.ts';
 
 const router = Router();
 
@@ -206,6 +207,7 @@ router.post(
         roundNumber: Math.max(1, Number(req.body.roundNumber) || 1),
         roundName: sanitizeText(req.body.roundName, 100) || 'Round 1',
         groupName: sanitizeText(req.body.groupName, 60),
+        matchFormat: sanitizeText(req.body.matchFormat, 80),
         matchNumber: Math.max(1, Number(req.body.matchNumber) || existingCount + 1),
         teamAId,
         teamBId,
@@ -438,35 +440,73 @@ router.patch(
         return;
       }
 
+      const prevScheduledAt = fixture.scheduledAt ? new Date(fixture.scheduledAt).toISOString() : '';
+      const prevLocation = fixture.location || '';
+      const prevTeamAId = fixture.teamAId ? fixture.teamAId.toString() : '';
+      const prevTeamBId = fixture.teamBId ? fixture.teamBId.toString() : '';
+      const prevTeamAName = fixture.teamAName || '';
+      const prevTeamBName = fixture.teamBName || '';
+      const prevMatchFormat = fixture.matchFormat || '';
+      const prevStatus = fixture.status;
+
+      if (req.body.roundNumber !== undefined && Number.isFinite(Number(req.body.roundNumber))) {
+        fixture.roundNumber = Math.max(1, Number(req.body.roundNumber));
+      }
+      if (req.body.matchNumber !== undefined && Number.isFinite(Number(req.body.matchNumber))) {
+        fixture.matchNumber = Math.max(1, Number(req.body.matchNumber));
+      }
       if (req.body.roundName !== undefined) fixture.roundName = sanitizeText(req.body.roundName, 100);
       if (req.body.groupName !== undefined) fixture.groupName = sanitizeText(req.body.groupName, 60);
+      if (req.body.matchFormat !== undefined) {
+        fixture.matchFormat = sanitizeText(req.body.matchFormat, 80);
+      }
       if (req.body.location !== undefined) fixture.location = sanitizeText(req.body.location, 160);
       if (req.body.scheduledAt !== undefined) {
         const d = req.body.scheduledAt ? new Date(req.body.scheduledAt) : null;
         fixture.scheduledAt = d && !isNaN(d.getTime()) ? d : null;
       }
-      if (req.body.teamAId !== undefined && mongoose.Types.ObjectId.isValid(req.body.teamAId)) {
-        const tA = await Team.findById(req.body.teamAId);
-        if (tA) {
-          fixture.teamAId = tA._id as mongoose.Types.ObjectId;
-          fixture.teamAName = tA.name;
-          fixture.teamALogo = tA.logoUrl || '';
+      if (req.body.teamAId !== undefined) {
+        if (req.body.teamAId && mongoose.Types.ObjectId.isValid(req.body.teamAId)) {
+          const tA = await Team.findById(req.body.teamAId);
+          if (tA) {
+            fixture.teamAId = tA._id as mongoose.Types.ObjectId;
+            fixture.teamAName = tA.name;
+            fixture.teamALogo = tA.logoUrl || '';
+          }
+        } else if (!req.body.teamAId) {
+          fixture.teamAId = null;
+          fixture.teamAName = sanitizeText(req.body.teamAName, 120) || 'TBD';
+          fixture.teamALogo = '';
         }
+      } else if (req.body.teamAName !== undefined) {
+        fixture.teamAName = sanitizeText(req.body.teamAName, 120) || 'TBD';
       }
-      if (req.body.teamBId !== undefined && mongoose.Types.ObjectId.isValid(req.body.teamBId)) {
-        const tB = await Team.findById(req.body.teamBId);
-        if (tB) {
-          fixture.teamBId = tB._id as mongoose.Types.ObjectId;
-          fixture.teamBName = tB.name;
-          fixture.teamBLogo = tB.logoUrl || '';
+
+      if (req.body.teamBId !== undefined) {
+        if (req.body.teamBId && mongoose.Types.ObjectId.isValid(req.body.teamBId)) {
+          const tB = await Team.findById(req.body.teamBId);
+          if (tB) {
+            fixture.teamBId = tB._id as mongoose.Types.ObjectId;
+            fixture.teamBName = tB.name;
+            fixture.teamBLogo = tB.logoUrl || '';
+          }
+        } else if (!req.body.teamBId) {
+          fixture.teamBId = null;
+          fixture.teamBName = sanitizeText(req.body.teamBName, 120) || 'TBD';
+          fixture.teamBLogo = '';
         }
+      } else if (req.body.teamBName !== undefined) {
+        fixture.teamBName = sanitizeText(req.body.teamBName, 120) || 'TBD';
       }
+
       if (req.body.venueId !== undefined) {
         if (req.body.venueId && mongoose.Types.ObjectId.isValid(req.body.venueId)) {
           const venue = await Venue.findById(req.body.venueId);
           if (venue) {
             fixture.venueId = venue._id as mongoose.Types.ObjectId;
-            if (!fixture.location) fixture.location = [venue.name, venue.city].filter(Boolean).join(', ');
+            if (req.body.location === undefined || !fixture.location) {
+              fixture.location = [venue.name, venue.city].filter(Boolean).join(', ');
+            }
           }
         } else {
           fixture.venueId = null;
@@ -481,6 +521,102 @@ router.patch(
 
       fixture.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await fixture.save();
+
+      // Keep linked LiveStream synchronized when fixture details change
+      if (fixture.liveStreamId) {
+        const linkedStream = await LiveStream.findById(fixture.liveStreamId);
+        if (linkedStream) {
+          linkedStream.teamAId = fixture.teamAId || null;
+          linkedStream.teamBId = fixture.teamBId || null;
+          linkedStream.teamAName = fixture.teamAName;
+          linkedStream.teamBName = fixture.teamBName;
+          linkedStream.teamALogo = fixture.teamALogo;
+          linkedStream.teamBLogo = fixture.teamBLogo;
+          linkedStream.venueId = fixture.venueId || linkedStream.venueId || null;
+          linkedStream.location = fixture.location || linkedStream.location || '';
+          linkedStream.matchDate = fixture.scheduledAt || null;
+          linkedStream.roundName = fixture.roundName || linkedStream.roundName || '';
+          linkedStream.matchTitle = `${fixture.teamAName} vs ${fixture.teamBName}${fixture.roundName ? ` · ${fixture.roundName}` : ''}`;
+          linkedStream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+          await linkedStream.save();
+        }
+      }
+
+      const newScheduledAt = fixture.scheduledAt ? new Date(fixture.scheduledAt).toISOString() : '';
+      const newTeamAId = fixture.teamAId ? fixture.teamAId.toString() : '';
+      const newTeamBId = fixture.teamBId ? fixture.teamBId.toString() : '';
+      const importantChanged =
+        prevScheduledAt !== newScheduledAt ||
+        prevLocation !== (fixture.location || '') ||
+        prevTeamAId !== newTeamAId ||
+        prevTeamBId !== newTeamBId ||
+        prevTeamAName !== (fixture.teamAName || '') ||
+        prevTeamBName !== (fixture.teamBName || '') ||
+        prevMatchFormat !== (fixture.matchFormat || '') ||
+        prevStatus !== fixture.status;
+
+      if (importantChanged) {
+        const tournament = await Tournament.findById(fixture.tournamentId).select('name isPublished').lean();
+        const affectedTeamIds = Array.from(
+          new Set([prevTeamAId, prevTeamBId, newTeamAId, newTeamBId].filter((tid) => mongoose.Types.ObjectId.isValid(tid)))
+        );
+        const scheduleText = fixture.scheduledAt
+          ? new Date(fixture.scheduledAt).toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : 'TBD';
+        const changeMsg = `${fixture.teamAName} vs ${fixture.teamBName} (${fixture.roundName || 'Match'})${
+          fixture.matchFormat ? ` [${fixture.matchFormat}]` : ''
+        } updated — ${scheduleText}${fixture.location ? ` @ ${fixture.location}` : ''}.`;
+        const linkUrl = `/tournaments/${fixture.tournamentId.toString()}?tab=bracket`;
+        const meta = {
+          tournamentId: fixture.tournamentId.toString(),
+          fixtureId: fixture._id.toString(),
+          tab: 'bracket',
+        };
+
+        if (tournament?.isPublished !== false) {
+          await dispatchMatchNotifications({
+            type: 'FIXTURE_UPDATED',
+            title: `Fixture Updated · ${tournament?.name || 'Tournament'}`,
+            message: changeMsg,
+            entityType: 'Fixture',
+            entityId: fixture._id.toString(),
+            link: linkUrl,
+            dedupeKey: `fixture-upd-${fixtureId}-${Date.now()}`,
+            teamIds: affectedTeamIds,
+            tournamentId: fixture.tournamentId,
+            metadata: meta,
+          });
+        }
+
+        if (affectedTeamIds.length > 0) {
+          const regs = await TournamentRegistration.find({
+            tournamentId: fixture.tournamentId,
+            teamId: { $in: affectedTeamIds },
+          })
+            .select('captainUserId')
+            .lean();
+          for (const r of regs) {
+            if (r.captainUserId) {
+              await notifyUser({
+                userId: r.captainUserId,
+                type: 'FIXTURE_UPDATED',
+                title: `Your Match Fixture Updated`,
+                message: changeMsg,
+                entityType: 'Fixture',
+                entityId: fixture._id.toString(),
+                link: linkUrl,
+                dedupeKey: `fixture-cap-${fixtureId}-${r.captainUserId.toString()}-${Date.now()}`,
+                metadata: meta,
+              });
+            }
+          }
+        }
+      }
 
       await recordActivity(
         req.user!,

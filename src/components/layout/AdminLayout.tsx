@@ -5,10 +5,12 @@ import {
   Activity,
   Award,
   BarChart3,
+  Bell,
   Briefcase,
   CalendarRange,
   ClipboardCheck,
   ClipboardList,
+  CreditCard,
   Flag,
   HeartPulse,
   KeyRound,
@@ -59,7 +61,7 @@ export function RequireAdminAuth() {
 }
 
 export function AdminLayout() {
-  const { adminUser, logoutAdmin } = useAuth();
+  const { adminUser, logoutAdmin, adminUnreadNotifications } = useAuth();
   const { theme, toggleTheme } = useAdminTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -76,6 +78,18 @@ export function AdminLayout() {
       label: 'Registration Queue',
       icon: ClipboardCheck,
       show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageTournaments),
+    },
+    {
+      to: '/admin/payments',
+      label: 'Payment Verification',
+      icon: CreditCard,
+      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageTournaments),
+    },
+    {
+      to: '/admin/notifications',
+      label: 'Notifications',
+      icon: Bell,
+      show: true,
     },
     { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: true },
     { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: true },
@@ -215,18 +229,35 @@ export function AdminLayout() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             {adminUser && (
               <span className="hidden md:inline text-xs text-slate-500 whitespace-nowrap">
                 {adminUser.name} · {ROLE_LABELS[adminUser.role] || adminUser.role}
               </span>
             )}
+            <Link
+              to="/admin/notifications"
+              aria-label="Admin notifications"
+              title="Notifications"
+              className={`relative min-h-[34px] min-w-[34px] inline-flex items-center justify-center rounded-lg border transition-colors ${
+                theme === 'dark'
+                  ? 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Bell className="w-4 h-4" />
+              {adminUnreadNotifications > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-[#EA580C] text-white text-[10px] font-bold flex items-center justify-center">
+                  {adminUnreadNotifications > 9 ? '9+' : adminUnreadNotifications}
+                </span>
+              )}
+            </Link>
             <button
               type="button"
               onClick={toggleTheme}
               aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
               title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              className={`min-h-[38px] min-w-[38px] inline-flex items-center justify-center gap-1.5 px-2.5 rounded-lg border text-xs font-semibold transition-colors ${
+              className={`min-h-[34px] min-w-[34px] inline-flex items-center justify-center gap-1.5 px-2.5 rounded-lg border text-xs font-semibold transition-colors ${
                 theme === 'dark'
                   ? 'bg-slate-900 border-slate-700 text-amber-300 hover:bg-slate-800'
                   : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
@@ -237,7 +268,7 @@ export function AdminLayout() {
             </button>
             <Link
               to="/admin/live-streams"
-              className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
+              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
             >
               <Radio className="w-3.5 h-3.5" />
               <span>Streams</span>

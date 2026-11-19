@@ -16,7 +16,9 @@ interface AuthContextValue {
   adminUser: AuthUser | null;
   adminLoading: boolean;
   unreadNotifications: number;
+  adminUnreadNotifications: number;
   refreshNotifications: () => Promise<void>;
+  refreshAdminNotifications: () => Promise<void>;
   updateCustomerUser: (user: AuthUser) => void;
   loginCustomer: (email: string, password: string, totpCode?: string) => Promise<LoginResult>;
   registerCustomer: (payload: {
@@ -48,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [adminUser, setAdminUser] = useState<AuthUser | null>(null);
   const [adminLoading, setAdminLoading] = useState(true);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [adminUnreadNotifications, setAdminUnreadNotifications] = useState(0);
 
   const refreshNotifications = useCallback(async () => {
     const token = authService.getCustomerToken();
@@ -56,8 +59,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     try {
-      const res = await platformOpsService.listNotifications();
+      const res = await platformOpsService.listNotifications('customer');
       setUnreadNotifications(res.unreadCount || 0);
+    } catch {
+      // Non-blocking
+    }
+  }, []);
+
+  const refreshAdminNotifications = useCallback(async () => {
+    const token = authService.getAdminToken();
+    if (!token) {
+      setAdminUnreadNotifications(0);
+      return;
+    }
+    try {
+      const res = await platformOpsService.listNotifications('admin');
+      setAdminUnreadNotifications(res.unreadCount || 0);
     } catch {
       // Non-blocking
     }
@@ -88,19 +105,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const token = authService.getAdminToken();
     if (!token) {
       setAdminUser(null);
+      setAdminUnreadNotifications(0);
       setAdminLoading(false);
       return;
     }
     try {
       const user = await authService.fetchAdminProfile();
       setAdminUser(user);
+      refreshAdminNotifications();
     } catch {
       authService.clearAdminToken();
       setAdminUser(null);
+      setAdminUnreadNotifications(0);
     } finally {
       setAdminLoading(false);
     }
-  }, []);
+  }, [refreshAdminNotifications]);
 
   useEffect(() => {
     refreshCustomer();
@@ -144,6 +164,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       socket.off('notification:new', onNewNotification);
     };
   }, [customerUser]);
+
+  useEffect(() => {
+    const token = authService.getAdminToken();
+    if (!adminUser || !token) return;
+
+    const socket = getSocketClient();
+    socket.emit('user:join', token);
+
+    const onReconnect = () => {
+      socket.emit('user:join', token);
+    };
+    const onNewAdminNotification = () => {
+      refreshAdminNotifications();
+    };
+
+    socket.on('connect', onReconnect);
+    socket.on('notification:new', onNewAdminNotification);
+    return () => {
+      socket.off('connect', onReconnect);
+      socket.off('notification:new', onNewAdminNotification);
+    };
+  }, [adminUser, refreshAdminNotifications]);
 
   const updateCustomerUser = useCallback((user: AuthUser) => {
     setCustomerUser(user);
@@ -196,9 +238,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       authService.saveAdminToken(res.token);
       setAdminUser(res.user);
+      refreshAdminNotifications();
       return { user: res.user };
     },
-    []
+    [refreshAdminNotifications]
   );
 
   const bootstrapSuperAdmin = useCallback(
@@ -206,6 +249,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await authService.bootstrapSuperAdmin(payload);
       authService.saveAdminToken(res.token);
       setAdminUser(res.user);
+      setAdminUnreadNotifications(0);
       return res.user;
     },
     []
@@ -215,6 +259,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authService.logoutSession('admin').catch(() => {});
     authService.clearAdminToken();
     setAdminUser(null);
+    setAdminUnreadNotifications(0);
   }, []);
 
   return (
@@ -225,7 +270,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         adminUser,
         adminLoading,
         unreadNotifications,
+        adminUnreadNotifications,
         refreshNotifications,
+        refreshAdminNotifications,
         updateCustomerUser,
         loginCustomer,
         registerCustomer,
