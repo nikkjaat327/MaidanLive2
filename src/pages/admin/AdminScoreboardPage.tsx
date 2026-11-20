@@ -9,6 +9,7 @@ import {
   Server,
   SlidersHorizontal,
   TrendingUp,
+  Tv,
   Youtube,
 } from 'lucide-react';
 import {
@@ -29,6 +30,7 @@ import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
 import { normalizeBroadcast } from '../../utils/normalizeBroadcast.ts';
+import { resolveTeamId } from '../../utils/dedupe.ts';
 import { LiveScoreboardView } from '../../components/scoreboard/LiveScoreboardView.tsx';
 import { ScoreboardSummary } from '../../components/scoreboard/ScoreboardSummary.tsx';
 import { CricketScorecardPanel } from '../../components/scoreboard/CricketScorecardPanel.tsx';
@@ -38,6 +40,7 @@ import { ScoreControlPanel } from '../../components/scoreboard/ScoreControlPanel
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
+import { QuickLiveScoreControls } from '../../components/obs/QuickLiveScoreControls.tsx';
 
 export function AdminScoreboardPage() {
   const { id } = useParams<{ id: string }>();
@@ -116,10 +119,7 @@ export function AdminScoreboardPage() {
       .then((all) => {
         if (stream.teamAId || stream.teamBId) {
           const matching = all.filter((p) => {
-            const tid =
-              typeof p.teamId === 'object' && p.teamId
-                ? p.teamId._id
-                : (p.teamId as string | null);
+            const tid = resolveTeamId(p.teamId);
             return tid === stream.teamAId || tid === stream.teamBId;
           });
           setPlayers(matching.length > 0 ? matching : all);
@@ -285,6 +285,13 @@ export function AdminScoreboardPage() {
                 {showVideoMonitor ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 <span>{showVideoMonitor ? 'Hide Monitor' : 'Show Monitor'}</span>
               </button>
+              <Link
+                to={`/broadcast/overlay/${stream.id}`}
+                className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-extrabold uppercase tracking-wide text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+              >
+                <Tv className="w-4 h-4 text-[#EA580C]" />
+                <span>OBS BROADCAST OVERLAY</span>
+              </Link>
             </>
           )}
         </div>
@@ -315,14 +322,25 @@ export function AdminScoreboardPage() {
       ) : (
         <div className="space-y-6">
           {showVideoMonitor && normalized && (
-            <div className="max-w-2xl aspect-video rounded-xl overflow-hidden border border-slate-200">
-              <LiveStreamPlayer
-                provider={normalized.activeProvider}
-                youtubeVideoId={normalized.youtubeVideoId}
-                mediamtxPlaybackUrl={normalized.mediamtxPlaybackUrl}
-                mediamtxWebrtcUrl={normalized.mediamtxWebrtcUrl}
-                title={normalized.title}
-              />
+            <div className="space-y-3 max-w-2xl">
+              <div className="aspect-video rounded-xl overflow-hidden border border-slate-200">
+                <LiveStreamPlayer
+                  provider={normalized.activeProvider}
+                  youtubeVideoId={normalized.youtubeVideoId}
+                  mediamtxPlaybackUrl={normalized.mediamtxPlaybackUrl}
+                  mediamtxWebrtcUrl={normalized.mediamtxWebrtcUrl}
+                  title={normalized.title}
+                />
+              </div>
+              {stream.status === 'LIVE' && (
+                <QuickLiveScoreControls
+                  stream={stream}
+                  score={score}
+                  onScoreChange={setScore}
+                  onRefresh={refetch}
+                  themeVariant="light"
+                />
+              )}
             </div>
           )}
 

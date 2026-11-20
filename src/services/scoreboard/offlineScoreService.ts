@@ -36,6 +36,7 @@ export interface ScorePatchInput {
   tossWinner?: 'A' | 'B' | '';
   tossDecision?: string;
   action: string;
+  allowLockedOverride?: boolean;
 }
 
 export interface StructuredScoreEventInput {

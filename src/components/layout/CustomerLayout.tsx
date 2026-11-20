@@ -24,16 +24,40 @@ import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { OfflineIndicator } from '../common/OfflineIndicator.tsx';
+import { GlobalSearchModal } from '../common/GlobalSearchModal.tsx';
 
 export function CustomerLayout() {
   const { customerUser, adminUser, unreadNotifications } = useAuth();
   const { language, toggleLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [swWaiting, setSwWaiting] = useState<ServiceWorker | null>(null);
   const headerInnerRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLElement>(null);
   const requiredWidthRef = useRef<number>(0);
+
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen((prev) => !prev);
+      } else if (
+        e.key === '/' &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !(e.target instanceof HTMLInputElement) &&
+        !(e.target instanceof HTMLTextAreaElement) &&
+        !(e.target as HTMLElement | null)?.isContentEditable
+      ) {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
@@ -202,13 +226,21 @@ export function CustomerLayout() {
 
           {/* Right Zone: Search, Language Toggle, PWA Install, Notifications & Account */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <Link
-              to="/search"
-              aria-label="Search MaidanLive"
-              className="min-h-[36px] min-w-[36px] sm:min-h-[38px] sm:min-w-[38px] inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors"
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              aria-label="Search tournaments, teams, and players"
+              title="Search (Ctrl+K / ⌘K)"
+              className="min-h-[36px] min-w-[36px] sm:min-h-[38px] sm:px-3 inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50/80 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
             >
-              <Search className="w-4 h-4" />
-            </Link>
+              <Search className="w-4 h-4 shrink-0" />
+              <span className="hidden lg:inline text-xs font-medium text-slate-500">
+                Search...
+              </span>
+              <kbd className="hidden xl:inline-flex items-center px-1.5 py-0.5 rounded bg-white border border-slate-200 font-mono text-[10px] text-slate-400">
+                ⌘K
+              </kbd>
+            </button>
 
             <button
               type="button"
@@ -514,6 +546,8 @@ export function CustomerLayout() {
           <span className="mt-0.5">{t('nav.leaderboards')}</span>
         </NavLink>
       </nav>
+
+      <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   );
 }

@@ -19,6 +19,7 @@ import {
   ViewerAnalyticsSummary,
 } from '../../types/index.ts';
 import { adminApi, customerApi, publicApi } from '../api/httpClient.ts';
+import { dedupeEntitiesById } from '../../utils/dedupe.ts';
 
 export const platformOpsService = {
   // Venues
@@ -318,7 +319,7 @@ export const platformOpsService = {
     const { data } = await publicApi.get<{ registrations: TournamentRegistrationData[] }>(
       `/v1/tournaments/${tournamentId}/registrations`
     );
-    return data.registrations;
+    return dedupeEntitiesById(data.registrations || []);
   },
   async updateRegistration(
     id: string,

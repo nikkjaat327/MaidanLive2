@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   variant?: 'danger' | 'primary';
   loading?: boolean;
+  error?: string | null;
 }
 
 export function ConfirmDialog({
@@ -23,6 +24,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'danger',
   loading = false,
+  error = null,
 }: ConfirmDialogProps) {
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidthClass="max-w-md">
@@ -39,6 +41,11 @@ export function ConfirmDialog({
           </div>
           <p className="text-sm text-slate-600 leading-relaxed">{message}</p>
         </div>
+        {error && (
+          <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+            {error}
+          </div>
+        )}
         <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
           <button
             type="button"

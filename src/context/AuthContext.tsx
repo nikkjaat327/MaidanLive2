@@ -125,6 +125,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshCustomer();
     refreshAdmin();
+
+    const onAuthExpired = (ev: Event) => {
+      const portal = (ev as CustomEvent<{ portal?: 'admin' | 'customer' }>)?.detail?.portal;
+      if (portal === 'admin') {
+        authService.clearAdminToken();
+        setAdminUser(null);
+        setAdminUnreadNotifications(0);
+      } else if (portal === 'customer') {
+        authService.clearCustomerToken();
+        setCustomerUser(null);
+        setUnreadNotifications(0);
+      }
+    };
+    window.addEventListener('maidanlive:auth-expired', onAuthExpired);
+    return () => {
+      window.removeEventListener('maidanlive:auth-expired', onAuthExpired);
+    };
   }, [refreshCustomer, refreshAdmin]);
 
   useEffect(() => {

@@ -7,6 +7,7 @@ import { LiveStream } from '../models/LiveStream.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { RoleAssignment } from '../models/RoleAssignment.ts';
 import { UserSession } from '../models/UserSession.ts';
+import { findDocByAnyId } from '../utils/mongoNormalize.ts';
 
 const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 
@@ -123,7 +124,7 @@ export async function authenticate(
     }
 
     const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload;
-    const user = await User.findById(decoded.sub);
+    const user = await findDocByAnyId(User, decoded.sub);
 
     if (!user || !user.isActive) {
       res.status(401).json({ message: 'Account is inactive or no longer exists.' });
@@ -131,7 +132,7 @@ export async function authenticate(
     }
 
     if (decoded.sid) {
-      const session = await UserSession.findById(decoded.sid).lean();
+      const session = await findDocByAnyId(UserSession, decoded.sid, { lean: true });
       if (!session || session.isRevoked || new Date(session.expiresAt).getTime() <= Date.now()) {
         res.status(401).json({ message: 'Session has been revoked or expired. Please sign in again.' });
         return;
@@ -158,7 +159,7 @@ export async function optionalAuthenticate(
       authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
     if (token) {
       const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload;
-      const user = await User.findById(decoded.sub);
+      const user = await findDocByAnyId(User, decoded.sub);
       if (user && user.isActive) {
         req.user = user;
         req.authPortal = decoded.portal;
@@ -267,9 +268,9 @@ export async function canManageTournament(user: IUser, tournamentId: string): Pr
   if (!user.permissions?.manageTournaments) return false;
   if (user.role === 'ADMIN') return true;
 
-  const tournament = await Tournament.findById(tournamentId);
+  const tournament = await findDocByAnyId(Tournament, tournamentId);
   if (!tournament) return false;
-  if (tournament.createdBy.toString() === user._id.toString()) return true;
+  if (tournament.createdBy?.toString() === user._id.toString()) return true;
   return (user.assignedTournamentIds || []).some((id) => id.toString() === tournamentId);
 }
 
@@ -297,9 +298,9 @@ export async function canManageStream(
     if (!user.permissions?.manageStreams && !hasExplicitManageStream) return false;
     if (user.role === 'ADMIN') return true;
 
-    const stream = await LiveStream.findById(streamId);
+    const stream = await findDocByAnyId(LiveStream, streamId);
     if (!stream) return false;
-    if (stream.createdBy.toString() === user._id.toString()) return true;
+    if (stream.createdBy?.toString() === user._id.toString()) return true;
     if ((user.assignedStreamIds || []).some((id) => id.toString() === streamId)) return true;
     if (
       stream.tournamentId &&
@@ -344,9 +345,9 @@ export async function canManageStream(
   }
   if (user.role === 'TOURNAMENT_ORGANIZER') {
     if (!user.permissions?.manageScores) return false;
-    const stream = await LiveStream.findById(streamId);
+    const stream = await findDocByAnyId(LiveStream, streamId);
     if (!stream) return false;
-    if (stream.createdBy.toString() === user._id.toString()) return true;
+    if (stream.createdBy?.toString() === user._id.toString()) return true;
     if ((user.assignedStreamIds || []).some((id) => id.toString() === streamId)) return true;
     if (
       stream.tournamentId &&

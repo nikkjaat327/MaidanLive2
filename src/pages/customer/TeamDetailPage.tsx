@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, BellPlus, Calendar, Check, Trophy, Users } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, BellPlus, Calendar, Check, Trophy, Users } from 'lucide-react';
 import { FixtureData, LiveStreamData, PlayerData, TeamData } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
@@ -212,8 +212,13 @@ export function TeamDetailPage() {
                 className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-3 hover:border-emerald-400 transition-colors"
               >
                 <TeamAvatar name={p.name} logoUrl={p.avatarUrl} />
-                <div className="min-w-0">
-                  <p className="font-semibold text-slate-900 truncate">{p.name}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <p className="font-semibold text-slate-900 truncate">{p.name}</p>
+                    {p.isVerified && (
+                      <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                    )}
+                  </div>
                   <p className="text-xs text-slate-500 truncate">
                     {[
                       p.role || p.position,

@@ -52,6 +52,10 @@ import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx';
 import { AdminPermissionsPage } from './pages/admin/AdminPermissionsPage.tsx';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.tsx';
 
+// Dedicated Broadcast Studio & OBS Browser Source Pages
+import { BroadcastOverlayConfigPage } from './pages/broadcast/BroadcastOverlayConfigPage.tsx';
+import { ObsOverlayViewerPage } from './pages/broadcast/ObsOverlayViewerPage.tsx';
+
 export default function App() {
   useEffect(() => {
     offlineScoreService.ensureLifecycleListeners();
@@ -63,6 +67,15 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <Routes>
+              {/* Isolated Public OBS Studio Browser Source Route (zero chrome, genuine transparency) */}
+              <Route path="/broadcast/overlay/view/:matchId" element={<ObsOverlayViewerPage />} />
+
+              {/* Dedicated OBS Broadcast Overlay Configuration Studio (Auth Protected) */}
+              <Route path="/broadcast/overlay" element={<RequireAdminAuth />}>
+                <Route index element={<Navigate to="/admin/live-streams" replace />} />
+                <Route path=":matchId" element={<BroadcastOverlayConfigPage />} />
+              </Route>
+
               {/* Admin Portal Routes (Completely separate layout & auth) */}
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route path="/admin" element={<RequireAdminAuth />}>

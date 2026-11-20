@@ -32,8 +32,10 @@ import {
   verifyMediaMTXStreamHealth,
 } from '../services/mediamtxService.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
+import { normalizeOverlayConfig } from '../../src/utils/overlayConfig.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import {
+  emitRoomOnlyEvent,
   emitStreamEvent,
   getActiveRoomViewerCount,
   invalidateViewerVisibilityCache,
@@ -90,6 +92,7 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
     activeStreamingProvider: clean.activeStreamingProvider || clean.streamingProvider || 'youtube',
     viewerCountVisibility: vis,
     activeViewers,
+    overlayConfig: normalizeOverlayConfig(clean.overlayConfig),
     ...extra,
   };
 }
@@ -549,6 +552,147 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
     res.status(500).json({ message: 'Failed to load live stream details.' });
   }
 });
+
+// GET /api/live/:id/overlay - Public broadcast-safe OBS overlay payload (stream metadata + score + overlayConfig)
+router.get('/:id/overlay', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid match ID.' });
+      return;
+    }
+
+    const stream = await LiveStream.findById(id).lean();
+    if (!stream) {
+      res.status(404).json({ message: 'Match broadcast not found.' });
+      return;
+    }
+
+    const [score, venue] = await Promise.all([
+      LiveScore.findOne({ liveStreamId: stream._id }).lean(),
+      stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
+    ]);
+
+    const overlayConfig = normalizeOverlayConfig((stream as any).overlayConfig);
+    const safeStream = formatPublicStream(
+      stream,
+      {
+        venue: venue ? { id: venue._id.toString(), name: venue.name, city: venue.city, state: venue.state } : null,
+      },
+      false
+    );
+    // Strip internal admin/audit/switch metadata from public OBS viewer payload
+    delete (safeStream as any).providerSwitchHistory;
+    delete (safeStream as any).createdBy;
+    delete (safeStream as any).updatedBy;
+    delete (safeStream as any).endedBy;
+    delete (safeStream as any).authorizedScorerId;
+    delete (safeStream as any).backupScorerId;
+    delete (safeStream as any).lastProviderSwitchBy;
+    delete (safeStream as any).lastProviderSwitchByName;
+    delete (safeStream as any).streamHealth;
+
+    res.json({
+      stream: safeStream,
+      score: score || null,
+      overlayConfig,
+    });
+  } catch (err) {
+    console.error('[LiveStream] Get overlay error:', err);
+    res.status(500).json({ message: 'Failed to load broadcast overlay data.' });
+  }
+});
+
+// PATCH /api/live/:id/overlay - Update & broadcast real-time OBS overlay configuration
+router.patch(
+  '/:id/overlay',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid match ID.' });
+        return;
+      }
+
+      const [canStream, canScore] = await Promise.all([
+        canManageStream(req.user!, id, 'stream'),
+        canManageStream(req.user!, id, 'score'),
+      ]);
+      if (!canStream && !canScore) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to configure broadcast overlays for this match.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Match broadcast not found.' });
+        return;
+      }
+
+      const incoming =
+        req.body.overlayConfig && typeof req.body.overlayConfig === 'object'
+          ? req.body.overlayConfig
+          : req.body;
+
+      const currentConfig = normalizeOverlayConfig((stream as any).overlayConfig);
+      const mergedRaw: Record<string, unknown> = { ...currentConfig, ...incoming };
+
+      // Keep visible & mode coherent
+      if (typeof incoming.mode === 'string') {
+        if (incoming.mode === 'hidden') {
+          mergedRaw.visible = false;
+        } else if (
+          ['full', 'compact', 'score_only'].includes(incoming.mode) &&
+          incoming.visible === undefined
+        ) {
+          mergedRaw.visible = true;
+        }
+      }
+      if (typeof incoming.visible === 'boolean') {
+        if (incoming.visible && mergedRaw.mode === 'hidden') {
+          mergedRaw.mode = 'full';
+        }
+      }
+
+      const nextConfig = normalizeOverlayConfig(mergedRaw);
+      (stream as any).overlayConfig = { ...nextConfig };
+      if (typeof (stream as any).markModified === 'function') {
+        (stream as any).markModified('overlayConfig');
+      }
+      stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await stream.save();
+
+      await recordActivity(
+        req.user!,
+        'UPDATE_OVERLAY_CONFIG',
+        'LiveStream',
+        stream._id.toString(),
+        `Updated OBS broadcast overlay (${nextConfig.visible ? nextConfig.mode : 'hidden'} · ${nextConfig.position} · ${nextConfig.theme})`,
+        {
+          previousValue: { ...currentConfig } as Record<string, unknown>,
+          newValue: { ...nextConfig } as Record<string, unknown>,
+        }
+      );
+
+      emitRoomOnlyEvent(id, 'overlay:config_updated', {
+        streamId: id,
+        overlayConfig: nextConfig,
+      });
+
+      res.json({
+        streamId: id,
+        overlayConfig: nextConfig,
+      });
+    } catch (err) {
+      console.error('[LiveStream] Update overlay error:', err);
+      res.status(500).json({ message: 'Failed to update broadcast overlay configuration.' });
+    }
+  }
+);
 
 // GET /api/live/:id/stream-config - Admin-only private MediaMTX & YouTube stream configuration
 router.get(

@@ -32,6 +32,25 @@ import { recordActivity } from '../utils/audit.ts';
 import { notifyTournamentAdminsAndOrganizers, notifyUser } from '../utils/notifications.ts';
 import { emitStreamEvent } from '../socket/index.ts';
 import { isCloudinaryConfigured, uploadBufferToCloudinary } from '../services/cloudinaryService.ts';
+import { buildIdMatchFilter } from '../utils/mongoNormalize.ts';
+
+function dedupeRosterEntries(entries: IRosterPlayerEntry[] = []): IRosterPlayerEntry[] {
+  const seen = new Set<string>();
+  const out: IRosterPlayerEntry[] = [];
+  for (const entry of entries) {
+    const cleanName = (entry?.name || '').trim().toLowerCase();
+    if (!cleanName) continue;
+    const jerseyKey =
+      entry?.jerseyNumber !== null && entry?.jerseyNumber !== undefined
+        ? String(entry.jerseyNumber)
+        : '';
+    const key = `${cleanName}::${jerseyKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
 
 const router = Router();
 
@@ -1784,7 +1803,8 @@ router.post(
           });
           reg.teamId = team._id as mongoose.Types.ObjectId;
 
-          for (const entry of reg.roster || []) {
+          const uniqueRoster = dedupeRosterEntries(reg.roster || []);
+          for (const entry of uniqueRoster) {
             await Player.create({
               name: entry.name,
               teamId: team._id,
@@ -1814,8 +1834,9 @@ router.post(
               },
             }
           );
-          await Player.deleteMany({ teamId: reg.teamId });
-          for (const entry of reg.roster || []) {
+          await Player.deleteMany({ teamId: buildIdMatchFilter(String(reg.teamId)) });
+          const uniqueRoster = dedupeRosterEntries(reg.roster || []);
+          for (const entry of uniqueRoster) {
             await Player.create({
               name: entry.name,
               teamId: reg.teamId,

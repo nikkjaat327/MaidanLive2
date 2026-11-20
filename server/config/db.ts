@@ -12,6 +12,7 @@ import {
   getSqliteFilePath,
   syncSqliteToMongo,
 } from '../db/sqliteStore.ts';
+import { normalizeAndDeduplicateMongoCollections } from '../utils/mongoNormalize.ts';
 
 mongoose.set('bufferCommands', false);
 
@@ -42,6 +43,7 @@ export async function connectDatabase(): Promise<{
         lastMongoError: null,
       });
       const syncResult = await syncSqliteToMongo();
+      await normalizeAndDeduplicateMongoCollections();
       if (syncResult.syncedRecords > 0) {
         updateEngineDiagnostics({
           lastSyncSummary: {
@@ -105,6 +107,7 @@ export async function retryMongoConnection(): Promise<{
       });
     }
     const syncResult = await syncSqliteToMongo();
+    await normalizeAndDeduplicateMongoCollections();
     setActiveDbEngine('mongodb');
     updateEngineDiagnostics({
       engine: 'mongodb',

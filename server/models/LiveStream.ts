@@ -1,6 +1,8 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
+import type { BroadcastOverlayConfig } from '../../src/utils/overlayConfig.ts';
+import { DEFAULT_OVERLAY_CONFIG } from '../../src/utils/overlayConfig.ts';
 
 export type SportType = 'Cricket' | 'Kabaddi' | 'Football' | 'Volleyball' | 'Other';
 export type StreamStatus = 'UPCOMING' | 'LIVE' | 'ENDED';
@@ -80,6 +82,7 @@ export interface ILiveStream extends Document {
   highlightsEnabled: boolean;
   totalViewsCount: number;
   replayViewsCount: number;
+  overlayConfig?: BroadcastOverlayConfig;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -189,6 +192,10 @@ const liveStreamSchema = new Schema<ILiveStream>(
     highlightsEnabled: { type: Boolean, default: true },
     totalViewsCount: { type: Number, default: 0, min: 0 },
     replayViewsCount: { type: Number, default: 0, min: 0 },
+    overlayConfig: {
+      type: Schema.Types.Mixed,
+      default: () => ({ ...DEFAULT_OVERLAY_CONFIG }),
+    },
   },
   { timestamps: true }
 );

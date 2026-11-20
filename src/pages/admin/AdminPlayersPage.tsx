@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { BadgeCheck, Edit3, Plus, ShieldAlert, Trash2, UserCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { BadgeCheck, Edit3, Plus, Search, ShieldAlert, Trash2, UserCheck, Users } from 'lucide-react';
+import axios from 'axios';
 import { PlayerData, TeamData } from '../../types/index.ts';
 import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { entityService } from '../../services/entities/entityService.ts';
@@ -10,6 +12,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import { getEntityId, resolveTeamId } from '../../utils/dedupe.ts';
 
 function computeIsMinor(dob: string): boolean {
   if (!dob) return false;
@@ -40,6 +43,8 @@ export function AdminPlayersPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<PlayerData | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [teamFilter, setTeamFilter] = useState('');
 
   const loadData = useCallback(async () => {
     try {
@@ -77,11 +82,7 @@ export function AdminPlayersPage() {
   function openEdit(player: PlayerData) {
     setEditing(player);
     setName(player.name);
-    setTeamId(
-      typeof player.teamId === 'object' && player.teamId
-        ? player.teamId._id
-        : (player.teamId as string) || ''
-    );
+    setTeamId(resolveTeamId(player.teamId));
     setSportType(player.sportType);
     setRole(player.role || '');
     setJerseyNumber(
@@ -146,18 +147,78 @@ export function AdminPlayersPage() {
     if (!deleteTarget) return;
     try {
       setDeleting(true);
+      setError(null);
       await entityService.deletePlayer(deleteTarget.id);
       setDeleteTarget(null);
       setSuccess('Player deleted.');
       await loadData();
     } catch (err) {
-      setError(extractApiError(err, 'Failed to delete player.'));
+      setDeleteTarget(null);
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setSuccess('Player was already removed. List refreshed.');
+        await loadData();
+      } else {
+        setError(extractApiError(err, 'Failed to delete player.'));
+      }
     } finally {
       setDeleting(false);
     }
   }
 
   const dobMinor = computeIsMinor(dateOfBirth);
+
+  const uniquePlayers = useMemo(() => {
+    const seenIds = new Set<string>();
+    const list: PlayerData[] = [];
+    for (const p of players) {
+      const pid = getEntityId(p);
+      if (pid) {
+        if (seenIds.has(pid)) continue;
+        seenIds.add(pid);
+      }
+      list.push(p);
+    }
+    return list;
+  }, [players]);
+
+  const filteredPlayers = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    const seenIds = new Set<string>();
+    return uniquePlayers.filter((p) => {
+      const pid = getEntityId(p);
+      if (pid) {
+        if (seenIds.has(pid)) return false;
+        seenIds.add(pid);
+      }
+      const pTeamId = resolveTeamId(p.teamId);
+      if (teamFilter === '__unassigned__' && pTeamId) return false;
+      if (teamFilter && teamFilter !== '__unassigned__' && pTeamId !== teamFilter) return false;
+      if (!q) return true;
+      const teamName =
+        typeof p.teamId === 'object' && p.teamId ? p.teamId.name.toLowerCase() : '';
+      return (
+        p.name.toLowerCase().includes(q) ||
+        (p.role || '').toLowerCase().includes(q) ||
+        teamName.includes(q)
+      );
+    });
+  }, [uniquePlayers, searchTerm, teamFilter]);
+
+  const teamCountMap = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of uniquePlayers) {
+      const pTeamId = resolveTeamId(p.teamId);
+      if (pTeamId) {
+        counts.set(pTeamId, (counts.get(pTeamId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [uniquePlayers]);
+
+  const totalPlayers = uniquePlayers.length;
+  const assignedCount = uniquePlayers.filter((p) => Boolean(resolveTeamId(p.teamId))).length;
+  const verifiedCount = uniquePlayers.filter((p) => p.isVerified).length;
+  const minorCount = uniquePlayers.filter((p) => p.isMinor).length;
 
   return (
     <div className="space-y-6">
@@ -183,6 +244,84 @@ export function AdminPlayersPage() {
       <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
       <FeedbackBanner type="success" message={success} onDismiss={() => setSuccess(null)} />
 
+      {/* Total Players & Eligibility Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Total Players</span>
+            <Users className="w-4 h-4 text-[#EA580C]" />
+          </div>
+          <p className="font-mono text-2xl font-bold text-slate-900 mt-1 tabular-nums">
+            {totalPlayers}
+          </p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Assigned to Teams</span>
+            <UserCheck className="w-4 h-4 text-blue-600" />
+          </div>
+          <p className="font-mono text-2xl font-bold text-slate-900 mt-1 tabular-nums">
+            {assignedCount}
+          </p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Verified Athletes</span>
+            <BadgeCheck className="w-4 h-4 text-emerald-600" />
+          </div>
+          <p className="font-mono text-2xl font-bold text-emerald-700 mt-1 tabular-nums">
+            {verifiedCount}
+          </p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Minors (&lt;18)</span>
+            <ShieldAlert className="w-4 h-4 text-amber-600" />
+          </div>
+          <p className="font-mono text-2xl font-bold text-amber-700 mt-1 tabular-nums">
+            {minorCount}
+          </p>
+        </div>
+      </div>
+
+      {/* Filter & Search Bar */}
+      {players.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search player, role, or team..."
+                className="min-h-[38px] pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg w-56 sm:w-64"
+              />
+            </div>
+            <select
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+              className="min-h-[38px] px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg"
+            >
+              <option value="">All Teams ({totalPlayers})</option>
+              <option value="__unassigned__">Unassigned Players</option>
+              {teams.map((tm) => {
+                const tid = getEntityId(tm);
+                const count = teamCountMap.get(tid) || 0;
+                return (
+                  <option key={tid} value={tid}>
+                    {tm.name} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+          <p className="text-xs font-mono text-slate-500">
+            Showing {filteredPlayers.length} of {totalPlayers} players
+          </p>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton rows={4} />
       ) : players.length === 0 ? (
@@ -200,6 +339,12 @@ export function AdminPlayersPage() {
             </button>
           }
         />
+      ) : filteredPlayers.length === 0 ? (
+        <EmptyState
+          icon={<Search className="w-6 h-6" />}
+          title="No matching players"
+          description="Try clearing your team filter or search query."
+        />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -214,14 +359,21 @@ export function AdminPlayersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {players.map((p) => {
-                const teamName =
-                  typeof p.teamId === 'object' && p.teamId ? p.teamId.name : 'Unassigned';
+              {filteredPlayers.map((p) => {
+                const pid = getEntityId(p);
+                const teamObj = typeof p.teamId === 'object' && p.teamId ? p.teamId : null;
+                const resolvedTid = resolveTeamId(p.teamId);
+                const teamName = teamObj ? teamObj.name : 'Unassigned';
                 return (
-                  <tr key={p.id} className="hover:bg-slate-50">
+                  <tr key={pid} className="hover:bg-slate-50">
                     <td className="py-3 px-4 font-medium text-slate-900">
                       <div className="flex items-center gap-1.5">
-                        <span>{p.name}</span>
+                        <Link
+                          to={`/players/${pid}`}
+                          className="hover:text-[#EA580C] hover:underline"
+                        >
+                          {p.name}
+                        </Link>
                         {p.isVerified && (
                           <span title="Verified Athlete">
                             <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -234,7 +386,18 @@ export function AdminPlayersPage() {
                         </div>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-600">{teamName}</td>
+                    <td className="py-3 px-4 text-slate-600">
+                      {teamObj && resolvedTid ? (
+                        <Link
+                          to={`/teams/${resolvedTid}`}
+                          className="font-medium text-slate-800 hover:text-[#EA580C] hover:underline"
+                        >
+                          {teamName}
+                        </Link>
+                      ) : (
+                        teamName
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-slate-600">
                       <div>{p.sportType}</div>
                       {p.role && <div className="text-xs text-slate-400">{p.role}</div>}

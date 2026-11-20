@@ -24,7 +24,7 @@ export function PlayersPage() {
         ...(sportFilter ? { sportType: sportFilter } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
       })
-      .then(setPlayers)
+      .then((list) => setPlayers(list))
       .catch((err) => setError(extractApiError(err, 'Unable to load players.')))
       .finally(() => setLoading(false));
   }, [sportFilter, search]);

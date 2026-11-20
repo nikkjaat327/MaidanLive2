@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 import {
   Award,
   BookmarkPlus,
@@ -412,12 +413,19 @@ export function AdminTournamentsPage() {
     if (!deleteTarget) return;
     try {
       setDeleting(true);
+      setError(null);
       await entityService.deleteTournament(deleteTarget.id);
       setDeleteTarget(null);
       setSuccess('Tournament deleted.');
       await loadTournaments();
     } catch (err) {
-      setError(extractApiError(err, 'Failed to delete tournament.'));
+      setDeleteTarget(null);
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setSuccess('Tournament was already removed. List refreshed.');
+        await loadTournaments();
+      } else {
+        setError(extractApiError(err, 'Failed to delete tournament.'));
+      }
     } finally {
       setDeleting(false);
     }

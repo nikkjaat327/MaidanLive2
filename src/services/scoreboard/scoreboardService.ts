@@ -18,6 +18,7 @@ export const scoreboardService = {
       tossWinner?: 'A' | 'B' | '';
       tossDecision?: string;
       action?: string;
+      allowLockedOverride?: boolean;
     }
   ): Promise<{ streamId: string; score: LiveScoreData; historyItem?: ScoreHistoryItem }> {
     const { data } = await adminApi.patch<{

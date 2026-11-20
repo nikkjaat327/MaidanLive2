@@ -43,6 +43,7 @@ import { entityService } from '../../services/entities/entityService.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { getEntityId } from '../../utils/dedupe.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
@@ -249,13 +250,13 @@ export function TournamentDetailPage() {
           location: res.tournament.location,
         });
       }
-      setStreams(res.streams);
-      setTeams(res.teams);
+      setStreams(res.streams || []);
+      setTeams(res.teams || []);
       setFixtures(res.fixtures || []);
       setPointsTable(res.pointsTable || []);
       setVenue(res.venue || null);
       setBannerSponsors(sponsors);
-      setPublicRegistrations(pubRegs);
+      setPublicRegistrations(pubRegs || []);
       sponsors.forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
 
       platformOpsService
@@ -1055,23 +1056,99 @@ export function TournamentDetailPage() {
             />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {teams.map((team) => (
-                <Link
-                  key={team.id}
-                  to={`/teams/${team.id}`}
-                  className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-3 hover:border-orange-300 transition-colors"
-                >
-                  <TeamAvatar name={team.name} logoUrl={team.logoUrl} />
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-900 truncate">{team.name}</p>
-                    <p className="text-xs text-slate-500 truncate">
-                      {[team.city, team.captainName ? `Capt: ${team.captainName}` : '']
-                        .filter(Boolean)
-                        .join(' · ') || team.sportType}
-                    </p>
-                  </div>
-                </Link>
-              ))}
+              {teams.map((team) => {
+                const count = team.playerCount ?? 0;
+                return (
+                  <Link
+                    key={team.id}
+                    to={`/teams/${team.id}`}
+                    className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-3 hover:border-orange-300 transition-colors"
+                  >
+                    <TeamAvatar name={team.name} logoUrl={team.logoUrl} />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-900 truncate">{team.name}</p>
+                      <p className="text-xs text-slate-500 truncate">
+                        {[team.city, team.captainName ? `Capt: ${team.captainName}` : '']
+                          .filter(Boolean)
+                          .join(' · ') || team.sportType}
+                      </p>
+                      <p className="text-[11px] font-semibold text-[#EA580C] mt-1 inline-flex items-center gap-1">
+                        <Users className="w-3 h-3" />
+                        <span>
+                          {count} Player{count === 1 ? '' : 's'} · View Squad
+                        </span>
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
+              {publicRegistrations
+                .filter((reg) => {
+                  const regTeamId =
+                    typeof reg.teamId === 'object' && reg.teamId
+                      ? getEntityId(reg.teamId)
+                      : String(reg.teamId || '');
+                  return !teams.some(
+                    (t) =>
+                      (regTeamId && getEntityId(t) === regTeamId) ||
+                      t.name.trim().toLowerCase() === (reg.teamName || '').trim().toLowerCase()
+                  );
+                })
+                .map((reg) =>
+                  reg.teamId ? (
+                    <Link
+                      key={reg.id}
+                      to={`/teams/${reg.teamId}`}
+                      className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-3 hover:border-orange-300 transition-colors"
+                    >
+                      <TeamAvatar name={reg.teamName} logoUrl={reg.teamLogoUrl} />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-slate-900 truncate">{reg.teamName}</p>
+                        <p className="text-xs text-slate-500 truncate">
+                          {[reg.city, reg.captainName ? `Capt: ${reg.captainName}` : '']
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                        <p className="text-[11px] font-semibold text-[#EA580C] mt-1 inline-flex items-center gap-1">
+                          <Users className="w-3 h-3" />
+                          <span>{reg.roster?.length || 0} Players · View Squad</span>
+                        </p>
+                      </div>
+                    </Link>
+                  ) : (
+                    <div
+                      key={reg.id}
+                      className="bg-white border border-slate-200 rounded-xl p-4 space-y-2"
+                    >
+                      <div className="flex items-center gap-3">
+                        <TeamAvatar name={reg.teamName} logoUrl={reg.teamLogoUrl} />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-slate-900 truncate">{reg.teamName}</p>
+                          <p className="text-xs text-slate-500 truncate">
+                            {[reg.city, reg.captainName ? `Capt: ${reg.captainName}` : '']
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                        </div>
+                      </div>
+                      {Array.isArray(reg.roster) && reg.roster.length > 0 && (
+                        <div className="pt-2 border-t border-slate-100 flex flex-wrap gap-1.5">
+                          {reg.roster.map((rp, idx) => (
+                            <span
+                              key={`${rp.name}-${idx}`}
+                              className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium"
+                            >
+                              {rp.name}
+                              {rp.jerseyNumber !== null && rp.jerseyNumber !== undefined
+                                ? ` #${rp.jerseyNumber}`
+                                : ''}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
             </div>
           )}
         </section>

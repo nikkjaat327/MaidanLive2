@@ -250,7 +250,12 @@ export function LiveBroadcastView({
         broadcast.teamB.id
           ? entityService.listPlayers({ teamId: broadcast.teamB.id }).catch(() => [])
           : Promise.resolve([]),
-      ]).then(([teamA, teamB]) => setLineupPlayers({ teamA, teamB }));
+      ]).then(([teamA, teamB]) =>
+        setLineupPlayers({
+          teamA,
+          teamB,
+        })
+      );
     }
 
     if (broadcast.tournamentId) {

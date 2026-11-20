@@ -14,6 +14,7 @@ import {
   VenueData,
 } from '../../types/index.ts';
 import { adminApi, publicApi } from '../api/httpClient.ts';
+import { dedupeEntitiesById } from '../../utils/dedupe.ts';
 
 export const entityService = {
   async getDashboardStats(): Promise<{
@@ -49,7 +50,7 @@ export const entityService = {
     const { data } = await publicApi.get<{ tournaments: TournamentData[] }>('/tournaments', {
       params,
     });
-    return data.tournaments;
+    return dedupeEntitiesById(data.tournaments || []);
   },
 
   async getTournamentDetail(id: string): Promise<{
@@ -62,7 +63,13 @@ export const entityService = {
     venue: VenueData | null;
   }> {
     const { data } = await publicApi.get(`/tournaments/${id}`);
-    return data;
+    return {
+      ...data,
+      streams: dedupeEntitiesById(data.streams || []),
+      teams: dedupeEntitiesById(data.teams || []),
+      ...(Array.isArray(data.players) ? { players: dedupeEntitiesById(data.players) } : {}),
+      fixtures: dedupeEntitiesById(data.fixtures || []),
+    };
   },
 
   async createTournament(payload: Partial<TournamentData>): Promise<TournamentData> {
@@ -105,7 +112,7 @@ export const entityService = {
     search?: string;
   }): Promise<TeamData[]> {
     const { data } = await publicApi.get<{ teams: TeamData[] }>('/teams', { params });
-    return data.teams;
+    return dedupeEntitiesById(data.teams || []);
   },
 
   async getTeamProfile(id: string): Promise<{
@@ -116,7 +123,12 @@ export const entityService = {
     record: { played: number; won: number; lost: number; drawn: number };
   }> {
     const { data } = await publicApi.get(`/teams/${id}`);
-    return data;
+    return {
+      ...data,
+      players: dedupeEntitiesById(data.players || []),
+      streams: dedupeEntitiesById(data.streams || []),
+      fixtures: dedupeEntitiesById(data.fixtures || []),
+    };
   },
 
   async createTeam(payload: Record<string, unknown>): Promise<TeamData> {
@@ -140,7 +152,7 @@ export const entityService = {
     const params =
       typeof teamIdOrParams === 'string' ? { teamId: teamIdOrParams } : teamIdOrParams;
     const { data } = await publicApi.get<{ players: PlayerData[] }>('/players', { params });
-    return data.players;
+    return dedupeEntitiesById(data.players || []);
   },
 
   async getPlayerProfile(id: string): Promise<{
@@ -184,9 +196,14 @@ export const entityService = {
   },
 
   // Global Unified Search
-  async globalSearch(q: string, type = 'all'): Promise<SearchResultsPayload> {
+  async globalSearch(
+    q: string,
+    type = 'all',
+    signal?: AbortSignal
+  ): Promise<SearchResultsPayload> {
     const { data } = await publicApi.get<SearchResultsPayload>('/search', {
       params: { q, type },
+      signal,
     });
     return data;
   },

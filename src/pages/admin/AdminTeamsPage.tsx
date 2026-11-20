@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Edit3, Plus, Trash2, Users } from 'lucide-react';
-import { TeamData, TournamentData } from '../../types/index.ts';
+import { Link } from 'react-router-dom';
+import { BadgeCheck, Edit3, ExternalLink, Plus, ShieldAlert, Trash2, Users } from 'lucide-react';
+import axios from 'axios';
+import { PlayerData, TeamData, TournamentData } from '../../types/index.ts';
 import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -31,6 +33,10 @@ export function AdminTeamsPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<TeamData | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const [playersModalTeam, setPlayersModalTeam] = useState<TeamData | null>(null);
+  const [teamPlayers, setTeamPlayers] = useState<PlayerData[]>([]);
+  const [loadingTeamPlayers, setLoadingTeamPlayers] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -110,16 +116,38 @@ export function AdminTeamsPage() {
     }
   }
 
+  async function openTeamPlayers(team: TeamData) {
+    setPlayersModalTeam(team);
+    setTeamPlayers([]);
+    setLoadingTeamPlayers(true);
+    try {
+      const profile = await entityService.getTeamProfile(team.id);
+      setTeamPlayers(profile.players || []);
+    } catch (err) {
+      setPlayersModalTeam(null);
+      setError(extractApiError(err, 'Failed to load team players.'));
+    } finally {
+      setLoadingTeamPlayers(false);
+    }
+  }
+
   async function handleDelete() {
     if (!deleteTarget) return;
     try {
       setDeleting(true);
+      setError(null);
       await entityService.deleteTeam(deleteTarget.id);
       setDeleteTarget(null);
       setSuccess('Team deleted.');
       await loadData();
     } catch (err) {
-      setError(extractApiError(err, 'Failed to delete team.'));
+      setDeleteTarget(null);
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setSuccess('Team was already removed. List refreshed.');
+        await loadData();
+      } else {
+        setError(extractApiError(err, 'Failed to delete team.'));
+      }
     } finally {
       setDeleting(false);
     }
@@ -171,6 +199,7 @@ export function AdminTeamsPage() {
               <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
                 <th className="py-3 px-4">Team</th>
                 <th className="py-3 px-4">Sport</th>
+                <th className="py-3 px-4">Players</th>
                 <th className="py-3 px-4">City</th>
                 <th className="py-3 px-4">Captain</th>
                 <th className="py-3 px-4 text-right">Actions</th>
@@ -180,19 +209,36 @@ export function AdminTeamsPage() {
               {teams.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50">
                   <td className="py-3 px-4">
-                    <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openTeamPlayers(t)}
+                      className="flex items-center gap-3 text-left group"
+                    >
                       <TeamAvatar name={t.name} logoUrl={t.logoUrl} size="sm" />
                       <div>
-                        <span className="font-medium text-slate-900">{t.name}</span>
+                        <span className="font-medium text-slate-900 group-hover:text-[#EA580C] group-hover:underline">
+                          {t.name}
+                        </span>
                         {t.shortName && (
                           <span className="ml-2 text-xs font-mono text-slate-500">
                             ({t.shortName})
                           </span>
                         )}
                       </div>
-                    </div>
+                    </button>
                   </td>
                   <td className="py-3 px-4 text-slate-600">{t.sportType}</td>
+                  <td className="py-3 px-4">
+                    <button
+                      type="button"
+                      onClick={() => openTeamPlayers(t)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-orange-50 hover:text-[#EA580C] text-xs font-semibold text-slate-700 transition-colors"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span className="font-mono tabular-nums">{t.playerCount ?? 0}</span>
+                      <span>Players</span>
+                    </button>
+                  </td>
                   <td className="py-3 px-4 text-slate-600">{t.city || '—'}</td>
                   <td className="py-3 px-4 text-slate-600">{t.captainName || '—'}</td>
                   <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -332,13 +378,85 @@ export function AdminTeamsPage() {
         </form>
       </Modal>
 
+      {/* Team Squad Players Modal */}
+      <Modal
+        open={Boolean(playersModalTeam)}
+        onClose={() => setPlayersModalTeam(null)}
+        title={`Squad Roster · ${playersModalTeam?.name || ''}`}
+        subtitle={`${teamPlayers.length} player${teamPlayers.length === 1 ? '' : 's'} registered`}
+        maxWidthClass="max-w-2xl"
+      >
+        <div className="space-y-4">
+          {loadingTeamPlayers ? (
+            <TableSkeleton rows={3} />
+          ) : teamPlayers.length === 0 ? (
+            <div className="p-6 text-center text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-xl">
+              No players linked to this team yet. You can assign players from the Players &amp; Eligibility page.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+              {teamPlayers.map((p) => (
+                <Link
+                  key={p.id}
+                  to={`/players/${p.id}`}
+                  className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:border-[#EA580C] transition-colors"
+                >
+                  <TeamAvatar name={p.name} logoUrl={p.avatarUrl} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-semibold text-sm text-slate-900 truncate">{p.name}</p>
+                      {p.isVerified && (
+                        <BadgeCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      )}
+                      {p.isMinor && (
+                        <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 truncate">
+                      {[
+                        p.role || p.position,
+                        p.jerseyNumber !== null && p.jerseyNumber !== undefined
+                          ? `#${p.jerseyNumber}`
+                          : '',
+                        p.sportType,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+            {playersModalTeam && (
+              <Link
+                to={`/teams/${playersModalTeam.id}`}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#EA580C] hover:underline"
+              >
+                <span>Open Public Team Page</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => setPlayersModalTeam(null)}
+              className="min-h-[34px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         loading={deleting}
         title="Delete Team"
-        message={`Remove "${deleteTarget?.name}" from MongoDB?`}
+        message={`Delete "${deleteTarget?.name}" from database? Players on this team will become unassigned.`}
         confirmLabel="Delete"
       />
     </div>

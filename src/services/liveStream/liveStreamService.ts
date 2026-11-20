@@ -1,4 +1,10 @@
-import { LiveStreamData, StreamHealthData, StreamingProvider } from '../../types/index.ts';
+import {
+  BroadcastOverlayConfig,
+  LiveScoreData,
+  LiveStreamData,
+  StreamHealthData,
+  StreamingProvider,
+} from '../../types/index.ts';
 import { adminApi, publicApi } from '../api/httpClient.ts';
 
 export interface YouTubeVerification {
@@ -145,6 +151,33 @@ export const liveStreamService = {
     stream: LiveStreamData;
   }> {
     const { data } = await adminApi.post(`/live/${id}/switch-provider`, payload);
+    return data;
+  },
+
+  async getOverlayData(id: string): Promise<{
+    stream: LiveStreamData;
+    score: LiveScoreData | null;
+    overlayConfig: BroadcastOverlayConfig;
+  }> {
+    const { data } = await publicApi.get<{
+      stream: LiveStreamData;
+      score: LiveScoreData | null;
+      overlayConfig: BroadcastOverlayConfig;
+    }>(`/live/${id}/overlay`);
+    return data;
+  },
+
+  async updateOverlayConfig(
+    id: string,
+    overlayConfig: Partial<BroadcastOverlayConfig>
+  ): Promise<{
+    streamId: string;
+    overlayConfig: BroadcastOverlayConfig;
+  }> {
+    const { data } = await adminApi.patch<{
+      streamId: string;
+      overlayConfig: BroadcastOverlayConfig;
+    }>(`/live/${id}/overlay`, { overlayConfig });
     return data;
   },
 };

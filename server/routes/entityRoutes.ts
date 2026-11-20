@@ -15,6 +15,7 @@ import { TournamentRegistration } from '../models/TournamentRegistration.ts';
 import { User, ALL_GRANULAR_PERMISSIONS } from '../models/User.ts';
 import type { UserRole } from '../models/User.ts';
 import { ActivityLog } from '../models/ActivityLog.ts';
+import { Sponsor, SponsorOverlay } from '../models/Sponsor.ts';
 import {
   authenticate,
   canManageTournament,
@@ -27,6 +28,23 @@ import { sanitizeGoogleMapsUrl, sanitizeImageUrl, sanitizeText } from '../utils/
 import { recordActivity } from '../utils/audit.ts';
 import { calculatePointsTable } from '../../src/utils/tournamentEngine.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
+import {
+  buildIdMatchFilter,
+  deleteDocByAnyId,
+  findDocByAnyId,
+} from '../utils/mongoNormalize.ts';
+
+function dedupeDocsById<T extends { _id?: any; id?: string }>(docs: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const doc of docs) {
+    const key = doc?._id ? String(doc._id) : doc?.id ? String(doc.id) : '';
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(doc);
+  }
+  return out;
+}
 
 const router = Router();
 const VALID_SPORTS = ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'];
@@ -260,9 +278,9 @@ router.get(
         upcomingStreams,
         availableReplays,
         publishedReplays,
-        tournamentsCount,
-        teamsCount,
-        playersCount,
+        tournamentsCountRaw,
+        teamsCountRaw,
+        playersCountRaw,
         recentActivity,
       ] = await Promise.all([
         LiveStream.countDocuments(),
@@ -271,11 +289,15 @@ router.get(
         LiveStream.countDocuments({ status: 'UPCOMING' }),
         LiveStream.countDocuments({ replayAvailable: true, replayVideoId: { $ne: '' } }),
         LiveStream.countDocuments({ replayPublished: true, replayAvailable: true }),
-        Tournament.countDocuments(),
-        Team.countDocuments(),
-        Player.countDocuments(),
+        Tournament.find().select('_id').lean(),
+        Team.find().select('_id').lean(),
+        Player.find().select('_id').lean(),
         ActivityLog.find().sort({ createdAt: -1 }).limit(15).lean(),
       ]);
+
+      const tournamentsCount = dedupeDocsById(tournamentsCountRaw).length;
+      const teamsCount = dedupeDocsById(teamsCountRaw).length;
+      const playersCount = dedupeDocsById(playersCountRaw).length;
 
       res.json({
         stats: {
@@ -373,26 +395,30 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Invalid tournament ID.' });
       return;
     }
-    const tournament = await Tournament.findById(id).lean();
+    const tournament = await findDocByAnyId(Tournament, id, { lean: true });
     if (!tournament) {
       res.status(404).json({ message: 'Tournament not found.' });
       return;
     }
 
+    const tMatch = buildIdMatchFilter(id);
+    const teamIdList = Array.isArray(tournament.teamIds) ? tournament.teamIds : [];
     const teamFilter =
-      Array.isArray(tournament.teamIds) && tournament.teamIds.length > 0
-        ? { $or: [{ tournamentId: id }, { _id: { $in: tournament.teamIds } }] }
-        : { tournamentId: id };
+      teamIdList.length > 0
+        ? { $or: [{ tournamentId: tMatch }, { _id: { $in: teamIdList } }] }
+        : { tournamentId: tMatch };
 
-    const [streams, rawTeams, fixtures, venue, nonApprovedRegs] = await Promise.all([
-      LiveStream.find({ tournamentId: id }).sort({ createdAt: -1 }).lean(),
+    const [streamsRaw, rawTeamsRaw, fixturesRaw, venue, nonApprovedRegs] = await Promise.all([
+      LiveStream.find({ tournamentId: tMatch }).sort({ createdAt: -1 }).lean(),
       Team.find(teamFilter).sort({ name: 1 }).lean(),
-      Fixture.find({ tournamentId: id })
+      Fixture.find({ tournamentId: tMatch })
         .sort({ roundNumber: 1, matchNumber: 1 })
         .lean(),
-      tournament.venueId ? Venue.findById(tournament.venueId).lean() : Promise.resolve(null),
+      tournament.venueId
+        ? findDocByAnyId(Venue, String(tournament.venueId), { lean: true })
+        : Promise.resolve(null),
       TournamentRegistration.find({
-        tournamentId: id,
+        tournamentId: tMatch,
         status: { $ne: 'APPROVED' },
         teamId: { $ne: null },
       })
@@ -400,10 +426,14 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    const streams = dedupeDocsById(streamsRaw);
+    const fixtures = dedupeDocsById(fixturesRaw);
     const suspendedTeamIds = new Set(
       nonApprovedRegs.map((r: any) => r.teamId?.toString()).filter(Boolean)
     );
-    const teams = rawTeams.filter((t) => !suspendedTeamIds.has(t._id.toString()));
+    const teams = dedupeDocsById(rawTeamsRaw).filter(
+      (t) => !suspendedTeamIds.has(t._id.toString())
+    );
 
     const streamIds = streams.map((s) => s._id);
     const scores =
@@ -459,19 +489,40 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
       fixtureGroupMap
     );
 
-    const teamObjectIds = teams.map((t) => t._id);
-    const players =
-      teamObjectIds.length > 0
-        ? await Player.find({ teamId: { $in: teamObjectIds } })
+    const teamMatchIds: any[] = [];
+    for (const t of teams) {
+      teamMatchIds.push(t._id, t._id.toString());
+    }
+    const rawPlayers =
+      teamMatchIds.length > 0
+        ? await Player.find({ teamId: { $in: teamMatchIds } })
             .populate('teamId', 'name shortName')
             .sort({ name: 1 })
             .lean()
         : [];
+    const players = dedupeDocsById(rawPlayers);
+
+    const playerCountByTeam = new Map<string, number>();
+    for (const p of players) {
+      const tid =
+        typeof p.teamId === 'object' && p.teamId
+          ? String((p.teamId as any)._id)
+          : p.teamId
+            ? String(p.teamId)
+            : '';
+      if (tid) {
+        playerCountByTeam.set(tid, (playerCountByTeam.get(tid) || 0) + 1);
+      }
+    }
 
     res.json({
       tournament: { ...tournament, id: tournament._id.toString() },
       streams: enrichedStreams,
-      teams: teams.map((t) => ({ ...t, id: t._id.toString() })),
+      teams: teams.map((t) => ({
+        ...t,
+        id: t._id.toString(),
+        playerCount: playerCountByTeam.get(t._id.toString()) || 0,
+      })),
       players: players.map((p) => ({ ...p, id: p._id.toString() })),
       fixtures: fixtures.map((f) => ({ ...f, id: f._id.toString() })),
       pointsTable,
@@ -604,6 +655,11 @@ router.patch(
         res.status(400).json({ message: 'Invalid tournament ID.' });
         return;
       }
+      const existingTournament = await findDocByAnyId(Tournament, id);
+      if (!existingTournament) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
       const allowed = await canManageTournament(req.user!, id);
       if (!allowed) {
         res.status(403).json({
@@ -611,11 +667,7 @@ router.patch(
         });
         return;
       }
-      const tournament = await Tournament.findById(id);
-      if (!tournament) {
-        res.status(404).json({ message: 'Tournament not found.' });
-        return;
-      }
+      const tournament = existingTournament;
 
       if (req.body.googleMapsUrl !== undefined) {
         const mapsCheck = sanitizeGoogleMapsUrl(req.body.googleMapsUrl);
@@ -758,16 +810,16 @@ router.patch(
         res.status(400).json({ message: 'Invalid tournament ID.' });
         return;
       }
+      const tournament = await findDocByAnyId(Tournament, id);
+      if (!tournament) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
       const allowed = await canManageTournament(req.user!, id);
       if (!allowed) {
         res.status(403).json({
           message: 'Forbidden: You are not authorized to update awards for this tournament.',
         });
-        return;
-      }
-      const tournament = await Tournament.findById(id);
-      if (!tournament) {
-        res.status(404).json({ message: 'Tournament not found.' });
         return;
       }
 
@@ -815,6 +867,11 @@ router.delete(
         res.status(400).json({ message: 'Invalid tournament ID.' });
         return;
       }
+      const existing = await findDocByAnyId(Tournament, id, { lean: true });
+      if (!existing) {
+        res.status(404).json({ message: 'Tournament not found.' });
+        return;
+      }
       const allowed = await canManageTournament(req.user!, id);
       if (!allowed) {
         res.status(403).json({
@@ -822,11 +879,29 @@ router.delete(
         });
         return;
       }
-      const deleted = await Tournament.findByIdAndDelete(id);
+      const deleted = await deleteDocByAnyId(Tournament, id);
       if (!deleted) {
         res.status(404).json({ message: 'Tournament not found.' });
         return;
       }
+
+      const tMatch = buildIdMatchFilter(id);
+      await Promise.all([
+        Fixture.deleteMany({ tournamentId: tMatch }),
+        TournamentRegistration.deleteMany({ tournamentId: tMatch }),
+        Team.updateMany({ tournamentId: tMatch }, { $set: { tournamentId: null } }),
+        LiveStream.updateMany(
+          { tournamentId: tMatch },
+          { $set: { tournamentId: null, tournamentName: '' } }
+        ),
+        Sponsor.updateMany({ tournamentId: tMatch }, { $set: { tournamentId: null } }),
+        SponsorOverlay.updateMany({ tournamentId: tMatch }, { $set: { tournamentId: null } }),
+        User.updateMany(
+          { $or: [{ assignedTournamentIds: tMatch }, { followedTournamentIds: tMatch }] },
+          { $pull: { assignedTournamentIds: tMatch, followedTournamentIds: tMatch } }
+        ),
+      ]);
+
       await recordActivity(req.user!, 'DELETE_TOURNAMENT', 'Tournament', id, deleted.name);
       res.json({ message: 'Tournament deleted.' });
     } catch (err) {
@@ -847,7 +922,7 @@ router.get('/teams', async (req: Request, res: Response) => {
       typeof req.query.tournamentId === 'string' &&
       mongoose.Types.ObjectId.isValid(req.query.tournamentId)
     ) {
-      query.tournamentId = req.query.tournamentId;
+      query.tournamentId = buildIdMatchFilter(req.query.tournamentId);
     }
     if (typeof req.query.search === 'string' && req.query.search.trim()) {
       const regex = new RegExp(
@@ -857,12 +932,32 @@ router.get('/teams', async (req: Request, res: Response) => {
       query.$or = [{ name: regex }, { shortName: regex }, { city: regex }];
     }
 
-    const teams = await Team.find(query)
-      .populate('tournamentId', 'name')
-      .sort({ createdAt: -1 })
-      .lean();
+    const [rawTeams, rawPlayers] = await Promise.all([
+      Team.find(query).populate('tournamentId', 'name').sort({ createdAt: -1 }).lean(),
+      Player.find({ teamId: { $ne: null } }).select('_id teamId').lean(),
+    ]);
+
+    const teams = dedupeDocsById(rawTeams);
+    const uniquePlayers = dedupeDocsById(rawPlayers);
+    const countByTeamId = new Map<string, number>();
+    for (const p of uniquePlayers) {
+      if (p.teamId) {
+        const tid =
+          typeof p.teamId === 'object' && p.teamId
+            ? String((p.teamId as any)._id || '')
+            : String(p.teamId);
+        if (tid) {
+          countByTeamId.set(tid, (countByTeamId.get(tid) || 0) + 1);
+        }
+      }
+    }
+
     res.json({
-      teams: teams.map((t) => ({ ...t, id: t._id.toString() })),
+      teams: teams.map((t) => ({
+        ...t,
+        id: t._id.toString(),
+        playerCount: countByTeamId.get(t._id.toString()) || 0,
+      })),
     });
   } catch (err) {
     console.error('[Teams] List error:', err);
@@ -878,23 +973,31 @@ router.get('/teams/:id', async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Invalid team ID.' });
       return;
     }
-    const team = await Team.findById(id).populate('tournamentId', 'name sportType').lean();
+    const team = await findDocByAnyId(Team, id, {
+      populate: [{ path: 'tournamentId', select: 'name sportType' }],
+      lean: true,
+    });
     if (!team) {
       res.status(404).json({ message: 'Team not found.' });
       return;
     }
 
-    const [players, streams, fixtures] = await Promise.all([
-      Player.find({ teamId: id }).sort({ jerseyNumber: 1, name: 1 }).lean(),
-      LiveStream.find({ $or: [{ teamAId: id }, { teamBId: id }] })
+    const tmMatch = buildIdMatchFilter(id);
+    const [rawPlayers, rawStreams, rawFixtures] = await Promise.all([
+      Player.find({ teamId: tmMatch }).sort({ jerseyNumber: 1, name: 1 }).lean(),
+      LiveStream.find({ $or: [{ teamAId: tmMatch }, { teamBId: tmMatch }] })
         .sort({ createdAt: -1 })
         .limit(50)
         .lean(),
-      Fixture.find({ $or: [{ teamAId: id }, { teamBId: id }] })
+      Fixture.find({ $or: [{ teamAId: tmMatch }, { teamBId: tmMatch }] })
         .sort({ scheduledAt: 1, roundNumber: 1 })
         .limit(50)
         .lean(),
     ]);
+
+    const players = dedupeDocsById(rawPlayers);
+    const streams = dedupeDocsById(rawStreams);
+    const fixtures = dedupeDocsById(rawFixtures);
 
     const streamIds = streams.map((s) => s._id);
     const scores =
@@ -931,7 +1034,7 @@ router.get('/teams/:id', async (req: Request, res: Response) => {
     });
 
     res.json({
-      team: { ...team, id: team._id.toString() },
+      team: { ...team, id: team._id.toString(), playerCount: players.length },
       players: players.map((p) => ({ ...p, id: p._id.toString() })),
       streams: enrichedStreams,
       fixtures: fixtures.map((f) => ({ ...f, id: f._id.toString() })),
@@ -975,7 +1078,7 @@ router.post(
       });
 
       await recordActivity(req.user!, 'CREATE_TEAM', 'Team', team._id.toString(), name);
-      res.status(201).json({ team: { ...team.toObject(), id: team._id.toString() } });
+      res.status(201).json({ team: { ...team.toObject(), id: team._id.toString(), playerCount: 0 } });
     } catch (err) {
       console.error('[Teams] Create error:', err);
       res.status(500).json({ message: 'Failed to create team.' });
@@ -995,7 +1098,7 @@ router.patch(
         res.status(400).json({ message: 'Invalid team ID.' });
         return;
       }
-      const team = await Team.findById(id);
+      const team = await findDocByAnyId(Team, id);
       if (!team) {
         res.status(404).json({ message: 'Team not found.' });
         return;
@@ -1053,11 +1156,20 @@ router.delete(
         res.status(400).json({ message: 'Invalid team ID.' });
         return;
       }
-      const deleted = await Team.findByIdAndDelete(id);
+      const deleted = await deleteDocByAnyId(Team, id);
       if (!deleted) {
         res.status(404).json({ message: 'Team not found.' });
         return;
       }
+
+      const tmMatch = buildIdMatchFilter(id);
+      await Promise.all([
+        Player.updateMany({ teamId: tmMatch }, { $set: { teamId: null } }),
+        Tournament.updateMany({ teamIds: tmMatch }, { $pull: { teamIds: tmMatch } }),
+        TournamentRegistration.updateMany({ teamId: tmMatch }, { $set: { teamId: null } }),
+        User.updateMany({ followedTeamIds: tmMatch }, { $pull: { followedTeamIds: tmMatch } }),
+      ]);
+
       await recordActivity(req.user!, 'DELETE_TEAM', 'Team', id, deleted.name);
       res.json({ message: 'Team deleted.' });
     } catch (err) {
@@ -1072,7 +1184,7 @@ router.get('/players', async (req: Request, res: Response) => {
   try {
     const query: Record<string, unknown> = {};
     if (typeof req.query.teamId === 'string' && mongoose.Types.ObjectId.isValid(req.query.teamId)) {
-      query.teamId = req.query.teamId;
+      query.teamId = buildIdMatchFilter(req.query.teamId);
     }
     if (typeof req.query.sportType === 'string' && VALID_SPORTS.includes(req.query.sportType)) {
       query.sportType = req.query.sportType;
@@ -1084,12 +1196,14 @@ router.get('/players', async (req: Request, res: Response) => {
       );
       query.$or = [{ name: regex }, { role: regex }];
     }
-    const players = await Player.find(query)
+    const rawPlayers = await Player.find(query)
       .populate('teamId', 'name shortName logoUrl')
       .sort({ createdAt: -1 })
       .lean();
+    const players = dedupeDocsById(rawPlayers);
     res.json({
       players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      totalCount: players.length,
     });
   } catch (err) {
     console.error('[Players] List error:', err);
@@ -1105,9 +1219,10 @@ router.get('/players/:id', async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Invalid player ID.' });
       return;
     }
-    const player = await Player.findById(id)
-      .populate('teamId', 'name shortName logoUrl city sportType')
-      .lean();
+    const player = await findDocByAnyId(Player, id, {
+      populate: [{ path: 'teamId', select: 'name shortName logoUrl city sportType' }],
+      lean: true,
+    });
     if (!player) {
       res.status(404).json({ message: 'Player not found.' });
       return;
@@ -1252,7 +1367,7 @@ router.patch(
         res.status(400).json({ message: 'Invalid player ID.' });
         return;
       }
-      const player = await Player.findById(id);
+      const player = await findDocByAnyId(Player, id);
       if (!player) {
         res.status(404).json({ message: 'Player not found.' });
         return;
@@ -1329,11 +1444,18 @@ router.delete(
         res.status(400).json({ message: 'Invalid player ID.' });
         return;
       }
-      const deleted = await Player.findByIdAndDelete(id);
+      const deleted = await deleteDocByAnyId(Player, id);
       if (!deleted) {
         res.status(404).json({ message: 'Player not found.' });
         return;
       }
+
+      const pMatch = buildIdMatchFilter(id);
+      await User.updateMany(
+        { followedPlayerIds: pMatch },
+        { $pull: { followedPlayerIds: pMatch } }
+      );
+
       await recordActivity(req.user!, 'DELETE_PLAYER', 'Player', id, deleted.name);
       res.json({ message: 'Player deleted.' });
     } catch (err) {
@@ -1355,7 +1477,7 @@ router.post(
         res.status(400).json({ message: 'Invalid player ID.' });
         return;
       }
-      const player = await Player.findById(id);
+      const player = await findDocByAnyId(Player, id);
       if (!player) {
         res.status(404).json({ message: 'Player not found.' });
         return;
@@ -1709,7 +1831,13 @@ router.get('/search', async (req: Request, res: Response) => {
         : Promise.resolve([]),
       want('teams')
         ? Team.find({
-            $or: [{ name: regex }, { shortName: regex }, { city: regex }, { captainName: regex }],
+            $or: [
+              { name: regex },
+              { shortName: regex },
+              { city: regex },
+              { captainName: regex },
+              { sportType: regex },
+            ],
           })
             .sort({ name: 1 })
             .limit(20)
@@ -1717,7 +1845,7 @@ router.get('/search', async (req: Request, res: Response) => {
         : Promise.resolve([]),
       want('players')
         ? Player.find({
-            $or: [{ name: regex }, { role: regex }, { position: regex }],
+            $or: [{ name: regex }, { role: regex }, { position: regex }, { sportType: regex }],
           })
             .populate('teamId', 'name shortName logoUrl')
             .sort({ name: 1 })
@@ -1734,7 +1862,13 @@ router.get('/search', async (req: Request, res: Response) => {
         : Promise.resolve([]),
     ]);
 
-    const streamIds = streams.map((s) => s._id);
+    const uniqueStreams = dedupeDocsById(streams);
+    const uniqueTournaments = dedupeDocsById(tournaments);
+    const uniqueTeams = dedupeDocsById(teams);
+    const uniquePlayers = dedupeDocsById(players);
+    const uniqueVenues = dedupeDocsById(venues);
+
+    const streamIds = uniqueStreams.map((s) => s._id);
     const scores =
       streamIds.length > 0
         ? await LiveScore.find({ liveStreamId: { $in: streamIds } }).lean()
@@ -1747,7 +1881,7 @@ router.get('/search', async (req: Request, res: Response) => {
       { name: string; tournamentCount: number; sports: Set<string>; latestTournamentId: string }
     >();
     if (want('organizers')) {
-      for (const tr of tournaments) {
+      for (const tr of uniqueTournaments) {
         const org = (tr.organizerName || '').trim();
         if (!org || !regex.test(org)) continue;
         const key = org.toLowerCase();
@@ -1765,17 +1899,17 @@ router.get('/search', async (req: Request, res: Response) => {
 
     res.json({
       query: rawQ,
-      matches: streams.map((s) => ({
+      matches: uniqueStreams.map((s) => ({
         ...s,
         id: s._id.toString(),
         score: scoreMap.get(s._id.toString()) || null,
       })),
       tournaments: want('tournaments')
-        ? tournaments.map((t) => ({ ...t, id: t._id.toString() }))
+        ? uniqueTournaments.map((t) => ({ ...t, id: t._id.toString() }))
         : [],
-      teams: teams.map((tm) => ({ ...tm, id: tm._id.toString() })),
-      players: players.map((p) => ({ ...p, id: p._id.toString() })),
-      venues: venues.map((v) => ({ ...v, id: v._id.toString() })),
+      teams: uniqueTeams.map((tm) => ({ ...tm, id: tm._id.toString() })),
+      players: uniquePlayers.map((p) => ({ ...p, id: p._id.toString() })),
+      venues: uniqueVenues.map((v) => ({ ...v, id: v._id.toString() })),
       organizers: Array.from(orgMap.values()).map((o) => ({
         name: o.name,
         tournamentCount: o.tournamentCount,

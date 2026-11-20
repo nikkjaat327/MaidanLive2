@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import mongoose from 'mongoose';
+import {
+  coerceDocFieldsForMongo,
+  getSchemaMetaForCollection,
+} from '../utils/mongoNormalize.ts';
 
 let sqliteDb: DatabaseSync | null = null;
 let resolvedDbPath = '/data/maidanlive.db';
@@ -447,14 +451,18 @@ export async function syncSqliteToMongo(): Promise<{ syncedCollections: number; 
   let syncedRecords = 0;
   for (const [colName, items] of byCollection.entries()) {
     const mongoCol = mongoose.connection.db.collection(colName);
+    const meta = getSchemaMetaForCollection(colName);
     for (const { id, doc } of items) {
       const { _id: _omit, id: _omitId, ...rest } = doc;
-      const oid = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
-      // Convert known ISO date fields back to Date where appropriate
-      const cleanDoc: Record<string, any> = { ...rest };
+      const isValidOid = mongoose.Types.ObjectId.isValid(id);
+      const oid = isValidOid ? new mongoose.Types.ObjectId(id) : id;
+      const cleanDoc = coerceDocFieldsForMongo(rest, meta);
       if (typeof cleanDoc.createdAt === 'string') cleanDoc.createdAt = new Date(cleanDoc.createdAt);
       if (typeof cleanDoc.updatedAt === 'string') cleanDoc.updatedAt = new Date(cleanDoc.updatedAt);
 
+      if (isValidOid) {
+        await mongoCol.deleteOne({ _id: id as any });
+      }
       await mongoCol.updateOne(
         { _id: oid as any },
         { $setOnInsert: { _id: oid as any }, $set: cleanDoc },

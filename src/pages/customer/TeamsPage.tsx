@@ -28,7 +28,7 @@ export function TeamsPage() {
         ...(sportFilter ? { sportType: sportFilter } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
       })
-      .then(setTeams)
+      .then((list) => setTeams(list))
       .catch((err) => setError(extractApiError(err, 'Unable to load teams.')))
       .finally(() => setLoading(false));
   }, [sportFilter, search]);
@@ -114,6 +114,7 @@ export function TeamsPage() {
                 ? team.tournamentId.name
                 : '';
             const isFollowed = followedIds.has(team.id);
+            const squadCount = team.playerCount ?? 0;
             return (
               <Link
                 key={team.id}
@@ -154,6 +155,12 @@ export function TeamsPage() {
                     <p className="text-xs text-slate-600">Captain: {team.captainName}</p>
                   )}
                   {tourName && <p className="text-xs text-emerald-700 font-medium">{tourName}</p>}
+                  <p className="text-xs font-semibold text-[#EA580C] pt-1 inline-flex items-center gap-1">
+                    <Users className="w-3.5 h-3.5" />
+                    <span>
+                      {squadCount} Player{squadCount === 1 ? '' : 's'} · View Squad
+                    </span>
+                  </p>
                 </div>
               </Link>
             );

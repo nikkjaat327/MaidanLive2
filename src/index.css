@@ -115,3 +115,47 @@ html[data-broadcast-fullscreen="true"] body {
   color: #64748b;
 }
 
+/* Isolated OBS Studio Browser Source Viewer Transparency & Zero-Chrome Reset */
+html[data-obs-overlay-view="true"],
+html[data-obs-overlay-view="true"] body,
+html[data-obs-overlay-view="true"] #root {
+  background: transparent !important;
+  background-color: transparent !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+@keyframes obsScorePop {
+  0% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  35% {
+    transform: scale(1.06);
+    filter: brightness(1.22);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+
+.obs-score-pop {
+  animation: obsScorePop 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.obs-checkerboard {
+  background-color: #0b1120;
+  background-image:
+    linear-gradient(45deg, rgba(148, 163, 184, 0.14) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(148, 163, 184, 0.14) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(148, 163, 184, 0.14) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(148, 163, 184, 0.14) 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+}
+
+

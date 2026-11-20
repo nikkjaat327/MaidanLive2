@@ -1,5 +1,8 @@
 import type { UserRole } from '../constants/roles.ts';
 import type { SportOption } from '../constants/sports.ts';
+import type { BroadcastOverlayConfig } from '../utils/overlayConfig.ts';
+
+export type { BroadcastOverlayConfig };
 
 export type ScoreboardPosition = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
 export type StreamingProvider = 'youtube' | 'mediamtx';
@@ -170,6 +173,7 @@ export interface LiveStreamData {
   highlightsEnabled?: boolean;
   totalViewsCount?: number;
   replayViewsCount?: number;
+  overlayConfig?: BroadcastOverlayConfig;
   createdAt: string;
   updatedAt: string;
   score?: LiveScoreData | null;
@@ -438,6 +442,7 @@ export interface TeamData {
   captainName: string;
   bio?: string;
   followersCount?: number;
+  playerCount?: number;
   tournamentId?: { _id: string; name: string } | string | null;
   createdAt: string;
 }

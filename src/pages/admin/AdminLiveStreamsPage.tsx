@@ -16,6 +16,7 @@ import {
   Server,
   SlidersHorizontal,
   StopCircle,
+  Tv,
   Video,
   Youtube,
 } from 'lucide-react';
@@ -754,6 +755,14 @@ export function AdminLiveStreamsPage() {
                   >
                     <SlidersHorizontal className="w-3.5 h-3.5" />
                     <span>Score Control</span>
+                  </Link>
+
+                  <Link
+                    to={`/broadcast/overlay/${stream.id}`}
+                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
+                  >
+                    <Tv className="w-3.5 h-3.5" />
+                    <span>OBS BROADCAST OVERLAY</span>
                   </Link>
 
                   <button

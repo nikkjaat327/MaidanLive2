@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Briefcase,
@@ -10,9 +10,11 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import axios from 'axios';
 import { SearchResultsPayload } from '../../types/index.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { useDebounce } from '../../hooks/useDebounce.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -55,8 +57,11 @@ export function SearchPage() {
   const [results, setResults] = useState<SearchResultsPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastSyncedQueryRef = useRef<string>(initialQ.trim());
 
-  const runSearch = useCallback(async (q: string, tab: SearchTab) => {
+  const debouncedInput = useDebounce(queryInput, 300);
+
+  const runSearch = useCallback(async (q: string, tab: SearchTab, signal?: AbortSignal) => {
     const trimmed = q.trim();
     if (!trimmed) {
       setResults(null);
@@ -65,40 +70,76 @@ export function SearchPage() {
     try {
       setLoading(true);
       setError(null);
-      const data = await entityService.globalSearch(trimmed, tab);
+      const data = await entityService.globalSearch(trimmed, tab, signal);
+      if (signal?.aborted) return;
       setResults(data);
       setRecentSearches(saveRecentSearch(trimmed));
     } catch (err) {
+      if (axios.isCancel(err) || signal?.aborted) return;
       setError(extractApiError(err, 'Search failed. Please try again.'));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, []);
 
+  // Sync input only when URL ?q= changes externally (e.g. navigating from GlobalSearchModal or Back/Forward)
   useEffect(() => {
-    const qParam = searchParams.get('q') || '';
-    setQueryInput(qParam);
-    setActiveQuery(qParam);
-    if (qParam.trim()) {
-      runSearch(qParam, activeTab);
-    } else {
-      setResults(null);
+    const qParam = (searchParams.get('q') || '').trim();
+    if (qParam !== lastSyncedQueryRef.current) {
+      lastSyncedQueryRef.current = qParam;
+      setQueryInput(qParam);
     }
-  }, [searchParams, activeTab, runSearch]);
+  }, [searchParams]);
+
+  // Trigger debounced search whenever debounced input or active tab changes
+  useEffect(() => {
+    const trimmed = debouncedInput.trim();
+    setActiveQuery(trimmed);
+
+    if (trimmed !== lastSyncedQueryRef.current) {
+      lastSyncedQueryRef.current = trimmed;
+      if (trimmed) {
+        setSearchParams({ q: trimmed }, { replace: true });
+      } else {
+        setSearchParams({}, { replace: true });
+      }
+    }
+
+    if (!trimmed) {
+      setResults(null);
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    runSearch(trimmed, activeTab, controller.signal);
+    return () => controller.abort();
+  }, [debouncedInput, activeTab, runSearch, setSearchParams]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = queryInput.trim();
+    lastSyncedQueryRef.current = trimmed;
     if (!trimmed) {
       setSearchParams({});
+      setActiveQuery('');
+      setResults(null);
       return;
     }
+    setActiveQuery(trimmed);
     setSearchParams({ q: trimmed });
+    runSearch(trimmed, activeTab);
   }
 
   function handleSelectQuick(term: string) {
-    setQueryInput(term);
-    setSearchParams({ q: term });
+    const trimmed = term.trim();
+    lastSyncedQueryRef.current = trimmed;
+    setQueryInput(trimmed);
+    setActiveQuery(trimmed);
+    setSearchParams({ q: trimmed });
+    runSearch(trimmed, activeTab);
   }
 
   function handleClearRecent() {
