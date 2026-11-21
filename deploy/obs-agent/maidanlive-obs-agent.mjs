@@ -75,10 +75,11 @@ async function emitObsSnapshot() {
   }
 
   try {
-    const [ver, sceneRes, streamRes, statsRes] = await Promise.all([
+    const [ver, sceneRes, streamRes, recordRes, statsRes] = await Promise.all([
       obs.call('GetVersion'),
       obs.call('GetSceneList'),
-      obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+      obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
+      obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
       obs.call('GetStats').catch(() => null),
     ]);
 
@@ -93,6 +94,10 @@ async function emitObsSnapshot() {
         : [],
       obsStreamActive: Boolean(streamRes.outputActive),
       obsStreamTimecode: String(streamRes.outputTimecode || ''),
+      obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
+      obsStreamDurationMs: typeof streamRes.outputDuration === 'number' ? streamRes.outputDuration : null,
+      obsRecordActive: Boolean(recordRes.outputActive),
+      obsRecordTimecode: String(recordRes.outputTimecode || ''),
       obsStats: statsRes
         ? {
             cpuUsage: Number(statsRes.cpuUsage || 0),
@@ -164,10 +169,11 @@ async function handleCommand(command, payload) {
 
   if (command === 'get_snapshot') {
     await emitObsSnapshot();
-    const [ver, sceneRes, streamRes] = await Promise.all([
+    const [ver, sceneRes, streamRes, recordRes] = await Promise.all([
       obs.call('GetVersion'),
       obs.call('GetSceneList'),
-      obs.call('GetStreamStatus').catch(() => ({ outputActive: false })),
+      obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+      obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
     ]);
     return {
       obsVersion: ver.obsVersion,
@@ -177,6 +183,7 @@ async function handleCommand(command, payload) {
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
         : [],
       obsStreamActive: Boolean(streamRes.outputActive),
+      obsRecordActive: Boolean(recordRes.outputActive),
     };
   }
 
@@ -329,6 +336,46 @@ async function handleCommand(command, payload) {
     return { imageData: res.imageData };
   }
 
+  if (command === 'start_stream') {
+    await obs.call('StartStream');
+    await emitObsSnapshot();
+    return { obsStreamActive: true };
+  }
+
+  if (command === 'stop_stream') {
+    await obs.call('StopStream');
+    await emitObsSnapshot();
+    return { obsStreamActive: false };
+  }
+
+  if (command === 'start_record') {
+    await obs.call('StartRecord');
+    await emitObsSnapshot();
+    return { obsRecordActive: true };
+  }
+
+  if (command === 'stop_record') {
+    const res = await obs.call('StopRecord');
+    await emitObsSnapshot();
+    return { obsRecordActive: false, outputPath: res?.outputPath || '' };
+  }
+
+  if (command === 'set_input_mute') {
+    const inputName = String(payload.inputName || '');
+    const inputMuted = Boolean(payload.inputMuted);
+    if (!inputName) throw new Error('inputName is required.');
+    await obs.call('SetInputMute', { inputName, inputMuted });
+    const verify = await obs.call('GetInputMute', { inputName }).catch(() => ({ inputMuted }));
+    return { inputName, inputMuted: Boolean(verify.inputMuted) };
+  }
+
+  if (command === 'get_input_mute') {
+    const inputName = String(payload.inputName || '');
+    if (!inputName) throw new Error('inputName is required.');
+    const res = await obs.call('GetInputMute', { inputName });
+    return { inputName, inputMuted: Boolean(res.inputMuted) };
+  }
+
   throw new Error(`Unsupported command: ${command}`);
 }
 
@@ -365,6 +412,7 @@ obs.on('ConnectionClosed', (err) => {
 obs.on('CurrentProgramSceneChanged', () => emitObsSnapshot().catch(() => {}));
 obs.on('SceneListChanged', () => emitObsSnapshot().catch(() => {}));
 obs.on('StreamStateChanged', () => emitObsSnapshot().catch(() => {}));
+obs.on('RecordStateChanged', () => emitObsSnapshot().catch(() => {}));
 
 socket.on('connect', () => {
   console.log(`[MaidanLive Agent] Authenticated to ${SERVER_URL}/obs-agent for match ${MATCH_ID}`);

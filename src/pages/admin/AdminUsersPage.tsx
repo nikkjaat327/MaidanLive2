@@ -133,6 +133,18 @@ export function AdminUsersPage() {
         manageVenues: true,
         declareResults: true,
       });
+    } else if (nextRole === 'BROADCASTER') {
+      setPermissions({
+        manageStreams: true,
+        manageScores: false,
+        manageTournaments: false,
+        manageTeams: false,
+        managePlayers: false,
+        moderateChat: false,
+        manageSponsors: false,
+        manageVenues: false,
+        declareResults: false,
+      });
     } else if (nextRole === 'MODERATOR') {
       setPermissions({
         manageStreams: false,
@@ -335,6 +347,7 @@ export function AdminUsersPage() {
           <option value="SUPER_ADMIN">Super Admin</option>
           <option value="ADMIN">Admin</option>
           <option value="TOURNAMENT_ORGANIZER">Tournament Organizer</option>
+          <option value="BROADCASTER">Broadcaster</option>
           <option value="MODERATOR">Moderator</option>
           <option value="SCORER">Scorer</option>
           <option value="CAPTAIN">Team Captain</option>
@@ -518,6 +531,7 @@ export function AdminUsersPage() {
               className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
             >
               <option value="SCORER">Scorer</option>
+              <option value="BROADCASTER">Broadcaster</option>
               <option value="MODERATOR">Moderator</option>
               <option value="TOURNAMENT_ORGANIZER">Tournament Organizer</option>
               <option value="ADMIN">Admin</option>
@@ -595,6 +609,7 @@ export function AdminUsersPage() {
                   className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
                 >
                   <option value="SCORER">Scorer</option>
+                  <option value="BROADCASTER">Broadcaster</option>
                   <option value="MODERATOR">Moderator</option>
                   <option value="TOURNAMENT_ORGANIZER">Tournament Organizer</option>
                   <option value="ADMIN">Admin</option>

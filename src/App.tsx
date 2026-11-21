@@ -6,6 +6,7 @@ import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
 import { offlineScoreService } from './services/scoreboard/offlineScoreService.ts';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
 import { AdminLayout, RequireAdminAuth } from './components/layout/AdminLayout.tsx';
+import { BroadcasterLayout } from './components/layout/BroadcasterLayout.tsx';
 
 // Customer Portal Pages
 import { HomePage } from './pages/customer/HomePage.tsx';
@@ -52,10 +53,12 @@ import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx';
 import { AdminPermissionsPage } from './pages/admin/AdminPermissionsPage.tsx';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.tsx';
 
-// Dedicated Broadcast Studio & OBS Browser Source Pages
+// Dedicated Broadcast Studio, Broadcaster Portal & OBS Browser Source Pages
 import { BroadcastOverlayConfigPage } from './pages/broadcast/BroadcastOverlayConfigPage.tsx';
 import { ObsOverlayViewerPage } from './pages/broadcast/ObsOverlayViewerPage.tsx';
 import { AdminObsBroadcastStudioPage } from './pages/admin/AdminObsBroadcastStudioPage.tsx';
+import { AdminBroadcastersPage } from './pages/admin/AdminBroadcastersPage.tsx';
+import { BroadcasterDashboardPage } from './pages/broadcaster/BroadcasterDashboardPage.tsx';
 import { CameraCompanionPage } from './pages/broadcast/CameraCompanionPage.tsx';
 
 export default function App() {
@@ -81,6 +84,16 @@ export default function App() {
                 <Route path=":matchId" element={<BroadcastOverlayConfigPage />} />
               </Route>
 
+              {/* Broadcaster Portal Routes (Dedicated Dark Broadcast Control Room) */}
+              <Route path="/broadcaster" element={<RequireAdminAuth />}>
+                <Route element={<BroadcasterLayout />}>
+                  <Route index element={<Navigate to="/broadcaster/dashboard" replace />} />
+                  <Route path="dashboard" element={<BroadcasterDashboardPage />} />
+                  <Route path="control-room" element={<AdminObsBroadcastStudioPage />} />
+                  <Route path="control-room/:matchId" element={<AdminObsBroadcastStudioPage />} />
+                </Route>
+              </Route>
+
               {/* Admin Portal Routes (Completely separate layout & auth) */}
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route path="/admin" element={<RequireAdminAuth />}>
@@ -88,6 +101,7 @@ export default function App() {
                   <Route index element={<Navigate to="/admin/dashboard" replace />} />
                   <Route path="dashboard" element={<AdminDashboardPage />} />
                   <Route path="live-streams" element={<AdminLiveStreamsPage />} />
+                  <Route path="broadcasters" element={<AdminBroadcastersPage />} />
                   <Route path="broadcast-studio" element={<AdminObsBroadcastStudioPage />} />
                   <Route path="broadcast-studio/:matchId" element={<AdminObsBroadcastStudioPage />} />
                   <Route path="match-health" element={<AdminMatchHealthPage />} />

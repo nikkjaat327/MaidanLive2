@@ -43,6 +43,7 @@ const KNOWN_COLLECTIONS = [
   'broadcastcameras',
   'broadcastscenes',
   'broadcastauditlogs',
+  'broadcastassignments',
 ];
 
 export function resolveSqliteDbPath(): string {

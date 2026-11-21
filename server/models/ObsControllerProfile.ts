@@ -48,9 +48,19 @@ export interface IObsControllerProfile extends Document {
   obsScenes: string[];
   obsStreamActive: boolean;
   obsStreamTimecode: string;
+  obsStreamBytes?: number | null;
+  obsStreamDurationMs?: number | null;
+  obsRecordActive: boolean;
+  obsRecordTimecode: string;
   obsStats?: IObsLiveStats | null;
   vdoRoomName: string;
   vdoRoomPasswordEnc: string;
+  broadcastSessionId: string;
+  broadcastSessionStartedAt?: Date | null;
+  activeControllerUserId?: mongoose.Types.ObjectId | null;
+  activeControllerName: string;
+  activeControllerRole: string;
+  activeControllerSince?: Date | null;
   adminOverrideLocked: boolean;
   adminOverrideByUserId?: mongoose.Types.ObjectId | null;
   adminOverrideByName: string;
@@ -118,12 +128,22 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     obsScenes: [{ type: String }],
     obsStreamActive: { type: Boolean, default: false },
     obsStreamTimecode: { type: String, default: '' },
+    obsStreamBytes: { type: Number, default: null },
+    obsStreamDurationMs: { type: Number, default: null },
+    obsRecordActive: { type: Boolean, default: false },
+    obsRecordTimecode: { type: String, default: '' },
     obsStats: {
       type: Schema.Types.Mixed,
       default: null,
     },
     vdoRoomName: { type: String, trim: true, default: '', maxlength: 100 },
     vdoRoomPasswordEnc: { type: String, default: '', select: false },
+    broadcastSessionId: { type: String, trim: true, default: '', maxlength: 80 },
+    broadcastSessionStartedAt: { type: Date, default: null },
+    activeControllerUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    activeControllerName: { type: String, trim: true, default: '', maxlength: 120 },
+    activeControllerRole: { type: String, trim: true, default: '', maxlength: 60 },
+    activeControllerSince: { type: Date, default: null },
     adminOverrideLocked: { type: Boolean, default: false },
     adminOverrideByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     adminOverrideByName: { type: String, default: '' },

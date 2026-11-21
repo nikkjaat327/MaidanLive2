@@ -46,6 +46,7 @@ function refNameToCollection(refName: string): string {
     BroadcastCamera: 'broadcastcameras',
     BroadcastScene: 'broadcastscenes',
     BroadcastAuditLog: 'broadcastauditlogs',
+    BroadcastAssignment: 'broadcastassignments',
   };
   return map[refName] || `${refName.toLowerCase()}s`;
 }

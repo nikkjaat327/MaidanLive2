@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { Server as HttpServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import { canManageStream, getJwtSecret, hasGranularPermission } from '../../server/middleware/auth.ts';
+import { canManageStream, getJwtSecret, hasBroadcastAccess, hasGranularPermission } from '../../server/middleware/auth.ts';
 import type { JwtPayload } from '../../server/middleware/auth.ts';
 import { ADMIN_PORTAL_ROLES, User } from '../../server/models/User.ts';
 import { LiveStream } from '../../server/models/LiveStream.ts';
@@ -344,6 +344,7 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
           if (!user || !user.isActive || !ADMIN_PORTAL_ROLES.includes(user.role)) return;
 
           const allowed =
+            (await hasBroadcastAccess(user, cleanMatchId, 'broadcast:control')) ||
             (await canManageStream(user, cleanMatchId, 'stream')) ||
             (await hasGranularPermission(user, 'broadcast:control', {
               scopeType: 'match',
@@ -353,6 +354,13 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
 
           socket.join(`broadcast-studio:${cleanMatchId}`);
           socket.emit('broadcast-studio:joined', attachMeta({ matchId: cleanMatchId }));
+          emitBroadcastStudioEvent(cleanMatchId, 'obs:controller_presence', {
+            matchId: cleanMatchId,
+            userId: String(user._id),
+            userName: user.name,
+            userRole: user.role,
+            action: 'joined',
+          });
         } catch {
           // Ignore invalid broadcast studio socket tokens
         }

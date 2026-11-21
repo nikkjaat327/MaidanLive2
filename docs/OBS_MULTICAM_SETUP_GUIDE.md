@@ -83,3 +83,15 @@ If MaidanLive runs on the same machine or LAN as OBS Studio (or via secure `wss:
 - **Orientation**: Lock all field phones to **Landscape** before tapping Start.
 - **Heat & Power**: Keep phones shaded, lower screen brightness, and attach a USB-C power bank during full T20 or tournament days.
 - **Admin Override**: During critical overs or finals, engage **Admin Override** from the studio header to lock OBS scene switching exclusively to Admins/Super Admins.
+
+---
+
+## 6. Broadcaster Role & Scoped Production Access
+
+MaidanLive supports a dedicated **Broadcaster** role (`BROADCASTER`), completely independent of the **Scorer** role (`SCORER`):
+
+- **Assignment Panel (`/admin/broadcasters`)**: Super Admins, Admins, and Tournament Organizers (for tournaments they manage) can assign Broadcasters at either **Tournament Scope** (all matches in a tournament) or **Match Scope** (specific matches, enabling multiple broadcasters per tournament on parallel grounds).
+- **Broadcaster Dashboard (`/broadcaster/dashboard`)**: Broadcasters are redirected here automatically upon sign-in to see only their assigned tournaments, matches, OBS connection states, and connected cameras.
+- **Broadcast Control Room (`/broadcaster/control-room/:matchId`)**: Authorized broadcasters can switch cameras, apply multi-cam split/grid layouts, control OBS streaming/recording (when permitted), mute/unmute camera inputs (`SetInputMute`), configure scoreboard overlays, and generate time-expiring smartphone QR links (`2h–48h`).
+- **Session & Conflict Control**: Only one active broadcast session runs per match; **Take Active Control** updates the active controller banner in real time, while **Admin Override** allows Admins/Organizers to lock production away from broadcasters when needed.
+

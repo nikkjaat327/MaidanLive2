@@ -62,7 +62,17 @@ export interface ObsControllerProfileData {
   obsScenes: string[];
   obsStreamActive: boolean;
   obsStreamTimecode: string;
+  obsStreamBytes?: number | null;
+  obsStreamDurationMs?: number | null;
+  obsRecordActive?: boolean;
+  obsRecordTimecode?: string;
   obsStats?: ObsLiveStats | null;
+  broadcastSessionId?: string;
+  broadcastSessionStartedAt?: string | null;
+  activeControllerUserId?: string | null;
+  activeControllerName?: string;
+  activeControllerRole?: string;
+  activeControllerSince?: string | null;
   vdoRoomName: string;
   adminOverrideLocked: boolean;
   adminOverrideByUserId?: string | null;
@@ -102,6 +112,10 @@ export interface BroadcastCameraData {
   vdoPushUrl?: string;
   obsBrowserSourceUrl?: string;
   pushTokenPrefix: string;
+  pushTokenExpiresAt?: string | null;
+  broadcastSessionId?: string;
+  audioMuted?: boolean;
+  obsInputMuted?: boolean | null;
   resolution: '1920x1080' | '1280x720' | '854x480' | '640x360';
   fps: number;
   bitrateKbps: number;
@@ -202,5 +216,123 @@ export interface ObsStudioPayload {
   }>;
   permissions: {
     canOverride: boolean;
+    canManageCameras?: boolean;
+    canManageOverlays?: boolean;
+    canControlStream?: boolean;
+    canControlRecord?: boolean;
   };
+}
+
+export interface BroadcastAssignmentData {
+  id: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  userRole?: string;
+  role?: string;
+  scopeType: 'tournament' | 'match';
+  tournamentId?: string | null;
+  tournamentName?: string;
+  matchId?: string | null;
+  matchTitle?: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  permissions: string[];
+  assignedByName: string;
+  notes: string;
+  suspendedAt?: string | null;
+  revokedAt?: string | null;
+  revokeReason?: string;
+  createdAt: string;
+}
+
+export interface BroadcasterDashboardMatchItem {
+  id: string;
+  matchTitle: string;
+  teamAName: string;
+  teamBName: string;
+  gameName: string;
+  tournamentId?: string | null;
+  tournamentName: string;
+  status: StreamStatus;
+  matchDate?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  activeStreamingProvider: StreamingProvider;
+  obsConnectionStatus: ObsConnectionStatus;
+  obsStreamActive: boolean;
+  obsRecordActive: boolean;
+  activeObsScene: string;
+  activeLayoutType: ObsLayoutType;
+  broadcastSessionId: string;
+  activeControllerName: string;
+  adminOverrideLocked: boolean;
+  connectedCameraCount: number;
+  totalCameraCount: number;
+}
+
+export interface BroadcasterDashboardPayload {
+  scope: {
+    allAccess: boolean;
+    tournamentIds: string[];
+    matchIds: string[];
+    permissions: string[];
+  };
+  assignments: BroadcastAssignmentData[];
+  tournaments: Array<{
+    id: string;
+    name: string;
+    sportType: string;
+    status: string;
+    startDate?: string | null;
+    matchCount: number;
+  }>;
+  matches: BroadcasterDashboardMatchItem[];
+  activeSessions: BroadcasterDashboardMatchItem[];
+  summary: {
+    assignedTournaments: number;
+    liveMatches: number;
+    upcomingMatches: number;
+    completedMatches: number;
+    connectedObsCount: number;
+    connectedCamerasTotal: number;
+    authorizedMatchIdsCount: number;
+  };
+}
+
+export interface BroadcastersManagementPayload {
+  assignments: BroadcastAssignmentData[];
+  candidates: Array<{
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    isActive: boolean;
+  }>;
+  tournaments: Array<{
+    id: string;
+    name: string;
+    sportType: string;
+    status: string;
+  }>;
+  matches: Array<{
+    id: string;
+    matchTitle: string;
+    tournamentId?: string | null;
+    tournamentName: string;
+    status: string;
+  }>;
+  activeSessions: Array<{
+    matchId: string;
+    matchTitle: string;
+    matchStatus: string;
+    connectionStatus: ObsConnectionStatus;
+    obsStreamActive: boolean;
+    obsRecordActive: boolean;
+    activeObsScene: string;
+    broadcastSessionId: string;
+    activeControllerName: string;
+    onlineCameraCount: number;
+    totalCameraCount: number;
+  }>;
+  recentAuditLogs: BroadcastAuditLogData[];
 }

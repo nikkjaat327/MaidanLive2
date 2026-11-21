@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   BatteryCharging,
   Camera,
   Check,
+  Circle,
   ClipboardList,
   Copy,
   Edit3,
@@ -16,6 +17,8 @@ import {
   KeyRound,
   Layers,
   Lock,
+  Mic,
+  MicOff,
   Monitor,
   Play,
   Plus,
@@ -27,16 +30,20 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Smartphone,
+  Square,
   Star,
   Terminal,
   Trash2,
   Tv,
   Unlock,
+  Unplug,
+  UserCheck,
   Video,
   Wifi,
   WifiOff,
   Zap,
 } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -95,8 +102,14 @@ function cameraStatusBadgeClass(status: CameraConnectionStatus) {
 export function AdminObsBroadcastStudioPage() {
   const { matchId } = useParams<{ matchId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { adminUser } = useAuth();
 
-  const [matches, setMatches] = useState<LiveStreamData[]>([]);
+  const isBroadcasterPortal = location.pathname.startsWith('/broadcaster');
+  const isBroadcasterRole = adminUser?.role === 'BROADCASTER';
+  const studioBaseRoute = isBroadcasterPortal ? '/broadcaster/control-room' : '/admin/broadcast-studio';
+
+  const [matches, setMatches] = useState<Array<Pick<LiveStreamData, 'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status'>>>([]);
   const [loadingMatches, setLoadingMatches] = useState(true);
   const [activeTab, setActiveTab] = useState<StudioTab>('live');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -118,6 +131,10 @@ export function AdminObsBroadcastStudioPage() {
   const [switchingKey, setSwitchingKey] = useState<string | null>(null);
   const [applyingLayout, setApplyingLayout] = useState(false);
   const [testingCamId, setTestingCamId] = useState<string | null>(null);
+  const [mutingCamId, setMutingCamId] = useState<string | null>(null);
+  const [disconnectingCamId, setDisconnectingCamId] = useState<string | null>(null);
+  const [executingObsAction, setExecutingObsAction] = useState<string | null>(null);
+  const [managingSession, setManagingSession] = useState<string | null>(null);
   const [previewSnapshots, setPreviewSnapshots] = useState<Record<string, { imageData: string; capturedAt: string }>>({});
   const [capturingPreviewFor, setCapturingPreviewFor] = useState<string | null>(null);
 
@@ -160,22 +177,34 @@ export function AdminObsBroadcastStudioPage() {
   // Audit log filter
   const [auditFilter, setAuditFilter] = useState('');
 
-  // Load match selector list
+  // Load match selector list (strictly scoped for Broadcasters)
   const loadMatches = useCallback(async () => {
     try {
       setLoadingMatches(true);
-      const list = await liveStreamService.listStreams();
+      let list: Array<Pick<LiveStreamData, 'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status'>> = [];
+      if (isBroadcasterRole || isBroadcasterPortal) {
+        const dash = await obsStudioService.getBroadcasterDashboard();
+        list = (dash.matches || []).map((m) => ({
+          id: m.id,
+          matchTitle: m.matchTitle,
+          teamAName: m.teamAName,
+          teamBName: m.teamBName,
+          status: m.status,
+        }));
+      } else {
+        list = await liveStreamService.listStreams();
+      }
       setMatches(list);
       if (!matchId && list.length > 0) {
         const preferred = list.find((s) => s.status === 'LIVE') || list.find((s) => s.status === 'UPCOMING') || list[0];
-        navigate(`/admin/broadcast-studio/${preferred.id}`, { replace: true });
+        navigate(`${studioBaseRoute}/${preferred.id}`, { replace: true });
       }
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to load matches list.'));
     } finally {
       setLoadingMatches(false);
     }
-  }, [matchId, navigate]);
+  }, [matchId, navigate, isBroadcasterRole, isBroadcasterPortal, studioBaseRoute]);
 
   useEffect(() => {
     loadMatches();
@@ -211,6 +240,10 @@ export function AdminObsBroadcastStudioPage() {
   const cameras = studio?.cameras || [];
   const scenes = studio?.scenes || [];
   const obsConnected = profile?.connectionStatus === 'CONNECTED';
+  const canManageCameras = studio?.permissions?.canManageCameras !== false;
+  const canManageOverlays = studio?.permissions?.canManageOverlays !== false;
+  const canControlStream = studio?.permissions?.canControlStream !== false;
+  const canControlRecord = studio?.permissions?.canControlRecord !== false;
   const enabledCameras = useMemo(() => cameras.filter((c) => c.enabled), [cameras]);
   const onlineCameraCount = useMemo(
     () => cameras.filter((c) => c.enabled && (c.status === 'CONNECTED' || c.status === 'ACTIVE')).length,
@@ -218,7 +251,7 @@ export function AdminObsBroadcastStudioPage() {
   );
 
   // Camera CRUD handlers
-  async function handleSaveCamera(payload: Partial<BroadcastCameraData>) {
+  async function handleSaveCamera(payload: Partial<BroadcastCameraData> & { expiresInHours?: number }) {
     if (!matchId) return;
     try {
       setActionError(null);
@@ -301,14 +334,97 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  async function handleRotatePhoneLink(cameraId: string) {
+  async function handleRotatePhoneLink(cameraId: string, expiresInHours = 12) {
     if (!matchId) return;
     try {
-      const res = await obsStudioService.rotateCameraToken(matchId, cameraId);
+      const res = await obsStudioService.rotateCameraToken(matchId, cameraId, expiresInHours);
       setWizardConnectUrl(res.mobileConnectUrl);
       notifySuccess('Generated fresh scoped smartphone setup QR link.');
+      await refetch();
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to generate smartphone link.'));
+    }
+  }
+
+  async function handleToggleCameraAudio(cam: BroadcastCameraData) {
+    if (!matchId) return;
+    const currentlyMuted = Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted);
+    try {
+      setMutingCamId(cam.cameraId);
+      setActionError(null);
+      const res = await obsStudioService.setCameraAudioMute(
+        matchId,
+        cam.cameraId,
+        !currentlyMuted,
+        Boolean(profile?.adminOverrideLocked)
+      );
+      notifySuccess(
+        res.obsSynced
+          ? `${cam.name} audio ${!currentlyMuted ? 'muted' : 'unmuted'} in OBS Studio.`
+          : `${cam.name} audio preference saved (${res.obsNote || 'OBS not synced'}).`
+      );
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to toggle audio for ${cam.name}.`));
+    } finally {
+      setMutingCamId(null);
+    }
+  }
+
+  async function handleDisconnectCamera(cam: BroadcastCameraData) {
+    if (!matchId) return;
+    try {
+      setDisconnectingCamId(cam.cameraId);
+      setActionError(null);
+      await obsStudioService.disconnectCamera(matchId, cam.cameraId);
+      notifySuccess(`Disconnected ${cam.name}.`);
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to disconnect ${cam.name}.`));
+    } finally {
+      setDisconnectingCamId(null);
+    }
+  }
+
+  async function handleObsOutputAction(action: 'start_stream' | 'stop_stream' | 'start_record' | 'stop_record') {
+    if (!matchId) return;
+    try {
+      setExecutingObsAction(action);
+      setActionError(null);
+      await obsStudioService.executeObsAction(matchId, action, Boolean(profile?.adminOverrideLocked));
+      const labels: Record<typeof action, string> = {
+        start_stream: 'OBS Stream started.',
+        stop_stream: 'OBS Stream stopped.',
+        start_record: 'OBS Recording started.',
+        stop_record: 'OBS Recording stopped.',
+      };
+      notifySuccess(labels[action]);
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `OBS refused command: ${action}.`));
+    } finally {
+      setExecutingObsAction(null);
+    }
+  }
+
+  async function handleManageSession(mode: 'start' | 'end' | 'takeover') {
+    if (!matchId) return;
+    try {
+      setManagingSession(mode);
+      setActionError(null);
+      await obsStudioService.manageSession(matchId, mode);
+      notifySuccess(
+        mode === 'start'
+          ? 'Broadcast production session started.'
+          : mode === 'end'
+            ? 'Broadcast production session ended.'
+            : 'Active controller presence updated.'
+      );
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to update broadcast session.'));
+    } finally {
+      setManagingSession(null);
     }
   }
 
@@ -653,7 +769,7 @@ export function AdminObsBroadcastStudioPage() {
             value={matchId || ''}
             disabled={loadingMatches}
             onChange={(e) => {
-              if (e.target.value) navigate(`/admin/broadcast-studio/${e.target.value}`);
+              if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
             }}
             aria-label="Select broadcast match"
             className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[260px]"
@@ -675,13 +791,15 @@ export function AdminObsBroadcastStudioPage() {
                 <Tv className="w-3.5 h-3.5 text-[#EA580C]" />
                 <span>Overlay Studio</span>
               </Link>
-              <Link
-                to={`/admin/scoreboard/${matchId}`}
-                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap"
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Scoreboard</span>
-              </Link>
+              {!isBroadcasterRole && (
+                <Link
+                  to={`/admin/scoreboard/${matchId}`}
+                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  <span>Scoreboard</span>
+                </Link>
+              )}
             </>
           )}
 
@@ -794,6 +912,56 @@ export function AdminObsBroadcastStudioPage() {
         <TableSkeleton rows={5} />
       ) : (
         <>
+          {/* Active Session & Controller Presence Bar */}
+          <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-1.5 font-mono font-bold text-slate-900">
+                <UserCheck className="w-4 h-4 text-[#EA580C]" />
+                <span>
+                  Controller:{' '}
+                  {profile.activeControllerName
+                    ? `${profile.activeControllerName} (${profile.activeControllerRole || 'Operator'})`
+                    : 'Unclaimed'}
+                </span>
+              </span>
+              <span className="font-mono text-slate-500">
+                Session: {profile.broadcastSessionId || 'No active session'}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {!profile.broadcastSessionId ? (
+                <button
+                  type="button"
+                  disabled={managingSession !== null}
+                  onClick={() => handleManageSession('start')}
+                  className="min-h-[32px] px-3 py-1 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {managingSession === 'start' ? 'Starting...' : 'Start Broadcast Session'}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={managingSession !== null}
+                    onClick={() => handleManageSession('takeover')}
+                    className="min-h-[32px] px-3 py-1 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    {managingSession === 'takeover' ? 'Claiming...' : 'Take Active Control'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={managingSession !== null}
+                    onClick={() => handleManageSession('end')}
+                    className="min-h-[32px] px-3 py-1 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50"
+                  >
+                    {managingSession === 'end' ? 'Ending...' : 'End Session'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* 4-Cell Studio KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -830,7 +998,7 @@ export function AdminObsBroadcastStudioPage() {
               <p className="font-mono tabular-nums text-lg font-bold text-slate-900 mt-1">
                 {obsConnected && profile.obsStats
                   ? `${Math.round(profile.obsStats.activeFps)} FPS · ${profile.obsStats.cpuUsage.toFixed(1)}% CPU`
-                  : '—'}
+                  : 'Unavailable'}
               </p>
               <p className="text-[11px] text-slate-500 mt-0.5 font-mono tabular-nums">
                 {obsConnected && profile.obsStats
@@ -839,13 +1007,21 @@ export function AdminObsBroadcastStudioPage() {
               </p>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Stream Output (YouTube / RTMP)
-              </p>
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  OBS Stream &amp; Recording
+                </p>
+                {obsConnected && profile.obsRecordActive && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-mono font-bold">
+                    <Circle className="w-2.5 h-2.5 fill-current" />
+                    REC
+                  </span>
+                )}
+              </div>
               <p
-                className={`font-mono text-lg font-bold mt-1 ${
-                  obsConnected && profile.obsStreamActive ? 'text-red-600' : 'text-slate-700'
+                className={`font-mono text-sm sm:text-base font-bold ${
+                  obsConnected && profile.obsStreamActive ? 'text-red-500' : 'text-slate-700'
                 }`}
               >
                 {obsConnected
@@ -854,8 +1030,46 @@ export function AdminObsBroadcastStudioPage() {
                     : 'OBS Output Idle'
                   : studio.match.status}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                Match: {studio.match.matchTitle} ({studio.match.activeStreamingProvider.toUpperCase()})
+              <div className="flex flex-wrap items-center gap-1.5">
+                {canControlStream && (
+                  <button
+                    type="button"
+                    disabled={!obsConnected || executingObsAction !== null}
+                    onClick={() =>
+                      handleObsOutputAction(profile.obsStreamActive ? 'stop_stream' : 'start_stream')
+                    }
+                    className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
+                      profile.obsStreamActive
+                        ? 'bg-red-600 text-white border-red-600'
+                        : 'bg-slate-900 text-white border-slate-700 hover:bg-slate-800'
+                    }`}
+                  >
+                    {profile.obsStreamActive ? <Square className="w-3 h-3" /> : <Radio className="w-3 h-3" />}
+                    <span>{profile.obsStreamActive ? 'Stop Stream' : 'Start Stream'}</span>
+                  </button>
+                )}
+                {canControlRecord && (
+                  <button
+                    type="button"
+                    disabled={!obsConnected || executingObsAction !== null}
+                    onClick={() =>
+                      handleObsOutputAction(profile.obsRecordActive ? 'stop_record' : 'start_record')
+                    }
+                    className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
+                      profile.obsRecordActive
+                        ? 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Circle className="w-3 h-3" />
+                    <span>{profile.obsRecordActive ? 'Stop Rec' : 'Record'}</span>
+                  </button>
+                )}
+              </div>
+              <p className="text-[10px] font-mono text-slate-500 truncate">
+                {profile.obsStreamBytes && profile.obsStreamBytes > 0
+                  ? `${(profile.obsStreamBytes / (1024 * 1024)).toFixed(1)} MB sent`
+                  : `Provider: ${studio.match.activeStreamingProvider.toUpperCase()}`}
               </p>
             </div>
           </div>
@@ -1067,6 +1281,28 @@ export function AdminObsBroadcastStudioPage() {
 
                               <button
                                 type="button"
+                                disabled={mutingCamId === cam.cameraId}
+                                onClick={() => handleToggleCameraAudio(cam)}
+                                title={
+                                  Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted)
+                                    ? 'Unmute camera audio in OBS'
+                                    : 'Mute camera audio in OBS'
+                                }
+                                className={`min-h-[38px] px-2.5 py-1.5 text-[11px] font-semibold border rounded-lg ${
+                                  Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted)
+                                    ? 'bg-red-50 text-red-700 border-red-200'
+                                    : 'text-slate-700 bg-slate-50 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted) ? (
+                                  <MicOff className="w-4 h-4" />
+                                ) : (
+                                  <Mic className="w-4 h-4" />
+                                )}
+                              </button>
+
+                              <button
+                                type="button"
                                 disabled={!obsConnected || capturingPreviewFor === cam.cameraId}
                                 onClick={() => handleCaptureSourcePreview(cam)}
                                 title="Capture genuine snapshot from OBS Studio"
@@ -1235,30 +1471,32 @@ export function AdminObsBroadcastStudioPage() {
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {[2, 4, 6].map((cnt) => (
+                {canManageCameras && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {[2, 4, 6].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        disabled={scaffoldingCount !== null}
+                        onClick={() => handleScaffoldCameras(cnt)}
+                        className="min-h-[38px] px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        {scaffoldingCount === cnt ? `Adding ${cnt}...` : `+ Add ${cnt} Mobile Cams`}
+                      </button>
+                    ))}
                     <button
-                      key={cnt}
                       type="button"
-                      disabled={scaffoldingCount !== null}
-                      onClick={() => handleScaffoldCameras(cnt)}
-                      className="min-h-[38px] px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50"
+                      onClick={() => {
+                        setEditingCamera(null);
+                        setCameraModalOpen(true);
+                      }}
+                      className="min-h-[38px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
                     >
-                      {scaffoldingCount === cnt ? `Adding ${cnt}...` : `+ Add ${cnt} Mobile Cams`}
+                      <Plus className="w-4 h-4" />
+                      <span>Add Camera</span>
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingCamera(null);
-                      setCameraModalOpen(true);
-                    }}
-                    className="min-h-[38px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Add Camera</span>
-                  </button>
-                </div>
+                  </div>
+                )}
               </div>
 
               {cameras.length === 0 ? (
@@ -1382,52 +1620,80 @@ export function AdminObsBroadcastStudioPage() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  handleToggleCameraField(
-                                    cam,
-                                    { enabled: !cam.enabled },
-                                    `${cam.name} ${cam.enabled ? 'disabled' : 'enabled'}.`
-                                  )
-                                }
-                                className="min-h-[32px] px-2 py-1 text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
-                              >
-                                {cam.enabled ? 'Disable' : 'Enable'}
-                              </button>
-                              {!cam.isDefault && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleToggleCameraField(
-                                      cam,
-                                      { isDefault: true },
-                                      `${cam.name} set as primary default camera.`
-                                    )
-                                  }
-                                  title="Set as Default Primary Camera"
-                                  className="min-h-[32px] px-2 py-1 text-slate-500 hover:text-amber-600 border border-slate-200 rounded-lg"
-                                >
-                                  <Star className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingCamera(cam);
-                                  setCameraModalOpen(true);
-                                }}
-                                title="Edit camera"
+                                disabled={mutingCamId === cam.cameraId}
+                                onClick={() => handleToggleCameraAudio(cam)}
+                                title="Toggle Camera Audio Mute"
                                 className="min-h-[32px] px-2 py-1 text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg"
                               >
-                                <Edit3 className="w-3.5 h-3.5" />
+                                {Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted) ? (
+                                  <MicOff className="w-3.5 h-3.5 text-red-600" />
+                                ) : (
+                                  <Mic className="w-3.5 h-3.5" />
+                                )}
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => setDeleteCameraTarget(cam)}
-                                title="Delete camera"
-                                className="min-h-[32px] px-2 py-1 text-slate-500 hover:text-red-600 border border-slate-200 rounded-lg"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {canManageCameras && (cam.status === 'CONNECTED' || cam.status === 'ACTIVE') && (
+                                <button
+                                  type="button"
+                                  disabled={disconnectingCamId === cam.cameraId}
+                                  onClick={() => handleDisconnectCamera(cam)}
+                                  title="Disconnect Camera Session"
+                                  className="min-h-[32px] px-2 py-1 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100"
+                                >
+                                  <Unplug className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {canManageCameras && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleToggleCameraField(
+                                        cam,
+                                        { enabled: !cam.enabled },
+                                        `${cam.name} ${cam.enabled ? 'disabled' : 'enabled'}.`
+                                      )
+                                    }
+                                    className="min-h-[32px] px-2 py-1 text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
+                                  >
+                                    {cam.enabled ? 'Disable' : 'Enable'}
+                                  </button>
+                                  {!cam.isDefault && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleCameraField(
+                                          cam,
+                                          { isDefault: true },
+                                          `${cam.name} set as primary default camera.`
+                                        )
+                                      }
+                                      title="Set as Default Primary Camera"
+                                      className="min-h-[32px] px-2 py-1 text-slate-500 hover:text-amber-600 border border-slate-200 rounded-lg"
+                                    >
+                                      <Star className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingCamera(cam);
+                                      setCameraModalOpen(true);
+                                    }}
+                                    title="Edit camera"
+                                    className="min-h-[32px] px-2 py-1 text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeleteCameraTarget(cam)}
+                                    title="Delete camera"
+                                    className="min-h-[32px] px-2 py-1 text-slate-500 hover:text-red-600 border border-slate-200 rounded-lg"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1605,12 +1871,14 @@ export function AdminObsBroadcastStudioPage() {
                       Select tournament sponsors linked to this match broadcast.
                     </p>
                   </div>
-                  <Link
-                    to="/admin/sponsors"
-                    className="text-xs font-semibold text-[#EA580C] hover:underline"
-                  >
-                    Manage Sponsors
-                  </Link>
+                  {!isBroadcasterRole && (
+                    <Link
+                      to="/admin/sponsors"
+                      className="text-xs font-semibold text-[#EA580C] hover:underline"
+                    >
+                      Manage Sponsors
+                    </Link>
+                  )}
                 </div>
 
                 {studio.sponsors.length === 0 ? (
@@ -1953,6 +2221,15 @@ export function AdminObsBroadcastStudioPage() {
                   <option value="SCENE_SWITCH">SCENE_SWITCH</option>
                   <option value="OBS_CONNECT">OBS_CONNECT</option>
                   <option value="OBS_DISCONNECT">OBS_DISCONNECT</option>
+                  <option value="OBS_STREAM_START">OBS_STREAM_START</option>
+                  <option value="OBS_STREAM_STOP">OBS_STREAM_STOP</option>
+                  <option value="OBS_RECORD_START">OBS_RECORD_START</option>
+                  <option value="OBS_RECORD_STOP">OBS_RECORD_STOP</option>
+                  <option value="CAMERA_AUDIO_TOGGLE">CAMERA_AUDIO_TOGGLE</option>
+                  <option value="CAMERA_DISCONNECTED">CAMERA_DISCONNECTED</option>
+                  <option value="BROADCAST_SESSION_STARTED">BROADCAST_SESSION_STARTED</option>
+                  <option value="BROADCAST_SESSION_ENDED">BROADCAST_SESSION_ENDED</option>
+                  <option value="CONTROLLER_TAKEOVER">CONTROLLER_TAKEOVER</option>
                   <option value="ADMIN_OVERRIDE_ON">ADMIN_OVERRIDE_ON</option>
                   <option value="ADMIN_OVERRIDE_OFF">ADMIN_OVERRIDE_OFF</option>
                   <option value="CAMERA_CREATED">CAMERA_CREATED</option>

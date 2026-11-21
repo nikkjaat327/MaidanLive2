@@ -64,27 +64,51 @@ export function RequireAdminAuth() {
 export function AdminLayout() {
   const { adminUser, logoutAdmin, adminUnreadNotifications } = useAuth();
   const { theme, toggleTheme } = useAdminTheme();
+  const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const isSuperOrAdmin = adminUser?.role === 'SUPER_ADMIN' || adminUser?.role === 'ADMIN';
+  const isBroadcaster = adminUser?.role === 'BROADCASTER';
+  const isOrganizer = adminUser?.role === 'TOURNAMENT_ORGANIZER';
   const perms = adminUser?.permissions;
 
+  // Enforce Broadcaster isolation: Broadcaster role only uses /broadcaster/* or /admin/broadcast-studio/*
+  if (
+    isBroadcaster &&
+    !location.pathname.startsWith('/admin/broadcast-studio') &&
+    !location.pathname.startsWith('/admin/notifications')
+  ) {
+    return <Navigate to="/broadcaster/dashboard" replace />;
+  }
+
   const navItems = [
-    { to: '/admin/dashboard', label: 'Overview', icon: LayoutDashboard, show: true },
-    { to: '/admin/tournaments', label: 'Tournaments', icon: Trophy, show: true },
-    { to: '/admin/teams', label: 'Teams Directory', icon: Users, show: true },
-    { to: '/admin/players', label: 'Players & Eligibility', icon: UserCheck, show: true },
+    {
+      to: '/broadcaster/dashboard',
+      label: 'Broadcaster Hub',
+      icon: Radio,
+      show: isBroadcaster || isSuperOrAdmin || isOrganizer,
+    },
+    {
+      to: '/admin/broadcasters',
+      label: 'Broadcaster Team',
+      icon: UserCheck,
+      show: isSuperOrAdmin || isOrganizer,
+    },
+    { to: '/admin/dashboard', label: 'Overview', icon: LayoutDashboard, show: !isBroadcaster },
+    { to: '/admin/tournaments', label: 'Tournaments', icon: Trophy, show: !isBroadcaster },
+    { to: '/admin/teams', label: 'Teams Directory', icon: Users, show: !isBroadcaster },
+    { to: '/admin/players', label: 'Players & Eligibility', icon: UserCheck, show: !isBroadcaster },
     {
       to: '/admin/registrations',
       label: 'Registration Queue',
       icon: ClipboardCheck,
-      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageTournaments),
+      show: !isBroadcaster && (isSuperOrAdmin || isOrganizer || Boolean(perms?.manageTournaments)),
     },
     {
       to: '/admin/payments',
       label: 'Payment Verification',
       icon: CreditCard,
-      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageTournaments),
+      show: !isBroadcaster && (isSuperOrAdmin || isOrganizer || Boolean(perms?.manageTournaments)),
     },
     {
       to: '/admin/notifications',
@@ -92,21 +116,21 @@ export function AdminLayout() {
       icon: Bell,
       show: true,
     },
-    { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: true },
-    { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: true },
+    { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: !isBroadcaster },
+    { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: !isBroadcaster },
     {
       to: '/admin/broadcast-studio',
       label: 'Multi-Cam OBS',
       icon: Video,
-      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageStreams),
+      show: isBroadcaster || isSuperOrAdmin || isOrganizer || Boolean(perms?.manageStreams),
     },
-    { to: '/admin/match-health', label: 'Match Health', icon: HeartPulse, show: true },
-    { to: '/admin/scoreboard', label: 'Live Score Control', icon: SlidersHorizontal, show: true },
+    { to: '/admin/match-health', label: 'Match Health', icon: HeartPulse, show: !isBroadcaster },
+    { to: '/admin/scoreboard', label: 'Live Score Control', icon: SlidersHorizontal, show: !isBroadcaster },
     {
       to: '/admin/sponsors',
       label: 'Sponsors',
       icon: Award,
-      show: isSuperOrAdmin || Boolean(perms?.manageSponsors),
+      show: !isBroadcaster && (isSuperOrAdmin || Boolean(perms?.manageSponsors)),
     },
     {
       to: '/admin/users',
@@ -124,26 +148,26 @@ export function AdminLayout() {
       to: '/admin/audit-logs',
       label: 'Audit Logs',
       icon: ClipboardList,
-      show: isSuperOrAdmin || adminUser?.role === 'MODERATOR',
+      show: !isBroadcaster && (isSuperOrAdmin || adminUser?.role === 'MODERATOR'),
     },
-    { to: '/admin/settings', label: 'Security & Settings', icon: Settings, show: true },
+    { to: '/admin/settings', label: 'Security & Settings', icon: Settings, show: !isBroadcaster },
     // Additional operational tools
-    { to: '/admin/highlights', label: 'Highlights', icon: Sparkles, show: true },
+    { to: '/admin/highlights', label: 'Highlights', icon: Sparkles, show: !isBroadcaster },
     {
       to: '/admin/venues',
       label: 'Venues',
       icon: MapPin,
-      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageVenues),
+      show: !isBroadcaster && (isSuperOrAdmin || isOrganizer || Boolean(perms?.manageVenues)),
     },
     {
       to: '/admin/moderation',
       label: 'Chat & Polls',
       icon: MessageSquareWarning,
-      show: isSuperOrAdmin || adminUser?.role === 'MODERATOR' || Boolean(perms?.moderateChat),
+      show: !isBroadcaster && (isSuperOrAdmin || adminUser?.role === 'MODERATOR' || Boolean(perms?.moderateChat)),
     },
-    { to: '/admin/reports', label: 'Issue Reports', icon: Flag, show: true },
-    { to: '/admin/analytics', label: 'Analytics', icon: BarChart3, show: true },
-    { to: '/admin/organizer', label: 'Organizer Hub', icon: Briefcase, show: true },
+    { to: '/admin/reports', label: 'Issue Reports', icon: Flag, show: !isBroadcaster },
+    { to: '/admin/analytics', label: 'Analytics', icon: BarChart3, show: !isBroadcaster },
+    { to: '/admin/organizer', label: 'Organizer Hub', icon: Briefcase, show: !isBroadcaster },
   ].filter((item) => item.show);
 
   return (

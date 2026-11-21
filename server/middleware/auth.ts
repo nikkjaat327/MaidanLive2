@@ -6,6 +6,7 @@ import type { IUser, UserPermissions, UserRole } from '../models/User.ts';
 import { LiveStream } from '../models/LiveStream.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { RoleAssignment } from '../models/RoleAssignment.ts';
+import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
 import { UserSession } from '../models/UserSession.ts';
 import { findDocByAnyId } from '../utils/mongoNormalize.ts';
 
@@ -45,11 +46,12 @@ export function getEffectiveGranularPermissions(user: IUser): Set<string> {
     return new Set(['*']);
   }
   if (ADMIN_PORTAL_ROLES.includes(user.role)) set.add('admin_portal:access');
-  if (perms.manageStreams) {
+  if (perms.manageStreams && user.role !== 'BROADCASTER') {
     set.add('matches:manage_stream');
     set.add('matches:publish_replay');
     set.add('broadcast:control');
     set.add('broadcast:manage_cameras');
+    set.add('broadcast:manage_overlays');
   }
   if (perms.manageScores) set.add('matches:score');
   if (perms.manageTournaments) {
@@ -80,6 +82,10 @@ export function getEffectiveGranularPermissions(user: IUser): Set<string> {
   if (user.role === 'TOURNAMENT_ORGANIZER') {
     set.add('analytics:view');
     set.add('registrations:review');
+    set.add('broadcast:assign_broadcasters');
+  }
+  if (user.role === 'BROADCASTER') {
+    set.add('broadcast:scoped_access');
   }
   if (user.role === 'MODERATOR') {
     set.add('audit_logs:view');
@@ -271,7 +277,8 @@ export async function canManageTournament(user: IUser, tournamentId: string): Pr
     user.role === 'SPECTATOR' ||
     user.role === 'CAPTAIN' ||
     user.role === 'SCORER' ||
-    user.role === 'MODERATOR'
+    user.role === 'MODERATOR' ||
+    user.role === 'BROADCASTER'
   ) {
     return false;
   }
@@ -284,6 +291,189 @@ export async function canManageTournament(user: IUser, tournamentId: string): Pr
   return (user.assignedTournamentIds || []).some((id) => id.toString() === tournamentId);
 }
 
+export type BroadcastAccessPermission =
+  | 'broadcast:control'
+  | 'broadcast:manage_cameras'
+  | 'broadcast:manage_overlays'
+  | 'broadcast:stream_control'
+  | 'broadcast:record_control'
+  | 'broadcast:override';
+
+export async function hasBroadcastAccess(
+  user: IUser,
+  matchId: string,
+  requiredPerm: BroadcastAccessPermission = 'broadcast:control'
+): Promise<boolean> {
+  if (user.role === 'SUPER_ADMIN') return true;
+  if (user.role === 'SPECTATOR' || user.role === 'CAPTAIN' || user.role === 'MODERATOR') {
+    return false;
+  }
+
+  if (requiredPerm === 'broadcast:override') {
+    if (user.role === 'ADMIN') return true;
+    if (user.role === 'TOURNAMENT_ORGANIZER') {
+      const stream = await findDocByAnyId(LiveStream, matchId);
+      if (!stream) return false;
+      const tourId = stream.tournamentId ? stream.tournamentId.toString() : '';
+      if (tourId && (await canManageTournament(user, tourId))) return true;
+      return stream.createdBy?.toString() === user._id.toString();
+    }
+    return await hasGranularPermission(user, 'broadcast:override', {
+      scopeType: 'match',
+      scopeId: matchId,
+    });
+  }
+
+  const stream = await findDocByAnyId(LiveStream, matchId);
+  if (!stream) return false;
+  const streamTournamentId = stream.tournamentId ? stream.tournamentId.toString() : '';
+
+  if (user.role === 'ADMIN') {
+    return true;
+  }
+
+  if (user.role === 'TOURNAMENT_ORGANIZER') {
+    if (stream.createdBy?.toString() === user._id.toString()) return true;
+    if ((user.assignedStreamIds || []).some((id) => id.toString() === matchId)) return true;
+    if (
+      streamTournamentId &&
+      ((await canManageTournament(user, streamTournamentId)) ||
+        (user.assignedTournamentIds || []).some((id) => id.toString() === streamTournamentId))
+    ) {
+      return true;
+    }
+    return await hasGranularPermission(user, requiredPerm, {
+      scopeType: 'match',
+      scopeId: matchId,
+    });
+  }
+
+  if (user.role === 'BROADCASTER') {
+    const assignments = await BroadcastAssignment.find({ userId: user._id }).lean();
+    let explicitlyBlocked = false;
+
+    for (const a of assignments) {
+      const matchHit = a.scopeType === 'match' && a.matchId && String(a.matchId) === matchId;
+      const tourHit =
+        a.scopeType === 'tournament' &&
+        a.tournamentId &&
+        streamTournamentId &&
+        String(a.tournamentId) === streamTournamentId;
+
+      if (matchHit || tourHit) {
+        if (a.status === 'ACTIVE') {
+          const perms = Array.isArray(a.permissions) ? a.permissions : [];
+          if (perms.length === 0 || perms.includes(requiredPerm) || perms.includes('broadcast:control')) {
+            return true;
+          }
+        } else {
+          explicitlyBlocked = true;
+        }
+      }
+    }
+
+    if (explicitlyBlocked) return false;
+
+    // Legacy direct user assignment fallback (only if not explicitly suspended/revoked)
+    const directMatch = (user.assignedStreamIds || []).some((id) => id.toString() === matchId);
+    const directTournament =
+      Boolean(streamTournamentId) &&
+      (user.assignedTournamentIds || []).some((id) => id.toString() === streamTournamentId);
+    if (directMatch || directTournament) {
+      return true;
+    }
+    return false;
+  }
+
+  // SCORER: NEVER automatically receives broadcaster permissions unless explicitly opted-in
+  if (user.role === 'SCORER') {
+    const activeAssignments = await BroadcastAssignment.find({
+      userId: user._id,
+      status: 'ACTIVE',
+    }).lean();
+    for (const a of activeAssignments) {
+      const matchHit = a.scopeType === 'match' && a.matchId && String(a.matchId) === matchId;
+      const tourHit =
+        a.scopeType === 'tournament' &&
+        a.tournamentId &&
+        streamTournamentId &&
+        String(a.tournamentId) === streamTournamentId;
+      if ((matchHit || tourHit) && (!a.permissions?.length || a.permissions.includes(requiredPerm))) {
+        return true;
+      }
+    }
+    const explicitPerms = Array.isArray(user.granularPermissions) ? user.granularPermissions : [];
+    if (explicitPerms.includes(requiredPerm)) {
+      if ((user.assignedStreamIds || []).length === 0 && (user.assignedTournamentIds || []).length === 0) {
+        return true;
+      }
+      if ((user.assignedStreamIds || []).some((id) => id.toString() === matchId)) return true;
+      if (
+        streamTournamentId &&
+        (user.assignedTournamentIds || []).some((id) => id.toString() === streamTournamentId)
+      ) {
+        return true;
+      }
+    }
+    return await hasGranularPermission(user, requiredPerm, {
+      scopeType: 'match',
+      scopeId: matchId,
+    });
+  }
+
+  return false;
+}
+
+export async function getAuthorizedBroadcastScope(user: IUser): Promise<{
+  allAccess: boolean;
+  tournamentIds: string[];
+  matchIds: string[];
+}> {
+  if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
+    return { allAccess: true, tournamentIds: [], matchIds: [] };
+  }
+
+  const tournamentSet = new Set<string>();
+  const matchSet = new Set<string>();
+
+  if (user.role === 'TOURNAMENT_ORGANIZER') {
+    const ownedTournaments = await Tournament.find({ createdBy: user._id }).select('_id').lean();
+    for (const t of ownedTournaments) tournamentSet.add(String(t._id));
+    for (const id of user.assignedTournamentIds || []) tournamentSet.add(id.toString());
+    const ownedStreams = await LiveStream.find({ createdBy: user._id }).select('_id').lean();
+    for (const s of ownedStreams) matchSet.add(String(s._id));
+    for (const id of user.assignedStreamIds || []) matchSet.add(id.toString());
+    return {
+      allAccess: false,
+      tournamentIds: Array.from(tournamentSet),
+      matchIds: Array.from(matchSet),
+    };
+  }
+
+  if (user.role === 'BROADCASTER') {
+    const assignments = await BroadcastAssignment.find({
+      userId: user._id,
+      status: 'ACTIVE',
+    }).lean();
+    for (const a of assignments) {
+      if (a.scopeType === 'tournament' && a.tournamentId) {
+        tournamentSet.add(String(a.tournamentId));
+      } else if (a.scopeType === 'match' && a.matchId) {
+        matchSet.add(String(a.matchId));
+      }
+    }
+    for (const id of user.assignedTournamentIds || []) tournamentSet.add(id.toString());
+    for (const id of user.assignedStreamIds || []) matchSet.add(id.toString());
+    return {
+      allAccess: false,
+      tournamentIds: Array.from(tournamentSet),
+      matchIds: Array.from(matchSet),
+    };
+  }
+
+  return { allAccess: false, tournamentIds: [], matchIds: [] };
+}
+
 export async function canManageStream(
   user: IUser,
   streamId: string,
@@ -291,6 +481,14 @@ export async function canManageStream(
 ): Promise<boolean> {
   if (user.role === 'SUPER_ADMIN') return true;
   if (user.role === 'SPECTATOR' || user.role === 'CAPTAIN') return false;
+
+  if (user.role === 'BROADCASTER') {
+    if (action === 'stream') {
+      return await hasBroadcastAccess(user, streamId, 'broadcast:control');
+    }
+    // Broadcaster is independent of Scorer and cannot submit scores or declare results
+    return false;
+  }
 
   if (action === 'stream') {
     // Strictly require matches:manage_stream (or manageStreams) — never allow unauthorized scorers to switch providers

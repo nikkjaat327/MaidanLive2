@@ -142,6 +142,24 @@ export function useObsStudio(matchId?: string) {
       if (payload?.message) setLiveErrorToast(String(payload.message));
     };
 
+    const onControllerPresence = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setStudio((prev) => {
+        if (!prev) return prev;
+        if (payload.userName && !prev.profile.activeControllerName) {
+          return {
+            ...prev,
+            profile: {
+              ...prev.profile,
+              activeControllerName: String(payload.userName),
+              activeControllerRole: String(payload.role || prev.profile.activeControllerRole || ''),
+            },
+          };
+        }
+        return prev;
+      });
+    };
+
     if (socket.connected) joinStudio();
 
     socket.on('connect', joinStudio);
@@ -152,6 +170,7 @@ export function useObsStudio(matchId?: string) {
     socket.on('obs:admin_override', onAdminOverride);
     socket.on('obs:audit_event', onAuditEvent);
     socket.on('obs:error', onObsError);
+    socket.on('obs:controller_presence', onControllerPresence);
 
     return () => {
       socket.emit('broadcast-studio:leave', matchId);
@@ -163,6 +182,7 @@ export function useObsStudio(matchId?: string) {
       socket.off('obs:admin_override', onAdminOverride);
       socket.off('obs:audit_event', onAuditEvent);
       socket.off('obs:error', onObsError);
+      socket.off('obs:controller_presence', onControllerPresence);
     };
   }, [matchId]);
 

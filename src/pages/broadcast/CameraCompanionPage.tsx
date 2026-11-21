@@ -7,6 +7,8 @@ import {
   Camera,
   ExternalLink,
   FlipHorizontal,
+  Mic,
+  MicOff,
   Power,
   Radio,
   RefreshCw,
@@ -35,6 +37,9 @@ interface CompanionState {
     enabled: boolean;
     status: string;
     operatorName: string;
+    audioMuted?: boolean;
+    broadcastSessionId?: string;
+    pushTokenExpiresAt?: string | null;
     vdoPushUrl: string;
     connectionUrl: string;
   };
@@ -62,6 +67,7 @@ export function CameraCompanionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [audioMuted, setAudioMuted] = useState(false);
   const [streamingActive, setStreamingActive] = useState(false);
   const [embedVdoFrame, setEmbedVdoFrame] = useState(false);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState<string | null>(null);
@@ -81,8 +87,9 @@ export function CameraCompanionPage() {
       const res = await obsStudioService.getCameraCompanionConfig(cameraDocId, token);
       setData(res);
       setFacingMode(res.camera.facingMode || 'environment');
+      setAudioMuted(Boolean(res.camera.audioMuted));
     } catch (err) {
-      setError(extractApiError(err, 'Invalid or expired camera companion link.'));
+      setError(extractApiError(err, 'Invalid, revoked, or expired camera companion link.'));
     } finally {
       setLoading(false);
     }
@@ -129,7 +136,11 @@ export function CameraCompanionPage() {
   }, []);
 
   const pushHeartbeat = useCallback(
-    async (status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR', errMsg = '') => {
+    async (
+      status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR',
+      errMsg = '',
+      overrideMuted?: boolean
+    ) => {
       if (!cameraDocId || !token) return;
       try {
         const res = await obsStudioService.sendCameraHeartbeat(cameraDocId, token, {
@@ -142,6 +153,7 @@ export function CameraCompanionPage() {
             batteryCharging,
             resolutionActual: data?.camera.resolution || '',
             fpsActual: data?.camera.fps || null,
+            audioMuted: overrideMuted !== undefined ? overrideMuted : audioMuted,
           },
         });
         setLastHeartbeatAt(res.lastHeartbeatAt || new Date().toISOString());
@@ -149,7 +161,17 @@ export function CameraCompanionPage() {
         // Ignore transient offline drop; next 10s interval retries
       }
     },
-    [cameraDocId, token, facingMode, networkType, batteryLevel, batteryCharging, data?.camera.resolution, data?.camera.fps]
+    [
+      cameraDocId,
+      token,
+      facingMode,
+      networkType,
+      batteryLevel,
+      batteryCharging,
+      audioMuted,
+      data?.camera.resolution,
+      data?.camera.fps,
+    ]
   );
 
   // Send periodic 10s heartbeat while companion feed is active
@@ -182,7 +204,7 @@ export function CameraCompanionPage() {
     };
   }, [streamingActive, pushHeartbeat, cameraDocId, token, facingMode]);
 
-  // Adjust facing mode inside VDO.Ninja URL dynamically
+  // Adjust facing mode & mute state inside VDO.Ninja URL dynamically
   const effectivePushUrl = useMemo(() => {
     const raw = data?.camera.vdoPushUrl || data?.camera.connectionUrl || '';
     if (!raw) return '';
@@ -190,12 +212,17 @@ export function CameraCompanionPage() {
       const u = new URL(raw);
       if (u.hostname.includes('vdo.ninja')) {
         u.searchParams.set('facing', facingMode);
+        if (audioMuted) {
+          u.searchParams.set('mute', '1');
+        } else {
+          u.searchParams.delete('mute');
+        }
       }
       return u.toString();
     } catch {
       return raw;
     }
-  }, [data?.camera.vdoPushUrl, data?.camera.connectionUrl, facingMode]);
+  }, [data?.camera.vdoPushUrl, data?.camera.connectionUrl, facingMode, audioMuted]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 safe-pt safe-pb">
@@ -257,6 +284,16 @@ export function CameraCompanionPage() {
                     {data.match.tournamentName || data.match.gameName || 'Live Match'}
                   </p>
                   <p className="text-sm font-bold text-white">{data.match.matchTitle}</p>
+                  {(data.camera.broadcastSessionId || data.camera.pushTokenExpiresAt) && (
+                    <p className="text-[11px] font-mono text-slate-400 mt-1">
+                      {data.camera.broadcastSessionId
+                        ? `Session: ${data.camera.broadcastSessionId} · `
+                        : ''}
+                      {data.camera.pushTokenExpiresAt
+                        ? `Link expires ${new Date(data.camera.pushTokenExpiresAt).toLocaleString()}`
+                        : ''}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -305,16 +342,37 @@ export function CameraCompanionPage() {
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))
-                  }
-                  className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-700 rounded-lg hover:bg-slate-800"
-                >
-                  <FlipHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
-                  <span>Lens: {facingMode === 'environment' ? 'Rear Main' : 'Front Selfie'}</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMuted = !audioMuted;
+                      setAudioMuted(nextMuted);
+                      if (streamingActive) {
+                        pushHeartbeat('CONNECTED', '', nextMuted);
+                      }
+                    }}
+                    className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border rounded-lg ${
+                      audioMuted
+                        ? 'bg-red-500/15 border-red-500/40 text-red-300'
+                        : 'bg-slate-950 border-slate-700 text-slate-200 hover:bg-slate-800'
+                    }`}
+                  >
+                    {audioMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span>{audioMuted ? 'Mic Muted' : 'Mic Live'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))
+                    }
+                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-700 rounded-lg hover:bg-slate-800"
+                  >
+                    <FlipHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <span>Lens: {facingMode === 'environment' ? 'Rear Main' : 'Front Selfie'}</span>
+                  </button>
+                </div>
               </div>
 
               {!data.camera.enabled && (

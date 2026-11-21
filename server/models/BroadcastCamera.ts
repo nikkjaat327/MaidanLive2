@@ -51,6 +51,10 @@ export interface IBroadcastCamera extends Document {
   vdoPasswordEnc: string;
   pushTokenHash: string;
   pushTokenPrefix: string;
+  pushTokenExpiresAt?: Date | null;
+  broadcastSessionId: string;
+  audioMuted: boolean;
+  obsInputMuted?: boolean | null;
   resolution: '1920x1080' | '1280x720' | '854x480' | '640x360';
   fps: number;
   bitrateKbps: number;
@@ -106,6 +110,10 @@ const broadcastCameraSchema = new Schema<IBroadcastCamera>(
     vdoPasswordEnc: { type: String, default: '', select: false },
     pushTokenHash: { type: String, default: '', select: false },
     pushTokenPrefix: { type: String, default: '' },
+    pushTokenExpiresAt: { type: Date, default: null },
+    broadcastSessionId: { type: String, trim: true, default: '', maxlength: 80 },
+    audioMuted: { type: Boolean, default: false },
+    obsInputMuted: { type: Boolean, default: null },
     resolution: {
       type: String,
       enum: ['1920x1080', '1280x720', '854x480', '640x360'],

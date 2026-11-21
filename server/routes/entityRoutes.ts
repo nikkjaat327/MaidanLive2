@@ -1635,6 +1635,7 @@ router.post(
         'SUPER_ADMIN',
         'ADMIN',
         'TOURNAMENT_ORGANIZER',
+        'BROADCASTER',
         'MODERATOR',
         'SCORER',
         'CAPTAIN',
@@ -1659,15 +1660,15 @@ router.post(
 
       const isManager = role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'TOURNAMENT_ORGANIZER';
       const defaultPerms = {
-        manageStreams: isManager,
-        manageScores: role !== 'MODERATOR' && role !== 'CAPTAIN',
+        manageStreams: isManager || role === 'BROADCASTER',
+        manageScores: role !== 'MODERATOR' && role !== 'CAPTAIN' && role !== 'BROADCASTER',
         manageTournaments: isManager,
         manageTeams: isManager,
         managePlayers: isManager,
         moderateChat: role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MODERATOR',
         manageSponsors: role === 'SUPER_ADMIN' || role === 'ADMIN',
         manageVenues: isManager,
-        declareResults: role !== 'MODERATOR' && role !== 'CAPTAIN',
+        declareResults: role !== 'MODERATOR' && role !== 'CAPTAIN' && role !== 'BROADCASTER',
       };
 
       const perms = req.body.permissions
@@ -1757,6 +1758,7 @@ router.patch(
           'SUPER_ADMIN',
           'ADMIN',
           'TOURNAMENT_ORGANIZER',
+          'BROADCASTER',
           'MODERATOR',
           'SCORER',
           'CAPTAIN',

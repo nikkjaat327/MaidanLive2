@@ -282,13 +282,17 @@ export function AdminPermissionsPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">Role Label</label>
-                    <input
-                      type="text"
+                    <select
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
-                      placeholder="SCORER / STREAM_OP"
-                      className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                    />
+                      className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
+                    >
+                      <option value="BROADCASTER">BROADCASTER</option>
+                      <option value="SCORER">SCORER</option>
+                      <option value="MODERATOR">MODERATOR</option>
+                      <option value="TOURNAMENT_ORGANIZER">TOURNAMENT_ORGANIZER</option>
+                      <option value="ADMIN">ADMIN</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">

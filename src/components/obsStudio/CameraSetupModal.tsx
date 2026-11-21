@@ -21,7 +21,7 @@ interface CameraFormModalProps {
   editingCamera: BroadcastCameraData | null;
   operators: Array<{ id: string; name: string; email: string; role: string }>;
   vdoRoomName: string;
-  onSave: (payload: Partial<BroadcastCameraData>) => Promise<void>;
+  onSave: (payload: Partial<BroadcastCameraData> & { expiresInHours?: number }) => Promise<void>;
 }
 
 export function CameraFormModal({
@@ -50,6 +50,7 @@ export function CameraFormModal({
   const [operatorName, setOperatorName] = useState('');
   const [priority, setPriority] = useState('10');
   const [description, setDescription] = useState('');
+  const [expiresInHours, setExpiresInHours] = useState('12');
   const [isDefault, setIsDefault] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -127,6 +128,7 @@ export function CameraFormModal({
         description: description.trim(),
         isDefault,
         enabled,
+        ...(!editingCamera ? { expiresInHours: Number(expiresInHours) || 12 } : {}),
       });
       onClose();
     } finally {
@@ -352,6 +354,22 @@ export function CameraFormModal({
             />
             <span>Enabled</span>
           </label>
+          {!editingCamera && (
+            <div className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+              <span>QR Link Expiry:</span>
+              <select
+                value={expiresInHours}
+                onChange={(e) => setExpiresInHours(e.target.value)}
+                className="min-h-[32px] px-2 text-xs font-mono border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="2">2 hours</option>
+                <option value="6">6 hours</option>
+                <option value="12">12 hours</option>
+                <option value="24">24 hours</option>
+                <option value="48">48 hours</option>
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
@@ -380,7 +398,7 @@ interface SmartphoneWizardModalProps {
   onClose: () => void;
   camera: BroadcastCameraData | null;
   mobileConnectUrl: string | null;
-  onRotateLink: (cameraId: string) => Promise<void>;
+  onRotateLink: (cameraId: string, expiresInHours?: number) => Promise<void>;
 }
 
 export function SmartphoneWizardModal({
@@ -393,6 +411,7 @@ export function SmartphoneWizardModal({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
+  const [expiresInHours, setExpiresInHours] = useState(12);
 
   const effectiveUrl = mobileConnectUrl || camera?.vdoPushUrl || '';
 
@@ -439,12 +458,20 @@ export function SmartphoneWizardModal({
             ) : (
               <div className="w-48 h-48 flex flex-col items-center justify-center text-xs text-slate-500 text-center p-4">
                 <QrCode className="w-8 h-8 mb-2 text-slate-400" />
-                <span>Click "Generate Fresh Phone Link" below to mint a secure QR code.</span>
+                <span>Click &ldquo;Generate Fresh Phone Link&rdquo; below to mint a secure QR code.</span>
               </div>
             )}
             <p className="text-[11px] font-mono text-slate-600 mt-2 text-center">
               ID: {camera.cameraId} · {camera.resolution} @ {camera.fps}fps
             </p>
+            {(camera.broadcastSessionId || camera.pushTokenExpiresAt) && (
+              <p className="text-[10px] font-mono text-slate-500 mt-1 text-center">
+                {camera.broadcastSessionId ? `Session ${camera.broadcastSessionId} · ` : ''}
+                {camera.pushTokenExpiresAt
+                  ? `Expires ${new Date(camera.pushTokenExpiresAt).toLocaleString()}`
+                  : ''}
+              </p>
+            )}
           </div>
 
           <div className="md:col-span-7 space-y-3">
@@ -453,22 +480,36 @@ export function SmartphoneWizardModal({
                 <Smartphone className="w-4 h-4 text-[#EA580C]" />
                 <span>Step 1: Open Companion Link on Phone</span>
               </span>
-              <button
-                type="button"
-                disabled={rotating}
-                onClick={async () => {
-                  try {
-                    setRotating(true);
-                    await onRotateLink(camera.cameraId);
-                  } finally {
-                    setRotating(false);
-                  }
-                }}
-                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#EA580C] bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3 h-3 ${rotating ? 'animate-spin' : ''}`} />
-                <span>{mobileConnectUrl ? 'Rotate Phone Link' : 'Generate Fresh Phone Link'}</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                <select
+                  aria-label="QR link expiration"
+                  value={expiresInHours}
+                  onChange={(e) => setExpiresInHours(Number(e.target.value) || 12)}
+                  className="min-h-[28px] px-2 text-[11px] font-mono border border-slate-300 rounded-md bg-white"
+                >
+                  <option value={2}>2h</option>
+                  <option value={6}>6h</option>
+                  <option value={12}>12h</option>
+                  <option value={24}>24h</option>
+                  <option value={48}>48h</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={rotating}
+                  onClick={async () => {
+                    try {
+                      setRotating(true);
+                      await onRotateLink(camera.cameraId, expiresInHours);
+                    } finally {
+                      setRotating(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#EA580C] bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${rotating ? 'animate-spin' : ''}`} />
+                  <span>{mobileConnectUrl ? 'Rotate Phone Link' : 'Generate Fresh Phone Link'}</span>
+                </button>
+              </div>
             </div>
 
             {mobileConnectUrl ? (

@@ -6,6 +6,7 @@ export type UserRole =
   | 'SUPER_ADMIN'
   | 'ADMIN'
   | 'TOURNAMENT_ORGANIZER'
+  | 'BROADCASTER'
   | 'MODERATOR'
   | 'SCORER'
   | 'CAPTAIN'
@@ -15,6 +16,7 @@ export const ADMIN_PORTAL_ROLES: UserRole[] = [
   'SUPER_ADMIN',
   'ADMIN',
   'TOURNAMENT_ORGANIZER',
+  'BROADCASTER',
   'MODERATOR',
   'SCORER',
 ];
@@ -39,6 +41,10 @@ export const ALL_GRANULAR_PERMISSIONS = [
   'matches:publish_replay',
   'broadcast:control',
   'broadcast:manage_cameras',
+  'broadcast:manage_overlays',
+  'broadcast:stream_control',
+  'broadcast:record_control',
+  'broadcast:assign_broadcasters',
   'broadcast:override',
   'registrations:review',
   'sponsors:manage',
@@ -127,6 +133,7 @@ const userSchema = new Schema<IUser>(
         'SUPER_ADMIN',
         'ADMIN',
         'TOURNAMENT_ORGANIZER',
+        'BROADCASTER',
         'MODERATOR',
         'SCORER',
         'CAPTAIN',

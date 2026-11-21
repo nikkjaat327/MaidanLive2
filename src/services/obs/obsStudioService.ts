@@ -1,7 +1,10 @@
 import { adminApi, publicApi } from '../api/httpClient.ts';
 import type {
+  BroadcastAssignmentData,
   BroadcastAuditLogData,
   BroadcastCameraData,
+  BroadcasterDashboardPayload,
+  BroadcastersManagementPayload,
   BroadcastSceneData,
   ObsControllerProfileData,
   ObsStudioPayload,
@@ -80,18 +83,27 @@ export const obsStudioService = {
 
   async createCamera(
     matchId: string,
-    payload: Partial<BroadcastCameraData>
+    payload: Partial<BroadcastCameraData> & { expiresInHours?: number }
   ): Promise<{
     camera: BroadcastCameraData;
     mobileConnectUrl: string;
     pushToken: string;
+    pushTokenExpiresAt?: string;
+    broadcastSessionId?: string;
   }> {
     const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras`, payload);
     return data;
   },
 
-  async scaffoldCameras(matchId: string, count: number): Promise<{ created: BroadcastCameraData[] }> {
-    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/scaffold`, { count });
+  async scaffoldCameras(
+    matchId: string,
+    count: number,
+    expiresInHours?: number
+  ): Promise<{ created: BroadcastCameraData[] }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/scaffold`, {
+      count,
+      ...(expiresInHours ? { expiresInHours } : {}),
+    });
     return data;
   },
 
@@ -114,9 +126,94 @@ export const obsStudioService = {
 
   async rotateCameraToken(
     matchId: string,
-    cameraId: string
-  ): Promise<{ pushToken: string; pushTokenPrefix: string; mobileConnectUrl: string }> {
-    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/rotate-token`);
+    cameraId: string,
+    expiresInHours = 12
+  ): Promise<{
+    pushToken: string;
+    pushTokenPrefix: string;
+    pushTokenExpiresAt?: string;
+    broadcastSessionId?: string;
+    mobileConnectUrl: string;
+  }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/rotate-token`, {
+      expiresInHours,
+    });
+    return data;
+  },
+
+  async disconnectCamera(matchId: string, cameraId: string) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/disconnect`);
+    return data;
+  },
+
+  async setCameraAudioMute(
+    matchId: string,
+    cameraId: string,
+    muted: boolean,
+    override = false
+  ): Promise<{
+    ok: boolean;
+    camera: BroadcastCameraData;
+    obsSynced: boolean;
+    obsNote: string;
+  }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/audio`, {
+      muted,
+      override,
+    });
+    return data;
+  },
+
+  async executeObsAction(
+    matchId: string,
+    action: 'start_stream' | 'stop_stream' | 'start_record' | 'stop_record',
+    override = false
+  ) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/obs-action`, {
+      action,
+      override,
+    });
+    return data;
+  },
+
+  async manageSession(matchId: string, mode: 'start' | 'end' | 'takeover') {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/session`, { mode });
+    return data;
+  },
+
+  async getBroadcasterDashboard(): Promise<BroadcasterDashboardPayload> {
+    const { data } = await adminApi.get<BroadcasterDashboardPayload>('/obs/broadcaster/dashboard');
+    return data;
+  },
+
+  async listBroadcasters(): Promise<BroadcastersManagementPayload> {
+    const { data } = await adminApi.get<BroadcastersManagementPayload>('/obs/broadcasters');
+    return data;
+  },
+
+  async assignBroadcaster(payload: {
+    userId: string;
+    scopeType: 'tournament' | 'match';
+    tournamentId?: string;
+    matchId?: string;
+    permissions?: string[];
+    notes?: string;
+    promoteToBroadcaster?: boolean;
+  }): Promise<{ assignment: BroadcastAssignmentData; message?: string }> {
+    const { data } = await adminApi.post('/obs/broadcasters/assign', payload);
+    return data;
+  },
+
+  async updateBroadcasterAssignment(
+    id: string,
+    payload: {
+      status?: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+      permissions?: string[];
+      notes?: string;
+      revokeReason?: string;
+    }
+  ): Promise<{ assignment: BroadcastAssignmentData }> {
+    const { data } = await adminApi.patch(`/obs/broadcasters/assignments/${id}`, payload);
     return data;
   },
 
@@ -229,6 +326,9 @@ export const obsStudioService = {
         enabled: boolean;
         status: string;
         operatorName: string;
+        audioMuted?: boolean;
+        broadcastSessionId?: string;
+        pushTokenExpiresAt?: string | null;
         vdoPushUrl: string;
         connectionUrl: string;
       };

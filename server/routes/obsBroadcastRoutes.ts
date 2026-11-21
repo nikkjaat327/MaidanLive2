@@ -1,16 +1,22 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import rateLimit from 'express-rate-limit';
 import {
   authenticate,
   canManageStream,
+  canManageTournament,
+  getAuthorizedBroadcastScope,
+  hasBroadcastAccess,
   hasGranularPermission,
   requireAdminPortal,
 } from '../middleware/auth.ts';
-import type { AuthenticatedRequest } from '../middleware/auth.ts';
+import type { AuthenticatedRequest, BroadcastAccessPermission } from '../middleware/auth.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { Tournament } from '../models/Tournament.ts';
 import { Sponsor } from '../models/Sponsor.ts';
 import { User } from '../models/User.ts';
+import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
 import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
 import { BroadcastCamera } from '../models/BroadcastCamera.ts';
 import type { CameraSourceType, CameraType } from '../models/BroadcastCamera.ts';
@@ -20,6 +26,8 @@ import {
   applyDynamicLayoutToObs,
   captureObsPreviewImage,
   connectDirectObs,
+  controlObsOutput,
+  disconnectCameraByOperator,
   disconnectObs,
   emitFullStudioState,
   ensureObsProfileForMatch,
@@ -28,7 +36,9 @@ import {
   formatSafeProfile,
   formatSafeScene,
   getStudioSnapshot,
+  manageBroadcastSession,
   refreshObsState,
+  setCameraObsAudioMute,
   switchCameraLive,
   switchObsSceneByName,
   testObsConnection,
@@ -44,10 +54,19 @@ import {
 import { LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
+import { recordActivity } from '../utils/audit.ts';
 import { emitBroadcastStudioEvent } from '../socket/index.ts';
 import { verifyMediaMTXStreamHealth } from '../services/mediamtxService.ts';
 
 const router = Router();
+
+const broadcastCommandLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many broadcast control commands. Please slow down.' },
+});
 
 const VALID_CAMERA_TYPES: CameraType[] = [
   'smartphone_vdo',
@@ -69,6 +88,14 @@ const VALID_SOURCE_TYPES: CameraSourceType[] = [
 const VALID_RESOLUTIONS = ['1920x1080', '1280x720', '854x480', '640x360'] as const;
 const VALID_LAYOUTS = Object.keys(LAYOUT_METADATA) as ObsLayoutType[];
 
+const DEFAULT_BROADCASTER_PERMS = [
+  'broadcast:control',
+  'broadcast:manage_cameras',
+  'broadcast:manage_overlays',
+  'broadcast:stream_control',
+  'broadcast:record_control',
+];
+
 function resolveBaseAppUrl(req: Request): string {
   const envUrl = (process.env.PUBLIC_APP_URL || process.env.VITE_PUBLIC_APP_URL || '').trim();
   if (envUrl) return envUrl.replace(/\/+$/, '');
@@ -86,7 +113,7 @@ async function authorizeBroadcastControl(
   req: AuthenticatedRequest,
   res: Response,
   matchId: string,
-  requiredPerm: 'broadcast:control' | 'broadcast:manage_cameras' | 'broadcast:override' = 'broadcast:control'
+  requiredPerm: BroadcastAccessPermission = 'broadcast:control'
 ): Promise<boolean> {
   if (!mongoose.Types.ObjectId.isValid(matchId)) {
     res.status(400).json({ message: 'Invalid match ID.' });
@@ -95,12 +122,7 @@ async function authorizeBroadcastControl(
   const user = req.user!;
   if (user.role === 'SUPER_ADMIN') return true;
   if (requiredPerm === 'broadcast:override') {
-    const canOverride =
-      user.role === 'ADMIN' ||
-      (await hasGranularPermission(user, 'broadcast:override', {
-        scopeType: 'match',
-        scopeId: matchId,
-      }));
+    const canOverride = await hasBroadcastAccess(user, matchId, 'broadcast:override');
     if (!canOverride) {
       res.status(403).json({
         message: 'Forbidden: Admin Override permission is required for this action.',
@@ -110,14 +132,11 @@ async function authorizeBroadcastControl(
     return true;
   }
 
-  const [canStream, hasPerm] = await Promise.all([
-    canManageStream(user, matchId, 'stream'),
-    hasGranularPermission(user, requiredPerm, { scopeType: 'match', scopeId: matchId }),
-  ]);
-
-  if (!canStream && !hasPerm) {
+  const allowed = await hasBroadcastAccess(user, matchId, requiredPerm);
+  if (!allowed) {
     res.status(403).json({
-      message: 'Forbidden: You are not authorized to control OBS broadcast production for this match.',
+      message:
+        'Forbidden: You do not have active broadcast assignment or permission for this match.',
     });
     return false;
   }
@@ -141,6 +160,14 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
     const cam: any = await BroadcastCamera.findById(cameraDocId).select('+pushTokenHash +vdoPasswordEnc');
     if (!cam || !verifyScopedToken(token, cam.pushTokenHash || '')) {
       res.status(403).json({ message: 'Invalid or revoked camera connection token.' });
+      return;
+    }
+    if (cam.pushTokenExpiresAt && new Date(cam.pushTokenExpiresAt).getTime() <= Date.now()) {
+      res.status(403).json({
+        message:
+          'This camera QR connection link has expired. Ask the broadcaster to generate a fresh QR code.',
+        code: 'CAMERA_TOKEN_EXPIRED',
+      });
       return;
     }
 
@@ -187,6 +214,9 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
         enabled: cam.enabled,
         status: cam.status,
         operatorName: cam.operatorName,
+        audioMuted: Boolean(cam.audioMuted ?? cam.telemetry?.audioMuted),
+        broadcastSessionId: cam.broadcastSessionId || profile?.broadcastSessionId || '',
+        pushTokenExpiresAt: cam.pushTokenExpiresAt || null,
         vdoPushUrl: vdoLinks?.pushUrl || '',
         connectionUrl: cam.connectionUrl || '',
       },
@@ -229,6 +259,13 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
       res.status(403).json({ message: 'Invalid or revoked camera connection token.' });
       return;
     }
+    if (cam.pushTokenExpiresAt && new Date(cam.pushTokenExpiresAt).getTime() <= Date.now()) {
+      res.status(403).json({
+        message: 'Camera connection token expired. Please re-scan the updated QR code.',
+        code: 'CAMERA_TOKEN_EXPIRED',
+      });
+      return;
+    }
 
     const reqStatus = req.body.status;
     const allowed = ['CONNECTING', 'CONNECTED', 'DISCONNECTED', 'ERROR'] as const;
@@ -247,6 +284,11 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
       cam.facingMode = req.body.facingMode;
     }
     if (req.body.telemetry && typeof req.body.telemetry === 'object') {
+      const audioMuted =
+        typeof req.body.telemetry.audioMuted === 'boolean'
+          ? req.body.telemetry.audioMuted
+          : cam.audioMuted;
+      cam.audioMuted = Boolean(audioMuted);
       cam.telemetry = {
         networkType: sanitizeText(req.body.telemetry.networkType, 40),
         batteryLevel:
@@ -260,10 +302,7 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
         resolutionActual: sanitizeText(req.body.telemetry.resolutionActual, 40),
         fpsActual:
           req.body.telemetry.fpsActual !== undefined ? Number(req.body.telemetry.fpsActual) : null,
-        audioMuted:
-          typeof req.body.telemetry.audioMuted === 'boolean'
-            ? req.body.telemetry.audioMuted
-            : false,
+        audioMuted: Boolean(audioMuted),
       };
     }
     await cam.save();
@@ -274,6 +313,7 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
       status: cam.status,
       lastHeartbeatAt: cam.lastHeartbeatAt,
       telemetry: cam.telemetry,
+      audioMuted: cam.audioMuted,
       lastError: cam.lastError,
     });
     await emitFullStudioState(String(cam.matchId));
@@ -284,6 +324,633 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
     res.status(500).json({ message: 'Failed to record camera heartbeat.' });
   }
 });
+
+// =========================================================================
+// BROADCASTER DASHBOARD & BROADCASTER ROLE ASSIGNMENT MANAGEMENT
+// =========================================================================
+
+// GET /api/obs/broadcaster/dashboard
+router.get(
+  '/broadcaster/dashboard',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      if (
+        !['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'SCORER'].includes(
+          user.role
+        )
+      ) {
+        res.status(403).json({ message: 'Forbidden: Broadcaster dashboard access required.' });
+        return;
+      }
+
+      // Scorer must have explicit broadcast assignments or granular broadcast:control to enter broadcaster dashboard
+      if (user.role === 'SCORER') {
+        const activeAssignCount = await BroadcastAssignment.countDocuments({
+          userId: user._id,
+          status: 'ACTIVE',
+        });
+        const hasExplicit =
+          activeAssignCount > 0 ||
+          (Array.isArray(user.granularPermissions) &&
+            user.granularPermissions.includes('broadcast:control'));
+        if (!hasExplicit) {
+          res.status(403).json({
+            message:
+              'Forbidden: Scorers do not automatically have Broadcaster permissions. Request a Broadcaster assignment.',
+          });
+          return;
+        }
+      }
+
+      const scope = await getAuthorizedBroadcastScope(user);
+
+      let tournamentList: any[] = [];
+      let streamList: any[] = [];
+
+      if (scope.allAccess) {
+        [tournamentList, streamList] = await Promise.all([
+          Tournament.find().sort({ createdAt: -1 }).limit(100).lean(),
+          LiveStream.find().sort({ startedAt: -1, createdAt: -1 }).limit(120).lean(),
+        ]);
+      } else {
+        const allStreams = await LiveStream.find().sort({ startedAt: -1, createdAt: -1 }).lean();
+        streamList = allStreams.filter((s: any) => {
+          const sid = String(s._id);
+          const tid = s.tournamentId ? String(s.tournamentId) : '';
+          return scope.matchIds.includes(sid) || (tid && scope.tournamentIds.includes(tid));
+        });
+
+        const tourIdSet = new Set<string>(scope.tournamentIds);
+        for (const s of streamList) {
+          if (s.tournamentId) tourIdSet.add(String(s.tournamentId));
+        }
+        if (tourIdSet.size > 0) {
+          const allTours = await Tournament.find().sort({ createdAt: -1 }).lean();
+          tournamentList = allTours.filter((t: any) => tourIdSet.has(String(t._id)));
+        }
+      }
+
+      const matchIds = streamList.map((s: any) => String(s._id));
+      const [profiles, cameras, userAssignments] = await Promise.all([
+        ObsControllerProfile.find().lean(),
+        BroadcastCamera.find().lean(),
+        BroadcastAssignment.find({ userId: user._id }).sort({ createdAt: -1 }).lean(),
+      ]);
+
+      const profileByMatch = new Map<string, any>();
+      for (const p of profiles) {
+        profileByMatch.set(String(p.matchId), formatSafeProfile(p));
+      }
+
+      const camerasByMatch = new Map<string, any[]>();
+      for (const c of cameras) {
+        const mid = String(c.matchId);
+        const list = camerasByMatch.get(mid) || [];
+        list.push(c);
+        camerasByMatch.set(mid, list);
+      }
+
+      const enrichedMatches = streamList.map((s: any) => {
+        const mid = String(s._id);
+        const prof = profileByMatch.get(mid) || null;
+        const cams = camerasByMatch.get(mid) || [];
+        const formattedCams = cams.map((c) => formatSafeCamera(c, prof || {}));
+        const connectedCount = formattedCams.filter(
+          (c) => c.enabled && (c.status === 'CONNECTED' || c.status === 'ACTIVE')
+        ).length;
+        return {
+          id: mid,
+          matchTitle:
+            s.matchTitle ||
+            [s.teamAName, s.teamBName].filter(Boolean).join(' vs ') ||
+            'Match Broadcast',
+          teamAName: s.teamAName || '',
+          teamBName: s.teamBName || '',
+          gameName: s.gameName || '',
+          tournamentId: s.tournamentId ? String(s.tournamentId) : null,
+          tournamentName: s.tournamentName || '',
+          status: s.status,
+          matchDate: s.matchDate || null,
+          startedAt: s.startedAt || null,
+          endedAt: s.endedAt || null,
+          activeStreamingProvider: s.activeStreamingProvider || s.streamingProvider || 'youtube',
+          obsConnectionStatus: prof?.connectionStatus || 'DISCONNECTED',
+          obsStreamActive: Boolean(prof?.obsStreamActive),
+          obsRecordActive: Boolean(prof?.obsRecordActive),
+          activeObsScene: prof?.activeObsScene || '',
+          activeLayoutType: prof?.activeLayoutType || 'SINGLE',
+          broadcastSessionId: prof?.broadcastSessionId || '',
+          activeControllerName: prof?.activeControllerName || '',
+          adminOverrideLocked: Boolean(prof?.adminOverrideLocked),
+          connectedCameraCount: connectedCount,
+          totalCameraCount: formattedCams.length,
+        };
+      });
+
+      const activeSessions = enrichedMatches.filter(
+        (m) =>
+          m.status === 'LIVE' ||
+          m.obsConnectionStatus === 'CONNECTED' ||
+          m.connectedCameraCount > 0 ||
+          m.obsStreamActive
+      );
+
+      res.json({
+        scope,
+        assignments: userAssignments.map((a: any) => ({
+          id: String(a._id),
+          scopeType: a.scopeType,
+          tournamentId: a.tournamentId ? String(a.tournamentId) : null,
+          matchId: a.matchId ? String(a.matchId) : null,
+          status: a.status,
+          permissions: a.permissions || [],
+          assignedByName: a.assignedByName || '',
+          notes: a.notes || '',
+          createdAt: a.createdAt,
+        })),
+        tournaments: tournamentList.map((t: any) => ({
+          id: String(t._id),
+          name: t.name,
+          sportType: t.sportType || 'Cricket',
+          status: t.status,
+          startDate: t.startDate || null,
+          matchCount: enrichedMatches.filter((m) => m.tournamentId === String(t._id)).length,
+        })),
+        matches: enrichedMatches,
+        activeSessions,
+        summary: {
+          assignedTournaments: tournamentList.length,
+          liveMatches: enrichedMatches.filter((m) => m.status === 'LIVE').length,
+          upcomingMatches: enrichedMatches.filter((m) => m.status === 'UPCOMING').length,
+          completedMatches: enrichedMatches.filter((m) => m.status === 'ENDED').length,
+          connectedObsCount: enrichedMatches.filter((m) => m.obsConnectionStatus === 'CONNECTED').length,
+          connectedCamerasTotal: enrichedMatches.reduce((acc, m) => acc + m.connectedCameraCount, 0),
+          authorizedMatchIdsCount: matchIds.length,
+        },
+      });
+    } catch (err) {
+      console.error('[Broadcaster Dashboard] Error:', err);
+      res.status(500).json({ message: 'Failed to load broadcaster dashboard.' });
+    }
+  }
+);
+
+// GET /api/obs/broadcasters - Management view for Admin / Super Admin / Organizer
+router.get(
+  '/broadcasters',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER'].includes(user.role)) {
+        res.status(403).json({
+          message: 'Forbidden: Only Super Admins, Admins, and Tournament Organizers can manage broadcasters.',
+        });
+        return;
+      }
+
+      const [allAssignments, allUsers, allTournaments, allStreams, allProfiles, allCameras, allLogs] =
+        await Promise.all([
+          BroadcastAssignment.find().sort({ createdAt: -1 }).lean(),
+          User.find({ isActive: true }).sort({ createdAt: -1 }).lean(),
+          Tournament.find().sort({ createdAt: -1 }).lean(),
+          LiveStream.find().sort({ createdAt: -1 }).lean(),
+          ObsControllerProfile.find().lean(),
+          BroadcastCamera.find().lean(),
+          BroadcastAuditLog.find().sort({ timestamp: -1 }).limit(80).lean(),
+        ]);
+
+      // Filter tournaments & matches for TOURNAMENT_ORGANIZER
+      const managedTournamentIds = new Set<string>();
+      for (const t of allTournaments) {
+        const tid = String(t._id);
+        if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
+          managedTournamentIds.add(tid);
+        } else if (await canManageTournament(user, tid)) {
+          managedTournamentIds.add(tid);
+        }
+      }
+
+      const visibleTournaments = allTournaments.filter((t: any) =>
+        managedTournamentIds.has(String(t._id))
+      );
+
+      const visibleStreams = allStreams.filter((s: any) => {
+        if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') return true;
+        if (s.createdBy && String(s.createdBy) === String(user._id)) return true;
+        if (s.tournamentId && managedTournamentIds.has(String(s.tournamentId))) return true;
+        return (user.assignedStreamIds || []).some((id) => String(id) === String(s._id));
+      });
+      const visibleStreamIds = new Set(visibleStreams.map((s: any) => String(s._id)));
+
+      const userMap = new Map(allUsers.map((u: any) => [String(u._id), u]));
+      const tourMap = new Map(allTournaments.map((t: any) => [String(t._id), t]));
+      const streamMap = new Map(allStreams.map((s: any) => [String(s._id), s]));
+
+      const visibleAssignments = allAssignments
+        .filter((a: any) => {
+          if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') return true;
+          if (a.scopeType === 'tournament' && a.tournamentId) {
+            return managedTournamentIds.has(String(a.tournamentId));
+          }
+          if (a.scopeType === 'match' && a.matchId) {
+            return visibleStreamIds.has(String(a.matchId));
+          }
+          return false;
+        })
+        .map((a: any) => {
+          const u = userMap.get(String(a.userId));
+          const t = a.tournamentId ? tourMap.get(String(a.tournamentId)) : null;
+          const m = a.matchId ? streamMap.get(String(a.matchId)) : null;
+          return {
+            id: String(a._id),
+            userId: String(a.userId),
+            userName: u?.name || 'Unknown User',
+            userEmail: u?.email || '',
+            userRole: u?.role || 'SPECTATOR',
+            role: a.role,
+            scopeType: a.scopeType,
+            tournamentId: a.tournamentId ? String(a.tournamentId) : null,
+            tournamentName: t?.name || m?.tournamentName || '',
+            matchId: a.matchId ? String(a.matchId) : null,
+            matchTitle: m
+              ? m.matchTitle || [m.teamAName, m.teamBName].filter(Boolean).join(' vs ')
+              : '',
+            status: a.status,
+            permissions: a.permissions || [],
+            assignedByName: a.assignedByName || '',
+            notes: a.notes || '',
+            suspendedAt: a.suspendedAt || null,
+            revokedAt: a.revokedAt || null,
+            revokeReason: a.revokeReason || '',
+            createdAt: a.createdAt,
+          };
+        });
+
+      const activeSessions = allProfiles
+        .filter((p: any) => visibleStreamIds.has(String(p.matchId)))
+        .map((p: any) => {
+          const safe = formatSafeProfile(p);
+          const m = streamMap.get(String(p.matchId));
+          const cams = allCameras.filter((c: any) => String(c.matchId) === String(p.matchId));
+          const onlineCams = cams
+            .map((c: any) => formatSafeCamera(c, safe))
+            .filter((c: any) => c.enabled && (c.status === 'CONNECTED' || c.status === 'ACTIVE'));
+          return {
+            matchId: String(p.matchId),
+            matchTitle: m
+              ? m.matchTitle || [m.teamAName, m.teamBName].filter(Boolean).join(' vs ')
+              : 'Match',
+            matchStatus: m?.status || 'UPCOMING',
+            connectionStatus: safe?.connectionStatus || 'DISCONNECTED',
+            obsStreamActive: Boolean(safe?.obsStreamActive),
+            obsRecordActive: Boolean(safe?.obsRecordActive),
+            activeObsScene: safe?.activeObsScene || '',
+            broadcastSessionId: safe?.broadcastSessionId || '',
+            activeControllerName: safe?.activeControllerName || '',
+            onlineCameraCount: onlineCams.length,
+            totalCameraCount: cams.length,
+          };
+        });
+
+      const recentAuditLogs = allLogs
+        .filter((l: any) => visibleStreamIds.has(String(l.matchId)))
+        .slice(0, 40)
+        .map(formatAuditLog);
+
+      res.json({
+        assignments: visibleAssignments,
+        candidates: allUsers.map((u: any) => ({
+          id: String(u._id),
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          isActive: u.isActive,
+        })),
+        tournaments: visibleTournaments.map((t: any) => ({
+          id: String(t._id),
+          name: t.name,
+          sportType: t.sportType || 'Cricket',
+          status: t.status,
+        })),
+        matches: visibleStreams.map((s: any) => ({
+          id: String(s._id),
+          matchTitle:
+            s.matchTitle || [s.teamAName, s.teamBName].filter(Boolean).join(' vs ') || 'Match',
+          tournamentId: s.tournamentId ? String(s.tournamentId) : null,
+          tournamentName: s.tournamentName || '',
+          status: s.status,
+        })),
+        activeSessions,
+        recentAuditLogs,
+      });
+    } catch (err) {
+      console.error('[Broadcasters Management] List error:', err);
+      res.status(500).json({ message: 'Failed to load broadcaster assignments.' });
+    }
+  }
+);
+
+// POST /api/obs/broadcasters/assign
+router.post(
+  '/broadcasters/assign',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const actor = req.user!;
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER'].includes(actor.role)) {
+        res.status(403).json({
+          message: 'Forbidden: Only Super Admins, Admins, and Tournament Organizers can assign broadcasters.',
+        });
+        return;
+      }
+
+      const userId = typeof req.body.userId === 'string' ? req.body.userId.trim() : '';
+      const scopeType = req.body.scopeType === 'tournament' ? 'tournament' : 'match';
+      const tournamentId =
+        typeof req.body.tournamentId === 'string' ? req.body.tournamentId.trim() : '';
+      const matchId = typeof req.body.matchId === 'string' ? req.body.matchId.trim() : '';
+      const notes = sanitizeText(req.body.notes, 300);
+      const promoteToBroadcaster = req.body.promoteToBroadcaster !== false;
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        res.status(400).json({ message: 'Valid target userId is required.' });
+        return;
+      }
+
+      const targetUser = await User.findById(userId);
+      if (!targetUser || !targetUser.isActive) {
+        res.status(404).json({ message: 'Target user not found or inactive.' });
+        return;
+      }
+
+      let resolvedTournamentId: mongoose.Types.ObjectId | null = null;
+      let resolvedMatchId: mongoose.Types.ObjectId | null = null;
+
+      if (scopeType === 'tournament') {
+        if (!mongoose.Types.ObjectId.isValid(tournamentId)) {
+          res.status(400).json({ message: 'Valid tournamentId is required for tournament scope.' });
+          return;
+        }
+        const tour = await Tournament.findById(tournamentId).lean();
+        if (!tour) {
+          res.status(404).json({ message: 'Tournament not found.' });
+          return;
+        }
+        if (actor.role === 'TOURNAMENT_ORGANIZER' && !(await canManageTournament(actor, tournamentId))) {
+          res.status(403).json({
+            message: 'Forbidden: You can only assign broadcasters to tournaments you manage.',
+          });
+          return;
+        }
+        resolvedTournamentId = tour._id as mongoose.Types.ObjectId;
+      } else {
+        if (!mongoose.Types.ObjectId.isValid(matchId)) {
+          res.status(400).json({ message: 'Valid matchId is required for match scope.' });
+          return;
+        }
+        const stream = await LiveStream.findById(matchId).lean();
+        if (!stream) {
+          res.status(404).json({ message: 'Match not found.' });
+          return;
+        }
+        if (actor.role === 'TOURNAMENT_ORGANIZER') {
+          const canTour = stream.tournamentId
+            ? await canManageTournament(actor, String(stream.tournamentId))
+            : false;
+          const isCreator = stream.createdBy && String(stream.createdBy) === String(actor._id);
+          if (!canTour && !isCreator) {
+            res.status(403).json({
+              message: 'Forbidden: You can only assign broadcasters to matches in your managed tournaments.',
+            });
+            return;
+          }
+        }
+        resolvedMatchId = stream._id as mongoose.Types.ObjectId;
+        resolvedTournamentId = (stream.tournamentId as mongoose.Types.ObjectId) || null;
+      }
+
+      // Prevent privilege escalation or downgrading higher admin roles
+      if (promoteToBroadcaster && ['SPECTATOR', 'CAPTAIN', 'MODERATOR'].includes(targetUser.role)) {
+        targetUser.role = 'BROADCASTER';
+        targetUser.permissions = {
+          manageStreams: true,
+          manageScores: false,
+          manageTournaments: false,
+          manageTeams: false,
+          managePlayers: false,
+          moderateChat: false,
+          manageSponsors: false,
+          manageVenues: false,
+          declareResults: false,
+        };
+        await targetUser.save();
+      } else if (
+        promoteToBroadcaster &&
+        targetUser.role === 'SCORER' &&
+        req.body.convertScorerToBroadcaster === true
+      ) {
+        targetUser.role = 'BROADCASTER';
+        targetUser.permissions = {
+          manageStreams: true,
+          manageScores: false,
+          manageTournaments: false,
+          manageTeams: false,
+          managePlayers: false,
+          moderateChat: false,
+          manageSponsors: false,
+          manageVenues: false,
+          declareResults: false,
+        };
+        await targetUser.save();
+      }
+
+      const permissions =
+        Array.isArray(req.body.permissions) && req.body.permissions.length > 0
+          ? req.body.permissions.filter((p: unknown): p is string => typeof p === 'string')
+          : [...DEFAULT_BROADCASTER_PERMS];
+
+      // Upsert or reactivate existing assignment for exact scope
+      const existingQuery: Record<string, any> = {
+        userId: targetUser._id,
+        scopeType,
+      };
+      if (scopeType === 'tournament') existingQuery.tournamentId = resolvedTournamentId;
+      else existingQuery.matchId = resolvedMatchId;
+
+      let assignment = await BroadcastAssignment.findOne(existingQuery);
+      if (assignment) {
+        assignment.status = 'ACTIVE';
+        assignment.permissions = permissions;
+        assignment.notes = notes;
+        assignment.assignedBy = actor._id as mongoose.Types.ObjectId;
+        assignment.assignedByName = actor.name;
+        assignment.suspendedAt = null;
+        assignment.revokedAt = null;
+        assignment.revokedBy = null;
+        assignment.revokeReason = '';
+        await assignment.save();
+      } else {
+        assignment = await BroadcastAssignment.create({
+          userId: targetUser._id,
+          role: 'BROADCASTER',
+          scopeType,
+          tournamentId: resolvedTournamentId,
+          matchId: resolvedMatchId,
+          status: 'ACTIVE',
+          permissions,
+          assignedBy: actor._id,
+          assignedByName: actor.name,
+          notes,
+        });
+      }
+
+      if (resolvedMatchId) {
+        await writeBroadcastAudit({
+          matchId: String(resolvedMatchId),
+          tournamentId: resolvedTournamentId ? String(resolvedTournamentId) : null,
+          actionType: 'BROADCASTER_ASSIGNED',
+          actor,
+          obsStatus: 'SUCCESS',
+          metadata: {
+            broadcasterId: String(targetUser._id),
+            broadcasterName: targetUser.name,
+            scopeType,
+          },
+        });
+      }
+
+      await recordActivity(
+        actor,
+        'ASSIGN_BROADCASTER',
+        'BroadcastAssignment',
+        String(assignment._id),
+        `Assigned ${targetUser.email} as Broadcaster (${scopeType})`
+      );
+
+      res.status(201).json({
+        assignment: {
+          id: String(assignment._id),
+          userId: String(assignment.userId),
+          scopeType: assignment.scopeType,
+          tournamentId: assignment.tournamentId ? String(assignment.tournamentId) : null,
+          matchId: assignment.matchId ? String(assignment.matchId) : null,
+          status: assignment.status,
+          permissions: assignment.permissions,
+          assignedByName: assignment.assignedByName,
+          notes: assignment.notes,
+        },
+      });
+    } catch (err) {
+      console.error('[Broadcasters] Assign error:', err);
+      res.status(500).json({ message: 'Failed to assign broadcaster.' });
+    }
+  }
+);
+
+// PATCH /api/obs/broadcasters/assignments/:id - Suspend, reactivate, or revoke (preserves history)
+router.patch(
+  '/broadcasters/assignments/:id',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const actor = req.user!;
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER'].includes(actor.role)) {
+        res.status(403).json({ message: 'Forbidden: Insufficient role permissions.' });
+        return;
+      }
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid assignment ID.' });
+        return;
+      }
+
+      const assignment = await BroadcastAssignment.findById(id);
+      if (!assignment) {
+        res.status(404).json({ message: 'Broadcast assignment not found.' });
+        return;
+      }
+
+      if (actor.role === 'TOURNAMENT_ORGANIZER') {
+        let authorized = false;
+        if (assignment.tournamentId && (await canManageTournament(actor, String(assignment.tournamentId)))) {
+          authorized = true;
+        } else if (assignment.matchId) {
+          const stream = await LiveStream.findById(assignment.matchId).lean();
+          if (stream?.createdBy && String(stream.createdBy) === String(actor._id)) authorized = true;
+          else if (stream?.tournamentId && (await canManageTournament(actor, String(stream.tournamentId)))) {
+            authorized = true;
+          }
+        }
+        if (!authorized) {
+          res.status(403).json({ message: 'Forbidden: Assignment is outside your managed tournaments.' });
+          return;
+        }
+      }
+
+      const nextStatus = req.body.status;
+      if (['ACTIVE', 'SUSPENDED', 'REVOKED'].includes(nextStatus)) {
+        assignment.status = nextStatus;
+        if (nextStatus === 'SUSPENDED') {
+          assignment.suspendedAt = new Date();
+        } else if (nextStatus === 'REVOKED') {
+          assignment.revokedAt = new Date();
+          assignment.revokedBy = actor._id as mongoose.Types.ObjectId;
+          assignment.revokeReason = sanitizeText(req.body.reason || req.body.revokeReason, 240);
+        } else if (nextStatus === 'ACTIVE') {
+          assignment.suspendedAt = null;
+          assignment.revokedAt = null;
+          assignment.revokeReason = '';
+        }
+      }
+      if (Array.isArray(req.body.permissions)) {
+        assignment.permissions = req.body.permissions.filter(
+          (p: unknown): p is string => typeof p === 'string'
+        );
+      }
+      if (typeof req.body.notes === 'string') {
+        assignment.notes = sanitizeText(req.body.notes, 300);
+      }
+      await assignment.save();
+
+      if (assignment.matchId) {
+        await writeBroadcastAudit({
+          matchId: String(assignment.matchId),
+          tournamentId: assignment.tournamentId ? String(assignment.tournamentId) : null,
+          actionType: 'BROADCASTER_STATUS_CHANGED',
+          actor,
+          obsStatus: 'SUCCESS',
+          metadata: {
+            assignmentId: String(assignment._id),
+            status: assignment.status,
+            reason: assignment.revokeReason,
+          },
+        });
+      }
+
+      res.json({
+        assignment: {
+          id: String(assignment._id),
+          status: assignment.status,
+          permissions: assignment.permissions,
+          notes: assignment.notes,
+          suspendedAt: assignment.suspendedAt,
+          revokedAt: assignment.revokedAt,
+          revokeReason: assignment.revokeReason,
+        },
+      });
+    } catch (err) {
+      console.error('[Broadcasters] Update assignment error:', err);
+      res.status(500).json({ message: 'Failed to update broadcast assignment.' });
+    }
+  }
+);
 
 // =========================================================================
 // PROTECTED BROADCAST STUDIO CONTROL ROUTES (Admin / Broadcaster RBAC)
@@ -305,15 +972,22 @@ router.get(
         return;
       }
 
-      const [snapshot, sponsors, operators] = await Promise.all([
+      const [snapshot, sponsors, operators, canOverride, canManageCameras, canManageOverlays, canControlStream, canControlRecord] = await Promise.all([
         getStudioSnapshot(matchId, true),
         Sponsor.find({ isActive: true }).sort({ createdAt: -1 }).lean(),
         User.find({
           isActive: true,
-          role: { $in: ['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'MODERATOR', 'SCORER'] },
+          role: { $in: ['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'MODERATOR', 'SCORER'] },
         })
           .select('name email role permissions')
           .lean(),
+        req.user!.role === 'SUPER_ADMIN' || req.user!.role === 'ADMIN'
+          ? Promise.resolve(true)
+          : hasBroadcastAccess(req.user!, matchId, 'broadcast:override'),
+        hasBroadcastAccess(req.user!, matchId, 'broadcast:manage_cameras'),
+        hasBroadcastAccess(req.user!, matchId, 'broadcast:manage_overlays'),
+        hasBroadcastAccess(req.user!, matchId, 'broadcast:stream_control'),
+        hasBroadcastAccess(req.user!, matchId, 'broadcast:record_control'),
       ]);
 
       const baseUrl = resolveBaseAppUrl(req);
@@ -352,13 +1026,11 @@ router.get(
           role: op.role,
         })),
         permissions: {
-          canOverride:
-            req.user!.role === 'SUPER_ADMIN' ||
-            req.user!.role === 'ADMIN' ||
-            (await hasGranularPermission(req.user!, 'broadcast:override', {
-              scopeType: 'match',
-              scopeId: matchId,
-            })),
+          canOverride,
+          canManageCameras,
+          canManageOverlays,
+          canControlStream,
+          canControlRecord,
         },
       });
     } catch (err) {
@@ -595,6 +1267,8 @@ router.post(
               : 'obs_input';
 
       const pushToken = generateScopedToken('mlcam');
+      const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
+      const pushTokenExpiresAt = new Date(Date.now() + expiresInHours * 3600_000);
       const vdoStreamId = sanitizeText(req.body.vdoStreamId, 80) || `${finalCameraId}_${matchId.slice(-4)}`;
       const vdoRoomName = sanitizeText(req.body.vdoRoomName, 80) || profile.vdoRoomName;
 
@@ -623,6 +1297,8 @@ router.post(
         vdoStreamId,
         pushTokenHash: pushToken.hash,
         pushTokenPrefix: pushToken.displayPrefix,
+        pushTokenExpiresAt,
+        broadcastSessionId: profile.broadcastSessionId || '',
         resolution: VALID_RESOLUTIONS.includes(req.body.resolution) ? req.body.resolution : '1280x720',
         fps: Math.max(15, Math.min(60, Number(req.body.fps) || 30)),
         bitrateKbps: Math.max(300, Math.min(12000, Number(req.body.bitrateKbps) || 2000)),
@@ -663,6 +1339,8 @@ router.post(
         camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
         mobileConnectUrl: `${baseUrl}/camera-connect/${cam._id.toString()}?token=${pushToken.raw}`,
         pushToken: pushToken.raw,
+        pushTokenExpiresAt: pushTokenExpiresAt.toISOString(),
+        broadcastSessionId: profile.broadcastSessionId || '',
       });
     } catch (err: any) {
       console.error('[OBS Camera] Create error:', err);
@@ -705,6 +1383,8 @@ router.post(
 
       const created: any[] = [];
       const baseUrl = resolveBaseAppUrl(req);
+      const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
+      const pushTokenExpiresAt = new Date(Date.now() + expiresInHours * 3600_000);
 
       for (let i = 0; i < count; i += 1) {
         const num = startNum + i;
@@ -726,6 +1406,8 @@ router.post(
           vdoStreamId: `cam${num}_${matchId.slice(-4)}`,
           pushTokenHash: pushToken.hash,
           pushTokenPrefix: pushToken.displayPrefix,
+          pushTokenExpiresAt,
+          broadcastSessionId: profile.broadcastSessionId || '',
           resolution: '1280x720',
           fps: 30,
           bitrateKbps: 2000,
@@ -742,6 +1424,8 @@ router.post(
         created.push({
           ...formatSafeCamera(doc.toObject(), profile, { includePrivateUrls: true }),
           mobileConnectUrl: `${baseUrl}/camera-connect/${doc._id.toString()}?token=${pushToken.raw}`,
+          pushTokenExpiresAt: pushTokenExpiresAt.toISOString(),
+          broadcastSessionId: profile.broadcastSessionId || '',
         });
       }
 
@@ -908,9 +1592,14 @@ router.post(
         res.status(404).json({ message: 'Camera not found.' });
         return;
       }
+      const profile = await ObsControllerProfile.findOne({ matchId }).lean();
       const nextToken = generateScopedToken('mlcam');
+      const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
+      const pushTokenExpiresAt = new Date(Date.now() + expiresInHours * 3600_000);
       cam.pushTokenHash = nextToken.hash;
       cam.pushTokenPrefix = nextToken.displayPrefix;
+      cam.pushTokenExpiresAt = pushTokenExpiresAt;
+      cam.broadcastSessionId = profile?.broadcastSessionId || cam.broadcastSessionId || '';
       await cam.save();
 
       const baseUrl = resolveBaseAppUrl(req);
@@ -919,6 +1608,8 @@ router.post(
       res.json({
         pushToken: nextToken.raw,
         pushTokenPrefix: nextToken.displayPrefix,
+        pushTokenExpiresAt: pushTokenExpiresAt.toISOString(),
+        broadcastSessionId: cam.broadcastSessionId || '',
         mobileConnectUrl,
       });
     } catch {
@@ -1003,6 +1694,7 @@ router.post(
   '/matches/:matchId/cameras/:cameraId/switch',
   authenticate,
   requireAdminPortal,
+  broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { matchId, cameraId } = req.params;
@@ -1026,6 +1718,7 @@ router.post(
   '/matches/:matchId/layouts/apply',
   authenticate,
   requireAdminPortal,
+  broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { matchId } = req.params;
@@ -1137,6 +1830,7 @@ router.post(
   '/matches/:matchId/scenes/switch',
   authenticate,
   requireAdminPortal,
+  broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { matchId } = req.params;
@@ -1165,6 +1859,7 @@ router.post(
   '/matches/:matchId/override',
   authenticate,
   requireAdminPortal,
+  broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { matchId } = req.params;
@@ -1230,6 +1925,107 @@ router.post(
         ok: false,
         message: err?.message || 'Unable to capture live OBS screenshot for this source.',
       });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/disconnect
+router.post(
+  '/matches/:matchId/cameras/:cameraId/disconnect',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+      const camera = await disconnectCameraByOperator(matchId, cameraId, req.user!);
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, camera, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to disconnect camera.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/audio
+router.post(
+  '/matches/:matchId/cameras/:cameraId/audio',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const muted = Boolean(req.body.muted);
+      const result = await setCameraObsAudioMute(
+        matchId,
+        cameraId,
+        muted,
+        req.user!,
+        Boolean(req.body.override)
+      );
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, ...result, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to toggle camera audio.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/obs-action
+router.post(
+  '/matches/:matchId/obs-action',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      const action = req.body.action;
+      if (!['start_stream', 'stop_stream', 'start_record', 'stop_record'].includes(action)) {
+        res.status(400).json({ message: 'Invalid OBS action requested.' });
+        return;
+      }
+      const perm: BroadcastAccessPermission =
+        action === 'start_stream' || action === 'stop_stream'
+          ? 'broadcast:stream_control'
+          : 'broadcast:record_control';
+      if (!(await authorizeBroadcastControl(req, res, matchId, perm))) return;
+
+      const out = await controlObsOutput(matchId, action, req.user!, Boolean(req.body.override));
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, ...out, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({ ok: false, message: err?.message || 'OBS output command failed.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/session
+router.post(
+  '/matches/:matchId/session',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const mode = req.body.mode;
+      if (!['start', 'end', 'takeover'].includes(mode)) {
+        res.status(400).json({ message: 'mode must be start, end, or takeover.' });
+        return;
+      }
+      await manageBroadcastSession(matchId, mode, req.user!);
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to update broadcast session.' });
     }
   }
 );

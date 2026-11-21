@@ -125,6 +125,18 @@ export function initObsControllerBridge(): void {
       if (typeof payload.obsStreamTimecode === 'string') {
         updateFields.obsStreamTimecode = payload.obsStreamTimecode;
       }
+      if (typeof payload.obsStreamBytes === 'number' || payload.obsStreamBytes === null) {
+        updateFields.obsStreamBytes = payload.obsStreamBytes;
+      }
+      if (typeof payload.obsStreamDurationMs === 'number' || payload.obsStreamDurationMs === null) {
+        updateFields.obsStreamDurationMs = payload.obsStreamDurationMs;
+      }
+      if (typeof payload.obsRecordActive === 'boolean') {
+        updateFields.obsRecordActive = payload.obsRecordActive;
+      }
+      if (typeof payload.obsRecordTimecode === 'string') {
+        updateFields.obsRecordTimecode = payload.obsRecordTimecode;
+      }
       if (payload.obsStats && typeof payload.obsStats === 'object') {
         updateFields.obsStats = payload.obsStats;
       }
@@ -240,11 +252,19 @@ export async function ensureObsProfileForMatch(
   userId?: mongoose.Types.ObjectId | string | null
 ): Promise<IObsControllerProfile> {
   let profile = await ObsControllerProfile.findOne({ matchId });
-  if (profile) return profile;
+  if (profile) {
+    if (!profile.broadcastSessionId) {
+      profile.broadcastSessionId = `mlsess_${generateScopedToken('s').raw.slice(2, 12)}`;
+      profile.broadcastSessionStartedAt = profile.broadcastSessionStartedAt || new Date();
+      await profile.save();
+    }
+    return profile;
+  }
 
   const stream = await LiveStream.findById(matchId).lean();
   const roomSuffix = matchId.slice(-8);
   const vdoPwd = generateScopedToken('vdo').raw.slice(0, 14);
+  const sessionId = `mlsess_${generateScopedToken('s').raw.slice(2, 12)}`;
 
   profile = await ObsControllerProfile.create({
     matchId,
@@ -257,6 +277,8 @@ export async function ensureObsProfileForMatch(
     connectionStatus: 'DISCONNECTED',
     vdoRoomName: `maidanlive_${roomSuffix}`,
     vdoRoomPasswordEnc: encryptObsSecret(vdoPwd),
+    broadcastSessionId: sessionId,
+    broadcastSessionStartedAt: new Date(),
     scoreboardSourceName: 'MaidanLive_Scoreboard_Overlay',
     autoSyncScoreboardSource: true,
     updatedBy: userId || null,
@@ -347,8 +369,21 @@ export function formatSafeProfile(profile: any) {
     obsScenes: Array.isArray(profile.obsScenes) ? profile.obsScenes : [],
     obsStreamActive: Boolean(profile.obsStreamActive),
     obsStreamTimecode: profile.obsStreamTimecode || '',
+    obsStreamBytes: typeof profile.obsStreamBytes === 'number' ? profile.obsStreamBytes : null,
+    obsStreamDurationMs:
+      typeof profile.obsStreamDurationMs === 'number' ? profile.obsStreamDurationMs : null,
+    obsRecordActive: Boolean(profile.obsRecordActive),
+    obsRecordTimecode: profile.obsRecordTimecode || '',
     obsStats: profile.obsStats || null,
     vdoRoomName: profile.vdoRoomName || '',
+    broadcastSessionId: profile.broadcastSessionId || '',
+    broadcastSessionStartedAt: profile.broadcastSessionStartedAt || null,
+    activeControllerUserId: profile.activeControllerUserId
+      ? String(profile.activeControllerUserId)
+      : null,
+    activeControllerName: profile.activeControllerName || '',
+    activeControllerRole: profile.activeControllerRole || '',
+    activeControllerSince: profile.activeControllerSince || null,
     adminOverrideLocked: Boolean(profile.adminOverrideLocked),
     adminOverrideByUserId: profile.adminOverrideByUserId
       ? String(profile.adminOverrideByUserId)
@@ -413,6 +448,10 @@ export function formatSafeCamera(
     obsBrowserSourceUrl:
       vdoLinks?.obsViewUrl || (options.includePrivateUrls ? camera.connectionUrl || '' : ''),
     pushTokenPrefix: camera.pushTokenPrefix || '',
+    pushTokenExpiresAt: camera.pushTokenExpiresAt || null,
+    broadcastSessionId: camera.broadcastSessionId || '',
+    audioMuted: Boolean(camera.audioMuted ?? camera.telemetry?.audioMuted),
+    obsInputMuted: typeof camera.obsInputMuted === 'boolean' ? camera.obsInputMuted : null,
     resolution: camera.resolution || '1280x720',
     fps: Number(camera.fps) || 30,
     bitrateKbps: Number(camera.bitrateKbps) || 2000,
@@ -671,6 +710,19 @@ export async function connectDirectObs(
     await emitFullStudioState(matchId);
   });
 
+  obs.on('RecordStateChanged', async (ev: any) => {
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId },
+      {
+        $set: {
+          obsRecordActive: Boolean(ev?.outputActive),
+          lastSyncedAt: new Date(),
+        },
+      }
+    );
+    await emitFullStudioState(matchId);
+  });
+
   try {
     const connectPromise = obs.connect(wsUrl, password || undefined, {
       rpcVersion: 1,
@@ -720,10 +772,11 @@ export async function connectDirectObs(
 }
 
 async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
-  const [versionRes, sceneListRes, streamStatusRes, statsRes] = await Promise.all([
+  const [versionRes, sceneListRes, streamStatusRes, recordStatusRes, statsRes] = await Promise.all([
     obs.call('GetVersion'),
     obs.call('GetSceneList'),
-    obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+    obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
+    obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
     obs.call('GetStats').catch(() => null),
   ]);
 
@@ -744,6 +797,16 @@ async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
         activeObsScene,
         obsStreamActive: Boolean((streamStatusRes as any)?.outputActive),
         obsStreamTimecode: String((streamStatusRes as any)?.outputTimecode || ''),
+        obsStreamBytes:
+          typeof (streamStatusRes as any)?.outputBytes === 'number'
+            ? Number((streamStatusRes as any).outputBytes)
+            : null,
+        obsStreamDurationMs:
+          typeof (streamStatusRes as any)?.outputDuration === 'number'
+            ? Number((streamStatusRes as any).outputDuration)
+            : null,
+        obsRecordActive: Boolean((recordStatusRes as any)?.outputActive),
+        obsRecordTimecode: String((recordStatusRes as any)?.outputTimecode || ''),
         obsStats: statsRes
           ? {
               cpuUsage: Number((statsRes as any).cpuUsage || 0),
@@ -1109,6 +1172,46 @@ export async function executeDirectObsCommand(
     return { imageData: res.imageData };
   }
 
+  if (command === 'start_stream') {
+    await obs.call('StartStream');
+    await pullDirectObsSnapshot(matchId, obs);
+    return { obsStreamActive: true };
+  }
+
+  if (command === 'stop_stream') {
+    await obs.call('StopStream');
+    await pullDirectObsSnapshot(matchId, obs);
+    return { obsStreamActive: false };
+  }
+
+  if (command === 'start_record') {
+    await obs.call('StartRecord');
+    await pullDirectObsSnapshot(matchId, obs);
+    return { obsRecordActive: true };
+  }
+
+  if (command === 'stop_record') {
+    const res = await obs.call('StopRecord');
+    await pullDirectObsSnapshot(matchId, obs);
+    return { obsRecordActive: false, outputPath: (res as any)?.outputPath || '' };
+  }
+
+  if (command === 'set_input_mute') {
+    const inputName = String(payload.inputName || '');
+    const inputMuted = Boolean(payload.inputMuted);
+    if (!inputName) throw new Error('inputName is required.');
+    await obs.call('SetInputMute', { inputName, inputMuted });
+    const verify = await obs.call('GetInputMute', { inputName }).catch(() => ({ inputMuted }));
+    return { inputName, inputMuted: Boolean((verify as any).inputMuted) };
+  }
+
+  if (command === 'get_input_mute') {
+    const inputName = String(payload.inputName || '');
+    if (!inputName) throw new Error('inputName is required.');
+    const res = await obs.call('GetInputMute', { inputName });
+    return { inputName, inputMuted: Boolean((res as any).inputMuted) };
+  }
+
   throw new Error(`Unsupported OBS command: ${command}`);
 }
 
@@ -1335,6 +1438,10 @@ export async function switchCameraLive(
     profile.activeLayoutType = 'SINGLE';
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerName = actor.name;
+    profile.activeControllerRole = actor.role;
+    profile.activeControllerSince = new Date();
     if (Array.isArray(rpcRes?.obsScenes)) {
       profile.obsScenes = rpcRes.obsScenes;
     }
@@ -1528,6 +1635,10 @@ export async function applyDynamicLayoutToObs(
     profile.activeCameraId = boxes.length === 1 ? leadCameraId : '';
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerName = actor.name;
+    profile.activeControllerRole = actor.role;
+    profile.activeControllerSince = new Date();
     if (Array.isArray(rpcRes?.obsScenes)) {
       profile.obsScenes = rpcRes.obsScenes;
     }
@@ -1631,6 +1742,10 @@ export async function switchObsSceneByName(
     profile.activeCameraId = mappedCam?.cameraId || '';
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerName = actor.name;
+    profile.activeControllerRole = actor.role;
+    profile.activeControllerSince = new Date();
     if (Array.isArray(rpcRes?.obsScenes)) {
       profile.obsScenes = rpcRes.obsScenes;
     }
@@ -1678,3 +1793,205 @@ export async function captureObsPreviewImage(matchId: string, sourceName: string
   const res = await callObsRpc<{ imageData: string }>(matchId, 'screenshot', { sourceName });
   return String(res?.imageData || '');
 }
+
+export async function controlObsOutput(
+  matchId: string,
+  action: 'start_stream' | 'stop_stream' | 'start_record' | 'stop_record',
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const actionMap: Record<typeof action, BroadcastAuditAction> = {
+    start_stream: 'OBS_STREAM_START',
+    stop_stream: 'OBS_STREAM_STOP',
+    start_record: 'OBS_RECORD_START',
+    stop_record: 'OBS_RECORD_STOP',
+  };
+
+  try {
+    const rpcRes = await callObsRpc(matchId, action, {});
+    if (action === 'start_stream') profile.obsStreamActive = true;
+    if (action === 'stop_stream') profile.obsStreamActive = false;
+    if (action === 'start_record') profile.obsRecordActive = true;
+    if (action === 'stop_record') profile.obsRecordActive = false;
+    profile.lastSyncedAt = new Date();
+    profile.updatedBy = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerName = actor.name;
+    profile.activeControllerRole = actor.role;
+    profile.activeControllerSince = new Date();
+    await profile.save();
+
+    await writeBroadcastAudit({
+      matchId,
+      tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+      actionType: actionMap[action],
+      actor,
+      adminOverride: Boolean(override),
+      obsStatus: 'SUCCESS',
+      metadata: rpcRes || null,
+    });
+    await emitFullStudioState(matchId);
+    return { profile: formatSafeProfile(profile), result: rpcRes };
+  } catch (err: any) {
+    await writeBroadcastAudit({
+      matchId,
+      tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+      actionType: actionMap[action],
+      actor,
+      adminOverride: Boolean(override),
+      obsStatus: 'FAILED',
+      errorDetails: err?.message || `Failed executing OBS ${action}.`,
+    });
+    throw err;
+  }
+}
+
+export async function setCameraObsAudioMute(
+  matchId: string,
+  cameraId: string,
+  muted: boolean,
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  let obsSynced = false;
+  let obsMutedResult: boolean | null = null;
+  let obsNote = '';
+
+  const targetInput = cam.obsInputName || `ML_CAM_${cam.cameraNumber}`;
+  const isObsConnected =
+    profile.connectionMode === 'local_agent'
+      ? Boolean(agentSockets.get(matchId)?.connected && profile.connectionStatus === 'CONNECTED')
+      : Boolean(directSessions.get(matchId)?.connected);
+
+  if (isObsConnected && targetInput) {
+    try {
+      const res = await callObsRpc<{ inputName: string; inputMuted: boolean }>(
+        matchId,
+        'set_input_mute',
+        { inputName: targetInput, inputMuted: muted }
+      );
+      obsSynced = true;
+      obsMutedResult = Boolean(res.inputMuted);
+    } catch (err: any) {
+      obsNote = err?.message || 'OBS input does not expose an audio track or was not yet created.';
+    }
+  } else {
+    obsNote = 'OBS is not currently connected; saved companion audio mute state only.';
+  }
+
+  cam.audioMuted = obsSynced ? Boolean(obsMutedResult) : muted;
+  cam.obsInputMuted = obsSynced ? Boolean(obsMutedResult) : null;
+  cam.telemetry = {
+    ...(cam.telemetry || {}),
+    audioMuted: cam.audioMuted,
+  };
+  await cam.save();
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_AUDIO_TOGGLE',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: obsSynced ? 'SUCCESS' : 'SUCCESS',
+    metadata: { muted: cam.audioMuted, obsSynced, note: obsNote },
+  });
+  await emitFullStudioState(matchId);
+
+  return {
+    camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+    obsSynced,
+    obsNote,
+  };
+}
+
+export async function disconnectCameraByOperator(
+  matchId: string,
+  cameraId: string,
+  actor: IUser
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  cam.status = 'DISCONNECTED';
+  cam.lastHeartbeatAt = null;
+  cam.lastError = `Disconnected by ${actor.name}`;
+  await cam.save();
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_DISCONNECTED',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    actor,
+    obsStatus: 'SUCCESS',
+  });
+  await emitFullStudioState(matchId);
+
+  return formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true });
+}
+
+export async function manageBroadcastSession(
+  matchId: string,
+  mode: 'start' | 'end' | 'takeover',
+  actor: IUser
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  if (mode === 'start') {
+    profile.broadcastSessionId = `mlsess_${generateScopedToken('s').raw.slice(2, 12)}`;
+    profile.broadcastSessionStartedAt = new Date();
+  }
+  if (mode === 'end') {
+    profile.broadcastSessionId = '';
+    profile.broadcastSessionStartedAt = null;
+    profile.activeControllerUserId = null;
+    profile.activeControllerName = '';
+    profile.activeControllerRole = '';
+    profile.activeControllerSince = null;
+  } else {
+    profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
+    profile.activeControllerName = actor.name;
+    profile.activeControllerRole = actor.role;
+    profile.activeControllerSince = new Date();
+  }
+  profile.updatedBy = actor._id as mongoose.Types.ObjectId;
+  await profile.save();
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType:
+      mode === 'start'
+        ? 'BROADCAST_SESSION_STARTED'
+        : mode === 'end'
+          ? 'BROADCAST_SESSION_ENDED'
+          : 'CONTROLLER_TAKEOVER',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { broadcastSessionId: profile.broadcastSessionId },
+  });
+  await emitFullStudioState(matchId);
+  return formatSafeProfile(profile);
+}
+
