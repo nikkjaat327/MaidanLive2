@@ -158,6 +158,7 @@ export function TeamsPage() {
                         url={shareUrl}
                         shareCard={{
                           type: 'TEAM',
+                          teamId: team.id,
                           teamName: team.name,
                           shortName: team.shortName,
                           sport: team.sportType,

@@ -30,15 +30,22 @@ export function ShareButton({
   async function handleNativeShare(e?: React.MouseEvent) {
     e?.preventDefault();
     e?.stopPropagation();
+    const textWithLink = `${shareText}\n${shareUrl}`;
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
-        await navigator.share({ title, text: shareText, url: shareUrl });
+        await navigator.share({ title, text: textWithLink, url: shareUrl });
         return;
       } catch {
         // Fallback to copy if cancelled or unsupported
       }
     }
-    await handleCopy();
+    try {
+      await navigator.clipboard.writeText(textWithLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      await handleCopy();
+    }
   }
 
   async function handleCopy(e?: React.MouseEvent) {

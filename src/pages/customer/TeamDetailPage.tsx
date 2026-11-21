@@ -173,6 +173,7 @@ export function TeamDetailPage() {
             url={buildTeamUrl(team.id)}
             shareCard={{
               type: 'TEAM',
+              teamId: team.id,
               teamName: team.name,
               shortName: team.shortName,
               sport: team.sportType,

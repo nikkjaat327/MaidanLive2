@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Award, Check, Copy, Download, Share2 } from 'lucide-react';
 import { TournamentPrizesConfig } from '../../types/index.ts';
+import { entityService } from '../../services/entities/entityService.ts';
 import { Modal } from './Modal.tsx';
 
 export type ShareCardPayload =
@@ -86,6 +87,7 @@ export type ShareCardPayload =
     }
   | {
       type: 'TEAM';
+      teamId?: string;
       teamName: string;
       shortName?: string;
       sport: string;
@@ -166,6 +168,65 @@ function wrapText(
       }
       ctx.fillText(line, x, currentY);
       line = words[i];
+      currentY += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  if (line) {
+    ctx.fillText(line, x, currentY);
+    currentY += lineHeight;
+  }
+  return currentY;
+}
+
+function drawFittedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number
+) {
+  let out = String(text || '');
+  if (ctx.measureText(out).width <= maxWidth) {
+    ctx.fillText(out, x, y);
+    return;
+  }
+  while (out.length > 1 && ctx.measureText(`${out}...`).width > maxWidth) {
+    out = out.slice(0, -1);
+  }
+  ctx.fillText(`${out}...`, x, y);
+}
+
+function wrapChars(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines = 2
+): number {
+  const str = String(text || '');
+  let line = '';
+  let currentY = y;
+  let lineCount = 0;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    const testLine = line + ch;
+    if (ctx.measureText(testLine).width > maxWidth && line) {
+      lineCount += 1;
+      if (lineCount >= maxLines) {
+        let trimmed = line;
+        while (trimmed.length > 1 && ctx.measureText(`${trimmed}...`).width > maxWidth) {
+          trimmed = trimmed.slice(0, -1);
+        }
+        ctx.fillText(`${trimmed}...`, x, currentY);
+        return currentY + lineHeight;
+      }
+      ctx.fillText(line, x, currentY);
+      line = ch;
       currentY += lineHeight;
     } else {
       line = testLine;
@@ -314,6 +375,29 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
+      // Hydrate team squad players + record on-demand if card was opened from Teams listing
+      let resolvedTeamPlayers = card.type === 'TEAM' ? card.players || [] : [];
+      let resolvedTeamRecord = card.type === 'TEAM' ? card.record : undefined;
+      if (card.type === 'TEAM' && card.teamId && resolvedTeamPlayers.length === 0) {
+        try {
+          const profile = await entityService.getTeamProfile(card.teamId);
+          if (!active) return;
+          if (Array.isArray(profile.players)) {
+            resolvedTeamPlayers = profile.players.map((p) => ({
+              name: p.name,
+              role: p.role || p.position,
+              jerseyNumber: p.jerseyNumber,
+              avatarUrl: p.avatarUrl,
+            }));
+          }
+          if (!resolvedTeamRecord && profile.record) {
+            resolvedTeamRecord = profile.record;
+          }
+        } catch {
+          // Non-blocking fallback
+        }
+      }
+
       // Preload optional remote assets safely (CORS-safe fallback to initials)
       let teamAImg: HTMLImageElement | null = null;
       let teamBImg: HTMLImageElement | null = null;
@@ -334,7 +418,7 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       } else if (card.type === 'TOURNAMENT') {
         logoImg = await loadImageForCanvas(card.logoUrl);
       } else if (card.type === 'TEAM') {
-        const visiblePlayers = (card.players || []).slice(0, 12);
+        const visiblePlayers = resolvedTeamPlayers.slice(0, 24);
         [logoImg, ...rosterImgs] = await Promise.all([
           loadImageForCanvas(card.teamLogoUrl),
           ...visiblePlayers.map((p) => loadImageForCanvas(p.avatarUrl)),
@@ -587,12 +671,12 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
 
         // Optional Record Strip
         let listStartY = Math.max(418, afterTeamY + 54);
-        if (card.record && card.record.played > 0) {
+        if (resolvedTeamRecord && resolvedTeamRecord.played > 0) {
           const recItems = [
-            { label: 'PLAYED', val: card.record.played },
-            { label: 'WON', val: card.record.won },
-            { label: 'LOST', val: card.record.lost },
-            { label: 'DRAW/TIE', val: card.record.drawn },
+            { label: 'PLAYED', val: resolvedTeamRecord.played },
+            { label: 'WON', val: resolvedTeamRecord.won },
+            { label: 'LOST', val: resolvedTeamRecord.lost },
+            { label: 'DRAW/TIE', val: resolvedTeamRecord.drawn },
           ];
           const pillW = (W - 192 - 36) / 4;
           recItems.forEach((it, idx) => {
@@ -611,18 +695,17 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
             ctx.font = '800 30px ui-monospace, SFMono-Regular, monospace';
             ctx.fillText(String(it.val), x + 18, listStartY + 60);
           });
-          listStartY += 108;
+          listStartY += 106;
         }
 
-        // Squad Roster Grid (up to 12 players, ZERO PII)
-        const roster = card.players || [];
-        const visibleRoster = roster.slice(0, 12);
+        // Squad Roster Grid (adaptive 2 or 3 columns, ZERO PII)
+        const roster = resolvedTeamPlayers;
         ctx.fillStyle = '#CBD5E1';
         ctx.font = '700 22px system-ui, -apple-system, sans-serif';
-        ctx.fillText(`OFFICIAL SQUAD (${roster.length})`, 96, listStartY);
+        ctx.fillText(`OFFICIAL SQUAD PLAYERS (${roster.length})`, 96, listStartY);
 
         const gridTop = listStartY + 22;
-        if (visibleRoster.length === 0) {
+        if (roster.length === 0) {
           ctx.fillStyle = 'rgba(255,255,255,0.05)';
           drawRoundedRect(ctx, 96, gridTop, W - 192, 120, 20);
           ctx.fill();
@@ -630,51 +713,60 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
           ctx.font = '600 26px system-ui, -apple-system, sans-serif';
           ctx.fillText('Squad players will appear here once published.', 132, gridTop + 68);
         } else {
-          const cols = 2;
-          const colW = (W - 192 - 20) / cols;
-          const rowH = 74;
+          const cols = roster.length > 12 ? 3 : 2;
+          const colGap = cols === 3 ? 14 : 18;
+          const colW = (W - 192 - colGap * (cols - 1)) / cols;
+          const rowH = cols === 3 ? 62 : 68;
+          const rowGap = 10;
+          const maxBottomY = H - 280;
+          const maxRows = Math.max(1, Math.floor((maxBottomY - gridTop) / (rowH + rowGap)));
+          const visibleRoster = roster.slice(0, maxRows * cols);
+
           visibleRoster.forEach((pl, idx) => {
             const col = idx % cols;
             const row = Math.floor(idx / cols);
-            const x = 96 + col * (colW + 20);
-            const y = gridTop + row * (rowH + 14);
-            if (y + rowH > H - 290) return;
+            const x = 96 + col * (colW + colGap);
+            const y = gridTop + row * (rowH + rowGap);
 
             ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
             ctx.lineWidth = 1.5;
-            drawRoundedRect(ctx, x, y, colW, rowH, 16);
+            drawRoundedRect(ctx, x, y, colW, rowH, 14);
             ctx.fill();
             ctx.stroke();
 
+            const avatarR = cols === 3 ? 18 : 21;
+            const avatarCx = x + avatarR + 12;
             drawCircularAvatar(
               ctx,
               rosterImgs[idx] || null,
               pl.name,
-              x + 36,
+              avatarCx,
               y + rowH / 2,
-              22,
+              avatarR,
               '#1E293B',
               'rgba(255,255,255,0.2)'
             );
 
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = '700 23px system-ui, -apple-system, sans-serif';
+            const textX = avatarCx + avatarR + 12;
+            const textMaxW = colW - (textX - x) - 10;
             const jerseyTag =
               pl.jerseyNumber !== null && pl.jerseyNumber !== undefined ? `#${pl.jerseyNumber} ` : '';
-            ctx.fillText(`${jerseyTag}${pl.name}`.slice(0, 22), x + 72, y + 34);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `700 ${cols === 3 ? 19 : 22}px system-ui, -apple-system, sans-serif`;
+            drawFittedText(ctx, `${jerseyTag}${pl.name}`, textX, y + (pl.role ? 28 : rowH / 2 + 7), textMaxW);
 
             if (pl.role) {
               ctx.fillStyle = '#94A3B8';
-              ctx.font = '500 18px system-ui, -apple-system, sans-serif';
-              ctx.fillText(pl.role.slice(0, 24), x + 72, y + 57);
+              ctx.font = `500 ${cols === 3 ? 15 : 17}px system-ui, -apple-system, sans-serif`;
+              drawFittedText(ctx, pl.role, textX, y + 50, textMaxW);
             }
           });
 
           if (roster.length > visibleRoster.length) {
             ctx.fillStyle = '#FDBA74';
-            ctx.font = '700 22px system-ui, -apple-system, sans-serif';
-            ctx.fillText(`+${roster.length - visibleRoster.length} more squad members`, 96, H - 275);
+            ctx.font = '700 20px system-ui, -apple-system, sans-serif';
+            ctx.fillText(`+${roster.length - visibleRoster.length} more squad players`, 96, H - 266);
           }
         }
       } else if (
@@ -865,28 +957,34 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         }
       }
 
-      // Bottom Branded CTA Footer Section
-      const footerY = H - 250;
+      // Bottom Branded CTA Footer Section (Always prints full web app / entity link)
+      const footerY = H - 252;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
       ctx.lineWidth = 2;
-      drawRoundedRect(ctx, 96, footerY, W - 192, 156, 26);
+      drawRoundedRect(ctx, 96, footerY, W - 192, 168, 26);
       ctx.fill();
       ctx.stroke();
 
       ctx.fillStyle = '#EA580C';
-      drawRoundedRect(ctx, 130, footerY + 34, 14, 88, 7);
+      drawRoundedRect(ctx, 130, footerY + 28, 14, 112, 7);
       ctx.fill();
 
+      const footerTitle =
+        card.type === 'TEAM'
+          ? `Team Squad & Matches on MaidanLive`
+          : 'Watch Live Scores & Video on MaidanLive';
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = '800 32px system-ui, -apple-system, sans-serif';
-      ctx.fillText('Watch Live Scores & Video on MaidanLive', 168, footerY + 66);
+      ctx.font = '800 30px system-ui, -apple-system, sans-serif';
+      ctx.fillText(footerTitle, 168, footerY + 54);
+
       ctx.fillStyle = '#94A3B8';
-      ctx.font = '500 22px system-ui, -apple-system, sans-serif';
-      ctx.fillText('Ball-by-ball updates, official scorecards & grassroots broadcasts', 168, footerY + 104);
+      ctx.font = '500 20px system-ui, -apple-system, sans-serif';
+      ctx.fillText('Ball-by-ball updates, official scorecards & grassroots broadcasts', 168, footerY + 86);
+
       ctx.fillStyle = '#F97316';
-      ctx.font = '600 21px ui-monospace, SFMono-Regular, monospace';
-      ctx.fillText(shareUrl.slice(0, 62), 168, footerY + 138);
+      ctx.font = '600 18px ui-monospace, SFMono-Regular, monospace';
+      wrapChars(ctx, shareUrl, 168, footerY + 120, W - 192 - 92, 24, 2);
 
       if (active) {
         try {
@@ -917,7 +1015,8 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
 
   async function handleShareCard() {
     const title = getCardTitle(card);
-    const text = getShareSummaryText(card);
+    const summary = getShareSummaryText(card);
+    const textWithLink = `${summary}\n${shareUrl}`;
 
     if (previewUrl && typeof navigator !== 'undefined' && navigator.share) {
       try {
@@ -927,16 +1026,22 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
           type: 'image/png',
         });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title, text, files: [file], url: shareUrl });
+          await navigator.share({ title, text: textWithLink, files: [file], url: shareUrl });
           return;
         }
-        await navigator.share({ title, text, url: shareUrl });
+        await navigator.share({ title, text: textWithLink, url: shareUrl });
         return;
       } catch {
         // Fallback to copy
       }
     }
-    await handleCopy();
+    try {
+      await navigator.clipboard.writeText(textWithLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      await handleCopy();
+    }
   }
 
   async function handleCopy() {
