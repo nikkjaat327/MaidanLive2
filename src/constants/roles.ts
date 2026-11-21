@@ -25,7 +25,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   MODERATOR: 'Moderator',
   SCORER: 'Scorer',
   CAPTAIN: 'Team Captain',
-  SPECTATOR: 'Spectator',
+  SPECTATOR: 'Player',
 };
 
 export const ALL_GRANULAR_PERMISSIONS = [

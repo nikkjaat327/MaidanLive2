@@ -158,4 +158,13 @@ html[data-obs-overlay-view="true"] #root {
   background-position: 0 0, 0 12px, 12px -12px, -12px 0;
 }
 
+/* Apply to a specific container, or use :root / * for the whole page */
+.scrollable-element {
+  /* First value = thumb (handle) color, Second value = track (background) color */
+  scrollbar-color: #4f46e5 #e5e7eb; 
+  
+  /* Options: auto | thin | none */
+  scrollbar-width: thin; 
+}
+
 

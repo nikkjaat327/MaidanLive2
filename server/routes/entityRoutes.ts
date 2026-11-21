@@ -48,6 +48,21 @@ function dedupeDocsById<T extends { _id?: any; id?: string }>(docs: T[]): T[] {
   return out;
 }
 
+function redactStreamPlayback<T extends Record<string, any>>(streamObj: T): T {
+  return {
+    ...streamObj,
+    youtubeVideoId: '',
+    replayVideoId: '',
+    replayInput: '',
+    mediamtxPlaybackUrl: '',
+    mediamtxWebrtcUrl: '',
+    mediamtxPlaybackHlsUrl: '',
+    mediamtxPlaybackWebrtcUrl: '',
+    mediamtxHlsUrl: '',
+    playbackLocked: true,
+  };
+}
+
 const router = Router();
 const VALID_SPORTS = ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'];
 const VALID_FORMATS = ['KNOCKOUT', 'LEAGUE', 'GROUP_STAGE', 'GROUP_KNOCKOUT'];
@@ -430,7 +445,7 @@ router.get('/tournaments', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/tournaments/:id', async (req: Request, res: Response) => {
+router.get('/tournaments/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -483,11 +498,14 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
         ? await LiveScore.find({ liveStreamId: { $in: streamIds } }).lean()
         : [];
     const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
-    const enrichedStreams = streams.map((s) => ({
-      ...s,
-      id: s._id.toString(),
-      score: scoreMap.get(s._id.toString()) || null,
-    }));
+    const enrichedStreams = streams.map((s) => {
+      const item = {
+        ...s,
+        id: s._id.toString(),
+        score: scoreMap.get(s._id.toString()) || null,
+      };
+      return req.user ? item : redactStreamPlayback(item);
+    });
 
     const fixtureGroupMap: Record<string, string> = {};
     const fixtureByStreamId = new Map<string, (typeof fixtures)[number]>();
@@ -1012,7 +1030,7 @@ router.get('/teams', async (req: Request, res: Response) => {
 });
 
 // Public Team Profile Page endpoint
-router.get('/teams/:id', async (req: Request, res: Response) => {
+router.get('/teams/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -1072,11 +1090,12 @@ router.get('/teams/:id', async (req: Request, res: Response) => {
           }
         }
       }
-      return {
+      const item = {
         ...s,
         id: s._id.toString(),
         score: sc,
       };
+      return req.user ? item : redactStreamPlayback(item);
     });
 
     res.json({
@@ -1868,7 +1887,7 @@ router.delete(
 );
 
 // ==================== GLOBAL UNIFIED SEARCH ====================
-router.get('/search', async (req: Request, res: Response) => {
+router.get('/search', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const rawQ = typeof req.query.q === 'string' ? sanitizeText(req.query.q, 80) : '';
     const category = typeof req.query.type === 'string' ? req.query.type.trim().toLowerCase() : 'all';
@@ -1984,11 +2003,14 @@ router.get('/search', async (req: Request, res: Response) => {
 
     res.json({
       query: rawQ,
-      matches: uniqueStreams.map((s) => ({
-        ...s,
-        id: s._id.toString(),
-        score: scoreMap.get(s._id.toString()) || null,
-      })),
+      matches: uniqueStreams.map((s) => {
+        const item = {
+          ...s,
+          id: s._id.toString(),
+          score: scoreMap.get(s._id.toString()) || null,
+        };
+        return req.user ? item : redactStreamPlayback(item);
+      }),
       tournaments: want('tournaments')
         ? uniqueTournaments.map((t) => ({ ...t, id: t._id.toString() }))
         : [],

@@ -27,7 +27,7 @@ const router = Router();
 const chatRateMap = new Map<string, number[]>();
 
 // ==================== MATCH HIGHLIGHTS (MODULE 1 & 11) ====================
-router.get('/live/:id/highlights', async (req: Request, res: Response) => {
+router.get('/live/:id/highlights', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {

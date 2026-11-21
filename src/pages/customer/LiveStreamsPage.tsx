@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Radio, Search } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Lock, Radio, Search } from 'lucide-react';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import { LiveStreamData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
@@ -11,6 +13,10 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 
 export function LiveStreamsPage() {
+  const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
+  const isAuthenticated = Boolean(customerUser || adminUser);
+  const authLoading = customerLoading || adminLoading;
+
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +34,7 @@ export function LiveStreamsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     fetchStreams();
@@ -144,6 +150,31 @@ export function LiveStreamsPage() {
           ))}
         </div>
       </div>
+
+      {!authLoading && !isAuthenticated && (
+        <div className="bg-slate-900 text-white rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-800">
+          <div className="flex items-start gap-2.5">
+            <Lock className="w-4 h-4 text-[#EA580C] shrink-0 mt-0.5" />
+            <p className="text-xs sm:text-sm text-slate-200">
+              Player sign-in is required to play live streams, match highlights, and full replays.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link
+              to="/login?next=%2Flive"
+              className="min-h-[36px] inline-flex items-center px-3.5 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-600"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/register?next=%2Flive"
+              className="min-h-[36px] inline-flex items-center px-3.5 py-1.5 rounded-lg bg-white/10 border border-white/20 text-white text-xs font-semibold hover:bg-white/20"
+            >
+              Create Player Account
+            </Link>
+          </div>
+        </div>
+      )}
 
       <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
 

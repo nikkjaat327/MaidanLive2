@@ -174,6 +174,7 @@ export interface LiveStreamData {
   totalViewsCount?: number;
   replayViewsCount?: number;
   overlayConfig?: BroadcastOverlayConfig;
+  playbackLocked?: boolean;
   createdAt: string;
   updatedAt: string;
   score?: LiveScoreData | null;

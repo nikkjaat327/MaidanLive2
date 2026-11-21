@@ -1127,7 +1127,7 @@ export function AdminTournamentsPage() {
                 onChange={(e) => setIsPublished(e.target.checked)}
                 className="w-4 h-4 rounded border-slate-300 text-emerald-600"
               />
-              <span>Publish tournament publicly on Customer Portal</span>
+              <span>Publish tournament publicly on Player Portal</span>
             </label>
             <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
               <input

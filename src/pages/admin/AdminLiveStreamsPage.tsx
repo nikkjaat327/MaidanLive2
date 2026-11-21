@@ -465,7 +465,7 @@ export function AdminLiveStreamsPage() {
         replayDescription: replayDescription.trim(),
       });
       setReplayTarget(null);
-      setSuccess(publishState ? 'Verified replay published to Customer Portal.' : 'Replay saved/hidden.');
+      setSuccess(publishState ? 'Verified replay published to Player Portal.' : 'Replay saved/hidden.');
       await loadAll();
     } catch (err) {
       setError(extractApiError(err, 'Could not update replay.'));
@@ -1351,7 +1351,7 @@ export function AdminLiveStreamsPage() {
                     }
                     className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
                   >
-                    <option value="public">Public (Visible on Customer Portal)</option>
+                    <option value="public">Public (Visible on Player Portal)</option>
                     <option value="admin_only">Admin Only (Hidden from Public)</option>
                     <option value="hidden">Hidden Everywhere</option>
                   </select>

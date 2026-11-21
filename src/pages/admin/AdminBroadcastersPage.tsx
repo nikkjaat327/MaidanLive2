@@ -525,7 +525,7 @@ export function AdminBroadcastersPage() {
               className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
             />
             <span>
-              Set user role to <strong>BROADCASTER</strong> if currently Spectator / Captain / Moderator
+              Set user role to <strong>BROADCASTER</strong> if currently Player / Captain / Moderator
             </span>
           </label>
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Award, Calendar, History, MapPin, PlaySquare, Radio, Trophy } from 'lucide-react';
+import { ArrowRight, Award, Calendar, History, Lock, MapPin, PlaySquare, Radio, Trophy } from 'lucide-react';
 import { HERO_BANNER_IMAGE, SPORT_OPTIONS } from '../../constants/sports.ts';
 import { LiveStreamData, SponsorData, TournamentData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
@@ -8,6 +8,7 @@ import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
@@ -19,6 +20,10 @@ import { MatchStatusBadge } from '../../components/common/MatchStatusBadge.tsx';
 
 export function HomePage() {
   const { t } = useLanguage();
+  const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
+  const isAuthenticated = Boolean(customerUser || adminUser);
+  const authLoading = customerLoading || adminLoading;
+
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
@@ -36,7 +41,7 @@ export function HomePage() {
       setError(null);
       const [allStreams, publishedReplays, allTournaments, sponsors] = await Promise.all([
         liveStreamService.listStreams(),
-        liveStreamService.listReplays(false),
+        isAuthenticated ? liveStreamService.listReplays(false).catch(() => []) : Promise.resolve([]),
         entityService.listTournaments().catch(() => []),
         platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
       ]);
@@ -50,7 +55,7 @@ export function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     loadData();
@@ -493,8 +498,30 @@ export function HomePage() {
             </Link>
           </div>
 
-          {loading ? (
+          {loading || authLoading ? (
             <CardGridSkeleton count={3} />
+          ) : !isAuthenticated ? (
+            <EmptyState
+              icon={<Lock className="w-6 h-6 text-[#EA580C]" />}
+              title="Sign in to watch Match Replays & Highlights"
+              description="Live video streams, match highlights, and full replays are available to signed-in MaidanLive players."
+              action={
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Link
+                    to="/login?next=%2Freplays"
+                    className="min-h-[40px] inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-700"
+                  >
+                    Sign In
+                  </Link>
+                  <Link
+                    to="/register?next=%2Freplays"
+                    className="min-h-[40px] inline-flex items-center px-4 py-2 text-sm font-semibold text-slate-900 bg-slate-100 rounded-lg hover:bg-slate-200"
+                  >
+                    Create Player Account
+                  </Link>
+                </div>
+              }
+            />
           ) : filteredReplays.length === 0 ? (
             <EmptyState
               icon={<PlaySquare className="w-6 h-6" />}

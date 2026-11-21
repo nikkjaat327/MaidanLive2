@@ -13,7 +13,7 @@ import {
   TournamentTemplateData,
   VenueData,
 } from '../../types/index.ts';
-import { adminApi, publicApi } from '../api/httpClient.ts';
+import { adminApi, getViewerApi, publicApi } from '../api/httpClient.ts';
 import { dedupeEntitiesById } from '../../utils/dedupe.ts';
 
 export const entityService = {
@@ -62,7 +62,7 @@ export const entityService = {
     pointsTable: PointsTableRow[];
     venue: VenueData | null;
   }> {
-    const { data } = await publicApi.get(`/tournaments/${id}`);
+    const { data } = await getViewerApi().get(`/tournaments/${id}`);
     return {
       ...data,
       streams: dedupeEntitiesById(data.streams || []),
@@ -122,7 +122,7 @@ export const entityService = {
     fixtures: FixtureData[];
     record: { played: number; won: number; lost: number; drawn: number };
   }> {
-    const { data } = await publicApi.get(`/teams/${id}`);
+    const { data } = await getViewerApi().get(`/teams/${id}`);
     return {
       ...data,
       players: dedupeEntitiesById(data.players || []),
@@ -201,7 +201,7 @@ export const entityService = {
     type = 'all',
     signal?: AbortSignal
   ): Promise<SearchResultsPayload> {
-    const { data } = await publicApi.get<SearchResultsPayload>('/search', {
+    const { data } = await getViewerApi().get<SearchResultsPayload>('/search', {
       params: { q, type },
       signal,
     });

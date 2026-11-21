@@ -5,7 +5,7 @@ import {
   StreamHealthData,
   StreamingProvider,
 } from '../../types/index.ts';
-import { adminApi, publicApi } from '../api/httpClient.ts';
+import { adminApi, getViewerApi, publicApi } from '../api/httpClient.ts';
 
 export interface YouTubeVerification {
   validId: boolean;
@@ -45,22 +45,22 @@ export const liveStreamService = {
     page?: number;
     limit?: number;
   }): Promise<LiveStreamData[]> {
-    const { data } = await publicApi.get<{ streams: LiveStreamData[] }>('/live', { params });
+    const { data } = await getViewerApi().get<{ streams: LiveStreamData[] }>('/live', { params });
     return data.streams;
   },
 
   async listActiveStreams(): Promise<LiveStreamData[]> {
-    const { data } = await publicApi.get<{ streams: LiveStreamData[] }>('/live/active');
+    const { data } = await getViewerApi().get<{ streams: LiveStreamData[] }>('/live/active');
     return data.streams;
   },
 
   async listStreamHistory(): Promise<LiveStreamData[]> {
-    const { data } = await publicApi.get<{ streams: LiveStreamData[] }>('/live/history');
+    const { data } = await getViewerApi().get<{ streams: LiveStreamData[] }>('/live/history');
     return data.streams;
   },
 
   async listReplays(all = false, gameName?: string): Promise<LiveStreamData[]> {
-    const { data } = await publicApi.get<{ replays: LiveStreamData[] }>('/live/replays', {
+    const { data } = await getViewerApi().get<{ replays: LiveStreamData[] }>('/live/replays', {
       params: {
         ...(all ? { all: 'true' } : {}),
         ...(gameName ? { gameName } : {}),
@@ -70,7 +70,7 @@ export const liveStreamService = {
   },
 
   async getStreamById(id: string): Promise<LiveStreamData> {
-    const { data } = await publicApi.get<{ stream: LiveStreamData }>(`/live/${id}`);
+    const { data } = await getViewerApi().get<{ stream: LiveStreamData }>(`/live/${id}`);
     return data.stream;
   },
 

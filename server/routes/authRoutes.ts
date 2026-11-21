@@ -189,7 +189,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
   } catch (err) {
     console.error('[Auth] Register error:', err);
-    res.status(500).json({ message: 'Failed to register customer account.' });
+    res.status(500).json({ message: 'Failed to register player account.' });
   }
 });
 
@@ -372,7 +372,7 @@ router.post('/admin/login', async (req: Request, res: Response) => {
 
     if (!ADMIN_PORTAL_ROLES.includes(user.role)) {
       res.status(403).json({
-        message: 'Access denied. Customer accounts cannot access the Admin Portal.',
+        message: 'Access denied. Player accounts cannot access the Admin Portal.',
       });
       return;
     }

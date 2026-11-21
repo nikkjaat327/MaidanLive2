@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Trophy } from 'lucide-react';
+import { Lock, Play, Trophy } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
@@ -28,7 +28,8 @@ export function StreamCard({
 
   const activeVideoId =
     useReplayThumbnail && stream.replayVideoId ? stream.replayVideoId : stream.youtubeVideoId;
-  const thumbUrl = `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`;
+  const thumbUrl = activeVideoId ? `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg` : '';
+  const isLocked = Boolean(stream.playbackLocked || !activeVideoId);
 
   const hasTeams = Boolean(stream.teamAName || stream.teamBName);
   const displayTitle =
@@ -139,7 +140,16 @@ export function StreamCard({
   const content = (
     <article className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-slate-300 transition-colors flex flex-col h-full">
       <div className="relative aspect-video bg-slate-900 overflow-hidden">
-        {!thumbErr ? (
+        {isLocked ? (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 bg-slate-900 text-slate-300">
+            <span className="h-10 w-10 rounded-full bg-slate-800 border border-white/10 flex items-center justify-center">
+              <Lock className="w-4.5 h-4.5 text-[#EA580C]" />
+            </span>
+            <span className="text-[11px] font-semibold text-slate-300">
+              Sign in as Player to watch
+            </span>
+          </div>
+        ) : !thumbErr ? (
           <img
             src={thumbUrl}
             alt={displayTitle}

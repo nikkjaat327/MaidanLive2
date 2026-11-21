@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   Award,
   BellPlus,
@@ -10,6 +10,8 @@ import {
   Eye,
   EyeOff,
   Flag,
+  Loader2,
+  Lock,
   MapPin,
   Maximize2,
   Minimize2,
@@ -69,6 +71,8 @@ interface LiveBroadcastViewProps {
   startSeconds?: number | null;
   jumpKey?: number;
   switchingBanner?: boolean;
+  isAuthenticated?: boolean;
+  authLoading?: boolean;
   onJumpHighlight: (seconds: number) => void;
   onOpenReport: () => void;
 }
@@ -113,12 +117,18 @@ export function LiveBroadcastView({
   startSeconds = null,
   jumpKey = 0,
   switchingBanner = false,
+  isAuthenticated,
+  authLoading = false,
   onJumpHighlight,
   onOpenReport,
 }: LiveBroadcastViewProps) {
   const { t } = useLanguage();
+  const location = useLocation();
   const { customerUser, adminUser, updateCustomerUser } = useAuth();
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const resolvedAuth = isAuthenticated ?? Boolean(customerUser || adminUser);
+  const canPlayVideo = resolvedAuth && !stream.playbackLocked;
+  const returnPath = `${location.pathname}${location.search}`;
 
   const broadcast = useMemo(() => normalizeBroadcast(stream, score), [stream, score]);
   const storageKey = `maidanlive_sb_vis_${broadcast.id || broadcast.youtubeVideoId}`;
@@ -378,7 +388,7 @@ export function LiveBroadcastView({
 
   async function handleToggleFollow(teamId: string, teamName: string) {
     if (!customerUser) {
-      setFollowFeedback('Sign in on the Customer Portal to follow teams.');
+      setFollowFeedback('Sign in on the Player Portal to follow teams.');
       return;
     }
     const followedSet = new Set(customerUser.followedTeamIds || []);
@@ -448,26 +458,67 @@ export function LiveBroadcastView({
           }
         >
           <div className="relative w-full h-full">
-            <LiveStreamPlayer
-              provider={wantsReplay && broadcast.replayPublished ? 'youtube' : broadcast.activeProvider}
-              youtubeVideoId={activeVideoId}
-              mediamtxPlaybackUrl={broadcast.mediamtxPlaybackUrl}
-              mediamtxWebrtcUrl={broadcast.mediamtxWebrtcUrl}
-              title={broadcast.title}
-              startSeconds={startSeconds}
-              jumpKey={jumpKey}
-              lowDataMode={lowDataMode}
-              videoDisabled={videoDisabled}
-              onEnableVideo={() => setVideoDisabled(false)}
-              switchingBanner={switchingBanner}
-              onPlaybackHealthChange={setPlayerSignal}
-            />
+            {canPlayVideo ? (
+              <>
+                <LiveStreamPlayer
+                  provider={wantsReplay && broadcast.replayPublished ? 'youtube' : broadcast.activeProvider}
+                  youtubeVideoId={activeVideoId}
+                  mediamtxPlaybackUrl={broadcast.mediamtxPlaybackUrl}
+                  mediamtxWebrtcUrl={broadcast.mediamtxWebrtcUrl}
+                  title={broadcast.title}
+                  startSeconds={startSeconds}
+                  jumpKey={jumpKey}
+                  lowDataMode={lowDataMode}
+                  videoDisabled={videoDisabled}
+                  onEnableVideo={() => setVideoDisabled(false)}
+                  switchingBanner={switchingBanner}
+                  onPlaybackHealthChange={setPlayerSignal}
+                />
 
-            {broadcast.status === 'UPCOMING' && !showUpcomingPreview && !videoDisabled && (
-              <StartingSoonGraphic
-                stream={stream}
-                onShowPreview={() => setShowUpcomingPreview(true)}
-              />
+                {broadcast.status === 'UPCOMING' && !showUpcomingPreview && !videoDisabled && (
+                  <StartingSoonGraphic
+                    stream={stream}
+                    onShowPreview={() => setShowUpcomingPreview(true)}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white z-10">
+                {authLoading ? (
+                  <div className="flex flex-col items-center gap-2 text-slate-300">
+                    <Loader2 className="w-7 h-7 animate-spin text-[#EA580C]" />
+                    <span className="text-xs font-medium">Checking player session...</span>
+                  </div>
+                ) : (
+                  <div className="max-w-md space-y-3">
+                    <div className="mx-auto h-12 w-12 rounded-full bg-[#EA580C]/15 border border-[#EA580C]/40 flex items-center justify-center">
+                      <Lock className="w-5 h-5 text-[#EA580C]" />
+                    </div>
+                    <h2 className="font-display text-lg sm:text-xl font-bold text-white">
+                      {wantsReplay && broadcast.replayPublished
+                        ? 'Player Login Required to Watch Replay'
+                        : 'Player Login Required for Live Stream'}
+                    </h2>
+                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                      Sign in with your MaidanLive player account to watch live video streams, match highlights, and full-match replays.
+                    </p>
+                    <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                      <Link
+                        to={`/login?next=${encodeURIComponent(returnPath)}`}
+                        className="min-h-[40px] inline-flex items-center px-4 py-2 rounded-lg bg-[#EA580C] text-white text-xs sm:text-sm font-semibold hover:bg-orange-600 transition-colors"
+                      >
+                        Sign In to Watch
+                      </Link>
+                      <Link
+                        to={`/register?next=${encodeURIComponent(returnPath)}`}
+                        className="min-h-[40px] inline-flex items-center px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-xs sm:text-sm font-semibold hover:bg-white/20 transition-colors"
+                      >
+                        Create Player Account
+                      </Link>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Top-Left Live / Viewer / Stream Connectivity Indicator */}
@@ -479,16 +530,19 @@ export function LiveBroadcastView({
                   <span>{broadcast.activeViewers}</span>
                 </span>
               )}
-              <StreamStatusIndicator
-                stream={stream}
-                socketConnected={connected}
-                playerSignal={playerSignal}
-                dark
-              />
+              {canPlayVideo && (
+                <StreamStatusIndicator
+                  stream={stream}
+                  socketConnected={connected}
+                  playerSignal={playerSignal}
+                  dark
+                />
+              )}
             </div>
 
             {/* Top-Right Viewer Controls */}
-            <div className="pointer-events-none absolute top-2.5 right-2.5 z-30 flex items-center gap-1.5">
+            {canPlayVideo && (
+              <div className="pointer-events-none absolute top-2.5 right-2.5 z-30 flex items-center gap-1.5">
               {wakeLockSupported && (
                 <button
                   type="button"
@@ -573,6 +627,7 @@ export function LiveBroadcastView({
                 )}
               </button>
             </div>
+            )}
 
             {/* Fullscreen Scoreboard Overlay */}
             {isFullscreenActive && scoreboardVisible && (
@@ -610,7 +665,7 @@ export function LiveBroadcastView({
                 Open Scorer Console
               </Link>
             )}
-            {activeVideoId && (
+            {canPlayVideo && activeVideoId && (
               <a
                 href={`https://www.youtube.com/watch?v=${activeVideoId}`}
                 target="_blank"
@@ -797,8 +852,13 @@ export function LiveBroadcastView({
               label: `Lineups (${lineupPlayers.teamA.length + lineupPlayers.teamB.length})`,
             },
             { id: 'chat' as const, label: 'Live Chat & Polls' },
-            ...(broadcast.highlightsEnabled && highlights.length > 0
-              ? [{ id: 'highlights' as const, label: `Highlights (${highlights.length})` }]
+            ...(broadcast.highlightsEnabled && (!resolvedAuth || highlights.length > 0)
+              ? [
+                  {
+                    id: 'highlights' as const,
+                    label: resolvedAuth ? `Highlights (${highlights.length})` : 'Highlights',
+                  },
+                ]
               : []),
             ...(upcomingFixtures.length > 0
               ? [{ id: 'fixtures' as const, label: `Upcoming (${upcomingFixtures.length})` }]
@@ -1028,25 +1088,52 @@ export function LiveBroadcastView({
                 <Sparkles className="w-4 h-4 text-[#EA580C]" />
                 <span>Key Match Moments</span>
               </h2>
-              <span className="text-xs text-slate-500 font-mono">{highlights.length} clips</span>
+              {resolvedAuth && (
+                <span className="text-xs text-slate-500 font-mono">{highlights.length} clips</span>
+              )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              {highlights.map((h) => (
-                <button
-                  key={h.id}
-                  type="button"
-                  onClick={() => onJumpHighlight(h.videoTimestampSeconds)}
-                  className="min-h-[40px] inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-orange-50 hover:border-orange-300 text-xs transition-colors"
-                >
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 text-white font-mono text-[11px]">
-                    <Clock className="w-3 h-3 text-orange-400" />
-                    {formatTimestamp(h.videoTimestampSeconds)}
-                  </span>
-                  <span className="font-semibold text-slate-900">{h.eventType}</span>
-                  {h.playerName && <span className="text-slate-600">({h.playerName})</span>}
-                </button>
-              ))}
-            </div>
+            {!resolvedAuth ? (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <Lock className="w-4 h-4 text-[#EA580C] shrink-0 mt-0.5" />
+                  <p className="text-xs sm:text-sm text-slate-700">
+                    Sign in as a Player to view match highlight timestamps and jump straight to key moments.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Link
+                    to={`/login?next=${encodeURIComponent(returnPath)}`}
+                    className="min-h-[34px] inline-flex items-center px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+                  >
+                    Sign In
+                  </Link>
+                  <Link
+                    to={`/register?next=${encodeURIComponent(returnPath)}`}
+                    className="min-h-[34px] inline-flex items-center px-3 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-700"
+                  >
+                    Register
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {highlights.map((h) => (
+                  <button
+                    key={h.id}
+                    type="button"
+                    onClick={() => onJumpHighlight(h.videoTimestampSeconds)}
+                    className="min-h-[40px] inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-orange-50 hover:border-orange-300 text-xs transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 text-white font-mono text-[11px]">
+                      <Clock className="w-3 h-3 text-orange-400" />
+                      {formatTimestamp(h.videoTimestampSeconds)}
+                    </span>
+                    <span className="font-semibold text-slate-900">{h.eventType}</span>
+                    {h.playerName && <span className="text-slate-600">({h.playerName})</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

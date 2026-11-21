@@ -1,13 +1,23 @@
 import React, { useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 
+function getSafeNextPath(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+    return raw;
+  }
+  return '/profile';
+}
+
 export function CustomerRegisterPage() {
   const { customerUser, registerCustomer } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const nextPath = getSafeNextPath(searchParams.get('next'));
+  const rawNext = searchParams.get('next');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -18,7 +28,7 @@ export function CustomerRegisterPage() {
   const [error, setError] = useState<string | null>(null);
 
   if (customerUser) {
-    return <Navigate to="/profile" replace />;
+    return <Navigate to={nextPath} replace />;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -34,7 +44,7 @@ export function CustomerRegisterPage() {
         favoriteSport,
         role,
       });
-      navigate('/profile', { replace: true });
+      navigate(nextPath, { replace: true });
     } catch (err) {
       setError(extractApiError(err, 'Registration failed.'));
     } finally {
@@ -46,9 +56,9 @@ export function CustomerRegisterPage() {
     <div className="max-w-md mx-auto px-4 py-12">
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
         <div>
-          <h1 className="font-display text-2xl font-bold text-slate-900">Create MaidanLive Account</h1>
+          <h1 className="font-display text-2xl font-bold text-slate-900">Create Player Account</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Join as a spectator or team captain to register squads and follow live matches.
+            Join as a player or team captain to watch live matches, highlights, replays, and register squads.
           </p>
         </div>
 
@@ -59,7 +69,7 @@ export function CustomerRegisterPage() {
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Account Type</label>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { val: 'SPECTATOR' as const, label: 'Fan / Spectator' },
+                { val: 'SPECTATOR' as const, label: 'Player' },
                 { val: 'CAPTAIN' as const, label: 'Team Captain' },
               ].map((opt) => (
                 <button
@@ -157,7 +167,10 @@ export function CustomerRegisterPage() {
 
         <p className="text-sm text-slate-600 text-center">
           Already registered?{' '}
-          <Link to="/login" className="font-semibold text-[#EA580C] hover:underline">
+          <Link
+            to={rawNext ? `/login?next=${encodeURIComponent(rawNext)}` : '/login'}
+            className="font-semibold text-[#EA580C] hover:underline"
+          >
             Sign in
           </Link>
         </p>

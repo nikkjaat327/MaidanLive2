@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -180,8 +180,9 @@ export function TournamentDetailPage() {
     insufficientData: boolean;
     message?: string;
   }>({ entries: [], insufficientData: true });
+  const [myRegLoaded, setMyRegLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState<TournamentTab>(
-    () => normalizeTabParam(searchParams.get('tab')) || 'matches'
+    () => normalizeTabParam(searchParams.get('tab')) || 'register'
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -221,6 +222,29 @@ export function TournamentDetailPage() {
   } | null>(null);
   const [paymentViewerOpen, setPaymentViewerOpen] = useState(false);
 
+  const registrationSectionRef = useRef<HTMLElement | null>(null);
+  const registrationFormRef = useRef<HTMLFormElement | null>(null);
+  const pendingRegisterScrollRef = useRef(false);
+
+  const isPostApprovalLocked =
+    myRegistration?.status === 'APPROVED' || myRegistration?.status === 'PENDING_REAPPROVAL';
+  const showRegistrationForm =
+    !myRegistration ||
+    myRegistration.status === 'PENDING' ||
+    myRegistration.status === 'REJECTED' ||
+    myRegistration.status === 'WITHDRAWN' ||
+    (isPostApprovalLocked && isEditingApproved);
+
+  const scrollToRegistrationTarget = useCallback(() => {
+    const target =
+      (myRegistration && showRegistrationForm && registrationFormRef.current) ||
+      registrationSectionRef.current ||
+      registrationFormRef.current;
+    if (!target) return false;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return true;
+  }, [myRegistration, showRegistrationForm]);
+
   // Sync tab with URL query param when navigating from notifications
   useEffect(() => {
     const requestedTab = normalizeTabParam(searchParams.get('tab'));
@@ -235,6 +259,29 @@ export function TournamentDetailPage() {
     next.set('tab', tab);
     setSearchParams(next, { replace: true });
   };
+
+  const handleRegisterButtonClick = () => {
+    pendingRegisterScrollRef.current = true;
+    if (activeTab === 'register') {
+      requestAnimationFrame(() => {
+        if (scrollToRegistrationTarget()) {
+          pendingRegisterScrollRef.current = false;
+        }
+      });
+      return;
+    }
+    handleSelectTab('register');
+  };
+
+  useEffect(() => {
+    if (!pendingRegisterScrollRef.current || activeTab !== 'register' || loading) return;
+    const rafId = requestAnimationFrame(() => {
+      if (scrollToRegistrationTarget()) {
+        pendingRegisterScrollRef.current = false;
+      }
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [activeTab, loading, scrollToRegistrationTarget]);
 
   const loadTournament = useCallback(async () => {
     if (!id) return;
@@ -323,14 +370,18 @@ export function TournamentDetailPage() {
   const loadMyRegistration = useCallback(async () => {
     if (!id || !customerUser) {
       setMyRegistration(null);
+      setMyRegLoaded(true);
       return;
     }
+    setMyRegLoaded(false);
     try {
       const reg = await platformOpsService.getMyTournamentRegistration(id);
       setMyRegistration(reg);
       hydrateFormFromRegistration(reg);
     } catch {
       // Non-blocking
+    } finally {
+      setMyRegLoaded(true);
     }
   }, [id, customerUser, hydrateFormFromRegistration]);
 
@@ -342,6 +393,17 @@ export function TournamentDetailPage() {
   useEffect(() => {
     loadMyRegistration();
   }, [loadMyRegistration]);
+
+  // Fall back to 'matches' if registration is closed/completed and user has no existing registration
+  useEffect(() => {
+    if (loading || !myRegLoaded || !tournament) return;
+    const canShowRegister =
+      (tournament.registrationOpen !== false && tournament.status !== 'COMPLETED') ||
+      Boolean(myRegistration);
+    if (activeTab === 'register' && !canShowRegister) {
+      setActiveTab('matches');
+    }
+  }, [loading, myRegLoaded, tournament, myRegistration, activeTab]);
 
   // Real-time tournament points/bracket socket updates
   useEffect(() => {
@@ -639,14 +701,6 @@ export function TournamentDetailPage() {
   const editsUsed = myRegistration?.editCount || 0;
   const maxEditsAfterApproval = myRegistration?.maxEditsAfterApproval || 2;
   const remainingEdits = Math.max(0, maxEditsAfterApproval - editsUsed);
-  const isPostApprovalLocked =
-    myRegistration?.status === 'APPROVED' || myRegistration?.status === 'PENDING_REAPPROVAL';
-  const showRegistrationForm =
-    !myRegistration ||
-    myRegistration.status === 'PENDING' ||
-    myRegistration.status === 'REJECTED' ||
-    myRegistration.status === 'WITHDRAWN' ||
-    (isPostApprovalLocked && isEditingApproved);
 
   // Configured Prize Tiers presence
   const configuredPrizeTiers = [
@@ -750,11 +804,26 @@ export function TournamentDetailPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto md:justify-end">
+            {(regOpen || myRegistration) && (
+              <button
+                type="button"
+                onClick={handleRegisterButtonClick}
+                className="min-h-[34px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-700 transition-colors max-w-full whitespace-nowrap shrink-0"
+              >
+                <ClipboardCheck className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">
+                  {myRegistration
+                    ? `Reg: ${myRegistration.status.replace('_', ' ')}`
+                    : t('tournament.registerTeam')}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               disabled={followBusy}
               onClick={handleToggleFollowTournament}
-              className={`min-h-[34px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors max-w-full ${
+              className={`min-h-[34px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors max-w-full whitespace-nowrap shrink-0 ${
                 customerUser?.followedTournamentIds?.includes(tournament.id)
                   ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                   : 'bg-slate-900 text-white hover:bg-slate-800'
@@ -771,21 +840,6 @@ export function TournamentDetailPage() {
                   : 'Follow'}
               </span>
             </button>
-
-            {(regOpen || myRegistration) && (
-              <button
-                type="button"
-                onClick={() => handleSelectTab('register')}
-                className="min-h-[34px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-700 transition-colors max-w-full"
-              >
-                <ClipboardCheck className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">
-                  {myRegistration
-                    ? `Reg: ${myRegistration.status.replace('_', ' ')}`
-                    : t('tournament.registerTeam')}
-                </span>
-              </button>
-            )}
 
             <ShareButton
               compact
@@ -1047,14 +1101,14 @@ export function TournamentDetailPage() {
       {/* Navigation Tabs (Compact, mobile-friendly) */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
         {[
+          ...(regOpen || myRegistration
+            ? [{ key: 'register' as const, label: 'Team Registration', icon: ClipboardCheck }]
+            : []),
           { key: 'matches' as const, label: `Matches (${streams.length})`, icon: Trophy },
           { key: 'bracket' as const, label: `Bracket & Fixtures (${fixtures.length})`, icon: GitBranch },
           { key: 'standings' as const, label: `Points Table (${pointsTable.length})`, icon: Table2 },
           { key: 'teams' as const, label: `Teams (${teams.length})`, icon: Users },
           { key: 'leaderboards' as const, label: 'Leaderboards', icon: Award },
-          ...(regOpen || myRegistration
-            ? [{ key: 'register' as const, label: 'Team Registration', icon: ClipboardCheck }]
-            : []),
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -1373,7 +1427,11 @@ export function TournamentDetailPage() {
 
       {/* Captain Team Registration & Payment Tab */}
       {activeTab === 'register' && (
-        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 space-y-5">
+        <section
+          id="team-registration-section"
+          ref={registrationSectionRef}
+          className="scroll-mt-20 bg-white border border-slate-200 rounded-xl p-4 sm:p-6 space-y-5"
+        >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="font-display text-lg font-bold text-slate-900">
@@ -1751,7 +1809,12 @@ export function TournamentDetailPage() {
                 )}
 
               {showRegistrationForm && (
-                <form onSubmit={handleSubmitRegistration} className="space-y-5">
+                <form
+                  id="team-registration-form"
+                  ref={registrationFormRef}
+                  onSubmit={handleSubmitRegistration}
+                  className="scroll-mt-20 space-y-5"
+                >
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">

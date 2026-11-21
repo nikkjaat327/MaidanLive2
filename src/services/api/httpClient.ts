@@ -209,6 +209,24 @@ function attachAuthInterceptors(
 attachAuthInterceptors(customerApi, CUSTOMER_TOKEN_KEY, CUSTOMER_REFRESH_KEY, 'customer');
 attachAuthInterceptors(adminApi, ADMIN_TOKEN_KEY, ADMIN_REFRESH_KEY, 'admin');
 
+export function getViewerApi() {
+  if (typeof window === 'undefined') return publicApi;
+  const path = window.location.pathname || '';
+  const hasAdmin =
+    Boolean(window.localStorage.getItem(ADMIN_TOKEN_KEY)) ||
+    Boolean(window.localStorage.getItem(ADMIN_REFRESH_KEY));
+  const hasPlayer =
+    Boolean(window.localStorage.getItem(CUSTOMER_TOKEN_KEY)) ||
+    Boolean(window.localStorage.getItem(CUSTOMER_REFRESH_KEY));
+
+  if ((path.startsWith('/admin') || path.startsWith('/broadcast')) && hasAdmin) {
+    return adminApi;
+  }
+  if (hasPlayer) return customerApi;
+  if (hasAdmin) return adminApi;
+  return publicApi;
+}
+
 export function extractApiError(err: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(err)) {
     const msg = err.response?.data?.message;

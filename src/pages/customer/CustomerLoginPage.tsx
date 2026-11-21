@@ -1,14 +1,24 @@
 import React, { useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { authService } from '../../services/auth/authService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 
+function getSafeNextPath(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+    return raw;
+  }
+  return '/profile';
+}
+
 export function CustomerLoginPage() {
   const { customerUser, loginCustomer, authNotice, clearAuthNotice } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const nextPath = getSafeNextPath(searchParams.get('next'));
+  const rawNext = searchParams.get('next');
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +32,7 @@ export function CustomerLoginPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   if (customerUser) {
-    return <Navigate to="/profile" replace />;
+    return <Navigate to={nextPath} replace />;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -37,7 +47,7 @@ export function CustomerLoginPage() {
         setNotice(res.message || 'Enter your 6-digit authenticator code.');
         return;
       }
-      navigate('/profile', { replace: true });
+      navigate(nextPath, { replace: true });
     } catch (err) {
       setError(extractApiError(err, 'Unable to sign in.'));
     } finally {
@@ -92,8 +102,8 @@ export function CustomerLoginPage() {
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             {mode === 'login'
-              ? 'Access your spectator profile, team registrations, and live match alerts.'
-              : 'Recover access to your MaidanLive account securely.'}
+              ? 'Access your player profile, live streams, highlights, replays, and team registrations.'
+              : 'Recover access to your MaidanLive player account securely.'}
           </p>
         </div>
 
@@ -244,8 +254,11 @@ export function CustomerLoginPage() {
 
         <p className="text-sm text-slate-600 text-center">
           New to MaidanLive?{' '}
-          <Link to="/register" className="font-semibold text-[#EA580C] hover:underline">
-            Create an account
+          <Link
+            to={rawNext ? `/register?next=${encodeURIComponent(rawNext)}` : '/register'}
+            className="font-semibold text-[#EA580C] hover:underline"
+          >
+            Create a player account
           </Link>
         </p>
       </div>

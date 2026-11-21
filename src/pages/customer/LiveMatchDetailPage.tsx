@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { MatchHighlightData, SponsorOverlayData } from '../../types/index.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
@@ -18,7 +19,12 @@ export function LiveMatchDetailPage() {
   const wantsReplay = searchParams.get('mode') === 'replay';
   const urlStartParam = Number(searchParams.get('start'));
 
-  const { stream, setStream, loading, error, switchingBanner } = useLiveStream(id);
+  const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
+  const isAuthenticated = Boolean(customerUser || adminUser);
+  const authLoading = customerLoading || adminLoading;
+  const authKey = `${customerUser?.id || ''}:${adminUser?.id || ''}`;
+
+  const { stream, setStream, loading, error, switchingBanner } = useLiveStream(id, authKey);
   const { score, history, connected } = useScoreboard(id, {
     onViewerCountUpdated: (viewers, visibility) => {
       setStream((prev) =>
@@ -47,15 +53,17 @@ export function LiveMatchDetailPage() {
     if (!id) return;
     try {
       const [hl, overlays] = await Promise.all([
-        engagementService.listHighlights(id),
+        isAuthenticated ? engagementService.listHighlights(id) : Promise.resolve([]),
         platformOpsService.listLiveSponsorOverlays(id),
       ]);
       setHighlights(hl);
       setSponsorOverlays(overlays);
     } catch {
-      // Non-blocking
+      if (!isAuthenticated) {
+        setHighlights([]);
+      }
     }
-  }, [id]);
+  }, [id, isAuthenticated]);
 
   useEffect(() => {
     loadHighlightsAndSponsors();
@@ -67,7 +75,7 @@ export function LiveMatchDetailPage() {
     socket.emit('stream:join', id);
 
     const refreshHighlights = (payload: { streamId?: string }) => {
-      if (payload?.streamId === id) {
+      if (payload?.streamId === id && isAuthenticated) {
         engagementService.listHighlights(id).then(setHighlights).catch(() => {});
       }
     };
@@ -88,7 +96,7 @@ export function LiveMatchDetailPage() {
       socket.off('highlight:deleted', refreshHighlights);
       socket.off('sponsor:updated', refreshSponsors);
     };
-  }, [id]);
+  }, [id, isAuthenticated]);
 
   useEffect(() => {
     if (!stream?.id) return;
@@ -147,6 +155,7 @@ export function LiveMatchDetailPage() {
   }, [id, stream?.id, stream?.status, stream?.replayPublished, wantsReplay]);
 
   function handleJumpHighlight(sec: number) {
+    if (!isAuthenticated) return;
     setStartSeconds(sec);
     setJumpKey((k) => k + 1);
   }
@@ -205,6 +214,8 @@ export function LiveMatchDetailPage() {
         startSeconds={startSeconds}
         jumpKey={jumpKey}
         switchingBanner={switchingBanner}
+        isAuthenticated={isAuthenticated}
+        authLoading={authLoading}
         onJumpHighlight={handleJumpHighlight}
         onOpenReport={() => setReportOpen(true)}
       />

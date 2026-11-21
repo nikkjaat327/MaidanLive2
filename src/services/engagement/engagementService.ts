@@ -7,12 +7,12 @@ import {
   TeamData,
   TournamentData,
 } from '../../types/index.ts';
-import { adminApi, customerApi, publicApi } from '../api/httpClient.ts';
+import { adminApi, customerApi, getViewerApi, publicApi } from '../api/httpClient.ts';
 
 export const engagementService = {
   // Highlights
   async listHighlights(streamId: string): Promise<MatchHighlightData[]> {
-    const { data } = await publicApi.get<{ highlights: MatchHighlightData[] }>(
+    const { data } = await getViewerApi().get<{ highlights: MatchHighlightData[] }>(
       `/live/${streamId}/highlights`
     );
     return data.highlights;

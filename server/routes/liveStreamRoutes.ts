@@ -97,14 +97,38 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
   };
 }
 
-async function attachScoresToStreams(streams: any[], isAdminViewer = false) {
+function redactPlaybackForUnauthenticated(streamObj: any) {
+  return {
+    ...streamObj,
+    youtubeVideoId: '',
+    replayVideoId: '',
+    replayInput: '',
+    mediamtxPlaybackUrl: '',
+    mediamtxWebrtcUrl: '',
+    mediamtxPlaybackHlsUrl: '',
+    mediamtxPlaybackWebrtcUrl: '',
+    mediamtxHlsUrl: '',
+    playbackLocked: true,
+  };
+}
+
+async function attachScoresToStreams(
+  streams: any[],
+  isAdminViewer = false,
+  isAuthenticated = false
+) {
   if (streams.length === 0) return [];
   const ids = streams.map((s) => s._id);
   const scores = await LiveScore.find({ liveStreamId: { $in: ids } }).lean();
   const scoreMap = new Map(scores.map((sc) => [sc.liveStreamId.toString(), sc]));
-  return streams.map((s) =>
-    formatPublicStream(s, { score: scoreMap.get(s._id.toString()) || null }, isAdminViewer)
-  );
+  return streams.map((s) => {
+    const formatted = formatPublicStream(
+      s,
+      { score: scoreMap.get(s._id.toString()) || null },
+      isAdminViewer
+    );
+    return isAuthenticated ? formatted : redactPlaybackForUnauthenticated(formatted);
+  });
 }
 
 // Verify YouTube Video ID or URL availability & embeddability
@@ -441,7 +465,7 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched, total, page, limit });
   } catch (err) {
     console.error('[LiveStream] List error:', err);
@@ -458,7 +482,7 @@ router.get('/active', optionalAuthenticate, async (req: AuthenticatedRequest, re
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched });
   } catch (err) {
     console.error('[LiveStream] Active error:', err);
@@ -476,7 +500,7 @@ router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, r
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched });
   } catch (err) {
     console.error('[LiveStream] History error:', err);
@@ -484,8 +508,8 @@ router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, r
   }
 });
 
-// GET /api/live/replays - Published available replays for Customer Portal
-router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+// GET /api/live/replays - Published available replays for authenticated Players / Admins
+router.get('/replays', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const includeAll = req.query.all === 'true';
     const query: Record<string, unknown> = includeAll
@@ -506,7 +530,7 @@ router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, r
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
-    const enriched = await attachScoresToStreams(streams, isAdminViewer);
+    const enriched = await attachScoresToStreams(streams, isAdminViewer, true);
     res.json({ replays: enriched });
   } catch (err) {
     console.error('[LiveStream] Replays error:', err);
@@ -514,7 +538,7 @@ router.get('/replays', optionalAuthenticate, async (req: AuthenticatedRequest, r
   }
 });
 
-// GET /api/live/:id - Get single stream + score + venue (strictly strips private MediaMTX RTMP keys)
+// GET /api/live/:id - Get single stream + score + venue (redacts playback URLs if unauthenticated)
 router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -536,16 +560,17 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
+    const formatted = formatPublicStream(
+      stream,
+      {
+        score: score || null,
+        venue: venue ? { ...venue, id: venue._id.toString() } : null,
+      },
+      isAdminViewer
+    );
 
     res.json({
-      stream: formatPublicStream(
-        stream,
-        {
-          score: score || null,
-          venue: venue ? { ...venue, id: venue._id.toString() } : null,
-        },
-        isAdminViewer
-      ),
+      stream: req.user ? formatted : redactPlaybackForUnauthenticated(formatted),
     });
   } catch (err) {
     console.error('[LiveStream] Get error:', err);
@@ -591,6 +616,15 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
     delete (safeStream as any).lastProviderSwitchBy;
     delete (safeStream as any).lastProviderSwitchByName;
     delete (safeStream as any).streamHealth;
+    // Strip playback URLs/IDs from unauthenticated OBS overlay metadata endpoint
+    delete (safeStream as any).youtubeVideoId;
+    delete (safeStream as any).replayVideoId;
+    delete (safeStream as any).replayInput;
+    delete (safeStream as any).mediamtxPlaybackUrl;
+    delete (safeStream as any).mediamtxWebrtcUrl;
+    delete (safeStream as any).mediamtxPlaybackHlsUrl;
+    delete (safeStream as any).mediamtxPlaybackWebrtcUrl;
+    delete (safeStream as any).mediamtxHlsUrl;
 
     res.json({
       stream: safeStream,

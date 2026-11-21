@@ -351,7 +351,7 @@ export function AdminUsersPage() {
           <option value="MODERATOR">Moderator</option>
           <option value="SCORER">Scorer</option>
           <option value="CAPTAIN">Team Captain</option>
-          <option value="SPECTATOR">Spectator</option>
+          <option value="SPECTATOR">Player</option>
         </select>
       </div>
 
@@ -615,7 +615,7 @@ export function AdminUsersPage() {
                   <option value="ADMIN">Admin</option>
                   <option value="SUPER_ADMIN">Super Admin</option>
                   <option value="CAPTAIN">Team Captain</option>
-                  <option value="SPECTATOR">Spectator</option>
+                  <option value="SPECTATOR">Player</option>
                 </select>
               </div>
               <div>

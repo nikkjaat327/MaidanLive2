@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { PlaySquare, Search } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Lock, PlaySquare, Search } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
@@ -10,6 +12,10 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 
 export function ReplaysPage() {
+  const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
+  const isAuthenticated = Boolean(customerUser || adminUser);
+  const authLoading = customerLoading || adminLoading;
+
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
   const [sportFilter, setSportFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -17,13 +23,20 @@ export function ReplaysPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      setReplays([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     liveStreamService
       .listReplays(false, sportFilter || undefined)
       .then(setReplays)
       .catch((err) => setError(extractApiError(err, 'Unable to load replays.')))
       .finally(() => setLoading(false));
-  }, [sportFilter]);
+  }, [sportFilter, isAuthenticated, authLoading]);
 
   const filtered = replays.filter((r) => {
     if (!search.trim()) return true;
@@ -49,36 +62,60 @@ export function ReplaysPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search replays..."
-              className="min-h-[40px] pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg w-48 sm:w-56"
-            />
+        {isAuthenticated && (
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search replays..."
+                className="min-h-[40px] pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg w-48 sm:w-56"
+              />
+            </div>
+            <select
+              value={sportFilter}
+              onChange={(e) => setSportFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg"
+            >
+              <option value="">All Sports</option>
+              {SPORT_OPTIONS.map((sp) => (
+                <option key={sp} value={sp}>
+                  {sp}
+                </option>
+              ))}
+            </select>
           </div>
-          <select
-            value={sportFilter}
-            onChange={(e) => setSportFilter(e.target.value)}
-            className="min-h-[40px] px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg"
-          >
-            <option value="">All Sports</option>
-            {SPORT_OPTIONS.map((sp) => (
-              <option key={sp} value={sp}>
-                {sp}
-              </option>
-            ))}
-          </select>
-        </div>
+        )}
       </div>
 
       <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
 
-      {loading ? (
+      {authLoading || loading ? (
         <CardGridSkeleton count={6} />
+      ) : !isAuthenticated ? (
+        <EmptyState
+          icon={<Lock className="w-6 h-6 text-[#EA580C]" />}
+          title="Player login required for Match Replays"
+          description="Sign in with your MaidanLive player account to watch full-match replays and jump to timestamped match highlights."
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
+              <Link
+                to="/login?next=%2Freplays"
+                className="min-h-[42px] inline-flex items-center px-5 py-2 rounded-lg bg-[#EA580C] text-white text-sm font-semibold hover:bg-orange-700"
+              >
+                Sign In to Watch
+              </Link>
+              <Link
+                to="/register?next=%2Freplays"
+                className="min-h-[42px] inline-flex items-center px-5 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
+              >
+                Create Player Account
+              </Link>
+            </div>
+          }
+        />
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={<PlaySquare className="w-6 h-6" />}

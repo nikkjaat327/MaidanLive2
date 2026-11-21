@@ -4,7 +4,7 @@ import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 
-export function useLiveStream(streamId?: string) {
+export function useLiveStream(streamId?: string, authKey = '') {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(streamId));
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +21,7 @@ export function useLiveStream(streamId?: string) {
     } finally {
       setLoading(false);
     }
-  }, [streamId]);
+  }, [streamId, authKey]);
 
   useEffect(() => {
     if (!streamId) {
