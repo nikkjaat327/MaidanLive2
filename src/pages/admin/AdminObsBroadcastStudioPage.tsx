@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
-  BatteryCharging,
   Camera,
   Check,
   Circle,
@@ -20,7 +19,6 @@ import {
   Mic,
   MicOff,
   Monitor,
-  Play,
   Plus,
   QrCode,
   Radio,
@@ -41,7 +39,6 @@ import {
   Video,
   Wifi,
   WifiOff,
-  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
@@ -62,6 +59,10 @@ import {
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import type { ObsLayoutType } from '../../utils/obsLayoutGeometry.ts';
 import { CameraFormModal, SmartphoneWizardModal } from '../../components/obsStudio/CameraSetupModal.tsx';
+import {
+  CameraPreviewGrid,
+  GridPromoteAction,
+} from '../../components/obsStudio/CameraPreviewGrid.tsx';
 import { DynamicLayoutBuilder } from '../../components/obsStudio/DynamicLayoutBuilder.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
@@ -136,7 +137,10 @@ export function AdminObsBroadcastStudioPage() {
   const [executingObsAction, setExecutingObsAction] = useState<string | null>(null);
   const [managingSession, setManagingSession] = useState<string | null>(null);
   const [previewSnapshots, setPreviewSnapshots] = useState<Record<string, { imageData: string; capturedAt: string }>>({});
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
   const [capturingPreviewFor, setCapturingPreviewFor] = useState<string | null>(null);
+  const [refreshingAllPreviews, setRefreshingAllPreviews] = useState(false);
+  const [preferredMainCameraId, setPreferredMainCameraId] = useState<string>('');
 
   // Camera modals
   const [cameraModalOpen, setCameraModalOpen] = useState(false);
@@ -221,6 +225,9 @@ export function AdminObsBroadcastStudioPage() {
     setVdoRoomName(p.vdoRoomName || '');
     setScoreboardSourceName(p.scoreboardSourceName || 'MaidanLive Scoreboard');
     setAutoSyncScoreboard(p.autoSyncScoreboardSource !== false);
+    if (p.activeCameraId) {
+      setPreferredMainCameraId(p.activeCameraId);
+    }
   }, [studio?.profile]);
 
   function notifySuccess(msg: string) {
@@ -521,12 +528,15 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  async function handleCaptureSourcePreview(cam: BroadcastCameraData) {
+  async function handleCaptureSourcePreview(
+    cam: BroadcastCameraData,
+    options: { silent?: boolean } = {}
+  ) {
     if (!matchId) return;
-    const sourceName = cam.obsInputName || cam.name;
+    const sourceName = cam.obsInputName || cam.obsSceneName || cam.name;
     try {
       setCapturingPreviewFor(cam.cameraId);
-      setActionError(null);
+      if (!options.silent) setActionError(null);
       const res = await obsStudioService.capturePreview(matchId, sourceName);
       setPreviewSnapshots((prev) => ({
         ...prev,
@@ -535,10 +545,79 @@ export function AdminObsBroadcastStudioPage() {
           capturedAt: new Date().toLocaleTimeString(),
         },
       }));
+      setPreviewErrors((prev) => {
+        if (!prev[cam.cameraId]) return prev;
+        const next = { ...prev };
+        delete next[cam.cameraId];
+        return next;
+      });
     } catch (err) {
-      setActionError(extractApiError(err, `OBS could not capture frame for "${sourceName}".`));
+      const msg = extractApiError(err, `OBS could not capture frame for "${sourceName}".`);
+      setPreviewErrors((prev) => ({ ...prev, [cam.cameraId]: msg }));
+      if (!options.silent) setActionError(msg);
     } finally {
       setCapturingPreviewFor(null);
+    }
+  }
+
+  async function handleRefreshAllPreviews(targetCameras: BroadcastCameraData[]) {
+    if (!matchId || !obsConnected || targetCameras.length === 0) return;
+    try {
+      setRefreshingAllPreviews(true);
+      for (const cam of targetCameras) {
+        await handleCaptureSourcePreview(cam, { silent: true });
+      }
+    } finally {
+      setRefreshingAllPreviews(false);
+    }
+  }
+
+  async function handlePromotePrimary(cam: BroadcastCameraData, action: GridPromoteAction) {
+    if (!matchId || !profile) return;
+    setPreferredMainCameraId(cam.cameraId);
+
+    if (!obsConnected) {
+      setActionError(
+        `OBS Studio is not connected. Connect OBS first to promote ${cam.label || cam.name} as the live primary feed.`
+      );
+      return;
+    }
+
+    if (
+      action === 'swap_layout_main' &&
+      (profile.activeLayoutType === 'MAIN_PLUS_SECONDARY' ||
+        profile.activeLayoutType === 'SPLIT_3' ||
+        profile.activeLayoutType === 'SPORT_BROADCAST')
+    ) {
+      const activeScenePreset = scenes.find(
+        (s) => s.obsSceneName === profile.activeObsScene && s.layoutType === profile.activeLayoutType
+      );
+      const layoutCameraIds =
+        activeScenePreset && activeScenePreset.cameraIds.length > 0
+          ? Array.from(new Set([cam.cameraId, ...activeScenePreset.cameraIds]))
+          : Array.from(
+              new Set([cam.cameraId, ...enabledCameras.slice(0, 4).map((c) => c.cameraId)])
+            );
+      await handleApplyLayout({
+        layoutType: profile.activeLayoutType,
+        cameraIds: layoutCameraIds,
+        mainCameraId: cam.cameraId,
+        sceneName: profile.activeObsScene || undefined,
+        includeScoreboardOverlay: profile.autoSyncScoreboardSource !== false,
+      });
+      return;
+    }
+
+    await handleSwitchCamera(cam);
+  }
+
+  async function handleSyncObsState() {
+    if (!matchId) return;
+    try {
+      await obsStudioService.refreshObs(matchId);
+      notifySuccess('Refreshed scenes and stats from OBS.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'OBS Studio is not connected.'));
     }
   }
 
@@ -1108,228 +1187,32 @@ export function AdminObsBroadcastStudioPage() {
           {/* ============================================================== */}
           {activeTab === 'live' && (
             <div className="space-y-6">
-              {/* Live Single-Camera Cut Deck */}
-              <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-display text-base font-bold text-slate-900 flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-[#EA580C]" />
-                      <span>Instant Camera Cut Deck ({enabledCameras.length} Enabled)</span>
-                    </h2>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Click <strong>Take Live</strong> to switch OBS Studio&apos;s active scene in real time. Status turns active only after OBS confirms the switch.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await obsStudioService.refreshObs(matchId!);
-                          notifySuccess('Refreshed scenes and stats from OBS.');
-                        } catch (err) {
-                          setActionError(extractApiError(err, 'OBS Studio is not connected.'));
-                        }
-                      }}
-                      disabled={!obsConnected}
-                      className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Sync OBS State</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('cameras')}
-                      className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Manage Cameras</span>
-                    </button>
-                  </div>
-                </div>
-
-                {enabledCameras.length === 0 ? (
-                  <EmptyState
-                    icon={<Smartphone className="w-6 h-6" />}
-                    title="No cameras added for this match yet"
-                    description="Quickly add 2, 4, 6, or unlimited smartphone/studio cameras to start switching live in OBS."
-                    action={
-                      <div className="flex flex-wrap items-center justify-center gap-2">
-                        {[2, 4, 6].map((cnt) => (
-                          <button
-                            key={cnt}
-                            type="button"
-                            disabled={scaffoldingCount !== null}
-                            onClick={() => handleScaffoldCameras(cnt)}
-                            className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
-                          >
-                            {scaffoldingCount === cnt ? `Adding ${cnt}...` : `+ Quick Add ${cnt} Cameras`}
-                          </button>
-                        ))}
-                      </div>
-                    }
-                  />
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {enabledCameras.map((cam) => {
-                      const isLiveProgram =
-                        obsConnected &&
-                        (profile.activeCameraId === cam.cameraId ||
-                          (cam.obsSceneName && profile.activeObsScene === cam.obsSceneName));
-                      const snap = previewSnapshots[cam.cameraId];
-                      const isSwitching = switchingKey === `cam:${cam.cameraId}`;
-
-                      return (
-                        <div
-                          key={cam.cameraId}
-                          className={`rounded-xl border overflow-hidden transition-colors ${
-                            isLiveProgram
-                              ? 'border-[#EA580C] ring-2 ring-[#EA580C]/20 bg-white'
-                              : 'border-slate-200 bg-white'
-                          }`}
-                        >
-                          {/* Genuine OBS Snapshot Monitor (only shows real OBS GetSourceScreenshot when requested) */}
-                          <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-200">
-                            {snap ? (
-                              <img
-                                src={snap.imageData}
-                                alt={`Live OBS frame for ${cam.name}`}
-                                className="w-full h-full object-contain"
-                              />
-                            ) : (
-                              <div className="p-4 text-center space-y-1.5">
-                                <Camera className="w-6 h-6 text-slate-600 mx-auto" />
-                                <p className="text-[11px] font-medium text-slate-400">
-                                  {obsConnected
-                                    ? 'Click "Fetch OBS Frame" below for real source snapshot'
-                                    : 'Connect OBS Studio to preview or switch live'}
-                                </p>
-                              </div>
-                            )}
-
-                            <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
-                              <span className="px-2 py-0.5 rounded bg-slate-950/90 text-white font-mono text-[11px] font-bold">
-                                CAM {cam.cameraNumber}
-                              </span>
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${cameraStatusBadgeClass(
-                                  isLiveProgram ? 'ACTIVE' : cam.status
-                                )}`}
-                              >
-                                {isLiveProgram ? 'ON AIR' : cam.status}
-                              </span>
-                            </div>
-
-                            {snap && (
-                              <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-slate-300">
-                                OBS Snapshot {snap.capturedAt}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="p-3.5 space-y-3">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <h3 className="text-sm font-bold text-slate-900 truncate">
-                                  {cam.label || cam.name}
-                                </h3>
-                                <p className="text-[11px] text-slate-500 truncate font-mono">
-                                  {cam.name} · Scene: {cam.obsSceneName || 'Auto'} · {cam.resolution}@{cam.fps}fps
-                                </p>
-                              </div>
-                              {cam.isDefault && (
-                                <Star className="w-4 h-4 text-amber-500 shrink-0 fill-amber-500" />
-                              )}
-                            </div>
-
-                            {cam.telemetry && (
-                              <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-500">
-                                {cam.telemetry.batteryLevel != null && (
-                                  <span className="inline-flex items-center gap-1">
-                                    <BatteryCharging className="w-3.5 h-3.5 text-emerald-600" />
-                                    {Math.round(cam.telemetry.batteryLevel)}%
-                                  </span>
-                                )}
-                                {cam.telemetry.networkType && (
-                                  <span>Net: {cam.telemetry.networkType.toUpperCase()}</span>
-                                )}
-                                {cam.operatorName && <span>Op: {cam.operatorName}</span>}
-                              </div>
-                            )}
-
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={!obsConnected || isSwitching}
-                                onClick={() => handleSwitchCamera(cam)}
-                                className={`flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wide rounded-lg transition-colors disabled:opacity-40 ${
-                                  isLiveProgram
-                                    ? 'bg-emerald-600 text-white'
-                                    : 'bg-[#EA580C] text-white hover:bg-orange-600'
-                                }`}
-                              >
-                                <Play className="w-3.5 h-3.5" />
-                                <span>
-                                  {isSwitching
-                                    ? 'Switching...'
-                                    : isLiveProgram
-                                      ? 'Live in OBS'
-                                      : 'Take Live'}
-                                </span>
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={mutingCamId === cam.cameraId}
-                                onClick={() => handleToggleCameraAudio(cam)}
-                                title={
-                                  Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted)
-                                    ? 'Unmute camera audio in OBS'
-                                    : 'Mute camera audio in OBS'
-                                }
-                                className={`min-h-[38px] px-2.5 py-1.5 text-[11px] font-semibold border rounded-lg ${
-                                  Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted)
-                                    ? 'bg-red-50 text-red-700 border-red-200'
-                                    : 'text-slate-700 bg-slate-50 border-slate-200 hover:bg-slate-100'
-                                }`}
-                              >
-                                {Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted) ? (
-                                  <MicOff className="w-4 h-4" />
-                                ) : (
-                                  <Mic className="w-4 h-4" />
-                                )}
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={!obsConnected || capturingPreviewFor === cam.cameraId}
-                                onClick={() => handleCaptureSourcePreview(cam)}
-                                title="Capture genuine snapshot from OBS Studio"
-                                className="min-h-[38px] px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
-                              >
-                                {capturingPreviewFor === cam.cameraId ? '...' : 'Fetch Frame'}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setWizardCamera(cam);
-                                  setWizardConnectUrl(null);
-                                }}
-                                title="Smartphone QR / URL Setup"
-                                className="min-h-[38px] px-2.5 py-1.5 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
-                              >
-                                <QrCode className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              {/* Dynamic Multiview Camera Grid with Click-to-Promote Primary Feed */}
+              <CameraPreviewGrid
+                cameras={cameras}
+                profile={profile}
+                obsConnected={obsConnected}
+                canManageCameras={canManageCameras}
+                previewSnapshots={previewSnapshots}
+                previewErrors={previewErrors}
+                capturingPreviewFor={capturingPreviewFor}
+                refreshingAllPreviews={refreshingAllPreviews}
+                switchingKey={switchingKey}
+                mutingCamId={mutingCamId}
+                scaffoldingCount={scaffoldingCount}
+                onPromotePrimary={handlePromotePrimary}
+                onCapturePreview={(cam) => handleCaptureSourcePreview(cam)}
+                onRefreshAllPreviews={handleRefreshAllPreviews}
+                onToggleAudio={handleToggleCameraAudio}
+                onOpenQrWizard={(cam) => {
+                  setWizardCamera(cam);
+                  setWizardConnectUrl(null);
+                }}
+                onScaffoldCameras={handleScaffoldCameras}
+                onSyncObsState={handleSyncObsState}
+                onOpenCamerasTab={() => setActiveTab('cameras')}
+                onOpenConnectionTab={() => setActiveTab('connection')}
+              />
 
               {/* Dynamic N-Camera Layout Builder */}
               <DynamicLayoutBuilder
@@ -1337,6 +1220,7 @@ export function AdminObsBroadcastStudioPage() {
                 obsConnected={obsConnected}
                 activeLayoutType={profile.activeLayoutType}
                 activeObsScene={profile.activeObsScene}
+                preferredMainCameraId={preferredMainCameraId}
                 applying={applyingLayout}
                 onApplyLayout={handleApplyLayout}
                 onSaveAsScene={handleSaveScenePreset}

@@ -12,6 +12,7 @@ interface DynamicLayoutBuilderProps {
   obsConnected: boolean;
   activeLayoutType: ObsLayoutType;
   activeObsScene: string;
+  preferredMainCameraId?: string;
   applying: boolean;
   onApplyLayout: (payload: {
     layoutType: ObsLayoutType;
@@ -37,6 +38,7 @@ export function DynamicLayoutBuilder({
   obsConnected,
   activeLayoutType,
   activeObsScene,
+  preferredMainCameraId,
   applying,
   onApplyLayout,
   onSaveAsScene,
@@ -78,6 +80,16 @@ export function DynamicLayoutBuilder({
         : enabledCameras[0].cameraId
     );
   }, [enabledCameras, layoutType]);
+
+  // Sync main camera when promoted externally from the multiview preview grid
+  useEffect(() => {
+    if (!preferredMainCameraId) return;
+    if (!enabledCameras.some((c) => c.cameraId === preferredMainCameraId)) return;
+    setMainCameraId(preferredMainCameraId);
+    setSelectedIds((prev) =>
+      prev.includes(preferredMainCameraId) ? prev : [preferredMainCameraId, ...prev]
+    );
+  }, [preferredMainCameraId, enabledCameras]);
 
   function handleLayoutSelect(nextType: ObsLayoutType) {
     setLayoutType(nextType);
