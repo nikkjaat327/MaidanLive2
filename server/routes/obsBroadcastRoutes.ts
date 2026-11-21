@@ -37,6 +37,7 @@ import {
   formatSafeScene,
   getStudioSnapshot,
   manageBroadcastSession,
+  reconnectCameraSource,
   refreshObsState,
   setCameraObsAudioMute,
   switchCameraLive,
@@ -1944,6 +1945,31 @@ router.post(
     } catch (err: any) {
       const code = Number(err?.statusCode) || 500;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to disconnect camera.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/reconnect
+router.post(
+  '/matches/:matchId/cameras/:cameraId/reconnect',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const result = await reconnectCameraSource(
+        matchId,
+        cameraId,
+        req.user!,
+        Boolean(req.body.override)
+      );
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ...result, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to reconnect camera.' });
     }
   }
 );

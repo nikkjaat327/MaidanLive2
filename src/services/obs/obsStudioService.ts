@@ -146,6 +146,23 @@ export const obsStudioService = {
     return data;
   },
 
+  async reconnectCamera(
+    matchId: string,
+    cameraId: string,
+    override = false
+  ): Promise<{
+    ok: boolean;
+    obsSynced: boolean;
+    status: string;
+    detail: string;
+    camera: BroadcastCameraData;
+  }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/reconnect`, {
+      override,
+    });
+    return data;
+  },
+
   async setCameraAudioMute(
     matchId: string,
     cameraId: string,

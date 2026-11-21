@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 import {
   Camera,
   Check,
@@ -6,6 +7,7 @@ import {
   Mic,
   MicOff,
   Monitor,
+  PlugZap,
   Plus,
   QrCode,
   RefreshCw,
@@ -39,16 +41,30 @@ interface CameraPreviewGridProps {
   refreshingAllPreviews: boolean;
   switchingKey: string | null;
   mutingCamId: string | null;
+  reconnectingCamId?: string | null;
   scaffoldingCount: number | null;
   onPromotePrimary: (cam: BroadcastCameraData, action: GridPromoteAction) => Promise<void> | void;
   onCapturePreview: (cam: BroadcastCameraData) => Promise<void> | void;
   onRefreshAllPreviews: (cams: BroadcastCameraData[]) => Promise<void> | void;
   onToggleAudio: (cam: BroadcastCameraData) => Promise<void> | void;
+  onReconnectCamera: (cam: BroadcastCameraData) => Promise<void> | void;
   onOpenQrWizard: (cam: BroadcastCameraData) => void;
   onScaffoldCameras: (count: number) => Promise<void> | void;
   onSyncObsState: () => Promise<void> | void;
   onOpenCamerasTab: () => void;
   onOpenConnectionTab: () => void;
+}
+
+function isCameraPrimary(
+  cam: BroadcastCameraData,
+  profile: ObsControllerProfileData,
+  obsConnected: boolean
+): boolean {
+  if (!obsConnected) return false;
+  return Boolean(
+    profile.activeCameraId === cam.cameraId ||
+      (cam.obsSceneName && profile.activeObsScene === cam.obsSceneName)
+  );
 }
 
 function isCameraActiveOrOnline(
@@ -97,11 +113,13 @@ export function CameraPreviewGrid({
   refreshingAllPreviews,
   switchingKey,
   mutingCamId,
+  reconnectingCamId = null,
   scaffoldingCount,
   onPromotePrimary,
   onCapturePreview,
   onRefreshAllPreviews,
   onToggleAudio,
+  onReconnectCamera,
   onOpenQrWizard,
   onScaffoldCameras,
   onSyncObsState,
@@ -115,20 +133,22 @@ export function CameraPreviewGrid({
     [enabledCameras, profile, obsConnected]
   );
 
-  // Default to active cameras when any are active; allow user to toggle between active & all enabled
   const [filterMode, setFilterMode] = useState<GridFilterMode>('active');
   const [previewMode, setPreviewMode] = useState<GridPreviewMode>('snapshots');
   const [columnMode, setColumnMode] = useState<'auto' | 2 | 3 | 4>('auto');
   const [promoteAction, setPromoteAction] = useState<GridPromoteAction>('cut_live');
   const [pollSeconds, setPollSeconds] = useState<0 | 3 | 5 | 10>(0);
 
-  // Determine effective list: if filterMode is 'active' and activeCameras exist, show activeCameras.
-  // If no cameras are reporting CONNECTED/ACTIVE yet, fall back cleanly when user clicks All Enabled,
-  // or keep active empty-state clear with 1-click switch to All Enabled.
-  const displayedCameras = useMemo(
-    () => (filterMode === 'active' ? activeCameras : enabledCameras),
-    [filterMode, activeCameras, enabledCameras]
-  );
+  // Order active primary camera first so promoting any thumbnail smoothly reorders the grid via Framer Motion layout
+  const displayedCameras = useMemo(() => {
+    const baseList = filterMode === 'active' ? activeCameras : enabledCameras;
+    return [...baseList].sort((a, b) => {
+      const aPrimary = isCameraPrimary(a, profile, obsConnected);
+      const bPrimary = isCameraPrimary(b, profile, obsConnected);
+      if (aPrimary !== bPrimary) return aPrimary ? -1 : 1;
+      return (a.sortOrder || a.cameraNumber) - (b.sortOrder || b.cameraNumber);
+    });
+  }, [filterMode, activeCameras, enabledCameras, profile, obsConnected]);
 
   const primaryCamera = useMemo(() => {
     if (enabledCameras.length === 0) return null;
@@ -348,78 +368,89 @@ export function CameraPreviewGrid({
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch border-b border-slate-200 pb-5">
             <div className="lg:col-span-8">
               <div className="relative aspect-video w-full rounded-lg border border-slate-700 bg-slate-950 overflow-hidden">
-                {primaryCamera ? (
-                  previewMode === 'live_vdo' &&
-                  primaryCamera.sourceType === 'vdoninja' &&
-                  primaryCamera.obsBrowserSourceUrl ? (
-                    <iframe
-                      title={`Primary feed ${primaryCamera.name}`}
-                      src={primaryCamera.obsBrowserSourceUrl}
-                      allow="autoplay; fullscreen"
-                      className="w-full h-full border-0 bg-slate-950"
-                    />
-                  ) : primarySnapshot ? (
-                    <img
-                      src={primarySnapshot.imageData}
-                      alt={`Primary OBS program feed for ${primaryCamera.label || primaryCamera.name}`}
-                      className="w-full h-full object-contain bg-slate-950"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
-                      <Tv className="w-8 h-8 text-slate-600" />
-                      <p className="text-sm font-semibold text-slate-200">
-                        {primaryCamera.label || primaryCamera.name}
-                      </p>
-                      <p className="text-xs text-slate-400 max-w-md">
-                        {obsConnected
-                          ? 'Click "Fetch Primary Frame" or "Refresh Previews" to pull a live frame from OBS Studio.'
-                          : 'OBS Studio is disconnected. Connect OBS to stream and monitor the live primary feed.'}
-                      </p>
-                      {obsConnected && (
-                        <button
-                          type="button"
-                          disabled={capturingPreviewFor === primaryCamera.cameraId}
-                          onClick={() => onCapturePreview(primaryCamera)}
-                          className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-40"
-                        >
-                          <RefreshCw
-                            className={`w-3.5 h-3.5 ${
-                              capturingPreviewFor === primaryCamera.cameraId ? 'animate-spin' : ''
-                            }`}
-                          />
-                          <span>
-                            {capturingPreviewFor === primaryCamera.cameraId
-                              ? 'Fetching...'
-                              : 'Fetch Primary Frame'}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                  )
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
-                    <Monitor className="w-8 h-8 text-slate-600" />
-                    <p className="text-sm font-semibold text-slate-200">
-                      {obsConnected
-                        ? `Active OBS Scene: ${profile.activeObsScene || 'None Selected'}`
-                        : 'Primary Program Feed Offline'}
-                    </p>
-                    <p className="text-xs text-slate-400 max-w-md">
-                      {obsConnected
-                        ? 'Click any camera thumbnail below to promote it as the primary feed.'
-                        : 'Connect OBS Studio first, then click any active camera thumbnail to promote it live.'}
-                    </p>
-                    {!obsConnected && (
-                      <button
-                        type="button"
-                        onClick={onOpenConnectionTab}
-                        className="min-h-[34px] px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
-                      >
-                        Configure OBS Connection
-                      </button>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={primaryCamera ? primaryCamera.cameraId : 'primary-standby'}
+                    initial={{ opacity: 0.65, scale: 0.99 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0.65 }}
+                    transition={{ duration: 0.2 }}
+                    className="w-full h-full"
+                  >
+                    {primaryCamera ? (
+                      previewMode === 'live_vdo' &&
+                      primaryCamera.sourceType === 'vdoninja' &&
+                      primaryCamera.obsBrowserSourceUrl ? (
+                        <iframe
+                          title={`Primary feed ${primaryCamera.name}`}
+                          src={primaryCamera.obsBrowserSourceUrl}
+                          allow="autoplay; fullscreen"
+                          className="w-full h-full border-0 bg-slate-950"
+                        />
+                      ) : primarySnapshot ? (
+                        <img
+                          src={primarySnapshot.imageData}
+                          alt={`Primary OBS program feed for ${primaryCamera.label || primaryCamera.name}`}
+                          className="w-full h-full object-contain bg-slate-950"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
+                          <Tv className="w-8 h-8 text-slate-600" />
+                          <p className="text-sm font-semibold text-slate-200">
+                            {primaryCamera.label || primaryCamera.name}
+                          </p>
+                          <p className="text-xs text-slate-400 max-w-md">
+                            {obsConnected
+                              ? 'Click "Fetch Primary Frame" or "Refresh Previews" to pull a live frame from OBS Studio.'
+                              : 'OBS Studio is disconnected. Connect OBS to stream and monitor the live primary feed.'}
+                          </p>
+                          {obsConnected && (
+                            <button
+                              type="button"
+                              disabled={capturingPreviewFor === primaryCamera.cameraId}
+                              onClick={() => onCapturePreview(primaryCamera)}
+                              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-40"
+                            >
+                              <RefreshCw
+                                className={`w-3.5 h-3.5 ${
+                                  capturingPreviewFor === primaryCamera.cameraId ? 'animate-spin' : ''
+                                }`}
+                              />
+                              <span>
+                                {capturingPreviewFor === primaryCamera.cameraId
+                                  ? 'Fetching...'
+                                  : 'Fetch Primary Frame'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      )
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
+                        <Monitor className="w-8 h-8 text-slate-600" />
+                        <p className="text-sm font-semibold text-slate-200">
+                          {obsConnected
+                            ? `Active OBS Scene: ${profile.activeObsScene || 'None Selected'}`
+                            : 'Primary Program Feed Offline'}
+                        </p>
+                        <p className="text-xs text-slate-400 max-w-md">
+                          {obsConnected
+                            ? 'Click any camera thumbnail below to promote it as the primary feed.'
+                            : 'Connect OBS Studio first, then click any active camera thumbnail to promote it live.'}
+                        </p>
+                        {!obsConnected && (
+                          <button
+                            type="button"
+                            onClick={onOpenConnectionTab}
+                            className="min-h-[34px] px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
+                          >
+                            Configure OBS Connection
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
+                  </motion.div>
+                </AnimatePresence>
 
                 {/* Measured Gradient Scrim Overlay */}
                 <div className="pointer-events-none absolute inset-x-0 top-0 p-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between gap-2">
@@ -568,170 +599,209 @@ export function CameraPreviewGrid({
               }
             />
           ) : (
-            <div className={`grid ${resolveAutoGridColsClass(displayedCameras.length, columnMode)} gap-4`}>
-              {displayedCameras.map((cam) => {
-                const isPrimary =
-                  obsConnected &&
-                  (profile.activeCameraId === cam.cameraId ||
-                    (cam.obsSceneName && profile.activeObsScene === cam.obsSceneName));
-                const isOnline = isCameraActiveOrOnline(cam, profile, obsConnected);
-                const snap = previewSnapshots[cam.cameraId];
-                const previewErr = previewErrors[cam.cameraId];
-                const isSwitching = switchingKey === `cam:${cam.cameraId}`;
-                const isMuted = Boolean(
-                  cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted
-                );
-                const showLiveVdo =
-                  previewMode === 'live_vdo' &&
-                  cam.sourceType === 'vdoninja' &&
-                  Boolean(cam.obsBrowserSourceUrl);
+            <LayoutGroup id="camera-multiview-grid">
+              <motion.div
+                layout
+                className={`grid ${resolveAutoGridColsClass(displayedCameras.length, columnMode)} gap-4`}
+              >
+                <AnimatePresence mode="popLayout">
+                  {displayedCameras.map((cam) => {
+                    const isPrimary = isCameraPrimary(cam, profile, obsConnected);
+                    const isOnline = isCameraActiveOrOnline(cam, profile, obsConnected);
+                    const snap = previewSnapshots[cam.cameraId];
+                    const previewErr = previewErrors[cam.cameraId];
+                    const isSwitching = switchingKey === `cam:${cam.cameraId}`;
+                    const isReconnecting = reconnectingCamId === cam.cameraId;
+                    const isMuted = Boolean(
+                      cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted
+                    );
+                    const showLiveVdo =
+                      previewMode === 'live_vdo' &&
+                      cam.sourceType === 'vdoninja' &&
+                      Boolean(cam.obsBrowserSourceUrl);
 
-                return (
-                  <div
-                    key={cam.cameraId}
-                    className={`group rounded-xl border overflow-hidden transition-colors bg-white ${
-                      isPrimary
-                        ? 'border-[#EA580C] ring-2 ring-[#EA580C]/25'
-                        : 'border-slate-200 hover:border-[#EA580C]/70'
-                    }`}
-                  >
-                    {/* Clickable Thumbnail Button -> Promote as Primary Feed */}
-                    <button
-                      type="button"
-                      disabled={isSwitching}
-                      onClick={() => onPromotePrimary(cam, promoteAction)}
-                      aria-label={`Promote ${cam.label || cam.name} as primary feed`}
-                      className="relative block w-full aspect-video bg-slate-950 overflow-hidden border-b border-slate-200 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
-                    >
-                      {showLiveVdo ? (
-                        <iframe
-                          title={`Live monitor ${cam.name}`}
-                          src={cam.obsBrowserSourceUrl}
-                          allow="autoplay"
-                          className="w-full h-full border-0 pointer-events-none bg-slate-950"
-                        />
-                      ) : snap ? (
-                        <img
-                          src={snap.imageData}
-                          alt={`OBS preview for ${cam.label || cam.name}`}
-                          className="w-full h-full object-contain bg-slate-950"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center space-y-1.5">
-                          <Video className="w-6 h-6 text-slate-600" />
-                          <p className="text-[11px] font-medium text-slate-300">
-                            {previewErr
-                              ? 'Preview unavailable in OBS'
-                              : obsConnected
-                                ? 'No frame captured yet'
-                                : 'OBS disconnected'}
-                          </p>
-                          <p className="text-[10px] font-mono text-slate-500">
-                            {cam.obsInputName || cam.obsSceneName || cam.name}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Top Scrim Metadata */}
-                      <div className="absolute inset-x-0 top-0 p-2.5 bg-gradient-to-b from-black/80 via-black/35 to-transparent flex items-center justify-between gap-2">
-                        <span className="font-mono tabular-nums text-[11px] font-bold text-white">
-                          CAM {cam.cameraNumber}
-                          <span className="text-slate-300 font-normal"> · {cam.status}</span>
-                        </span>
-                        {isPrimary ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EA580C] text-white font-mono text-[10px] font-bold tracking-wide">
-                            <Check className="w-3 h-3" />
-                            PRIMARY
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded bg-black/70 text-slate-100 font-mono text-[10px] font-semibold opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
-                            {isSwitching ? 'Switching...' : 'Promote Primary'}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Bottom Scrim Status */}
-                      <div className="absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-gradient-to-t from-black/80 via-black/35 to-transparent flex items-center justify-between gap-2 text-[10px] font-mono text-slate-200 tabular-nums">
-                        <span className="truncate">
-                          {isOnline ? 'Signal Ready' : 'Standby'} · {cam.resolution}@{cam.fps}
-                        </span>
-                        {snap && <span>{snap.capturedAt}</span>}
-                      </div>
-                    </button>
-
-                    {/* Tile Metadata & Secondary Controls */}
-                    <div className="p-3 flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-xs font-bold text-slate-900 truncate">
-                            {cam.label || cam.name}
-                          </p>
-                          {cam.isDefault && (
-                            <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500 shrink-0" />
-                          )}
-                        </div>
-                        <p className="text-[11px] text-slate-500 font-mono truncate tabular-nums">
-                          {cam.operatorName ? `${cam.operatorName} · ` : ''}
-                          {cam.obsSceneName || 'Auto Scene'}
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
+                    return (
+                      <motion.div
+                        key={cam.cameraId}
+                        layout
+                        initial={{ opacity: 0, scale: 0.96 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.94 }}
+                        transition={{
+                          layout: { type: 'spring', stiffness: 360, damping: 30, mass: 0.85 },
+                          opacity: { duration: 0.18 },
+                          scale: { duration: 0.18 },
+                        }}
+                        className={`group rounded-xl border overflow-hidden transition-colors bg-white ${
+                          isPrimary
+                            ? 'border-[#EA580C] ring-2 ring-[#EA580C]/25'
+                            : 'border-slate-200 hover:border-[#EA580C]/70'
+                        }`}
+                      >
+                        {/* Clickable Thumbnail Button -> Promote as Primary Feed */}
                         <button
                           type="button"
-                          disabled={mutingCamId === cam.cameraId}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleAudio(cam);
-                          }}
-                          title={isMuted ? 'Unmute camera audio' : 'Mute camera audio'}
-                          className={`min-h-[32px] px-2 py-1 rounded-lg border ${
-                            isMuted
-                              ? 'bg-red-50 text-red-700 border-red-200'
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
+                          disabled={isSwitching}
+                          onClick={() => onPromotePrimary(cam, promoteAction)}
+                          aria-label={`Promote ${cam.label || cam.name} as primary feed`}
+                          className="relative block w-full aspect-video bg-slate-950 overflow-hidden border-b border-slate-200 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
                         >
-                          {isMuted ? (
-                            <MicOff className="w-3.5 h-3.5" />
+                          {showLiveVdo ? (
+                            <iframe
+                              title={`Live monitor ${cam.name}`}
+                              src={cam.obsBrowserSourceUrl}
+                              allow="autoplay"
+                              className="w-full h-full border-0 pointer-events-none bg-slate-950"
+                            />
+                          ) : snap ? (
+                            <img
+                              src={snap.imageData}
+                              alt={`OBS preview for ${cam.label || cam.name}`}
+                              className="w-full h-full object-contain bg-slate-950"
+                            />
                           ) : (
-                            <Mic className="w-3.5 h-3.5" />
+                            <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center space-y-1.5">
+                              <Video className="w-6 h-6 text-slate-600" />
+                              <p className="text-[11px] font-medium text-slate-300">
+                                {previewErr
+                                  ? 'Preview unavailable in OBS'
+                                  : obsConnected
+                                    ? 'No frame captured yet'
+                                    : 'OBS disconnected'}
+                              </p>
+                              <p className="text-[10px] font-mono text-slate-500">
+                                {cam.obsInputName || cam.obsSceneName || cam.name}
+                              </p>
+                            </div>
                           )}
+
+                          {/* Top Scrim Metadata */}
+                          <div className="absolute inset-x-0 top-0 p-2.5 bg-gradient-to-b from-black/80 via-black/35 to-transparent flex items-center justify-between gap-2">
+                            <span className="font-mono tabular-nums text-[11px] font-bold text-white">
+                              CAM {cam.cameraNumber}
+                              <span className="text-slate-300 font-normal"> · {cam.status}</span>
+                            </span>
+                            {isPrimary ? (
+                              <motion.span
+                                layoutId="primary-camera-active-badge"
+                                transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EA580C] text-white font-mono text-[10px] font-bold tracking-wide"
+                              >
+                                <Check className="w-3 h-3" />
+                                PRIMARY
+                              </motion.span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-black/70 text-slate-100 font-mono text-[10px] font-semibold opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
+                                {isSwitching ? 'Switching...' : 'Promote Primary'}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Bottom Scrim Status */}
+                          <div className="absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-gradient-to-t from-black/80 via-black/35 to-transparent flex items-center justify-between gap-2 text-[10px] font-mono text-slate-200 tabular-nums">
+                            <span className="truncate">
+                              {isOnline ? 'Signal Ready' : 'Standby'} · {cam.resolution}@{cam.fps}
+                            </span>
+                            {snap && <span>{snap.capturedAt}</span>}
+                          </div>
                         </button>
 
-                        <button
-                          type="button"
-                          disabled={!obsConnected || capturingPreviewFor === cam.cameraId}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onCapturePreview(cam);
-                          }}
-                          title="Refresh live OBS preview frame"
-                          className="min-h-[32px] px-2 py-1 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
-                        >
-                          <RefreshCw
-                            className={`w-3.5 h-3.5 ${
-                              capturingPreviewFor === cam.cameraId ? 'animate-spin' : ''
-                            }`}
-                          />
-                        </button>
+                        {/* Tile Metadata & Direct Low-Latency Controls */}
+                        <div className="p-3 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-bold text-slate-900 truncate">
+                                {cam.label || cam.name}
+                              </p>
+                              {cam.isDefault && (
+                                <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500 shrink-0" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 font-mono truncate tabular-nums">
+                              {cam.operatorName ? `${cam.operatorName} · ` : ''}
+                              {cam.obsSceneName || 'Auto Scene'}
+                            </p>
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onOpenQrWizard(cam);
-                          }}
-                          title="Smartphone QR / URL Setup"
-                          className="min-h-[32px] px-2 py-1 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
-                        >
-                          <QrCode className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              disabled={isReconnecting}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onReconnectCamera(cam);
+                              }}
+                              title="Reconnect camera source"
+                              aria-label={`Reconnect ${cam.label || cam.name}`}
+                              className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center px-2 py-1 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
+                            >
+                              {isReconnecting ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#EA580C]" />
+                              ) : (
+                                <PlugZap className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={mutingCamId === cam.cameraId}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleAudio(cam);
+                              }}
+                              title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
+                              aria-label={`${isMuted ? 'Unmute audio' : 'Mute audio'} for ${cam.label || cam.name}`}
+                              className={`min-h-[30px] min-w-[30px] inline-flex items-center justify-center px-2 py-1 rounded-lg border ${
+                                isMuted
+                                  ? 'bg-red-50 text-red-700 border-red-200'
+                                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                              } disabled:opacity-40`}
+                            >
+                              {isMuted ? (
+                                <MicOff className="w-3.5 h-3.5" />
+                              ) : (
+                                <Mic className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={!obsConnected || capturingPreviewFor === cam.cameraId}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onCapturePreview(cam);
+                              }}
+                              title="Refresh OBS preview frame"
+                              aria-label={`Refresh preview frame for ${cam.label || cam.name}`}
+                              className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center px-2 py-1 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
+                            >
+                              <Camera
+                                className={`w-3.5 h-3.5 ${
+                                  capturingPreviewFor === cam.cameraId ? 'animate-pulse text-[#EA580C]' : ''
+                                }`}
+                              />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenQrWizard(cam);
+                              }}
+                              title="Smartphone QR Setup"
+                              aria-label={`Open QR setup for ${cam.label || cam.name}`}
+                              className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center px-2 py-1 text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
+                            >
+                              <QrCode className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </motion.div>
+            </LayoutGroup>
           )}
         </>
       )}

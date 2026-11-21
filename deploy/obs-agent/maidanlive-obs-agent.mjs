@@ -376,6 +376,26 @@ async function handleCommand(command, payload) {
     return { inputName, inputMuted: Boolean(res.inputMuted) };
   }
 
+  if (command === 'reconnect_input') {
+    const sceneName = String(payload.sceneName || '');
+    const inputName = String(payload.inputName || '');
+    if (sceneName && inputName) {
+      await ensureSceneAndInput(
+        sceneName,
+        inputName,
+        payload.inputKind || 'browser_source',
+        payload.inputSettings || {}
+      ).catch(() => {});
+    }
+    if (inputName) {
+      await obs
+        .call('PressInputPropertiesButton', { inputName, propertyName: 'refreshnocache' })
+        .catch(() => {});
+    }
+    await emitObsSnapshot();
+    return { reconnected: true, inputName };
+  }
+
   throw new Error(`Unsupported command: ${command}`);
 }
 

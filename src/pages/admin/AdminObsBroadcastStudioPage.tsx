@@ -133,6 +133,7 @@ export function AdminObsBroadcastStudioPage() {
   const [applyingLayout, setApplyingLayout] = useState(false);
   const [testingCamId, setTestingCamId] = useState<string | null>(null);
   const [mutingCamId, setMutingCamId] = useState<string | null>(null);
+  const [reconnectingCamId, setReconnectingCamId] = useState<string | null>(null);
   const [disconnectingCamId, setDisconnectingCamId] = useState<string | null>(null);
   const [executingObsAction, setExecutingObsAction] = useState<string | null>(null);
   const [managingSession, setManagingSession] = useState<string | null>(null);
@@ -390,6 +391,32 @@ export function AdminObsBroadcastStudioPage() {
       setActionError(extractApiError(err, `Failed to disconnect ${cam.name}.`));
     } finally {
       setDisconnectingCamId(null);
+    }
+  }
+
+  async function handleReconnectCamera(cam: BroadcastCameraData) {
+    if (!matchId) return;
+    try {
+      setReconnectingCamId(cam.cameraId);
+      setActionError(null);
+      const res = await obsStudioService.reconnectCamera(
+        matchId,
+        cam.cameraId,
+        Boolean(profile?.adminOverrideLocked)
+      );
+      if (res.ok) {
+        notifySuccess(`${cam.label || cam.name}: ${res.detail}`);
+      } else {
+        setActionError(`${cam.label || cam.name}: ${res.detail}`);
+      }
+      await refetch();
+      if (obsConnected) {
+        await handleCaptureSourcePreview(cam, { silent: true });
+      }
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to reconnect ${cam.name}.`));
+    } finally {
+      setReconnectingCamId(null);
     }
   }
 
@@ -1199,11 +1226,13 @@ export function AdminObsBroadcastStudioPage() {
                 refreshingAllPreviews={refreshingAllPreviews}
                 switchingKey={switchingKey}
                 mutingCamId={mutingCamId}
+                reconnectingCamId={reconnectingCamId}
                 scaffoldingCount={scaffoldingCount}
                 onPromotePrimary={handlePromotePrimary}
                 onCapturePreview={(cam) => handleCaptureSourcePreview(cam)}
                 onRefreshAllPreviews={handleRefreshAllPreviews}
                 onToggleAudio={handleToggleCameraAudio}
+                onReconnectCamera={handleReconnectCamera}
                 onOpenQrWizard={(cam) => {
                   setWizardCamera(cam);
                   setWizardConnectUrl(null);

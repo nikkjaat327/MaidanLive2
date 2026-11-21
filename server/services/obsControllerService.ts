@@ -21,6 +21,7 @@ import { computeObsLayoutBoxes, LAYOUT_METADATA } from '../../src/utils/obsLayou
 import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
 import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
+import { verifyMediaMTXStreamHealth } from './mediamtxService.ts';
 
 interface DirectObsSession {
   matchId: string;
@@ -1212,6 +1213,34 @@ export async function executeDirectObsCommand(
     return { inputName, inputMuted: Boolean((res as any).inputMuted) };
   }
 
+  if (command === 'reconnect_input') {
+    const sceneName = String(payload.sceneName || '');
+    const inputName = String(payload.inputName || '');
+    if (sceneName && inputName) {
+      await ensureSceneAndInputDirect(
+        obs,
+        sceneName,
+        inputName,
+        payload.inputKind || 'browser_source',
+        payload.inputSettings || {}
+      ).catch(() => {});
+    }
+    if (inputName) {
+      await obs
+        .call('PressInputPropertiesButton', {
+          inputName,
+          propertyName: 'refreshnocache',
+        })
+        .catch(() => {});
+    }
+    const snapshot = await pullDirectObsSnapshot(matchId, obs);
+    return {
+      reconnected: true,
+      inputName,
+      obsScenes: snapshot.obsScenes,
+    };
+  }
+
   throw new Error(`Unsupported OBS command: ${command}`);
 }
 
@@ -1950,6 +1979,142 @@ export async function disconnectCameraByOperator(
   await emitFullStudioState(matchId);
 
   return formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true });
+}
+
+export async function reconnectCameraSource(
+  matchId: string,
+  cameraId: string,
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetSceneName = cam.obsSceneName?.trim() || `CAM ${cam.cameraNumber} FULL`;
+  const targetInputName = cam.obsInputName?.trim() || `ML_CAM_${cam.cameraNumber}`;
+  const roomPassword = await getRoomPasswordForProfile(profile);
+
+  let inputKind = 'browser_source';
+  let inputSettings: Record<string, any> = {};
+  if (cam.sourceType === 'vdoninja' && cam.vdoStreamId) {
+    const links = buildVdoNinjaLinks({
+      roomName: cam.vdoRoomName || profile.vdoRoomName,
+      streamId: cam.vdoStreamId,
+      password: roomPassword,
+      label: cam.label || cam.name,
+      resolution: cam.resolution,
+      fps: cam.fps,
+      bitrateKbps: cam.bitrateKbps,
+      lowBandwidthMode: cam.lowBandwidthMode,
+      facingMode: cam.facingMode,
+    });
+    inputSettings = { url: links.obsViewUrl, width: 1920, height: 1080 };
+  } else if (cam.sourceType === 'browser_source' && cam.connectionUrl) {
+    inputSettings = { url: cam.connectionUrl, width: 1920, height: 1080 };
+  } else {
+    inputKind = '';
+  }
+
+  const isObsConnected =
+    profile.connectionMode === 'local_agent'
+      ? Boolean(agentSockets.get(matchId)?.connected && profile.connectionStatus === 'CONNECTED')
+      : Boolean(directSessions.get(matchId)?.connected);
+
+  let obsSynced = false;
+  let obsNote = '';
+  if (isObsConnected) {
+    try {
+      await callObsRpc(matchId, 'reconnect_input', {
+        sceneName: targetSceneName,
+        inputName: targetInputName,
+        inputKind,
+        inputSettings,
+      });
+      obsSynced = true;
+    } catch (err: any) {
+      obsNote = err?.message || 'OBS input refresh returned an error.';
+    }
+  } else {
+    obsNote = 'OBS Studio is disconnected.';
+  }
+
+  let signalOk = false;
+  let signalDetail = '';
+  if (cam.sourceType === 'mediamtx' && cam.connectionUrl) {
+    const mtx = await verifyMediaMTXStreamHealth({
+      streamPath: cam.connectionUrl,
+      hlsPlaybackUrl: cam.connectionUrl,
+      webrtcPlaybackUrl: '',
+    });
+    signalOk = mtx.ok;
+    signalDetail = mtx.message;
+  } else if (
+    cam.lastHeartbeatAt &&
+    Date.now() - new Date(cam.lastHeartbeatAt).getTime() <= HEARTBEAT_STALE_MS
+  ) {
+    signalOk = cam.status !== 'ERROR';
+    signalDetail = `Smartphone companion active (heartbeat ${Math.round(
+      (Date.now() - new Date(cam.lastHeartbeatAt).getTime()) / 1000
+    )}s ago).`;
+  } else if (obsSynced) {
+    signalOk = true;
+    signalDetail = `Reloaded "${targetInputName}" in OBS Studio.`;
+  } else {
+    signalDetail =
+      obsNote ||
+      'No active smartphone companion heartbeat or OBS connection detected for this camera.';
+  }
+
+  const hasRecentHeartbeat = Boolean(
+    cam.lastHeartbeatAt && Date.now() - new Date(cam.lastHeartbeatAt).getTime() <= HEARTBEAT_STALE_MS
+  );
+  if (cam.status === 'ERROR' && signalOk) {
+    cam.status = hasRecentHeartbeat ? 'CONNECTED' : 'DISCONNECTED';
+  }
+  cam.lastError = signalOk ? '' : signalDetail.slice(0, 400);
+  cam.status = computeEffectiveCameraStatus(
+    cam,
+    profile.activeCameraId || '',
+    profile.activeObsScene || '',
+    isObsConnected
+  );
+  await cam.save();
+
+  emitBroadcastStudioEvent(matchId, 'obs:camera_reconnect_requested', {
+    matchId,
+    cameraId: cam.cameraId,
+    obsSynced,
+    status: cam.status,
+  });
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_RECONNECT',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: signalOk || obsSynced ? 'SUCCESS' : 'FAILED',
+    errorDetails: signalOk || obsSynced ? '' : signalDetail,
+    metadata: { obsSynced, status: cam.status },
+  });
+  await emitFullStudioState(matchId);
+
+  return {
+    ok: signalOk || obsSynced,
+    obsSynced,
+    status: cam.status,
+    detail: obsSynced && signalDetail ? signalDetail : signalDetail || obsNote,
+    camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+  };
 }
 
 export async function manageBroadcastSession(
