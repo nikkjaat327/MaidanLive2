@@ -111,7 +111,7 @@ export function AdminScoreboardPage() {
   }, [selectedId]);
 
   useEffect(() => {
-    if (!stream) return;
+    if (!stream?.id) return;
     loadHighlights();
     loadPlayerStats();
     entityService
@@ -128,7 +128,7 @@ export function AdminScoreboardPage() {
         }
       })
       .catch(() => setPlayers([]));
-  }, [stream, loadHighlights, loadPlayerStats]);
+  }, [stream?.id, stream?.gameName, stream?.teamAId, stream?.teamBId, loadHighlights, loadPlayerStats]);
 
   async function handleToggleOverlayDefault() {
     if (!stream) return;

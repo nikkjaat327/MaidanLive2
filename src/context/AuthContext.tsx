@@ -74,92 +74,125 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const adminUserRef = useRef<AuthUser | null>(adminUser);
   adminUserRef.current = adminUser;
 
+  const customerRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const adminRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const notifRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const adminNotifRefreshInFlightRef = useRef<Promise<void> | null>(null);
+
   const clearAuthNotice = useCallback(() => setAuthNotice(null), []);
 
   const refreshNotifications = useCallback(async () => {
-    const hasSession =
-      Boolean(authService.getCustomerToken()) || Boolean(authService.getCustomerRefreshToken());
-    if (!hasSession) {
-      setUnreadNotifications(0);
-      return;
-    }
-    try {
-      const res = await platformOpsService.listNotifications('customer');
-      setUnreadNotifications(res.unreadCount || 0);
-    } catch {
-      // Non-blocking
-    }
+    if (notifRefreshInFlightRef.current) return notifRefreshInFlightRef.current;
+    const promise = (async () => {
+      const hasSession =
+        Boolean(authService.getCustomerToken()) || Boolean(authService.getCustomerRefreshToken());
+      if (!hasSession) {
+        setUnreadNotifications(0);
+        return;
+      }
+      try {
+        const res = await platformOpsService.listNotifications('customer');
+        setUnreadNotifications(res.unreadCount || 0);
+      } catch {
+        // Non-blocking
+      }
+    })().finally(() => {
+      notifRefreshInFlightRef.current = null;
+    });
+    notifRefreshInFlightRef.current = promise;
+    return promise;
   }, []);
 
   const refreshAdminNotifications = useCallback(async () => {
-    const hasSession =
-      Boolean(authService.getAdminToken()) || Boolean(authService.getAdminRefreshToken());
-    if (!hasSession) {
-      setAdminUnreadNotifications(0);
-      return;
-    }
-    try {
-      const res = await platformOpsService.listNotifications('admin');
-      setAdminUnreadNotifications(res.unreadCount || 0);
-    } catch {
-      // Non-blocking
-    }
+    if (adminNotifRefreshInFlightRef.current) return adminNotifRefreshInFlightRef.current;
+    const promise = (async () => {
+      const hasSession =
+        Boolean(authService.getAdminToken()) || Boolean(authService.getAdminRefreshToken());
+      if (!hasSession) {
+        setAdminUnreadNotifications(0);
+        return;
+      }
+      try {
+        const res = await platformOpsService.listNotifications('admin');
+        setAdminUnreadNotifications(res.unreadCount || 0);
+      } catch {
+        // Non-blocking
+      }
+    })().finally(() => {
+      adminNotifRefreshInFlightRef.current = null;
+    });
+    adminNotifRefreshInFlightRef.current = promise;
+    return promise;
   }, []);
 
   const refreshCustomer = useCallback(async () => {
-    const token = await authService.ensureFreshCustomerToken();
-    const refreshToken = authService.getCustomerRefreshToken();
-    if (!token && !refreshToken) {
-      setCustomerUser(null);
-      setUnreadNotifications(0);
-      setCustomerLoading(false);
-      return;
-    }
-    try {
-      const user = await authService.fetchCustomerProfile();
-      setCustomerUser(user);
-      refreshNotifications();
-    } catch (err) {
-      const stillHasRefresh = Boolean(authService.getCustomerRefreshToken());
-      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-      if (!stillHasRefresh || status === 401 || status === 403) {
-        if (!stillHasRefresh) {
-          authService.clearCustomerToken();
-          setCustomerUser(null);
-          setUnreadNotifications(0);
-        }
+    if (customerRefreshInFlightRef.current) return customerRefreshInFlightRef.current;
+    const promise = (async () => {
+      const token = await authService.ensureFreshCustomerToken();
+      const refreshToken = authService.getCustomerRefreshToken();
+      if (!token && !refreshToken) {
+        setCustomerUser(null);
+        setUnreadNotifications(0);
+        setCustomerLoading(false);
+        return;
       }
-      // On network / 5xx error with an active refreshToken, preserve cached customerUser
-    } finally {
-      setCustomerLoading(false);
-    }
+      try {
+        const user = await authService.fetchCustomerProfile();
+        setCustomerUser(user);
+        refreshNotifications();
+      } catch (err) {
+        const stillHasRefresh = Boolean(authService.getCustomerRefreshToken());
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (!stillHasRefresh || status === 401 || status === 403) {
+          if (!stillHasRefresh) {
+            authService.clearCustomerToken();
+            setCustomerUser(null);
+            setUnreadNotifications(0);
+          }
+        }
+        // On network / 5xx error with an active refreshToken, preserve cached customerUser
+      } finally {
+        setCustomerLoading(false);
+      }
+    })().finally(() => {
+      customerRefreshInFlightRef.current = null;
+    });
+    customerRefreshInFlightRef.current = promise;
+    return promise;
   }, [refreshNotifications]);
 
   const refreshAdmin = useCallback(async () => {
-    const token = await authService.ensureFreshAdminToken();
-    const refreshToken = authService.getAdminRefreshToken();
-    if (!token && !refreshToken) {
-      setAdminUser(null);
-      setAdminUnreadNotifications(0);
-      setAdminLoading(false);
-      return;
-    }
-    try {
-      const user = await authService.fetchAdminProfile();
-      setAdminUser(user);
-      refreshAdminNotifications();
-    } catch (err) {
-      const stillHasRefresh = Boolean(authService.getAdminRefreshToken());
-      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-      const invalidPortal = err instanceof Error && err.message === 'Invalid portal session.';
-      if (invalidPortal || !stillHasRefresh || (status === 401 && !stillHasRefresh) || status === 403) {
-        authService.clearAdminToken();
+    if (adminRefreshInFlightRef.current) return adminRefreshInFlightRef.current;
+    const promise = (async () => {
+      const token = await authService.ensureFreshAdminToken();
+      const refreshToken = authService.getAdminRefreshToken();
+      if (!token && !refreshToken) {
         setAdminUser(null);
         setAdminUnreadNotifications(0);
+        setAdminLoading(false);
+        return;
       }
-    } finally {
-      setAdminLoading(false);
-    }
+      try {
+        const user = await authService.fetchAdminProfile();
+        setAdminUser(user);
+        refreshAdminNotifications();
+      } catch (err) {
+        const stillHasRefresh = Boolean(authService.getAdminRefreshToken());
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        const invalidPortal = err instanceof Error && err.message === 'Invalid portal session.';
+        if (invalidPortal || !stillHasRefresh || (status === 401 && !stillHasRefresh) || status === 403) {
+          authService.clearAdminToken();
+          setAdminUser(null);
+          setAdminUnreadNotifications(0);
+        }
+      } finally {
+        setAdminLoading(false);
+      }
+    })().finally(() => {
+      adminRefreshInFlightRef.current = null;
+    });
+    adminRefreshInFlightRef.current = promise;
+    return promise;
   }, [refreshAdminNotifications]);
 
   useEffect(() => {

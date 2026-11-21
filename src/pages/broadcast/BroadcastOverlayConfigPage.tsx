@@ -167,7 +167,7 @@ export function BroadcastOverlayConfigPage() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [stream]);
+  }, [stream?.id]);
 
   // Clean up object URL if uploaded
   useEffect(() => {

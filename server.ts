@@ -337,7 +337,7 @@ async function startServer() {
   await ensureEnvSuperAdminIfConfigured();
 
   const app = express();
-  app.set('trust proxy', 1);
+  app.set('trust proxy', 2);
   const httpServer = http.createServer(app);
   initObsControllerBridge();
   initSocketServer(httpServer);
@@ -363,10 +363,17 @@ async function startServer() {
 
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 1200,
+    max: 600,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path === '/health',
+    skip: (req) =>
+      req.method === 'GET' ||
+      req.method === 'HEAD' ||
+      req.method === 'OPTIONS' ||
+      req.path === '/health' ||
+      req.path === '/viewers/track' ||
+      /^\/obs\/matches\/[^/]+\/preview$/.test(req.path) ||
+      /^\/obs\/camera-connect\/[^/]+\/heartbeat$/.test(req.path),
     message: { message: 'Too many API requests. Please wait a moment and try again.' },
   });
 
