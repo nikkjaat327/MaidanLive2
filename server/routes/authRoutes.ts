@@ -9,6 +9,7 @@ import { SecurityPolicy } from '../models/SecurityPolicy.ts';
 import {
   authenticate,
   getEffectiveGranularPermissions,
+  optionalAuthenticate,
   requireAdminPortal,
   requireRole,
   signAuthToken,
@@ -27,6 +28,21 @@ const router = Router();
 
 function hashToken(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+const REFRESH_GRACE_MS = 30 * 1000;
+const graceResponseCache = new Map<
+  string,
+  { token: string; refreshToken: string; sessionId: string; user: any; expiresAtMs: number }
+>();
+
+function pruneGraceCache() {
+  const now = Date.now();
+  for (const [key, entry] of graceResponseCache.entries()) {
+    if (entry.expiresAtMs <= now) {
+      graceResponseCache.delete(key);
+    }
+  }
 }
 
 async function getOrCreateSecurityPolicy() {
@@ -428,7 +444,7 @@ router.post('/admin/login', async (req: Request, res: Response) => {
   }
 });
 
-// Rotate Refresh Token
+// Rotate Refresh Token (concurrent/multi-tab safe with 30s grace window & sliding expiry)
 router.post('/refresh', async (req: Request, res: Response) => {
   try {
     const rawRefresh = typeof req.body.refreshToken === 'string' ? req.body.refreshToken.trim() : '';
@@ -436,45 +452,104 @@ router.post('/refresh', async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Refresh token is required.' });
       return;
     }
+
     const tokenHash = hashToken(rawRefresh);
-    const session = await UserSession.findOne({ refreshTokenHash: tokenHash, isRevoked: false });
-    if (!session || new Date(session.expiresAt).getTime() < Date.now()) {
-      res.status(401).json({ message: 'Refresh token is invalid or expired.' });
+    const cached = graceResponseCache.get(tokenHash);
+    if (cached && cached.expiresAtMs > Date.now()) {
+      res.json({
+        token: cached.token,
+        refreshToken: cached.refreshToken,
+        sessionId: cached.sessionId,
+        user: cached.user,
+      });
+      return;
+    }
+
+    let session = await UserSession.findOne({ refreshTokenHash: tokenHash, isRevoked: false });
+    if (!session) {
+      const graceCandidate = await UserSession.findOne({
+        previousRefreshTokenHash: tokenHash,
+        isRevoked: false,
+      });
+      if (
+        graceCandidate &&
+        graceCandidate.previousTokenGraceUntil &&
+        new Date(graceCandidate.previousTokenGraceUntil).getTime() > Date.now()
+      ) {
+        session = graceCandidate;
+      }
+    }
+
+    if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
+      res.status(401).json({
+        message: 'Refresh token is invalid or expired.',
+        code: 'REFRESH_EXPIRED',
+      });
       return;
     }
 
     const user = await User.findById(session.userId);
     if (!user || !user.isActive) {
-      res.status(401).json({ message: 'User account is inactive.' });
+      res.status(401).json({
+        message: 'User account is inactive.',
+        code: 'ACCOUNT_INACTIVE',
+      });
       return;
     }
 
     const nextRawRefresh = crypto.randomBytes(32).toString('hex');
+    const slidingDays = session.portal === 'admin' ? 7 : 30;
+    session.previousRefreshTokenHash = tokenHash;
+    session.previousTokenGraceUntil = new Date(Date.now() + REFRESH_GRACE_MS);
     session.refreshTokenHash = hashToken(nextRawRefresh);
     session.lastActiveAt = new Date();
+    session.expiresAt = new Date(Date.now() + slidingDays * 24 * 60 * 60 * 1000);
     await session.save();
 
     const token = signAuthToken(user, session.portal, session._id.toString());
-    res.json({
+    const serializedUser = serializeUser(user);
+    const responsePayload = {
       token,
       refreshToken: nextRawRefresh,
       sessionId: session._id.toString(),
-      user: serializeUser(user),
+      user: serializedUser,
+    };
+
+    if (graceResponseCache.size > 200) pruneGraceCache();
+    graceResponseCache.set(tokenHash, {
+      ...responsePayload,
+      expiresAtMs: Date.now() + REFRESH_GRACE_MS,
     });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('[Auth] Refresh error:', err);
     res.status(500).json({ message: 'Failed to refresh session.' });
   }
 });
 
-// Logout current session
-router.post('/logout', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+// Logout current session (works even when access JWT already expired)
+router.post('/logout', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const revokedAt = new Date();
     if (req.sessionId) {
       await UserSession.findByIdAndUpdate(req.sessionId, {
         isRevoked: true,
-        revokedAt: new Date(),
+        revokedAt,
       });
+    }
+    const rawRefresh = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : '';
+    if (rawRefresh) {
+      const tokenHash = hashToken(rawRefresh);
+      graceResponseCache.delete(tokenHash);
+      await UserSession.updateMany(
+        { refreshTokenHash: tokenHash, isRevoked: false },
+        { $set: { isRevoked: true, revokedAt } }
+      );
+      await UserSession.updateMany(
+        { previousRefreshTokenHash: tokenHash, isRevoked: false },
+        { $set: { isRevoked: true, revokedAt } }
+      );
     }
     res.json({ ok: true, message: 'Signed out.' });
   } catch {

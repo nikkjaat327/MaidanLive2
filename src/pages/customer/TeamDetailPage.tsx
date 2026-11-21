@@ -11,6 +11,7 @@ import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { ShareButton } from '../../components/common/ShareButton.tsx';
+import { buildTeamUrl } from '../../utils/shareUrl.ts';
 
 export function TeamDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -165,7 +166,30 @@ export function TeamDetailPage() {
             {isFollowing ? <Check className="w-3.5 h-3.5" /> : <BellPlus className="w-3.5 h-3.5" />}
             <span>{isFollowing ? 'Following Team' : 'Follow Team'}</span>
           </button>
-          <ShareButton compact title={team.name} text={`Follow ${team.name} on MaidanLive`} />
+          <ShareButton
+            compact
+            title={team.name}
+            text={`Follow ${team.name} on MaidanLive`}
+            url={buildTeamUrl(team.id)}
+            shareCard={{
+              type: 'TEAM',
+              teamName: team.name,
+              shortName: team.shortName,
+              sport: team.sportType,
+              city: team.city,
+              captainName: team.captainName,
+              tournamentName: tourObj?.name,
+              teamLogoUrl: team.logoUrl,
+              record,
+              players: players.map((p) => ({
+                name: p.name,
+                role: p.role || p.position,
+                jerseyNumber: p.jerseyNumber,
+                avatarUrl: p.avatarUrl,
+              })),
+              shareUrl: buildTeamUrl(team.id),
+            }}
+          />
         </div>
       </div>
 

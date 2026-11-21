@@ -289,6 +289,17 @@ export interface TournamentCustomAwardField {
   value: string;
 }
 
+export interface TournamentPrizeTier {
+  amount?: string;
+  label?: string;
+}
+
+export interface TournamentPrizesConfig {
+  first?: TournamentPrizeTier;
+  second?: TournamentPrizeTier;
+  third?: TournamentPrizeTier;
+}
+
 export interface TournamentData {
   id: string;
   _id?: string;
@@ -309,6 +320,7 @@ export interface TournamentData {
   organizerName: string;
   season?: string;
   prizeMoney?: string;
+  prizes?: TournamentPrizesConfig;
   registrationOpen?: boolean;
   paymentMode?: TournamentPaymentMode;
   registrationFee?: number;
@@ -329,6 +341,8 @@ export interface RosterPlayerEntry {
   name: string;
   role: string;
   jerseyNumber?: number | null;
+  avatarUrl?: string;
+  avatarPublicId?: string;
   dateOfBirth: string;
   isMinor: boolean;
   guardianName?: string;
@@ -460,6 +474,7 @@ export interface PlayerData {
   bio?: string;
   jerseyNumber?: number | null;
   avatarUrl: string;
+  avatarPublicId?: string;
   dateOfBirth?: string;
   isMinor?: boolean;
   isVerified?: boolean;
@@ -854,6 +869,7 @@ export interface TournamentTemplateData {
   groupCount: number;
   location: string;
   prizeMoney: string;
+  prizes?: TournamentPrizesConfig;
   registrationFee: number;
   rules: string;
   qualificationRules: string;

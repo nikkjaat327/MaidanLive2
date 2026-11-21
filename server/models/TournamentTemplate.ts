@@ -1,7 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import type { SportType } from './LiveStream.ts';
-import type { TournamentFormat } from './Tournament.ts';
+import type { ITournamentPrizes, TournamentFormat } from './Tournament.ts';
 import { createDualModel } from '../db/dualModel.ts';
 
 export interface ITournamentTemplate extends Document {
@@ -11,6 +11,7 @@ export interface ITournamentTemplate extends Document {
   groupCount: number;
   location: string;
   prizeMoney: string;
+  prizes?: ITournamentPrizes;
   registrationFee: number;
   rules: string;
   qualificationRules: string;
@@ -19,6 +20,14 @@ export interface ITournamentTemplate extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const templatePrizeTierSchema = new Schema(
+  {
+    amount: { type: String, trim: true, default: '', maxlength: 80 },
+    label: { type: String, trim: true, default: '', maxlength: 120 },
+  },
+  { _id: false }
+);
 
 const tournamentTemplateSchema = new Schema<ITournamentTemplate>(
   {
@@ -36,6 +45,14 @@ const tournamentTemplateSchema = new Schema<ITournamentTemplate>(
     groupCount: { type: Number, default: 2, min: 1, max: 8 },
     location: { type: String, trim: true, default: '', maxlength: 160 },
     prizeMoney: { type: String, trim: true, default: '', maxlength: 120 },
+    prizes: {
+      type: {
+        first: { type: templatePrizeTierSchema, default: undefined },
+        second: { type: templatePrizeTierSchema, default: undefined },
+        third: { type: templatePrizeTierSchema, default: undefined },
+      },
+      default: undefined,
+    },
     registrationFee: { type: Number, default: 0, min: 0 },
     rules: { type: String, trim: true, default: '', maxlength: 2000 },
     qualificationRules: { type: String, trim: true, default: '', maxlength: 400 },

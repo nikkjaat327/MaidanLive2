@@ -11,6 +11,8 @@ import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
+import { ShareButton } from '../../components/common/ShareButton.tsx';
+import { buildTeamUrl } from '../../utils/shareUrl.ts';
 
 export function TeamsPage() {
   const { customerUser, updateCustomerUser } = useAuth();
@@ -115,16 +117,18 @@ export function TeamsPage() {
                 : '';
             const isFollowed = followedIds.has(team.id);
             const squadCount = team.playerCount ?? 0;
+            const shareUrl = buildTeamUrl(team.id);
             return (
-              <Link
+              <div
                 key={team.id}
-                to={`/teams/${team.id}`}
                 className="bg-white border border-slate-200 rounded-xl p-5 flex items-start gap-4 hover:border-emerald-400 transition-colors"
               >
-                <TeamAvatar name={team.name} logoUrl={team.logoUrl} size="lg" />
+                <Link to={`/teams/${team.id}`} className="shrink-0">
+                  <TeamAvatar name={team.name} logoUrl={team.logoUrl} size="lg" />
+                </Link>
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0 truncate">
                       <span>{team.sportType}</span>
                       {team.shortName && (
                         <>
@@ -133,36 +137,57 @@ export function TeamsPage() {
                         </>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      disabled={busyId === team.id}
-                      onClick={(e) => handleFollowToggle(e, team)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold shrink-0 ${
-                        isFollowed
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {isFollowed ? <Check className="w-3 h-3" /> : <BellPlus className="w-3 h-3" />}
-                      <span>{isFollowed ? 'Following' : 'Follow'}</span>
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={busyId === team.id}
+                        onClick={(e) => handleFollowToggle(e, team)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold shrink-0 ${
+                          isFollowed
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {isFollowed ? <Check className="w-3 h-3" /> : <BellPlus className="w-3 h-3" />}
+                        <span>{isFollowed ? 'Following' : 'Follow'}</span>
+                      </button>
+                      <ShareButton
+                        variant="card-icon"
+                        title={team.name}
+                        text={`${team.sportType} squad on MaidanLive`}
+                        url={shareUrl}
+                        shareCard={{
+                          type: 'TEAM',
+                          teamName: team.name,
+                          shortName: team.shortName,
+                          sport: team.sportType,
+                          city: team.city,
+                          captainName: team.captainName,
+                          tournamentName: tourName || undefined,
+                          teamLogoUrl: team.logoUrl,
+                          shareUrl,
+                        }}
+                      />
+                    </div>
                   </div>
-                  <h2 className="font-display text-lg font-bold text-slate-900 truncate">
-                    {team.name}
-                  </h2>
-                  {team.city && <p className="text-xs text-slate-500">{team.city}</p>}
-                  {team.captainName && (
-                    <p className="text-xs text-slate-600">Captain: {team.captainName}</p>
-                  )}
-                  {tourName && <p className="text-xs text-emerald-700 font-medium">{tourName}</p>}
-                  <p className="text-xs font-semibold text-[#EA580C] pt-1 inline-flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5" />
-                    <span>
-                      {squadCount} Player{squadCount === 1 ? '' : 's'} · View Squad
-                    </span>
-                  </p>
+                  <Link to={`/teams/${team.id}`} className="block space-y-1">
+                    <h2 className="font-display text-lg font-bold text-slate-900 truncate hover:text-[#EA580C] transition-colors">
+                      {team.name}
+                    </h2>
+                    {team.city && <p className="text-xs text-slate-500">{team.city}</p>}
+                    {team.captainName && (
+                      <p className="text-xs text-slate-600">Captain: {team.captainName}</p>
+                    )}
+                    {tourName && <p className="text-xs text-emerald-700 font-medium">{tourName}</p>}
+                    <p className="text-xs font-semibold text-[#EA580C] pt-1 inline-flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5" />
+                      <span>
+                        {squadCount} Player{squadCount === 1 ? '' : 's'} · View Squad
+                      </span>
+                    </p>
+                  </Link>
                 </div>
-              </Link>
+              </div>
             );
           })}
         </div>

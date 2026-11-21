@@ -297,6 +297,29 @@ export const platformOpsService = {
     };
   },
 
+  async uploadPlayerPhoto(
+    file: File,
+    onProgress?: (pct: number) => void,
+    portal: 'customer' | 'admin' = 'customer'
+  ): Promise<{ url: string; publicId: string; bytes: number }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const client = portal === 'admin' ? adminApi : customerApi;
+    const { data } = await client.post<{ url: string; publicId: string; bytes: number }>(
+      '/v1/players/photo',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (evt) => {
+          if (evt.total && onProgress) {
+            onProgress(Math.min(100, Math.round((evt.loaded / evt.total) * 100)));
+          }
+        },
+      }
+    );
+    return data;
+  },
+
   // Captain Tournament Registrations & Payments
   async registerTeamForTournament(
     tournamentId: string,

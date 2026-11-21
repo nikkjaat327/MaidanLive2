@@ -4,13 +4,17 @@ import { Play, Trophy } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
+import { ShareButton } from '../common/ShareButton.tsx';
+import { ShareCardPayload } from '../common/ShareCardModal.tsx';
 import { formatCricketOvers } from '../../utils/cricketScoring.ts';
+import { buildMatchUrl } from '../../utils/shareUrl.ts';
 
 interface StreamCardProps {
   stream: LiveStreamData;
   to?: string;
   onSelect?: () => void;
   useReplayThumbnail?: boolean;
+  showShare?: boolean;
 }
 
 export function StreamCard({
@@ -18,6 +22,7 @@ export function StreamCard({
   to,
   onSelect,
   useReplayThumbnail = false,
+  showShare = true,
 }: StreamCardProps) {
   const [thumbErr, setThumbErr] = useState(false);
 
@@ -41,6 +46,95 @@ export function StreamCard({
   const score = stream.score;
   const isCricket = score?.sportType === 'Cricket';
   const cricketDetails = isCricket ? score?.sportSpecificDetails : null;
+
+  const teamAScoreText =
+    isCricket && cricketDetails
+      ? `${cricketDetails.teamARuns ?? score?.teamAScore ?? 0}/${cricketDetails.teamAWickets ?? 0}`
+      : String(score?.teamAScore ?? 0);
+  const teamBScoreText =
+    isCricket && cricketDetails
+      ? `${cricketDetails.teamBRuns ?? score?.teamBScore ?? 0}/${cricketDetails.teamBWickets ?? 0}`
+      : String(score?.teamBScore ?? 0);
+  const teamASec =
+    isCricket && cricketDetails ? `${formatCricketOvers(cricketDetails.teamABalls ?? 0)} ov` : undefined;
+  const teamBSec =
+    isCricket && cricketDetails ? `${formatCricketOvers(cricketDetails.teamBBalls ?? 0)} ov` : undefined;
+
+  const isReplay = useReplayThumbnail || Boolean(stream.replayPublished && stream.status === 'ENDED');
+  const canonicalUrl = buildMatchUrl(stream.id, useReplayThumbnail);
+  const hasResult = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
+
+  const shareCardPayload: ShareCardPayload = isReplay
+    ? {
+        type: 'REPLAY',
+        title: displayTitle,
+        sport: stream.gameName || 'Sports',
+        tournamentName: stream.tournamentName || undefined,
+        resultText: hasResult ? score?.resultDescription || score?.winnerTeamName : undefined,
+        winnerName: score?.winnerTeamName || undefined,
+        teamAName: stream.teamAName || 'Team A',
+        teamBName: stream.teamBName || 'Team B',
+        teamAScore: teamAScoreText,
+        teamBScore: teamBScoreText,
+        teamASecondary: teamASec,
+        teamBSecondary: teamBSec,
+        teamALogo: stream.teamALogo,
+        teamBLogo: stream.teamBLogo,
+        shareUrl: canonicalUrl,
+      }
+    : hasResult
+      ? {
+          type: 'MATCH_RESULT',
+          title: displayTitle,
+          sport: stream.gameName || 'Sports',
+          tournamentName: stream.tournamentName || undefined,
+          resultText: score?.resultDescription || score?.winnerTeamName || 'Match Completed',
+          winnerName: score?.winnerTeamName || undefined,
+          mvpName: score?.mvpPlayerName || undefined,
+          teamAName: stream.teamAName || 'Team A',
+          teamBName: stream.teamBName || 'Team B',
+          teamAScore: teamAScoreText,
+          teamBScore: teamBScoreText,
+          teamASecondary: teamASec,
+          teamBSecondary: teamBSec,
+          teamALogo: stream.teamALogo,
+          teamBLogo: stream.teamBLogo,
+          shareUrl: canonicalUrl,
+        }
+      : stream.status === 'UPCOMING' && (!score || (score.teamAScore === 0 && score.teamBScore === 0))
+        ? {
+            type: 'UPCOMING_MATCH',
+            title: displayTitle,
+            sport: stream.gameName || 'Sports',
+            tournamentName: stream.tournamentName || undefined,
+            scheduledText: stream.matchDate ? new Date(stream.matchDate).toLocaleString() : 'Upcoming Fixture',
+            venueName: stream.location || undefined,
+            teamAName: stream.teamAName || 'Team A',
+            teamBName: stream.teamBName || 'Team B',
+            teamALogo: stream.teamALogo,
+            teamBLogo: stream.teamBLogo,
+            shareUrl: canonicalUrl,
+          }
+        : {
+            type: 'LIVE_SCORE',
+            title: displayTitle,
+            sport: stream.gameName || 'Sports',
+            tournamentName: stream.tournamentName || undefined,
+            statusLabel: score?.matchStatus || stream.status || 'LIVE',
+            teamAName: stream.teamAName || 'Team A',
+            teamBName: stream.teamBName || 'Team B',
+            teamAScore: teamAScoreText,
+            teamBScore: teamBScoreText,
+            teamASecondary: teamASec,
+            teamBSecondary: teamBSec,
+            teamALogo: stream.teamALogo,
+            teamBLogo: stream.teamBLogo,
+            venueName: stream.location || undefined,
+            shareUrl: canonicalUrl,
+          };
+
+  const showWatchingPill =
+    typeof stream.activeViewers === 'number' && stream.viewerCountVisibility === 'public';
 
   const content = (
     <article className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-slate-300 transition-colors flex flex-col h-full">
@@ -74,7 +168,7 @@ export function StreamCard({
               </span>
             )}
         </div>
-        {typeof stream.activeViewers === 'number' && stream.viewerCountVisibility === 'public' && (
+        {showWatchingPill && !showShare && (
           <div className="absolute top-3 right-3 px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
             {stream.activeViewers} watching
           </div>
@@ -155,25 +249,56 @@ export function StreamCard({
     </article>
   );
 
+  const shareOverlay = showShare ? (
+    <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+      {showWatchingPill && (
+        <span className="pointer-events-none px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
+          {stream.activeViewers} watching
+        </span>
+      )}
+      <ShareButton
+        variant="card-icon"
+        title={displayTitle}
+        text={`${stream.gameName || 'Sports'} on MaidanLive`}
+        url={canonicalUrl}
+        shareCard={shareCardPayload}
+      />
+    </div>
+  ) : null;
+
   if (to) {
     return (
-      <Link to={to} className="block h-full focus-visible:outline-2 focus-visible:outline-emerald-600 rounded-xl">
-        {content}
-      </Link>
+      <div className="relative h-full">
+        <Link
+          to={to}
+          className="block h-full focus-visible:outline-2 focus-visible:outline-emerald-600 rounded-xl"
+        >
+          {content}
+        </Link>
+        {shareOverlay}
+      </div>
     );
   }
 
   if (onSelect) {
     return (
-      <button
-        type="button"
-        onClick={onSelect}
-        className="block w-full text-left h-full focus-visible:outline-2 focus-visible:outline-emerald-600 rounded-xl"
-      >
-        {content}
-      </button>
+      <div className="relative h-full">
+        <button
+          type="button"
+          onClick={onSelect}
+          className="block w-full text-left h-full focus-visible:outline-2 focus-visible:outline-emerald-600 rounded-xl"
+        >
+          {content}
+        </button>
+        {shareOverlay}
+      </div>
     );
   }
 
-  return content;
+  return (
+    <div className="relative h-full">
+      {content}
+      {shareOverlay}
+    </div>
+  );
 }

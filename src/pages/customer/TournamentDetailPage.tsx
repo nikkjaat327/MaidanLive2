@@ -55,6 +55,9 @@ import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { TournamentBracket } from '../../components/tournaments/TournamentBracket.tsx';
 import { DocumentUploadField } from '../../components/common/DocumentUploadField.tsx';
 import { PaymentProofViewerModal } from '../../components/common/PaymentProofViewerModal.tsx';
+import { PlayerPhotoUploadField } from '../../components/common/PlayerPhotoUploadField.tsx';
+import { ShareButton } from '../../components/common/ShareButton.tsx';
+import { buildTournamentUrl } from '../../utils/shareUrl.ts';
 
 type TournamentTab = 'matches' | 'bracket' | 'standings' | 'teams' | 'leaderboards' | 'register';
 
@@ -88,6 +91,8 @@ function emptyPlayer(): RosterPlayerEntry {
     name: '',
     role: '',
     jerseyNumber: null,
+    avatarUrl: '',
+    avatarPublicId: '',
     dateOfBirth: '',
     isMinor: false,
     guardianName: '',
@@ -283,7 +288,15 @@ export function TournamentDetailPage() {
         setVerificationDocId(reg.verificationDocId || reg.verificationDocMeta?.fileId || '');
         setVerificationDocMeta(reg.verificationDocMeta || null);
         setVerificationNotes(reg.verificationNotes || '');
-        setRoster(Array.isArray(reg.roster) ? reg.roster : []);
+        setRoster(
+          Array.isArray(reg.roster)
+            ? reg.roster.map((r) => ({
+                ...r,
+                avatarUrl: r.avatarUrl || '',
+                avatarPublicId: r.avatarPublicId || '',
+              }))
+            : []
+        );
         setPaymentRefNote(reg.paymentReferenceNote || '');
         setStagedPaymentDoc(reg.paymentProofMeta || null);
       } else {
@@ -635,6 +648,38 @@ export function TournamentDetailPage() {
     myRegistration.status === 'WITHDRAWN' ||
     (isPostApprovalLocked && isEditingApproved);
 
+  // Configured Prize Tiers presence
+  const configuredPrizeTiers = [
+    {
+      key: 'first' as const,
+      rankLabel: '1st Prize',
+      badgeCls: 'bg-amber-50 border-amber-200 text-amber-900',
+      rankCls: 'text-amber-700',
+      tier: tournament.prizes?.first,
+    },
+    {
+      key: 'second' as const,
+      rankLabel: '2nd Prize',
+      badgeCls: 'bg-slate-50 border-slate-200 text-slate-900',
+      rankCls: 'text-slate-600',
+      tier: tournament.prizes?.second,
+    },
+    {
+      key: 'third' as const,
+      rankLabel: '3rd Prize',
+      badgeCls: 'bg-orange-50/70 border-orange-200 text-orange-950',
+      rankCls: 'text-orange-700',
+      tier: tournament.prizes?.third,
+    },
+  ].filter((entry) => Boolean(entry.tier && (entry.tier.amount?.trim() || entry.tier.label?.trim())));
+
+  const showTournamentPrizes = configuredPrizeTiers.length > 0 || Boolean(tournament.prizeMoney?.trim());
+  const tournamentDatesLabel = tournament.startDate
+    ? `${new Date(tournament.startDate).toLocaleDateString()}${
+        tournament.endDate ? ` – ${new Date(tournament.endDate).toLocaleDateString()}` : ''
+      }`
+    : undefined;
+
   const paymentBadge = formatPaymentStatusLabel(myRegistration?.paymentStatus);
   const refundBadge =
     myRegistration?.paymentType === 'SECURITY_DEPOSIT'
@@ -741,6 +786,28 @@ export function TournamentDetailPage() {
                 </span>
               </button>
             )}
+
+            <ShareButton
+              compact
+              title={tournament.name}
+              text={`${tournament.sportType} Tournament${tournament.location ? ` · ${tournament.location}` : ''} on MaidanLive`}
+              url={buildTournamentUrl(tournament.id)}
+              shareCard={{
+                type: 'TOURNAMENT',
+                title: tournament.name,
+                sport: tournament.sportType,
+                format: tournament.format,
+                status: tournament.status,
+                season: tournament.season,
+                location: tournament.location || venue?.name,
+                datesText: tournamentDatesLabel,
+                prizeMoney: tournament.prizeMoney,
+                prizes: tournament.prizes,
+                teamCount: teams.length || publicRegistrations.length,
+                logoUrl: tournament.logoUrl,
+                shareUrl: buildTournamentUrl(tournament.id),
+              }}
+            />
           </div>
         </div>
 
@@ -810,6 +877,50 @@ export function TournamentDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Public Tournament Prizes Card (Only shown if prize tiers or prizeMoney configured) */}
+      {showTournamentPrizes && (
+        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-amber-500" />
+              <h2 className="font-display text-sm sm:text-base font-bold text-slate-900">
+                Tournament Prizes &amp; Awards
+              </h2>
+            </div>
+            {tournament.prizeMoney?.trim() && (
+              <span className="px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-900 text-xs font-bold">
+                Prize Pool: {tournament.prizeMoney}
+              </span>
+            )}
+          </div>
+
+          {configuredPrizeTiers.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {configuredPrizeTiers.map((item) => (
+                <div
+                  key={item.key}
+                  className={`p-3.5 rounded-xl border ${item.badgeCls} space-y-1`}
+                >
+                  <p className={`text-[11px] font-bold uppercase tracking-wider ${item.rankCls}`}>
+                    {item.rankLabel}
+                  </p>
+                  {item.tier?.amount?.trim() && (
+                    <p className="font-mono text-lg font-extrabold text-slate-900">
+                      {item.tier.amount.trim()}
+                    </p>
+                  )}
+                  {item.tier?.label?.trim() && (
+                    <p className="text-xs font-semibold text-slate-700">
+                      {item.tier.label.trim()}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Results, Dynamic Positions, Best Player & Custom Fields Card */}
       {showResultsAwards && (
@@ -1136,12 +1247,21 @@ export function TournamentDetailPage() {
                           {reg.roster.map((rp, idx) => (
                             <span
                               key={`${rp.name}-${idx}`}
-                              className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium"
+                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px] font-medium"
                             >
-                              {rp.name}
-                              {rp.jerseyNumber !== null && rp.jerseyNumber !== undefined
-                                ? ` #${rp.jerseyNumber}`
-                                : ''}
+                              {rp.avatarUrl && (
+                                <img
+                                  src={rp.avatarUrl}
+                                  alt={rp.name}
+                                  className="w-4 h-4 rounded-full object-cover shrink-0"
+                                />
+                              )}
+                              <span>
+                                {rp.name}
+                                {rp.jerseyNumber !== null && rp.jerseyNumber !== undefined
+                                  ? ` #${rp.jerseyNumber}`
+                                  : ''}
+                              </span>
                             </span>
                           ))}
                         </div>
@@ -1844,6 +1964,17 @@ export function TournamentDetailPage() {
                         </div>
                       </div>
 
+                      <div className="pt-1">
+                        <PlayerPhotoUploadField
+                          compact
+                          portal="customer"
+                          playerName={newPlayer.name}
+                          avatarUrl={newPlayer.avatarUrl || ''}
+                          avatarPublicId={newPlayer.avatarPublicId || ''}
+                          onChange={(next) => updateNewPlayer(next)}
+                        />
+                      </div>
+
                       {newPlayer.isMinor && (
                         <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
                           <p className="text-[11px] font-bold text-amber-900">
@@ -1966,6 +2097,17 @@ export function TournamentDetailPage() {
                                   className="w-full min-h-[34px] px-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
                                 />
                               </div>
+                            </div>
+
+                            <div className="pt-0.5">
+                              <PlayerPhotoUploadField
+                                compact
+                                portal="customer"
+                                playerName={player.name}
+                                avatarUrl={player.avatarUrl || ''}
+                                avatarPublicId={player.avatarPublicId || ''}
+                                onChange={(next) => updateRosterRow(idx, next)}
+                              />
                             </div>
 
                             {player.isMinor && (

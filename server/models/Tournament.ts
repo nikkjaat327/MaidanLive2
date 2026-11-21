@@ -30,6 +30,17 @@ export interface ITournamentCustomAwardField {
   value: string;
 }
 
+export interface ITournamentPrizeTier {
+  amount?: string;
+  label?: string;
+}
+
+export interface ITournamentPrizes {
+  first?: ITournamentPrizeTier;
+  second?: ITournamentPrizeTier;
+  third?: ITournamentPrizeTier;
+}
+
 export interface ITournament extends Document {
   name: string;
   sportType: SportType;
@@ -44,6 +55,7 @@ export interface ITournament extends Document {
   description: string;
   rules: string;
   prizeMoney: string;
+  prizes?: ITournamentPrizes;
   registrationOpen: boolean;
   paymentMode: TournamentPaymentMode;
   registrationFee: number;
@@ -65,6 +77,14 @@ export interface ITournament extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const prizeTierSchema = new Schema(
+  {
+    amount: { type: String, trim: true, default: '', maxlength: 80 },
+    label: { type: String, trim: true, default: '', maxlength: 120 },
+  },
+  { _id: false }
+);
 
 const tournamentSchema = new Schema<ITournament>(
   {
@@ -95,6 +115,14 @@ const tournamentSchema = new Schema<ITournament>(
     description: { type: String, trim: true, default: '', maxlength: 1500 },
     rules: { type: String, trim: true, default: '', maxlength: 2000 },
     prizeMoney: { type: String, trim: true, default: '', maxlength: 120 },
+    prizes: {
+      type: {
+        first: { type: prizeTierSchema, default: undefined },
+        second: { type: prizeTierSchema, default: undefined },
+        third: { type: prizeTierSchema, default: undefined },
+      },
+      default: undefined,
+    },
     registrationOpen: { type: Boolean, default: true },
     paymentMode: {
       type: String,

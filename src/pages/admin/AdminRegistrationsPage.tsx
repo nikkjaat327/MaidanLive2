@@ -19,6 +19,7 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { PaymentProofViewerModal } from '../../components/common/PaymentProofViewerModal.tsx';
+import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 
 export function AdminRegistrationsPage() {
   const [searchParams] = useSearchParams();
@@ -419,14 +420,17 @@ export function AdminRegistrationsPage() {
                 </h4>
                 <div className="max-h-52 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
                   {(selected.roster || []).map((player, idx) => (
-                    <div key={idx} className="p-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                      <div>
-                        <span className="font-semibold text-slate-900">{player.name}</span>{' '}
-                        {player.jerseyNumber != null && (
-                          <span className="font-mono text-slate-500">#{player.jerseyNumber}</span>
-                        )}
-                        {player.role && <span className="text-slate-500"> · {player.role}</span>}
-                        <div className="text-slate-500">DOB: {player.dateOfBirth || '—'}</div>
+                    <div key={idx} className="p-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <TeamAvatar name={player.name} logoUrl={player.avatarUrl} size="sm" />
+                        <div className="min-w-0">
+                          <span className="font-semibold text-slate-900">{player.name}</span>{' '}
+                          {player.jerseyNumber != null && (
+                            <span className="font-mono text-slate-500">#{player.jerseyNumber}</span>
+                          )}
+                          {player.role && <span className="text-slate-500"> · {player.role}</span>}
+                          <div className="text-slate-500">DOB: {player.dateOfBirth || '—'}</div>
+                        </div>
                       </div>
                       {player.isMinor ? (
                         <div className="text-right">

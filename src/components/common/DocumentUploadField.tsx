@@ -391,9 +391,30 @@ export function DocumentUploadField({
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
         title={value?.fileName || 'Document Preview'}
-        maxWidthClass="max-w-2xl"
+        maxWidthClass="max-w-4xl"
+        zIndexClass="z-[120]"
       >
         <div className="space-y-3">
+          {previewUrl && !previewLoading && (
+            <div className="flex justify-end gap-2">
+              <a
+                href={previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-h-[32px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              >
+                <span>Open in New Tab</span>
+              </a>
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="min-h-[32px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg bg-[#0F172A] text-white hover:bg-slate-800"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </button>
+            </div>
+          )}
           {previewLoading ? (
             <div className="py-12 flex items-center justify-center gap-2 text-xs text-slate-500">
               <Loader2 className="w-4 h-4 animate-spin text-[#EA580C]" />

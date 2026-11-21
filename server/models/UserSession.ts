@@ -6,6 +6,8 @@ export interface IUserSession extends Document {
   userId: mongoose.Types.ObjectId;
   portal: 'admin' | 'customer';
   refreshTokenHash: string;
+  previousRefreshTokenHash?: string;
+  previousTokenGraceUntil?: Date | null;
   userAgent: string;
   ipAddress: string;
   isRevoked: boolean;
@@ -21,6 +23,8 @@ const userSessionSchema = new Schema<IUserSession>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     portal: { type: String, enum: ['admin', 'customer'], default: 'customer' },
     refreshTokenHash: { type: String, required: true, index: true },
+    previousRefreshTokenHash: { type: String, default: '', index: true },
+    previousTokenGraceUntil: { type: Date, default: null },
     userAgent: { type: String, trim: true, default: '', maxlength: 300 },
     ipAddress: { type: String, trim: true, default: '', maxlength: 100 },
     isRevoked: { type: Boolean, default: false, index: true },

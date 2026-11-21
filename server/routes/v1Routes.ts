@@ -31,8 +31,12 @@ import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { notifyTournamentAdminsAndOrganizers, notifyUser } from '../utils/notifications.ts';
 import { emitStreamEvent } from '../socket/index.ts';
-import { isCloudinaryConfigured, uploadBufferToCloudinary } from '../services/cloudinaryService.ts';
-import { buildIdMatchFilter } from '../utils/mongoNormalize.ts';
+import {
+  deleteFromCloudinary,
+  isCloudinaryConfigured,
+  uploadBufferToCloudinary,
+} from '../services/cloudinaryService.ts';
+import { buildIdMatchFilter, deleteDocByAnyId } from '../utils/mongoNormalize.ts';
 
 function dedupeRosterEntries(entries: IRosterPlayerEntry[] = []): IRosterPlayerEntry[] {
   const seen = new Set<string>();
@@ -55,6 +59,7 @@ function dedupeRosterEntries(entries: IRosterPlayerEntry[] = []): IRosterPlayerE
 const router = Router();
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_PLAYER_PHOTO_BYTES = 5 * 1024 * 1024;
 const ALLOWED_VERIFICATION_MIMES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -75,9 +80,22 @@ const ALLOWED_PAYMENT_MIMES = new Set([
 ]);
 const ALLOWED_PAYMENT_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'];
 
+const ALLOWED_PLAYER_PHOTO_MIMES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
+const ALLOWED_PLAYER_PHOTO_EXTS = ['.jpg', '.jpeg', '.png', '.webp'];
+
 const memoryUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_UPLOAD_BYTES },
+});
+
+const playerPhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PLAYER_PHOTO_BYTES },
 });
 
 function handleSingleUpload(req: Request, res: Response, next: NextFunction) {
@@ -93,6 +111,20 @@ function handleSingleUpload(req: Request, res: Response, next: NextFunction) {
         return;
       }
       res.status(400).json({ message: err.message || 'Invalid file upload payload.' });
+      return;
+    }
+    next();
+  });
+}
+
+function handlePlayerPhotoUpload(req: Request, res: Response, next: NextFunction) {
+  playerPhotoUpload.single('file')(req, res, (err: any) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ message: 'Player photo exceeds the 5 MB maximum limit.' });
+        return;
+      }
+      res.status(400).json({ message: err.message || 'Invalid player photo upload payload.' });
       return;
     }
     next();
@@ -370,10 +402,15 @@ function normalizeAndValidateRoster(
       };
     }
 
+    const avatarUrl = sanitizeImageUrl((item as any)?.avatarUrl);
+    const avatarPublicId = avatarUrl ? sanitizeText((item as any)?.avatarPublicId, 260) : '';
+
     roster.push({
       name: pName,
       role: sanitizeText((item as any)?.role, 80),
       jerseyNumber,
+      avatarUrl,
+      avatarPublicId,
       dateOfBirth: dob,
       isMinor,
       guardianName,
@@ -396,6 +433,14 @@ function stripPrivateRegistrationFields(reg: any) {
   delete copy.previousApprovalSnapshot;
   delete copy.captainPhone;
   delete copy.captainEmail;
+  if (Array.isArray(copy.roster)) {
+    copy.roster = copy.roster.map((p: any) => ({
+      name: p?.name || '',
+      role: p?.role || '',
+      jerseyNumber: p?.jerseyNumber ?? null,
+      avatarUrl: p?.avatarUrl || '',
+    }));
+  }
   return copy;
 }
 
@@ -643,6 +688,62 @@ router.post(
     } catch (err) {
       console.error('[Documents] Upload error:', err);
       res.status(500).json({ message: 'Failed to upload document.' });
+    }
+  }
+);
+
+// ==================== PLAYER PHOTO UPLOAD (CLOUDINARY) ====================
+router.post(
+  '/players/photo',
+  authenticate,
+  handlePlayerPhotoUpload,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+      if (!uploadedFile) {
+        res.status(400).json({ message: 'Player photo file is required.' });
+        return;
+      }
+
+      const fileName = sanitizeText(uploadedFile.originalname, 240) || 'player.webp';
+      const ext = getFileExtension(fileName);
+      const mime = resolveMimeType(fileName, uploadedFile.mimetype || '');
+      if (uploadedFile.size <= 0) {
+        res.status(400).json({ message: 'Uploaded photo cannot be empty.' });
+        return;
+      }
+      if (uploadedFile.size > MAX_PLAYER_PHOTO_BYTES) {
+        res.status(400).json({ message: 'Player photo exceeds the 5 MB maximum limit.' });
+        return;
+      }
+      if (!ALLOWED_PLAYER_PHOTO_MIMES.has(mime) || (ext && !ALLOWED_PLAYER_PHOTO_EXTS.includes(ext))) {
+        res.status(400).json({ message: 'Player photo must be JPG, JPEG, PNG, or WebP.' });
+        return;
+      }
+
+      if (!isCloudinaryConfigured()) {
+        res.status(503).json({
+          message:
+            'Cloudinary is not configured. Please add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET (or CLOUDINARY_URL) in Secrets.',
+        });
+        return;
+      }
+
+      const uploaded = await uploadBufferToCloudinary({
+        buffer: uploadedFile.buffer,
+        fileName,
+        mimeType: mime,
+        folder: 'maidanlive/players',
+      });
+
+      res.status(201).json({
+        url: uploaded.url,
+        publicId: uploaded.publicId,
+        bytes: uploaded.bytes,
+      });
+    } catch (err: any) {
+      console.error('[PlayerPhoto] Upload error:', err);
+      res.status(502).json({ message: err?.message || 'Failed to upload player photo.' });
     }
   }
 );
@@ -1034,10 +1135,28 @@ router.patch(
           reg.verificationNotes = nextNotes;
         }
       }
+      const previousPublicIds = Array.isArray(reg.roster)
+        ? reg.roster
+            .map((p: any) => String(p?.avatarPublicId || '').trim())
+            .filter((pid: string) => pid.startsWith('maidanlive/players/'))
+        : [];
+
       if (parsedRoster) {
         changedFields.push(`Roster (${parsedRoster.length} players)`);
         reg.roster = parsedRoster;
       }
+
+      const cleanupRemovedRosterPhotos = () => {
+        if (!parsedRoster || previousPublicIds.length === 0) return;
+        const nextSet = new Set(
+          (reg.roster || []).map((p: any) => String(p?.avatarPublicId || '').trim()).filter(Boolean)
+        );
+        for (const oldPid of previousPublicIds) {
+          if (!nextSet.has(oldPid)) {
+            void deleteFromCloudinary(oldPid);
+          }
+        }
+      };
 
       if (isPostApprovalEdit) {
         const prevStatus = reg.status;
@@ -1080,6 +1199,7 @@ router.patch(
         }
 
         await reg.save();
+        cleanupRemovedRosterPhotos();
 
         await recordActivity(
           req.user!,
@@ -1114,6 +1234,7 @@ router.patch(
 
       if (reg.status === 'REJECTED') reg.status = 'PENDING';
       await reg.save();
+      cleanupRemovedRosterPhotos();
 
       await recordActivity(
         req.user!,
@@ -1788,6 +1909,8 @@ router.post(
         }
       }
 
+      const staleCloudinaryPublicIds: string[] = [];
+
       if (decision === 'APPROVED') {
         if (!reg.teamId) {
           const team = await Team.create({
@@ -1811,6 +1934,8 @@ router.post(
               sportType: tournament.sportType,
               role: entry.role || '',
               jerseyNumber: entry.jerseyNumber ?? null,
+              avatarUrl: entry.avatarUrl || '',
+              avatarPublicId: entry.avatarUrl ? entry.avatarPublicId || '' : '',
               dateOfBirth: entry.dateOfBirth || '',
               isMinor: Boolean(entry.isMinor),
               isVerified: true,
@@ -1820,7 +1945,7 @@ router.post(
             });
           }
         } else {
-          // Re-approval: sync updated Team profile & roster into official Team/Player records
+          // Non-destructive re-approval: update existing players in place by normalized name to preserve IDs, stats & followers
           await Team.updateOne(
             { _id: reg.teamId },
             {
@@ -1834,22 +1959,75 @@ router.post(
               },
             }
           );
-          await Player.deleteMany({ teamId: buildIdMatchFilter(String(reg.teamId)) });
+
+          const existingPlayers = await Player.find({
+            teamId: buildIdMatchFilter(String(reg.teamId)),
+          }).select('+avatarPublicId');
+          const existingByName = new Map<string, (typeof existingPlayers)[number]>();
+          for (const ep of existingPlayers) {
+            const key = String(ep.name || '').trim().toLowerCase();
+            if (key && !existingByName.has(key)) {
+              existingByName.set(key, ep);
+            }
+          }
+
+          const matchedIds = new Set<string>();
           const uniqueRoster = dedupeRosterEntries(reg.roster || []);
+
           for (const entry of uniqueRoster) {
-            await Player.create({
-              name: entry.name,
-              teamId: reg.teamId,
-              sportType: tournament.sportType,
-              role: entry.role || '',
-              jerseyNumber: entry.jerseyNumber ?? null,
-              dateOfBirth: entry.dateOfBirth || '',
-              isMinor: Boolean(entry.isMinor),
-              isVerified: true,
-              verifiedBy: req.user!._id,
-              createdBy: req.user!._id,
-              updatedBy: req.user!._id,
-            });
+            const key = entry.name.trim().toLowerCase();
+            const existing = existingByName.get(key);
+            if (existing) {
+              matchedIds.add(existing._id.toString());
+              const prevPid = String(existing.avatarPublicId || '').trim();
+              const nextUrl = entry.avatarUrl || '';
+              const nextPid = nextUrl
+                ? entry.avatarPublicId || (nextUrl === existing.avatarUrl ? prevPid : '')
+                : '';
+
+              existing.name = entry.name;
+              existing.sportType = tournament.sportType;
+              existing.role = entry.role || '';
+              existing.jerseyNumber = entry.jerseyNumber ?? null;
+              existing.dateOfBirth = entry.dateOfBirth || '';
+              existing.isMinor = Boolean(entry.isMinor);
+              existing.avatarUrl = nextUrl;
+              existing.avatarPublicId = nextPid;
+              existing.isVerified = true;
+              existing.verifiedBy = req.user!._id as mongoose.Types.ObjectId;
+              existing.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+              await existing.save();
+
+              if (prevPid && prevPid !== nextPid && prevPid.startsWith('maidanlive/players/')) {
+                staleCloudinaryPublicIds.push(prevPid);
+              }
+            } else {
+              await Player.create({
+                name: entry.name,
+                teamId: reg.teamId,
+                sportType: tournament.sportType,
+                role: entry.role || '',
+                jerseyNumber: entry.jerseyNumber ?? null,
+                avatarUrl: entry.avatarUrl || '',
+                avatarPublicId: entry.avatarUrl ? entry.avatarPublicId || '' : '',
+                dateOfBirth: entry.dateOfBirth || '',
+                isMinor: Boolean(entry.isMinor),
+                isVerified: true,
+                verifiedBy: req.user!._id,
+                createdBy: req.user!._id,
+                updatedBy: req.user!._id,
+              });
+            }
+          }
+
+          for (const ep of existingPlayers) {
+            if (!matchedIds.has(ep._id.toString())) {
+              const epPid = String(ep.avatarPublicId || '').trim();
+              await deleteDocByAnyId(Player, ep._id.toString());
+              if (epPid && epPid.startsWith('maidanlive/players/')) {
+                staleCloudinaryPublicIds.push(epPid);
+              }
+            }
           }
         }
 
@@ -1868,6 +2046,10 @@ router.post(
       }
 
       await reg.save();
+
+      for (const oldPid of staleCloudinaryPublicIds) {
+        void deleteFromCloudinary(oldPid);
+      }
 
       await recordActivity(
         req.user!,

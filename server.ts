@@ -20,6 +20,11 @@ import engagementRoutes from './server/routes/engagementRoutes.ts';
 import platformOpsRoutes from './server/routes/platformOpsRoutes.ts';
 import v1Routes from './server/routes/v1Routes.ts';
 import { User } from './server/models/User.ts';
+import { Tournament } from './server/models/Tournament.ts';
+import { LiveStream } from './server/models/LiveStream.ts';
+import { LiveScore } from './server/models/LiveScore.ts';
+import { Team } from './server/models/Team.ts';
+import { Player } from './server/models/Player.ts';
 
 dotenv.config();
 
@@ -60,6 +65,270 @@ async function ensureEnvSuperAdminIfConfigured(): Promise<void> {
 
 const STATIC_FILE_EXT_RE =
   /\.(?:js|mjs|css|png|jpg|jpeg|webp|gif|svg|ico|json|woff|woff2|ttf|map|txt|webmanifest|m3u8|ts|mp4)$/i;
+
+const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+
+interface SharePageMetadata {
+  title: string;
+  description: string;
+  canonicalUrl: string;
+  imageUrl?: string;
+}
+
+function escapeHtmlAttr(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeHtmlText(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function resolvePublicBaseUrl(req: express.Request): string {
+  const configured = (process.env.PUBLIC_APP_URL || process.env.VITE_PUBLIC_APP_URL || '').trim();
+  if (configured) {
+    try {
+      const parsed = new URL(configured);
+      if (
+        (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+        !LOCALHOST_HOSTNAMES.has(parsed.hostname.toLowerCase())
+      ) {
+        return parsed.origin.replace(/\/+$/, '');
+      }
+    } catch {
+      // Fall through to request origin
+    }
+  }
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = req.get('host') || 'localhost:3000';
+  return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+async function resolveShareMetadata(
+  req: express.Request,
+  baseUrl: string
+): Promise<SharePageMetadata> {
+  const cleanPath = req.path || '/';
+  const defaultImage = `${baseUrl}/pwa-512x512.png`;
+  const defaults: SharePageMetadata = {
+    title: 'MaidanLive — Live Sports Streaming & Real-Time Scoreboards',
+    description:
+      'Watch live grassroots and tournament sports on MaidanLive with real-time Cricket, Kabaddi, Football, and Volleyball scoreboards.',
+    canonicalUrl: `${baseUrl}${cleanPath === '/' ? '' : cleanPath}`,
+    imageUrl: defaultImage,
+  };
+
+  try {
+    const tournamentMatch = cleanPath.match(/^\/tournaments\/([^/]+)$/);
+    if (tournamentMatch) {
+      const tourId = decodeURIComponent(tournamentMatch[1]);
+      const t: any = await Tournament.findById(tourId).catch(() => null);
+      if (t) {
+        const prizeSummary =
+          t.prizes?.first?.amount?.trim() ||
+          t.prizes?.first?.label?.trim() ||
+          t.prizeMoney?.trim() ||
+          '';
+        const parts = [
+          t.sportType ? `${t.sportType} Tournament` : 'Tournament',
+          t.status || '',
+          t.location || '',
+          prizeSummary ? `Prize: ${prizeSummary}` : '',
+        ].filter(Boolean);
+        return {
+          title: `${t.name} | MaidanLive`,
+          description: `${parts.join(' · ')} — Live fixtures, standings, and broadcasts on MaidanLive.`,
+          canonicalUrl: `${baseUrl}/tournaments/${encodeURIComponent(tourId)}`,
+          imageUrl: t.logoUrl?.trim() || defaultImage,
+        };
+      }
+    }
+
+    const matchRoute = cleanPath.match(/^\/live\/([^/]+)$/);
+    if (matchRoute) {
+      const streamId = decodeURIComponent(matchRoute[1]);
+      const isReplayMode = String(req.query.mode || '').toLowerCase() === 'replay';
+      const stream: any = await LiveStream.findById(streamId).catch(() => null);
+      if (stream) {
+        const score: any = await LiveScore.findOne({ liveStreamId: stream._id || streamId }).catch(
+          () => null
+        );
+        const matchName =
+          stream.matchTitle ||
+          (stream.teamAName && stream.teamBName
+            ? `${stream.teamAName} vs ${stream.teamBName}`
+            : stream.teamAName || stream.teamBName || 'Live Sports Match');
+        const videoId =
+          isReplayMode && stream.replayVideoId ? stream.replayVideoId : stream.youtubeVideoId;
+        const thumbImage = videoId
+          ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+          : defaultImage;
+
+        let scoreNote = '';
+        if (score) {
+          if (score.resultStatus && score.resultStatus !== 'NOT_DECLARED') {
+            scoreNote = score.resultDescription || score.winnerTeamName || '';
+          } else if (stream.teamAName && stream.teamBName) {
+            scoreNote = `${stream.teamAName} ${score.teamAScore ?? 0} - ${score.teamBScore ?? 0} ${stream.teamBName}`;
+          }
+        }
+        const prefix = isReplayMode && stream.replayPublished ? 'Full Replay' : stream.status || 'Live';
+        const descParts = [
+          stream.gameName || 'Sports',
+          stream.tournamentName || '',
+          scoreNote,
+          stream.location || '',
+        ].filter(Boolean);
+
+        return {
+          title: `${matchName} (${prefix}) | MaidanLive`,
+          description: `${descParts.join(' · ')} on MaidanLive.`,
+          canonicalUrl: `${baseUrl}/live/${encodeURIComponent(streamId)}${isReplayMode ? '?mode=replay' : ''}`,
+          imageUrl: thumbImage,
+        };
+      }
+    }
+
+    const teamMatch = cleanPath.match(/^\/teams\/([^/]+)$/);
+    if (teamMatch) {
+      const teamId = decodeURIComponent(teamMatch[1]);
+      const team: any = await Team.findById(teamId).catch(() => null);
+      if (team) {
+        const squadCount = await Player.countDocuments({ teamId: team._id || teamId }).catch(() => 0);
+        const parts = [
+          team.sportType ? `${team.sportType} Squad` : 'Team Squad',
+          team.city || '',
+          team.captainName ? `Captain: ${team.captainName}` : '',
+          squadCount > 0 ? `${squadCount} Players` : '',
+        ].filter(Boolean);
+        return {
+          title: `${team.name} | MaidanLive`,
+          description: `${parts.join(' · ')} — Squad profile, fixtures, and live broadcasts on MaidanLive.`,
+          canonicalUrl: `${baseUrl}/teams/${encodeURIComponent(teamId)}`,
+          imageUrl: team.logoUrl?.trim() || defaultImage,
+        };
+      }
+    }
+
+    const playerMatch = cleanPath.match(/^\/players\/([^/]+)$/);
+    if (playerMatch) {
+      const playerId = decodeURIComponent(playerMatch[1]);
+      const player: any = await Player.findById(playerId)
+        .select('name sportType role jerseyNumber teamId avatarUrl')
+        .catch(() => null);
+      if (player) {
+        let teamName = '';
+        if (player.teamId) {
+          const team: any = await Team.findById(player.teamId).catch(() => null);
+          if (team?.name) teamName = team.name;
+        }
+        const parts = [
+          player.sportType || 'Player',
+          player.role || '',
+          player.jerseyNumber !== null && player.jerseyNumber !== undefined
+            ? `#${player.jerseyNumber}`
+            : '',
+          teamName,
+        ].filter(Boolean);
+        return {
+          title: `${player.name} | MaidanLive`,
+          description: `${parts.join(' · ')} — Official career stats and match history on MaidanLive.`,
+          canonicalUrl: `${baseUrl}/players/${encodeURIComponent(playerId)}`,
+          imageUrl: player.avatarUrl?.trim() || defaultImage,
+        };
+      }
+    }
+
+    const staticSections: Record<string, { title: string; description: string }> = {
+      '/tournaments': {
+        title: 'Tournaments | MaidanLive',
+        description:
+          'Explore active, upcoming, and completed grassroots sports tournaments on MaidanLive.',
+      },
+      '/replays': {
+        title: 'Verified Match Replays | MaidanLive',
+        description:
+          'Watch full-match grassroots sports replays with preserved scoreboards and highlights on MaidanLive.',
+      },
+      '/teams': {
+        title: 'Teams & Squads | MaidanLive',
+        description: 'Browse registered teams, official squads, and match records on MaidanLive.',
+      },
+      '/players': {
+        title: 'Players | MaidanLive',
+        description: 'Discover grassroots athletes, verified stats, and MVP honours on MaidanLive.',
+      },
+      '/leaderboards': {
+        title: 'Tournament Leaderboards | MaidanLive',
+        description:
+          'Top runs, wickets, raid points, tackle points, goals, and MVPs across MaidanLive.',
+      },
+      '/calendar': {
+        title: 'Match Calendar & Schedule | MaidanLive',
+        description: 'View upcoming fixtures, live matches, and tournament schedules on MaidanLive.',
+      },
+    };
+    const staticMeta = staticSections[cleanPath];
+    if (staticMeta) {
+      return {
+        ...staticMeta,
+        canonicalUrl: `${baseUrl}${cleanPath}`,
+        imageUrl: defaultImage,
+      };
+    }
+  } catch {
+    // Non-blocking fallback to default metadata
+  }
+
+  return defaults;
+}
+
+function injectMetaIntoHtml(rawHtml: string, meta: SharePageMetadata): string {
+  const safeTitle = escapeHtmlText(meta.title);
+  const safeAttrTitle = escapeHtmlAttr(meta.title);
+  const safeDesc = escapeHtmlAttr(meta.description);
+  const safeUrl = escapeHtmlAttr(meta.canonicalUrl);
+  const safeImg = escapeHtmlAttr(meta.imageUrl || '');
+
+  let html = rawHtml;
+  html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`);
+  html = html.replace(
+    /<meta\s+name=["']description["'][^>]*>/i,
+    `<meta name="description" content="${safeDesc}" />`
+  );
+  html = html.replace(
+    /<meta\s+property=["']og:title["'][^>]*>/i,
+    `<meta property="og:title" content="${safeAttrTitle}" />`
+  );
+  html = html.replace(
+    /<meta\s+property=["']og:description["'][^>]*>/i,
+    `<meta property="og:description" content="${safeDesc}" />`
+  );
+
+  const extraTags = [
+    `<link rel="canonical" href="${safeUrl}" />`,
+    `<meta property="og:site_name" content="MaidanLive" />`,
+    `<meta property="og:url" content="${safeUrl}" />`,
+    safeImg ? `<meta property="og:image" content="${safeImg}" />` : '',
+    `<meta name="twitter:title" content="${safeAttrTitle}" />`,
+    `<meta name="twitter:description" content="${safeDesc}" />`,
+    safeImg ? `<meta name="twitter:image" content="${safeImg}" />` : '',
+  ]
+    .filter(Boolean)
+    .join('\n    ');
+
+  return html.replace('</head>', `    ${extraTags}\n  </head>`);
+}
 
 async function startServer() {
   const dbInfo = await connectDatabase();
@@ -194,6 +463,38 @@ export class ErrorOverlay extends HTMLElement {}
       server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
     });
+
+    app.use(async (req, res, next) => {
+      const accept = String(req.headers.accept || '');
+      const wantsHtml =
+        accept.includes('text/html') || accept === '' || accept === '*/*' || accept.includes('*/*');
+      if (
+        req.method !== 'GET' ||
+        req.path.startsWith('/api') ||
+        req.path.startsWith('/assets/') ||
+        req.path.startsWith('/@') ||
+        req.path.startsWith('/src/') ||
+        req.path.startsWith('/node_modules/') ||
+        req.path.includes('.') ||
+        STATIC_FILE_EXT_RE.test(req.path) ||
+        !wantsHtml
+      ) {
+        next();
+        return;
+      }
+      try {
+        const indexPath = path.resolve(process.cwd(), 'index.html');
+        const template = fs.readFileSync(indexPath, 'utf8');
+        const transformed = await vite.transformIndexHtml(req.originalUrl, template);
+        const baseUrl = resolvePublicBaseUrl(req);
+        const meta = await resolveShareMetadata(req, baseUrl);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(injectMetaIntoHtml(transformed, meta));
+      } catch (err) {
+        vite.ssrFixStacktrace(err as Error);
+        next();
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     // 1. Immutable 1-year cache for Vite hashed /assets/* and strict 404 on missing files
@@ -238,14 +539,21 @@ export class ErrorOverlay extends HTMLElement {}
     );
 
     // 4. Strictly 404 missing static extensions or /assets/* (never return index.html)
-    app.get('*', (req, res) => {
+    app.get('*', async (req, res) => {
       if (req.path.startsWith('/assets/') || STATIC_FILE_EXT_RE.test(req.path)) {
         res.status(404).send('Static resource not found.');
         return;
       }
       if (fs.existsSync(distIndex)) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.sendFile(distIndex);
+        try {
+          const rawHtml = fs.readFileSync(distIndex, 'utf8');
+          const baseUrl = resolvePublicBaseUrl(req);
+          const meta = await resolveShareMetadata(req, baseUrl);
+          res.type('text/html').send(injectMetaIntoHtml(rawHtml, meta));
+        } catch {
+          res.sendFile(distIndex);
+        }
       } else {
         res.status(404).send('Build output not found.');
       }

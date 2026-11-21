@@ -8,6 +8,8 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
+import { ShareButton } from '../../components/common/ShareButton.tsx';
+import { buildTournamentUrl } from '../../utils/shareUrl.ts';
 
 export function TournamentsPage() {
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
@@ -138,63 +140,100 @@ export function TournamentsPage() {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filtered.map((t) => (
-            <Link
-              key={t.id}
-              to={`/tournaments/${t.id}`}
-              className="bg-white border border-slate-200 rounded-xl p-5 hover:border-slate-300 transition-colors flex flex-col justify-between gap-4"
-            >
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                  <span className="font-bold text-[#EA580C] uppercase">{t.sportType}</span>
-                  <span aria-hidden="true">·</span>
-                  <span
-                    className={
-                      t.status === 'ONGOING'
-                        ? 'text-emerald-700 font-semibold'
-                        : t.status === 'UPCOMING'
-                          ? 'text-amber-700 font-medium'
-                          : 'text-slate-500'
-                    }
-                  >
-                    {t.status}
-                  </span>
-                  {t.registrationOpen && t.status !== 'COMPLETED' && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[11px]">
-                        Reg Open
-                      </span>
-                    </>
-                  )}
-                </div>
-                <h2 className="font-display text-lg font-bold text-slate-900">{t.name}</h2>
-                {t.description && (
-                  <p className="text-sm text-slate-600 line-clamp-2">{t.description}</p>
-                )}
-              </div>
+          {filtered.map((t) => {
+            const firstPrizeSummary =
+              t.prizes?.first?.amount?.trim() ||
+              t.prizes?.first?.label?.trim() ||
+              t.prizeMoney?.trim() ||
+              '';
+            const datesLabel = t.startDate
+              ? `${new Date(t.startDate).toLocaleDateString()}${
+                  t.endDate ? ` – ${new Date(t.endDate).toLocaleDateString()}` : ''
+                }`
+              : undefined;
+            const shareUrl = buildTournamentUrl(t.id);
 
-              <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-                {t.location && (
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5" />
-                    <span>{t.location}</span>
-                  </span>
-                )}
-                {t.startDate && (
-                  <span className="inline-flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" />
-                    <span>{new Date(t.startDate).toLocaleDateString()}</span>
-                  </span>
-                )}
-                {t.prizeMoney && (
-                  <span className="text-amber-800 font-semibold ml-auto">
-                    {t.prizeMoney}
-                  </span>
-                )}
+            return (
+              <div
+                key={t.id}
+                className="bg-white border border-slate-200 rounded-xl hover:border-slate-300 transition-colors flex flex-col justify-between"
+              >
+                <Link to={`/tournaments/${t.id}`} className="p-5 pb-4 flex-1 space-y-2 block">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-bold text-[#EA580C] uppercase">{t.sportType}</span>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className={
+                        t.status === 'ONGOING'
+                          ? 'text-emerald-700 font-semibold'
+                          : t.status === 'UPCOMING'
+                            ? 'text-amber-700 font-medium'
+                            : 'text-slate-500'
+                      }
+                    >
+                      {t.status}
+                    </span>
+                    {t.registrationOpen && t.status !== 'COMPLETED' && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[11px]">
+                          Reg Open
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <h2 className="font-display text-lg font-bold text-slate-900">{t.name}</h2>
+                  {t.description && (
+                    <p className="text-sm text-slate-600 line-clamp-2">{t.description}</p>
+                  )}
+                </Link>
+
+                <div className="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+                    {t.location && (
+                      <span className="inline-flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">{t.location}</span>
+                      </span>
+                    )}
+                    {t.startDate && (
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 shrink-0" />
+                        <span>{new Date(t.startDate).toLocaleDateString()}</span>
+                      </span>
+                    )}
+                    {firstPrizeSummary && (
+                      <span className="text-amber-800 font-semibold truncate">
+                        {t.prizes?.first?.amount?.trim() ? `1st: ${firstPrizeSummary}` : firstPrizeSummary}
+                      </span>
+                    )}
+                  </div>
+
+                  <ShareButton
+                    variant="card-icon"
+                    title={t.name}
+                    text={`${t.sportType} Tournament on MaidanLive`}
+                    url={shareUrl}
+                    shareCard={{
+                      type: 'TOURNAMENT',
+                      title: t.name,
+                      sport: t.sportType,
+                      format: t.format,
+                      status: t.status,
+                      season: t.season,
+                      location: t.location,
+                      datesText: datesLabel,
+                      prizeMoney: t.prizeMoney,
+                      prizes: t.prizes,
+                      teamCount: t.teamIds?.length,
+                      logoUrl: t.logoUrl,
+                      shareUrl,
+                    }}
+                  />
+                </div>
               </div>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

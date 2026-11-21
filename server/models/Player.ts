@@ -14,6 +14,7 @@ export interface IPlayer extends Document {
   bio: string;
   jerseyNumber?: number | null;
   avatarUrl: string;
+  avatarPublicId?: string;
   dateOfBirth?: string;
   isMinor?: boolean;
   isVerified?: boolean;
@@ -42,6 +43,7 @@ const playerSchema = new Schema<IPlayer>(
     bio: { type: String, trim: true, default: '', maxlength: 600 },
     jerseyNumber: { type: Number, default: null, min: 0, max: 999 },
     avatarUrl: { type: String, trim: true, default: '' },
+    avatarPublicId: { type: String, trim: true, default: '', select: false },
     dateOfBirth: { type: String, trim: true, default: '' },
     isMinor: { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },

@@ -7,7 +7,7 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 
 export function CustomerLoginPage() {
-  const { customerUser, loginCustomer } = useAuth();
+  const { customerUser, loginCustomer, authNotice, clearAuthNotice } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>('login');
   const [email, setEmail] = useState('');
@@ -30,6 +30,7 @@ export function CustomerLoginPage() {
     try {
       setLoading(true);
       setError(null);
+      clearAuthNotice();
       const res = await loginCustomer(email, password, totpCode.trim() || undefined);
       if (res.requires2FA) {
         setRequires2FA(true);
@@ -96,6 +97,7 @@ export function CustomerLoginPage() {
           </p>
         </div>
 
+        <FeedbackBanner type="info" message={authNotice} onDismiss={clearAuthNotice} />
         <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
         <FeedbackBanner type="success" message={notice} onDismiss={() => setNotice(null)} />
 

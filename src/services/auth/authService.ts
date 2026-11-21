@@ -1,14 +1,19 @@
 import { AuthUser, SecurityPolicyData, UserSessionData } from '../../types/index.ts';
 import {
+  ADMIN_REFRESH_KEY,
   ADMIN_TOKEN_KEY,
+  ADMIN_USER_CACHE_KEY,
+  CUSTOMER_REFRESH_KEY,
   CUSTOMER_TOKEN_KEY,
+  CUSTOMER_USER_CACHE_KEY,
   adminApi,
   customerApi,
+  ensureFreshPortalToken,
+  performSingleFlightRefresh,
   publicApi,
 } from '../api/httpClient.ts';
 
-export const CUSTOMER_REFRESH_KEY = 'maidanlive_customer_refresh_token';
-export const ADMIN_REFRESH_KEY = 'maidanlive_admin_refresh_token';
+export { CUSTOMER_REFRESH_KEY, ADMIN_REFRESH_KEY };
 
 export interface AuthResponse {
   token: string;
@@ -35,6 +40,7 @@ export const authService = {
   }): Promise<AuthResponse> {
     const { data } = await publicApi.post<AuthResponse>('/auth/register', payload);
     if (data.refreshToken) this.saveCustomerRefreshToken(data.refreshToken);
+    if (data.user) this.saveCustomerUserCache(data.user);
     return data;
   },
 
@@ -45,11 +51,13 @@ export const authService = {
   }): Promise<AuthResponse> {
     const { data } = await publicApi.post<AuthResponse>('/auth/login', payload);
     if (data.refreshToken) this.saveCustomerRefreshToken(data.refreshToken);
+    if (data.user) this.saveCustomerUserCache(data.user);
     return data;
   },
 
   async fetchCustomerProfile(): Promise<AuthUser> {
     const { data } = await customerApi.get<{ user: AuthUser }>('/auth/me');
+    this.saveCustomerUserCache(data.user);
     return data.user;
   },
 
@@ -59,6 +67,7 @@ export const authService = {
     favoriteSport?: string;
   }): Promise<AuthUser> {
     const { data } = await customerApi.patch<{ user: AuthUser }>('/auth/me', payload);
+    this.saveCustomerUserCache(data.user);
     return data.user;
   },
 
@@ -83,6 +92,7 @@ export const authService = {
   }): Promise<AuthResponse> {
     const { data } = await publicApi.post<AuthResponse>('/auth/admin/bootstrap', payload);
     if (data.refreshToken) this.saveAdminRefreshToken(data.refreshToken);
+    if (data.user) this.saveAdminUserCache(data.user);
     return data;
   },
 
@@ -93,6 +103,7 @@ export const authService = {
   }): Promise<AuthResponse> {
     const { data } = await publicApi.post<AuthResponse>('/auth/admin/login', payload);
     if (data.refreshToken) this.saveAdminRefreshToken(data.refreshToken);
+    if (data.user) this.saveAdminUserCache(data.user);
     return data;
   },
 
@@ -101,6 +112,7 @@ export const authService = {
     if (data.portal !== 'admin') {
       throw new Error('Invalid portal session.');
     }
+    this.saveAdminUserCache(data.user);
     return data.user;
   },
 
@@ -113,20 +125,23 @@ export const authService = {
   },
 
   async refreshAccessToken(portal: 'admin' | 'customer'): Promise<AuthResponse | null> {
-    const refreshToken =
-      portal === 'admin' ? this.getAdminRefreshToken() : this.getCustomerRefreshToken();
-    if (!refreshToken) return null;
-    const { data } = await publicApi.post<AuthResponse>('/auth/refresh', { refreshToken });
-    if (data.token) {
-      if (portal === 'admin') {
-        this.saveAdminToken(data.token);
-        if (data.refreshToken) this.saveAdminRefreshToken(data.refreshToken);
-      } else {
-        this.saveCustomerToken(data.token);
-        if (data.refreshToken) this.saveCustomerRefreshToken(data.refreshToken);
-      }
-    }
-    return data;
+    const tokenKey = portal === 'admin' ? ADMIN_TOKEN_KEY : CUSTOMER_TOKEN_KEY;
+    const refreshKey = portal === 'admin' ? ADMIN_REFRESH_KEY : CUSTOMER_REFRESH_KEY;
+    const result = await performSingleFlightRefresh(tokenKey, refreshKey, portal, { force: true });
+    if (!result?.token) return null;
+    return {
+      token: result.token,
+      refreshToken: result.refreshToken,
+      user: result.user,
+    };
+  },
+
+  async ensureFreshCustomerToken(): Promise<string | null> {
+    return ensureFreshPortalToken('customer');
+  },
+
+  async ensureFreshAdminToken(): Promise<string | null> {
+    return ensureFreshPortalToken('admin');
   },
 
   async logoutSession(portal: 'admin' | 'customer'): Promise<void> {
@@ -247,6 +262,7 @@ export const authService = {
   clearCustomerToken() {
     window.localStorage.removeItem(CUSTOMER_TOKEN_KEY);
     window.localStorage.removeItem(CUSTOMER_REFRESH_KEY);
+    window.localStorage.removeItem(CUSTOMER_USER_CACHE_KEY);
   },
   getCustomerToken(): string | null {
     return window.localStorage.getItem(CUSTOMER_TOKEN_KEY);
@@ -257,6 +273,25 @@ export const authService = {
   getCustomerRefreshToken(): string | null {
     return window.localStorage.getItem(CUSTOMER_REFRESH_KEY);
   },
+  saveCustomerUserCache(user: AuthUser) {
+    try {
+      window.localStorage.setItem(CUSTOMER_USER_CACHE_KEY, JSON.stringify(user));
+    } catch {
+      // Ignore storage quota errors
+    }
+  },
+  getCustomerUserCache(): AuthUser | null {
+    try {
+      const hasSession =
+        Boolean(window.localStorage.getItem(CUSTOMER_TOKEN_KEY)) ||
+        Boolean(window.localStorage.getItem(CUSTOMER_REFRESH_KEY));
+      if (!hasSession) return null;
+      const raw = window.localStorage.getItem(CUSTOMER_USER_CACHE_KEY);
+      return raw ? (JSON.parse(raw) as AuthUser) : null;
+    } catch {
+      return null;
+    }
+  },
 
   saveAdminToken(token: string) {
     window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
@@ -264,6 +299,7 @@ export const authService = {
   clearAdminToken() {
     window.localStorage.removeItem(ADMIN_TOKEN_KEY);
     window.localStorage.removeItem(ADMIN_REFRESH_KEY);
+    window.localStorage.removeItem(ADMIN_USER_CACHE_KEY);
   },
   getAdminToken(): string | null {
     return window.localStorage.getItem(ADMIN_TOKEN_KEY);
@@ -273,5 +309,24 @@ export const authService = {
   },
   getAdminRefreshToken(): string | null {
     return window.localStorage.getItem(ADMIN_REFRESH_KEY);
+  },
+  saveAdminUserCache(user: AuthUser) {
+    try {
+      window.localStorage.setItem(ADMIN_USER_CACHE_KEY, JSON.stringify(user));
+    } catch {
+      // Ignore storage quota errors
+    }
+  },
+  getAdminUserCache(): AuthUser | null {
+    try {
+      const hasSession =
+        Boolean(window.localStorage.getItem(ADMIN_TOKEN_KEY)) ||
+        Boolean(window.localStorage.getItem(ADMIN_REFRESH_KEY));
+      if (!hasSession) return null;
+      const raw = window.localStorage.getItem(ADMIN_USER_CACHE_KEY);
+      return raw ? (JSON.parse(raw) as AuthUser) : null;
+    } catch {
+      return null;
+    }
   },
 };

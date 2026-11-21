@@ -9,6 +9,7 @@ import { useAuth } from '../../hooks/useAuth.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { ShareButton } from '../../components/common/ShareButton.tsx';
+import { buildPlayerUrl } from '../../utils/shareUrl.ts';
 
 export function PlayerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -182,6 +183,7 @@ export function PlayerDetailPage() {
           <ShareButton
             title={player.name}
             text={`View ${player.name}'s stats on MaidanLive`}
+            url={buildPlayerUrl(player.id)}
             shareCard={{
               type: 'PLAYER_AWARD',
               playerName: player.name,
@@ -189,8 +191,10 @@ export function PlayerDetailPage() {
               teamName: teamObj?.name,
               role: player.role,
               jerseyNumber: player.jerseyNumber,
+              avatarUrl: player.avatarUrl,
               mvpAwards: totals.mvpAwards || 0,
               stats: statSummaryCards.map((c) => ({ label: c.label, value: c.val })),
+              shareUrl: buildPlayerUrl(player.id),
             }}
           />
         </div>

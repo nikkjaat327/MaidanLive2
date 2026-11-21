@@ -56,6 +56,7 @@ import { LiveChatAndPollsPanel } from '../engagement/LiveChatAndPollsPanel.tsx';
 import { ShareButton } from '../common/ShareButton.tsx';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { formatTimestamp } from '../scoreboard/MatchHighlightsManager.tsx';
+import { buildMatchUrl } from '../../utils/shareUrl.ts';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -667,39 +668,83 @@ export function LiveBroadcastView({
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               <ShareButton
                 title={broadcast.title}
-                text={`Watch ${broadcast.sport} live on MaidanLive`}
+                text={`Watch ${broadcast.sport} ${wantsReplay && broadcast.replayPublished ? 'replay' : 'live'} on MaidanLive`}
+                url={buildMatchUrl(broadcast.id, Boolean(wantsReplay && broadcast.replayPublished))}
                 compact
                 shareCard={
-                  broadcast.resultDeclared
+                  wantsReplay && broadcast.replayPublished
                     ? {
-                        type: 'MATCH_RESULT',
+                        type: 'REPLAY',
                         title: broadcast.title,
                         sport: broadcast.sport,
                         tournamentName: broadcast.tournamentName,
-                        resultText: broadcast.resultBannerText || 'Match Completed',
+                        resultText: broadcast.resultDeclared
+                          ? broadcast.resultBannerText || 'Match Completed'
+                          : undefined,
                         winnerName: broadcast.winnerName,
-                        mvpName: broadcast.mvpName,
                         teamAName: broadcast.teamA.name,
                         teamBName: broadcast.teamB.name,
                         teamAScore: broadcast.teamA.primaryText,
                         teamBScore: broadcast.teamB.primaryText,
                         teamASecondary: broadcast.teamA.secondaryText,
                         teamBSecondary: broadcast.teamB.secondaryText,
+                        teamALogo: broadcast.teamA.logoUrl,
+                        teamBLogo: broadcast.teamB.logoUrl,
+                        shareUrl: buildMatchUrl(broadcast.id, true),
                       }
-                    : {
-                        type: 'LIVE_SCORE',
-                        title: broadcast.title,
-                        sport: broadcast.sport,
-                        tournamentName: broadcast.tournamentName,
-                        statusLabel: broadcast.centerMeta.statusLabel,
-                        teamAName: broadcast.teamA.name,
-                        teamBName: broadcast.teamB.name,
-                        teamAScore: broadcast.teamA.primaryText,
-                        teamBScore: broadcast.teamB.primaryText,
-                        teamASecondary: broadcast.teamA.secondaryText,
-                        teamBSecondary: broadcast.teamB.secondaryText,
-                        venueName: broadcast.venueName,
-                      }
+                    : broadcast.resultDeclared
+                      ? {
+                          type: 'MATCH_RESULT',
+                          title: broadcast.title,
+                          sport: broadcast.sport,
+                          tournamentName: broadcast.tournamentName,
+                          resultText: broadcast.resultBannerText || 'Match Completed',
+                          winnerName: broadcast.winnerName,
+                          mvpName: broadcast.mvpName,
+                          teamAName: broadcast.teamA.name,
+                          teamBName: broadcast.teamB.name,
+                          teamAScore: broadcast.teamA.primaryText,
+                          teamBScore: broadcast.teamB.primaryText,
+                          teamASecondary: broadcast.teamA.secondaryText,
+                          teamBSecondary: broadcast.teamB.secondaryText,
+                          teamALogo: broadcast.teamA.logoUrl,
+                          teamBLogo: broadcast.teamB.logoUrl,
+                          shareUrl: buildMatchUrl(broadcast.id),
+                        }
+                      : broadcast.status === 'UPCOMING' &&
+                          (!score || (score.teamAScore === 0 && score.teamBScore === 0))
+                        ? {
+                            type: 'UPCOMING_MATCH',
+                            title: broadcast.title,
+                            sport: broadcast.sport,
+                            tournamentName: broadcast.tournamentName,
+                            scheduledText: broadcast.matchDate
+                              ? new Date(broadcast.matchDate).toLocaleString()
+                              : 'Upcoming Match',
+                            venueName: broadcast.venueName,
+                            teamAName: broadcast.teamA.name,
+                            teamBName: broadcast.teamB.name,
+                            teamALogo: broadcast.teamA.logoUrl,
+                            teamBLogo: broadcast.teamB.logoUrl,
+                            shareUrl: buildMatchUrl(broadcast.id),
+                          }
+                        : {
+                            type: 'LIVE_SCORE',
+                            title: broadcast.title,
+                            sport: broadcast.sport,
+                            tournamentName: broadcast.tournamentName,
+                            statusLabel: broadcast.centerMeta.statusLabel,
+                            teamAName: broadcast.teamA.name,
+                            teamBName: broadcast.teamB.name,
+                            teamAScore: broadcast.teamA.primaryText,
+                            teamBScore: broadcast.teamB.primaryText,
+                            teamASecondary: broadcast.teamA.secondaryText,
+                            teamBSecondary: broadcast.teamB.secondaryText,
+                            teamALogo: broadcast.teamA.logoUrl,
+                            teamBLogo: broadcast.teamB.logoUrl,
+                            venueName: broadcast.venueName,
+                            shareUrl: buildMatchUrl(broadcast.id),
+                          }
                 }
               />
               <button

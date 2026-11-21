@@ -117,3 +117,32 @@ export async function uploadBufferToCloudinary(params: {
     stream.end(params.buffer);
   });
 }
+
+export async function deleteFromCloudinary(
+  publicId: string,
+  resourceType: 'image' | 'raw' | 'video' = 'image'
+): Promise<boolean> {
+  const cleanId = String(publicId || '').trim();
+  if (!cleanId) return false;
+  const creds = getCloudinaryCredentials();
+  if (!creds) return false;
+
+  try {
+    cloudinary.config({
+      cloud_name: creds.cloudName,
+      api_key: creds.apiKey,
+      api_secret: creds.apiSecret,
+      secure: true,
+      ...(creds.uploadPrefix ? { upload_prefix: creds.uploadPrefix } : {}),
+    });
+
+    const result = await cloudinary.uploader.destroy(cleanId, {
+      resource_type: resourceType,
+      invalidate: true,
+    });
+    return result?.result === 'ok' || result?.result === 'not found';
+  } catch (err) {
+    console.warn('[Cloudinary] Cleanup failed (non-fatal):', err);
+    return false;
+  }
+}

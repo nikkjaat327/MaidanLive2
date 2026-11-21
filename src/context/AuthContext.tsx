@@ -1,6 +1,16 @@
 import React, { createContext, useCallback, useEffect, useState } from 'react';
+import axios from 'axios';
 import { AuthUser, NotificationData } from '../types/index.ts';
 import { authService } from '../services/auth/authService.ts';
+import {
+  ADMIN_REFRESH_KEY,
+  ADMIN_TOKEN_KEY,
+  ADMIN_USER_CACHE_KEY,
+  CUSTOMER_REFRESH_KEY,
+  CUSTOMER_TOKEN_KEY,
+  CUSTOMER_USER_CACHE_KEY,
+  getJwtRemainingMs,
+} from '../services/api/httpClient.ts';
 import { platformOpsService } from '../services/platformOps/platformOpsService.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 
@@ -15,6 +25,8 @@ interface AuthContextValue {
   customerLoading: boolean;
   adminUser: AuthUser | null;
   adminLoading: boolean;
+  authNotice: string | null;
+  clearAuthNotice: () => void;
   unreadNotifications: number;
   adminUnreadNotifications: number;
   refreshNotifications: () => Promise<void>;
@@ -45,16 +57,24 @@ interface AuthContextValue {
 export const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [customerUser, setCustomerUser] = useState<AuthUser | null>(null);
+  const [customerUser, setCustomerUser] = useState<AuthUser | null>(() =>
+    typeof window !== 'undefined' ? authService.getCustomerUserCache() : null
+  );
   const [customerLoading, setCustomerLoading] = useState(true);
-  const [adminUser, setAdminUser] = useState<AuthUser | null>(null);
+  const [adminUser, setAdminUser] = useState<AuthUser | null>(() =>
+    typeof window !== 'undefined' ? authService.getAdminUserCache() : null
+  );
   const [adminLoading, setAdminLoading] = useState(true);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [adminUnreadNotifications, setAdminUnreadNotifications] = useState(0);
 
+  const clearAuthNotice = useCallback(() => setAuthNotice(null), []);
+
   const refreshNotifications = useCallback(async () => {
-    const token = authService.getCustomerToken();
-    if (!token) {
+    const hasSession =
+      Boolean(authService.getCustomerToken()) || Boolean(authService.getCustomerRefreshToken());
+    if (!hasSession) {
       setUnreadNotifications(0);
       return;
     }
@@ -67,8 +87,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshAdminNotifications = useCallback(async () => {
-    const token = authService.getAdminToken();
-    if (!token) {
+    const hasSession =
+      Boolean(authService.getAdminToken()) || Boolean(authService.getAdminRefreshToken());
+    if (!hasSession) {
       setAdminUnreadNotifications(0);
       return;
     }
@@ -81,8 +102,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshCustomer = useCallback(async () => {
-    const token = authService.getCustomerToken();
-    if (!token) {
+    const token = await authService.ensureFreshCustomerToken();
+    const refreshToken = authService.getCustomerRefreshToken();
+    if (!token && !refreshToken) {
       setCustomerUser(null);
       setUnreadNotifications(0);
       setCustomerLoading(false);
@@ -92,18 +114,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const user = await authService.fetchCustomerProfile();
       setCustomerUser(user);
       refreshNotifications();
-    } catch {
-      authService.clearCustomerToken();
-      setCustomerUser(null);
-      setUnreadNotifications(0);
+    } catch (err) {
+      const stillHasRefresh = Boolean(authService.getCustomerRefreshToken());
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      if (!stillHasRefresh || status === 401 || status === 403) {
+        if (!stillHasRefresh) {
+          authService.clearCustomerToken();
+          setCustomerUser(null);
+          setUnreadNotifications(0);
+        }
+      }
+      // On network / 5xx error with an active refreshToken, preserve cached customerUser
     } finally {
       setCustomerLoading(false);
     }
   }, [refreshNotifications]);
 
   const refreshAdmin = useCallback(async () => {
-    const token = authService.getAdminToken();
-    if (!token) {
+    const token = await authService.ensureFreshAdminToken();
+    const refreshToken = authService.getAdminRefreshToken();
+    if (!token && !refreshToken) {
       setAdminUser(null);
       setAdminUnreadNotifications(0);
       setAdminLoading(false);
@@ -113,10 +143,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const user = await authService.fetchAdminProfile();
       setAdminUser(user);
       refreshAdminNotifications();
-    } catch {
-      authService.clearAdminToken();
-      setAdminUser(null);
-      setAdminUnreadNotifications(0);
+    } catch (err) {
+      const stillHasRefresh = Boolean(authService.getAdminRefreshToken());
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const invalidPortal = err instanceof Error && err.message === 'Invalid portal session.';
+      if (invalidPortal || !stillHasRefresh || (status === 401 && !stillHasRefresh) || status === 403) {
+        authService.clearAdminToken();
+        setAdminUser(null);
+        setAdminUnreadNotifications(0);
+      }
     } finally {
       setAdminLoading(false);
     }
@@ -136,24 +171,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         authService.clearCustomerToken();
         setCustomerUser(null);
         setUnreadNotifications(0);
+        setAuthNotice('Your session expired. Please sign in again to continue.');
       }
     };
+
+    const onWakeOrOnline = () => {
+      const custRefresh = authService.getCustomerRefreshToken();
+      const custToken = authService.getCustomerToken();
+      if (custRefresh && (!custToken || getJwtRemainingMs(custToken) < 5 * 60_000)) {
+        refreshCustomer();
+      }
+      const admRefresh = authService.getAdminRefreshToken();
+      const admToken = authService.getAdminToken();
+      if (admRefresh && (!admToken || getJwtRemainingMs(admToken) < 5 * 60_000)) {
+        refreshAdmin();
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        onWakeOrOnline();
+      }
+    };
+
+    const onStorageSync = (e: StorageEvent) => {
+      if (e.key === CUSTOMER_REFRESH_KEY && !e.newValue) {
+        setCustomerUser(null);
+        setUnreadNotifications(0);
+      } else if (e.key === CUSTOMER_USER_CACHE_KEY) {
+        setCustomerUser(e.newValue ? (JSON.parse(e.newValue) as AuthUser) : null);
+      } else if (e.key === CUSTOMER_TOKEN_KEY && e.newValue && !customerUser) {
+        refreshCustomer();
+      }
+
+      if (e.key === ADMIN_REFRESH_KEY && !e.newValue) {
+        setAdminUser(null);
+        setAdminUnreadNotifications(0);
+      } else if (e.key === ADMIN_USER_CACHE_KEY) {
+        setAdminUser(e.newValue ? (JSON.parse(e.newValue) as AuthUser) : null);
+      } else if (e.key === ADMIN_TOKEN_KEY && e.newValue && !adminUser) {
+        refreshAdmin();
+      }
+    };
+
     window.addEventListener('maidanlive:auth-expired', onAuthExpired);
+    window.addEventListener('online', onWakeOrOnline);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('storage', onStorageSync);
+
     return () => {
       window.removeEventListener('maidanlive:auth-expired', onAuthExpired);
+      window.removeEventListener('online', onWakeOrOnline);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('storage', onStorageSync);
     };
-  }, [refreshCustomer, refreshAdmin]);
+  }, [refreshCustomer, refreshAdmin, customerUser, adminUser]);
 
   useEffect(() => {
-    const token = authService.getCustomerToken();
-    if (!customerUser || !token) return;
+    if (!customerUser) return;
 
     const socket = getSocketClient();
-    socket.emit('user:join', token);
-
-    const onReconnect = () => {
-      socket.emit('user:join', token);
+    const joinCustomerRoom = () => {
+      authService.ensureFreshCustomerToken().then((freshToken) => {
+        if (freshToken) {
+          socket.emit('user:join', freshToken);
+        }
+      });
     };
+
+    joinCustomerRoom();
 
     const onNewNotification = (payload: { notification?: NotificationData }) => {
       setUnreadNotifications((c) => c + 1);
@@ -174,37 +260,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    socket.on('connect', onReconnect);
+    socket.on('connect', joinCustomerRoom);
     socket.on('notification:new', onNewNotification);
     return () => {
-      socket.off('connect', onReconnect);
+      socket.off('connect', joinCustomerRoom);
       socket.off('notification:new', onNewNotification);
     };
-  }, [customerUser]);
+  }, [customerUser?.id, customerUser?.notificationPreferences?.browserPushEnabled]);
 
   useEffect(() => {
-    const token = authService.getAdminToken();
-    if (!adminUser || !token) return;
+    if (!adminUser) return;
 
     const socket = getSocketClient();
-    socket.emit('user:join', token);
-
-    const onReconnect = () => {
-      socket.emit('user:join', token);
+    const joinAdminRoom = () => {
+      authService.ensureFreshAdminToken().then((freshToken) => {
+        if (freshToken) {
+          socket.emit('user:join', freshToken);
+        }
+      });
     };
+
+    joinAdminRoom();
+
     const onNewAdminNotification = () => {
       refreshAdminNotifications();
     };
 
-    socket.on('connect', onReconnect);
+    socket.on('connect', joinAdminRoom);
     socket.on('notification:new', onNewAdminNotification);
     return () => {
-      socket.off('connect', onReconnect);
+      socket.off('connect', joinAdminRoom);
       socket.off('notification:new', onNewAdminNotification);
     };
-  }, [adminUser, refreshAdminNotifications]);
+  }, [adminUser?.id, refreshAdminNotifications]);
 
   const updateCustomerUser = useCallback((user: AuthUser) => {
+    authService.saveCustomerUserCache(user);
     setCustomerUser(user);
   }, []);
 
@@ -215,6 +306,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { requires2FA: true, message: res.message };
       }
       authService.saveCustomerToken(res.token);
+      authService.saveCustomerUserCache(res.user);
+      setAuthNotice(null);
       setCustomerUser(res.user);
       refreshNotifications();
       return { user: res.user };
@@ -233,6 +326,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }) => {
       const res = await authService.registerCustomer(payload);
       authService.saveCustomerToken(res.token);
+      authService.saveCustomerUserCache(res.user);
+      setAuthNotice(null);
       setCustomerUser(res.user);
       setUnreadNotifications(0);
       return res.user;
@@ -243,6 +338,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logoutCustomer = useCallback(() => {
     authService.logoutSession('customer').catch(() => {});
     authService.clearCustomerToken();
+    setAuthNotice(null);
     setCustomerUser(null);
     setUnreadNotifications(0);
   }, []);
@@ -254,6 +350,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { requires2FA: true, message: res.message };
       }
       authService.saveAdminToken(res.token);
+      authService.saveAdminUserCache(res.user);
       setAdminUser(res.user);
       refreshAdminNotifications();
       return { user: res.user };
@@ -265,6 +362,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (payload: { name: string; email: string; password: string; setupKey?: string }) => {
       const res = await authService.bootstrapSuperAdmin(payload);
       authService.saveAdminToken(res.token);
+      authService.saveAdminUserCache(res.user);
       setAdminUser(res.user);
       setAdminUnreadNotifications(0);
       return res.user;
@@ -286,6 +384,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         customerLoading,
         adminUser,
         adminLoading,
+        authNotice,
+        clearAuthNotice,
         unreadNotifications,
         adminUnreadNotifications,
         refreshNotifications,

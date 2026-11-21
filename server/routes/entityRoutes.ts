@@ -12,13 +12,14 @@ import { Fixture } from '../models/Fixture.ts';
 import { Venue } from '../models/Venue.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
 import { TournamentRegistration } from '../models/TournamentRegistration.ts';
-import { User, ALL_GRANULAR_PERMISSIONS } from '../models/User.ts';
+import { User, ADMIN_PORTAL_ROLES, ALL_GRANULAR_PERMISSIONS } from '../models/User.ts';
 import type { UserRole } from '../models/User.ts';
 import { ActivityLog } from '../models/ActivityLog.ts';
 import { Sponsor, SponsorOverlay } from '../models/Sponsor.ts';
 import {
   authenticate,
   canManageTournament,
+  optionalAuthenticate,
   requireAdminPortal,
   requirePermission,
   requireRole,
@@ -28,6 +29,7 @@ import { sanitizeGoogleMapsUrl, sanitizeImageUrl, sanitizeText } from '../utils/
 import { recordActivity } from '../utils/audit.ts';
 import { calculatePointsTable } from '../../src/utils/tournamentEngine.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
+import { deleteFromCloudinary } from '../services/cloudinaryService.ts';
 import {
   buildIdMatchFilter,
   deleteDocByAnyId,
@@ -49,6 +51,46 @@ function dedupeDocsById<T extends { _id?: any; id?: string }>(docs: T[]): T[] {
 const router = Router();
 const VALID_SPORTS = ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'];
 const VALID_FORMATS = ['KNOCKOUT', 'LEAGUE', 'GROUP_STAGE', 'GROUP_KNOCKOUT'];
+
+function sanitizeTournamentPrizes(raw: unknown) {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') return {};
+  const src = raw as Record<string, any>;
+  const out: Record<string, { amount: string; label: string }> = {};
+  for (const key of ['first', 'second', 'third'] as const) {
+    const tier = src[key];
+    if (!tier || typeof tier !== 'object') continue;
+    const amount = sanitizeText(tier.amount, 80);
+    const label = sanitizeText(tier.label, 120);
+    if (amount || label) {
+      out[key] = { amount, label };
+    }
+  }
+  return out;
+}
+
+function sanitizePublicPlayer(p: any) {
+  if (!p) return p;
+  const id = p._id ? String(p._id) : p.id ? String(p.id) : '';
+  return {
+    _id: p._id,
+    id,
+    name: p.name || '',
+    teamId: p.teamId || null,
+    sportType: p.sportType || 'Cricket',
+    role: p.role || '',
+    position: p.position || '',
+    battingStyle: p.battingStyle || '',
+    bowlingStyle: p.bowlingStyle || '',
+    bio: p.bio || '',
+    jerseyNumber: p.jerseyNumber ?? null,
+    avatarUrl: p.avatarUrl || '',
+    isVerified: Boolean(p.isVerified),
+    followersCount: Number(p.followersCount) || 0,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+}
 
 function resolveTournamentPaymentInput(body: any, existing?: any): {
   error?: string;
@@ -523,7 +565,7 @@ router.get('/tournaments/:id', async (req: Request, res: Response) => {
         id: t._id.toString(),
         playerCount: playerCountByTeam.get(t._id.toString()) || 0,
       })),
-      players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      players: players.map(sanitizePublicPlayer),
       fixtures: fixtures.map((f) => ({ ...f, id: f._id.toString() })),
       pointsTable,
       venue: venue ? { ...venue, id: venue._id.toString() } : null,
@@ -599,6 +641,7 @@ router.post(
         organizerName: sanitizeText(req.body.organizerName, 120) || req.user!.name,
         season: sanitizeText(req.body.season, 60),
         prizeMoney: sanitizeText(req.body.prizeMoney, 120),
+        prizes: sanitizeTournamentPrizes(req.body.prizes) || {},
         registrationOpen: req.body.registrationOpen === true,
         paymentMode: payCfg.paymentMode,
         registrationFee: payCfg.registrationFee,
@@ -755,6 +798,9 @@ router.patch(
       if (req.body.season !== undefined) tournament.season = sanitizeText(req.body.season, 60);
       if (req.body.prizeMoney !== undefined) {
         tournament.prizeMoney = sanitizeText(req.body.prizeMoney, 120);
+      }
+      if (req.body.prizes !== undefined) {
+        tournament.prizes = sanitizeTournamentPrizes(req.body.prizes) || {};
       }
       if (typeof req.body.registrationOpen === 'boolean') {
         tournament.registrationOpen = req.body.registrationOpen;
@@ -1035,7 +1081,7 @@ router.get('/teams/:id', async (req: Request, res: Response) => {
 
     res.json({
       team: { ...team, id: team._id.toString(), playerCount: players.length },
-      players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      players: players.map(sanitizePublicPlayer),
       streams: enrichedStreams,
       fixtures: fixtures.map((f) => ({ ...f, id: f._id.toString() })),
       record: { played, won, lost, drawn },
@@ -1180,7 +1226,7 @@ router.delete(
 );
 
 // ==================== PLAYERS ====================
-router.get('/players', async (req: Request, res: Response) => {
+router.get('/players', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const query: Record<string, unknown> = {};
     if (typeof req.query.teamId === 'string' && mongoose.Types.ObjectId.isValid(req.query.teamId)) {
@@ -1196,13 +1242,20 @@ router.get('/players', async (req: Request, res: Response) => {
       );
       query.$or = [{ name: regex }, { role: regex }];
     }
+    const isAdminViewer = Boolean(
+      req.user &&
+        ADMIN_PORTAL_ROLES.includes(req.user.role) &&
+        req.authPortal === 'admin'
+    );
     const rawPlayers = await Player.find(query)
       .populate('teamId', 'name shortName logoUrl')
       .sort({ createdAt: -1 })
       .lean();
     const players = dedupeDocsById(rawPlayers);
     res.json({
-      players: players.map((p) => ({ ...p, id: p._id.toString() })),
+      players: isAdminViewer
+        ? players.map((p) => ({ ...p, id: p._id.toString() }))
+        : players.map(sanitizePublicPlayer),
       totalCount: players.length,
     });
   } catch (err) {
@@ -1284,7 +1337,7 @@ router.get('/players/:id', async (req: Request, res: Response) => {
     );
 
     res.json({
-      player: { ...player, id: player._id.toString() },
+      player: sanitizePublicPlayer(player),
       totals,
       matchStats: matchStats.map((st) => ({ ...st, id: st._id.toString() })),
     });
@@ -1327,13 +1380,15 @@ router.post(
         }
       }
 
+      const cleanAvatarUrl = sanitizeImageUrl(req.body.avatarUrl);
       const player = await Player.create({
         name,
         teamId,
         sportType,
         role: sanitizeText(req.body.role, 80),
         jerseyNumber,
-        avatarUrl: sanitizeImageUrl(req.body.avatarUrl),
+        avatarUrl: cleanAvatarUrl,
+        avatarPublicId: cleanAvatarUrl ? sanitizeText(req.body.avatarPublicId, 260) : '',
         bio: sanitizeText(req.body.bio, 500),
         dateOfBirth: dob,
         isMinor,
@@ -1367,11 +1422,13 @@ router.patch(
         res.status(400).json({ message: 'Invalid player ID.' });
         return;
       }
-      const player = await findDocByAnyId(Player, id);
+      const player = await findDocByAnyId(Player, id, { select: '+avatarPublicId' });
       if (!player) {
         res.status(404).json({ message: 'Player not found.' });
         return;
       }
+
+      const prevAvatarPublicId = String(player.avatarPublicId || '').trim();
 
       if (req.body.name !== undefined) {
         const cleanName = sanitizeText(req.body.name, 120);
@@ -1392,7 +1449,15 @@ router.patch(
       }
       if (req.body.role !== undefined) player.role = sanitizeText(req.body.role, 80);
       if (req.body.bio !== undefined) player.bio = sanitizeText(req.body.bio, 500);
-      if (req.body.avatarUrl !== undefined) player.avatarUrl = sanitizeImageUrl(req.body.avatarUrl);
+      if (req.body.avatarUrl !== undefined) {
+        player.avatarUrl = sanitizeImageUrl(req.body.avatarUrl);
+        if (!player.avatarUrl) {
+          player.avatarPublicId = '';
+        }
+      }
+      if (req.body.avatarPublicId !== undefined) {
+        player.avatarPublicId = player.avatarUrl ? sanitizeText(req.body.avatarPublicId, 260) : '';
+      }
       if (req.body.jerseyNumber !== undefined) {
         player.jerseyNumber =
           req.body.jerseyNumber !== '' &&
@@ -1420,6 +1485,15 @@ router.patch(
       player.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await player.save();
 
+      const nextAvatarPublicId = String(player.avatarPublicId || '').trim();
+      if (
+        prevAvatarPublicId &&
+        prevAvatarPublicId !== nextAvatarPublicId &&
+        prevAvatarPublicId.startsWith('maidanlive/players/')
+      ) {
+        void deleteFromCloudinary(prevAvatarPublicId);
+      }
+
       const populated = await Player.findById(player._id)
         .populate('teamId', 'name shortName logoUrl')
         .lean();
@@ -1444,6 +1518,10 @@ router.delete(
         res.status(400).json({ message: 'Invalid player ID.' });
         return;
       }
+      const existing = await findDocByAnyId(Player, id, {
+        select: '+avatarPublicId',
+        lean: true,
+      });
       const deleted = await deleteDocByAnyId(Player, id);
       if (!deleted) {
         res.status(404).json({ message: 'Player not found.' });
@@ -1455,6 +1533,11 @@ router.delete(
         { followedPlayerIds: pMatch },
         { $pull: { followedPlayerIds: pMatch } }
       );
+
+      const oldPublicId = String(existing?.avatarPublicId || deleted?.avatarPublicId || '').trim();
+      if (oldPublicId && oldPublicId.startsWith('maidanlive/players/')) {
+        void deleteFromCloudinary(oldPublicId);
+      }
 
       await recordActivity(req.user!, 'DELETE_PLAYER', 'Player', id, deleted.name);
       res.json({ message: 'Player deleted.' });
@@ -1908,7 +1991,7 @@ router.get('/search', async (req: Request, res: Response) => {
         ? uniqueTournaments.map((t) => ({ ...t, id: t._id.toString() }))
         : [],
       teams: uniqueTeams.map((tm) => ({ ...tm, id: tm._id.toString() })),
-      players: uniquePlayers.map((p) => ({ ...p, id: p._id.toString() })),
+      players: uniquePlayers.map(sanitizePublicPlayer),
       venues: uniqueVenues.map((v) => ({ ...v, id: v._id.toString() })),
       organizers: Array.from(orgMap.values()).map((o) => ({
         name: o.name,
@@ -1963,6 +2046,7 @@ router.post(
         groupCount: Math.max(1, Math.min(8, Number(req.body.groupCount) || 2)),
         location: sanitizeText(req.body.location, 160),
         prizeMoney: sanitizeText(req.body.prizeMoney, 120),
+        prizes: sanitizeTournamentPrizes(req.body.prizes) || {},
         registrationFee: Math.max(0, Number(req.body.registrationFee) || 0),
         rules: sanitizeText(req.body.rules, 2000),
         qualificationRules: sanitizeText(req.body.qualificationRules, 400),

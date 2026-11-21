@@ -35,7 +35,7 @@ export function signAuthToken(user: IUser, portal: 'admin' | 'customer', session
     portal,
     ...(sessionId ? { sid: sessionId } : {}),
   };
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: portal === 'admin' ? '12h' : '7d' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: portal === 'admin' ? '1h' : '2h' });
 }
 
 export function getEffectiveGranularPermissions(user: IUser): Set<string> {
@@ -119,7 +119,7 @@ export async function authenticate(
       authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
     if (!token) {
-      res.status(401).json({ message: 'Authentication required.' });
+      res.status(401).json({ message: 'Authentication required.', code: 'TOKEN_MISSING' });
       return;
     }
 
@@ -127,14 +127,17 @@ export async function authenticate(
     const user = await findDocByAnyId(User, decoded.sub);
 
     if (!user || !user.isActive) {
-      res.status(401).json({ message: 'Account is inactive or no longer exists.' });
+      res.status(401).json({ message: 'Account is inactive or no longer exists.', code: 'ACCOUNT_INACTIVE' });
       return;
     }
 
     if (decoded.sid) {
       const session = await findDocByAnyId(UserSession, decoded.sid, { lean: true });
       if (!session || session.isRevoked || new Date(session.expiresAt).getTime() <= Date.now()) {
-        res.status(401).json({ message: 'Session has been revoked or expired. Please sign in again.' });
+        res.status(401).json({
+          message: 'Session has been revoked or expired. Please sign in again.',
+          code: 'SESSION_REVOKED',
+        });
         return;
       }
     }
@@ -143,8 +146,12 @@ export async function authenticate(
     req.authPortal = decoded.portal;
     req.sessionId = decoded.sid;
     next();
-  } catch {
-    res.status(401).json({ message: 'Invalid or expired authentication token.' });
+  } catch (err: any) {
+    if (err?.name === 'TokenExpiredError') {
+      res.status(401).json({ message: 'Access token expired.', code: 'TOKEN_EXPIRED' });
+      return;
+    }
+    res.status(401).json({ message: 'Invalid or expired authentication token.', code: 'TOKEN_INVALID' });
   }
 }
 

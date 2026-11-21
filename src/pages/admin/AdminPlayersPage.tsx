@@ -12,6 +12,8 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
+import { PlayerPhotoUploadField } from '../../components/common/PlayerPhotoUploadField.tsx';
 import { getEntityId, resolveTeamId } from '../../utils/dedupe.ts';
 
 function computeIsMinor(dob: string): boolean {
@@ -39,6 +41,7 @@ export function AdminPlayersPage() {
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [isVerified, setIsVerified] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarPublicId, setAvatarPublicId] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<PlayerData | null>(null);
@@ -76,6 +79,7 @@ export function AdminPlayersPage() {
     setDateOfBirth('');
     setIsVerified(false);
     setAvatarUrl('');
+    setAvatarPublicId('');
     setModalOpen(true);
   }
 
@@ -93,6 +97,7 @@ export function AdminPlayersPage() {
     setDateOfBirth(player.dateOfBirth ? player.dateOfBirth.slice(0, 10) : '');
     setIsVerified(Boolean(player.isVerified));
     setAvatarUrl(player.avatarUrl || '');
+    setAvatarPublicId(player.avatarPublicId || '');
     setModalOpen(true);
   }
 
@@ -111,6 +116,7 @@ export function AdminPlayersPage() {
         isMinor: computeIsMinor(dateOfBirth),
         isVerified,
         avatarUrl: avatarUrl.trim(),
+        avatarPublicId: avatarUrl.trim() ? avatarPublicId : '',
       };
       if (editing) {
         await entityService.updatePlayer(editing.id, payload);
@@ -367,24 +373,29 @@ export function AdminPlayersPage() {
                 return (
                   <tr key={pid} className="hover:bg-slate-50">
                     <td className="py-3 px-4 font-medium text-slate-900">
-                      <div className="flex items-center gap-1.5">
-                        <Link
-                          to={`/players/${pid}`}
-                          className="hover:text-[#EA580C] hover:underline"
-                        >
-                          {p.name}
-                        </Link>
-                        {p.isVerified && (
-                          <span title="Verified Athlete">
-                            <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                          </span>
-                        )}
-                      </div>
-                      {p.dateOfBirth && (
-                        <div className="text-[11px] font-mono text-slate-400">
-                          DOB: {p.dateOfBirth.slice(0, 10)}
+                      <div className="flex items-center gap-2.5">
+                        <TeamAvatar name={p.name} logoUrl={p.avatarUrl} size="sm" />
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <Link
+                              to={`/players/${pid}`}
+                              className="hover:text-[#EA580C] hover:underline"
+                            >
+                              {p.name}
+                            </Link>
+                            {p.isVerified && (
+                              <span title="Verified Athlete">
+                                <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                              </span>
+                            )}
+                          </div>
+                          {p.dateOfBirth && (
+                            <div className="text-[11px] font-mono text-slate-400">
+                              DOB: {p.dateOfBirth.slice(0, 10)}
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-slate-600">
                       {teamObj && resolvedTid ? (
@@ -547,15 +558,19 @@ export function AdminPlayersPage() {
                 className="w-full min-h-[42px] px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
               />
             </div>
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Photo URL (Optional)
+            <div className="sm:col-span-2 space-y-2">
+              <label className="block text-sm font-medium text-slate-700">
+                Player Photo (Optional)
               </label>
-              <input
-                type="url"
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              <PlayerPhotoUploadField
+                playerName={name}
+                avatarUrl={avatarUrl}
+                avatarPublicId={avatarPublicId}
+                portal="admin"
+                onChange={({ avatarUrl: nextUrl, avatarPublicId: nextPid }) => {
+                  setAvatarUrl(nextUrl);
+                  setAvatarPublicId(nextPid);
+                }}
               />
             </div>
           </div>

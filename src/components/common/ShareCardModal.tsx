@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Award, Check, Copy, Download, Share2 } from 'lucide-react';
+import { TournamentPrizesConfig } from '../../types/index.ts';
 import { Modal } from './Modal.tsx';
 
 export type ShareCardPayload =
@@ -15,7 +16,22 @@ export type ShareCardPayload =
       teamBScore: string;
       teamASecondary?: string;
       teamBSecondary?: string;
+      teamALogo?: string;
+      teamBLogo?: string;
       venueName?: string;
+      shareUrl?: string;
+    }
+  | {
+      type: 'UPCOMING_MATCH';
+      title: string;
+      sport: string;
+      tournamentName?: string;
+      scheduledText?: string;
+      venueName?: string;
+      teamAName: string;
+      teamBName: string;
+      teamALogo?: string;
+      teamBLogo?: string;
       shareUrl?: string;
     }
   | {
@@ -32,6 +48,58 @@ export type ShareCardPayload =
       teamBScore: string;
       teamASecondary?: string;
       teamBSecondary?: string;
+      teamALogo?: string;
+      teamBLogo?: string;
+      shareUrl?: string;
+    }
+  | {
+      type: 'REPLAY';
+      title: string;
+      sport: string;
+      tournamentName?: string;
+      resultText?: string;
+      winnerName?: string;
+      teamAName: string;
+      teamBName: string;
+      teamAScore: string;
+      teamBScore: string;
+      teamASecondary?: string;
+      teamBSecondary?: string;
+      teamALogo?: string;
+      teamBLogo?: string;
+      shareUrl?: string;
+    }
+  | {
+      type: 'TOURNAMENT';
+      title: string;
+      sport: string;
+      format?: string;
+      status: string;
+      season?: string;
+      location?: string;
+      datesText?: string;
+      prizeMoney?: string;
+      prizes?: TournamentPrizesConfig;
+      teamCount?: number;
+      logoUrl?: string;
+      shareUrl?: string;
+    }
+  | {
+      type: 'TEAM';
+      teamName: string;
+      shortName?: string;
+      sport: string;
+      city?: string;
+      captainName?: string;
+      tournamentName?: string;
+      teamLogoUrl?: string;
+      record?: { played: number; won: number; lost: number; drawn: number };
+      players?: Array<{
+        name: string;
+        role?: string;
+        jerseyNumber?: number | null;
+        avatarUrl?: string;
+      }>;
       shareUrl?: string;
     }
   | {
@@ -41,6 +109,7 @@ export type ShareCardPayload =
       teamName?: string;
       role?: string;
       jerseyNumber?: number | null;
+      avatarUrl?: string;
       mvpAwards?: number;
       stats: Array<{ label: string; value: string | number }>;
       shareUrl?: string;
@@ -82,7 +151,7 @@ function wrapText(
   lineHeight: number,
   maxLines = 3
 ): number {
-  const words = text.split(/\s+/);
+  const words = String(text || '').split(/\s+/).filter(Boolean);
   let line = '';
   let currentY = y;
   let lineCount = 0;
@@ -109,6 +178,121 @@ function wrapText(
   return currentY;
 }
 
+function getInitials(name: string): string {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'ML';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
+}
+
+async function loadImageForCanvas(url?: string): Promise<HTMLImageElement | null> {
+  const clean = url?.trim();
+  if (!clean) return null;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, 3500);
+
+    img.onload = () => {
+      if (!settled) {
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(img.naturalWidth > 0 ? img : null);
+      }
+    };
+
+    img.onerror = () => {
+      if (!settled) {
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(null);
+      }
+    };
+
+    img.src = clean;
+  });
+}
+
+function drawCircularAvatar(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  fallbackName: string,
+  cx: number,
+  cy: number,
+  radius: number,
+  bgColor = '#1E293B',
+  borderColor = 'rgba(255,255,255,0.2)'
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.fillStyle = bgColor;
+  ctx.fill();
+  ctx.clip();
+
+  if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+    const scale = Math.max((radius * 2) / img.naturalWidth, (radius * 2) / img.naturalHeight);
+    const drawW = img.naturalWidth * scale;
+    const drawH = img.naturalHeight * scale;
+    ctx.drawImage(img, cx - drawW / 2, cy - drawH / 2, drawW, drawH);
+  } else {
+    ctx.fillStyle = '#F8FAFC';
+    ctx.font = `800 ${Math.round(radius * 0.72)}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(getInitials(fallbackName), cx, cy + 1);
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function getCardTitle(card: ShareCardPayload): string {
+  switch (card.type) {
+    case 'PLAYER_AWARD':
+      return card.playerName;
+    case 'TEAM':
+      return card.teamName;
+    default:
+      return card.title;
+  }
+}
+
+function getShareSummaryText(card: ShareCardPayload): string {
+  switch (card.type) {
+    case 'PLAYER_AWARD':
+      return `${card.playerName} (${card.sport}) on MaidanLive`;
+    case 'TEAM':
+      return `${card.teamName} Squad (${card.sport}) on MaidanLive`;
+    case 'TOURNAMENT':
+      return `${card.title} (${card.sport}) on MaidanLive`;
+    case 'REPLAY':
+      return `Watch Replay: ${card.title} — ${card.teamAName} vs ${card.teamBName} on MaidanLive`;
+    case 'UPCOMING_MATCH':
+      return `Upcoming Match: ${card.teamAName} vs ${card.teamBName} on MaidanLive`;
+    default:
+      return `${card.title} — ${card.teamAName} vs ${card.teamBName} on MaidanLive`;
+  }
+}
+
 export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
@@ -129,6 +313,37 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       setRendering(true);
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+
+      // Preload optional remote assets safely (CORS-safe fallback to initials)
+      let teamAImg: HTMLImageElement | null = null;
+      let teamBImg: HTMLImageElement | null = null;
+      let logoImg: HTMLImageElement | null = null;
+      let playerImg: HTMLImageElement | null = null;
+      let rosterImgs: Array<HTMLImageElement | null> = [];
+
+      if (
+        card.type === 'LIVE_SCORE' ||
+        card.type === 'UPCOMING_MATCH' ||
+        card.type === 'MATCH_RESULT' ||
+        card.type === 'REPLAY'
+      ) {
+        [teamAImg, teamBImg] = await Promise.all([
+          loadImageForCanvas(card.teamALogo),
+          loadImageForCanvas(card.teamBLogo),
+        ]);
+      } else if (card.type === 'TOURNAMENT') {
+        logoImg = await loadImageForCanvas(card.logoUrl);
+      } else if (card.type === 'TEAM') {
+        const visiblePlayers = (card.players || []).slice(0, 12);
+        [logoImg, ...rosterImgs] = await Promise.all([
+          loadImageForCanvas(card.teamLogoUrl),
+          ...visiblePlayers.map((p) => loadImageForCanvas(p.avatarUrl)),
+        ]);
+      } else if (card.type === 'PLAYER_AWARD') {
+        playerImg = await loadImageForCanvas(card.avatarUrl);
+      }
+
+      if (!active) return;
 
       const W = 1080;
       const H = 1350;
@@ -164,21 +379,42 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
 
       ctx.fillStyle = '#FFFFFF';
       ctx.font = '800 40px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
       ctx.fillText('MaidanLive', 138, 138);
 
       // Card Type Badge
       const badgeLabel =
         card.type === 'LIVE_SCORE'
           ? card.statusLabel.toUpperCase()
-          : card.type === 'MATCH_RESULT'
-            ? 'FINAL RESULT'
-            : 'PLAYER SPOTLIGHT';
+          : card.type === 'UPCOMING_MATCH'
+            ? 'UPCOMING MATCH'
+            : card.type === 'MATCH_RESULT'
+              ? 'FINAL RESULT'
+              : card.type === 'REPLAY'
+                ? 'FULL REPLAY'
+                : card.type === 'TOURNAMENT'
+                  ? card.status.toUpperCase()
+                  : card.type === 'TEAM'
+                    ? 'TEAM SQUAD'
+                    : 'PLAYER SPOTLIGHT';
+
       const badgeBg =
         card.type === 'LIVE_SCORE'
           ? '#DC2626'
-          : card.type === 'MATCH_RESULT'
-            ? '#059669'
-            : '#EA580C';
+          : card.type === 'UPCOMING_MATCH'
+            ? '#D97706'
+            : card.type === 'MATCH_RESULT'
+              ? '#059669'
+              : card.type === 'REPLAY'
+                ? '#2563EB'
+                : card.type === 'TOURNAMENT'
+                  ? card.status === 'ONGOING'
+                    ? '#059669'
+                    : '#D97706'
+                  : card.type === 'TEAM'
+                    ? '#0D9488'
+                    : '#EA580C';
 
       ctx.font = '700 24px system-ui, -apple-system, sans-serif';
       const badgeWidth = Math.max(210, ctx.measureText(badgeLabel).width + 56);
@@ -191,7 +427,262 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       ctx.textAlign = 'left';
 
       // Body by card type
-      if (card.type === 'LIVE_SCORE' || card.type === 'MATCH_RESULT') {
+      if (card.type === 'TOURNAMENT') {
+        const hasLogo = Boolean(logoImg);
+        if (hasLogo && logoImg) {
+          drawCircularAvatar(ctx, logoImg, card.title, 152, 268, 56, '#1E293B', 'rgba(249,115,22,0.5)');
+        }
+        const headerX = hasLogo ? 236 : 96;
+        const headerW = W - headerX - 96;
+
+        ctx.fillStyle = '#F97316';
+        ctx.font = '700 26px system-ui, -apple-system, sans-serif';
+        const subMeta = [
+          card.sport.toUpperCase(),
+          card.format ? card.format.replace(/_/g, ' ') : '',
+          card.season || '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        ctx.fillText(subMeta, headerX, 240);
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '800 50px system-ui, -apple-system, sans-serif';
+        const afterTitleY = wrapText(ctx, card.title, headerX, 312, headerW, 62, 2);
+
+        // Meta strip (Location / Dates / Teams)
+        const metaRowY = Math.max(415, afterTitleY + 18);
+        const metaItems = [
+          card.location ? `Ground: ${card.location}` : '',
+          card.datesText ? `Dates: ${card.datesText}` : '',
+          typeof card.teamCount === 'number' && card.teamCount > 0 ? `${card.teamCount} Teams` : '',
+        ].filter(Boolean);
+
+        if (metaItems.length > 0) {
+          ctx.fillStyle = '#CBD5E1';
+          ctx.font = '600 26px system-ui, -apple-system, sans-serif';
+          wrapText(ctx, metaItems.join('   ·   '), 96, metaRowY, W - 192, 38, 2);
+        }
+
+        // Prize Tiers Section
+        const prizeStartY = metaItems.length > 0 ? metaRowY + 95 : metaRowY + 25;
+        const tiers: Array<{
+          rank: string;
+          amount: string;
+          label: string;
+          bg: string;
+          border: string;
+          accent: string;
+        }> = [];
+        if (card.prizes?.first && (card.prizes.first.amount?.trim() || card.prizes.first.label?.trim())) {
+          tiers.push({
+            rank: '1ST PRIZE',
+            amount: card.prizes.first.amount?.trim() || '',
+            label: card.prizes.first.label?.trim() || 'Champions',
+            bg: 'rgba(245, 158, 11, 0.16)',
+            border: 'rgba(251, 191, 36, 0.55)',
+            accent: '#FCD34D',
+          });
+        }
+        if (card.prizes?.second && (card.prizes.second.amount?.trim() || card.prizes.second.label?.trim())) {
+          tiers.push({
+            rank: '2ND PRIZE',
+            amount: card.prizes.second.amount?.trim() || '',
+            label: card.prizes.second.label?.trim() || 'Runners-Up',
+            bg: 'rgba(148, 163, 184, 0.16)',
+            border: 'rgba(203, 213, 225, 0.4)',
+            accent: '#E2E8F0',
+          });
+        }
+        if (card.prizes?.third && (card.prizes.third.amount?.trim() || card.prizes.third.label?.trim())) {
+          tiers.push({
+            rank: '3RD PRIZE',
+            amount: card.prizes.third.amount?.trim() || '',
+            label: card.prizes.third.label?.trim() || 'Third Place',
+            bg: 'rgba(234, 88, 12, 0.14)',
+            border: 'rgba(251, 146, 60, 0.45)',
+            accent: '#FDBA74',
+          });
+        }
+
+        if (tiers.length > 0) {
+          ctx.fillStyle = '#94A3B8';
+          ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+          ctx.fillText('OFFICIAL PRIZES & HONOURS', 96, prizeStartY - 18);
+
+          const tierH = 118;
+          tiers.forEach((tier, idx) => {
+            const y = prizeStartY + idx * (tierH + 18);
+            ctx.fillStyle = tier.bg;
+            ctx.strokeStyle = tier.border;
+            ctx.lineWidth = 2;
+            drawRoundedRect(ctx, 96, y, W - 192, tierH, 22);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = tier.accent;
+            ctx.font = '800 24px system-ui, -apple-system, sans-serif';
+            ctx.fillText(tier.rank, 132, y + 44);
+
+            ctx.fillStyle = '#F8FAFC';
+            ctx.font = '600 28px system-ui, -apple-system, sans-serif';
+            ctx.fillText(tier.label.slice(0, 32), 132, y + 86);
+
+            if (tier.amount) {
+              ctx.fillStyle = '#FFFFFF';
+              ctx.font = '800 40px ui-monospace, SFMono-Regular, monospace';
+              ctx.textAlign = 'right';
+              ctx.fillText(tier.amount.slice(0, 18), W - 132, y + 72);
+              ctx.textAlign = 'left';
+            }
+          });
+        } else if (card.prizeMoney?.trim()) {
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.16)';
+          ctx.strokeStyle = 'rgba(251, 191, 36, 0.5)';
+          ctx.lineWidth = 2;
+          drawRoundedRect(ctx, 96, prizeStartY, W - 192, 160, 24);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#FCD34D';
+          ctx.font = '700 24px system-ui, -apple-system, sans-serif';
+          ctx.fillText('TOTAL PRIZE POOL', 136, prizeStartY + 56);
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = '800 46px system-ui, -apple-system, sans-serif';
+          ctx.fillText(card.prizeMoney.trim().slice(0, 28), 136, prizeStartY + 118);
+        }
+      } else if (card.type === 'TEAM') {
+        drawCircularAvatar(
+          ctx,
+          logoImg,
+          card.teamName,
+          154,
+          268,
+          58,
+          '#0F172A',
+          'rgba(20, 184, 166, 0.55)'
+        );
+
+        ctx.fillStyle = '#2DD4BF';
+        ctx.font = '700 26px system-ui, -apple-system, sans-serif';
+        const teamMeta = [card.sport.toUpperCase(), card.shortName, card.city].filter(Boolean).join(' · ');
+        ctx.fillText(teamMeta, 240, 236);
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '800 50px system-ui, -apple-system, sans-serif';
+        const afterTeamY = wrapText(ctx, card.teamName, 240, 304, W - 336, 58, 2);
+
+        const subLine = [
+          card.captainName ? `Captain: ${card.captainName}` : '',
+          card.tournamentName || '',
+        ]
+          .filter(Boolean)
+          .join('  ·  ');
+        if (subLine) {
+          ctx.fillStyle = '#94A3B8';
+          ctx.font = '600 24px system-ui, -apple-system, sans-serif';
+          ctx.fillText(subLine.slice(0, 52), 240, afterTeamY + 6);
+        }
+
+        // Optional Record Strip
+        let listStartY = Math.max(418, afterTeamY + 54);
+        if (card.record && card.record.played > 0) {
+          const recItems = [
+            { label: 'PLAYED', val: card.record.played },
+            { label: 'WON', val: card.record.won },
+            { label: 'LOST', val: card.record.lost },
+            { label: 'DRAW/TIE', val: card.record.drawn },
+          ];
+          const pillW = (W - 192 - 36) / 4;
+          recItems.forEach((it, idx) => {
+            const x = 96 + idx * (pillW + 12);
+            ctx.fillStyle = 'rgba(255,255,255,0.06)';
+            ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+            ctx.lineWidth = 1.5;
+            drawRoundedRect(ctx, x, listStartY, pillW, 74, 16);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#94A3B8';
+            ctx.font = '700 18px system-ui, -apple-system, sans-serif';
+            ctx.fillText(it.label, x + 18, listStartY + 28);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = '800 30px ui-monospace, SFMono-Regular, monospace';
+            ctx.fillText(String(it.val), x + 18, listStartY + 60);
+          });
+          listStartY += 108;
+        }
+
+        // Squad Roster Grid (up to 12 players, ZERO PII)
+        const roster = card.players || [];
+        const visibleRoster = roster.slice(0, 12);
+        ctx.fillStyle = '#CBD5E1';
+        ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+        ctx.fillText(`OFFICIAL SQUAD (${roster.length})`, 96, listStartY);
+
+        const gridTop = listStartY + 22;
+        if (visibleRoster.length === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.05)';
+          drawRoundedRect(ctx, 96, gridTop, W - 192, 120, 20);
+          ctx.fill();
+          ctx.fillStyle = '#94A3B8';
+          ctx.font = '600 26px system-ui, -apple-system, sans-serif';
+          ctx.fillText('Squad players will appear here once published.', 132, gridTop + 68);
+        } else {
+          const cols = 2;
+          const colW = (W - 192 - 20) / cols;
+          const rowH = 74;
+          visibleRoster.forEach((pl, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const x = 96 + col * (colW + 20);
+            const y = gridTop + row * (rowH + 14);
+            if (y + rowH > H - 290) return;
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.lineWidth = 1.5;
+            drawRoundedRect(ctx, x, y, colW, rowH, 16);
+            ctx.fill();
+            ctx.stroke();
+
+            drawCircularAvatar(
+              ctx,
+              rosterImgs[idx] || null,
+              pl.name,
+              x + 36,
+              y + rowH / 2,
+              22,
+              '#1E293B',
+              'rgba(255,255,255,0.2)'
+            );
+
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = '700 23px system-ui, -apple-system, sans-serif';
+            const jerseyTag =
+              pl.jerseyNumber !== null && pl.jerseyNumber !== undefined ? `#${pl.jerseyNumber} ` : '';
+            ctx.fillText(`${jerseyTag}${pl.name}`.slice(0, 22), x + 72, y + 34);
+
+            if (pl.role) {
+              ctx.fillStyle = '#94A3B8';
+              ctx.font = '500 18px system-ui, -apple-system, sans-serif';
+              ctx.fillText(pl.role.slice(0, 24), x + 72, y + 57);
+            }
+          });
+
+          if (roster.length > visibleRoster.length) {
+            ctx.fillStyle = '#FDBA74';
+            ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+            ctx.fillText(`+${roster.length - visibleRoster.length} more squad members`, 96, H - 275);
+          }
+        }
+      } else if (
+        card.type === 'LIVE_SCORE' ||
+        card.type === 'UPCOMING_MATCH' ||
+        card.type === 'MATCH_RESULT' ||
+        card.type === 'REPLAY'
+      ) {
         ctx.fillStyle = '#F97316';
         ctx.font = '700 28px system-ui, -apple-system, sans-serif';
         const subHeader = [card.sport.toUpperCase(), card.tournamentName].filter(Boolean).join(' · ');
@@ -201,7 +692,6 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         ctx.font = '800 50px system-ui, -apple-system, sans-serif';
         const afterTitleY = wrapText(ctx, card.title, 96, 315, W - 192, 64, 2);
 
-        // Score Panel
         const boxY = Math.max(430, afterTitleY + 25);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
@@ -210,7 +700,6 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         ctx.fill();
         ctx.stroke();
 
-        // Divider between teams
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.beginPath();
         ctx.moveTo(140, boxY + 210);
@@ -218,38 +707,57 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         ctx.stroke();
 
         // Team A row
+        drawCircularAvatar(ctx, teamAImg, card.teamAName, 174, boxY + 105, 36, '#1E293B');
         ctx.fillStyle = '#F8FAFC';
-        ctx.font = '700 40px system-ui, -apple-system, sans-serif';
-        ctx.fillText(card.teamAName.slice(0, 22), 140, boxY + 100);
-        if (card.teamASecondary) {
-          ctx.fillStyle = '#94A3B8';
-          ctx.font = '600 26px system-ui, -apple-system, sans-serif';
-          ctx.fillText(card.teamASecondary, 140, boxY + 148);
+        ctx.font = '700 38px system-ui, -apple-system, sans-serif';
+        ctx.fillText(card.teamAName.slice(0, 20), 230, boxY + 102);
+
+        if (card.type === 'UPCOMING_MATCH') {
+          ctx.fillStyle = '#FDBA74';
+          ctx.font = '700 28px system-ui, -apple-system, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText('TEAM A', W - 140, boxY + 114);
+          ctx.textAlign = 'left';
+        } else {
+          if (card.teamASecondary) {
+            ctx.fillStyle = '#94A3B8';
+            ctx.font = '600 24px system-ui, -apple-system, sans-serif';
+            ctx.fillText(card.teamASecondary, 230, boxY + 148);
+          }
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = '800 66px ui-monospace, SFMono-Regular, monospace';
+          ctx.textAlign = 'right';
+          ctx.fillText(card.teamAScore || '0', W - 140, boxY + 125);
+          ctx.textAlign = 'left';
         }
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '800 68px ui-monospace, SFMono-Regular, monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(card.teamAScore || '0', W - 140, boxY + 125);
-        ctx.textAlign = 'left';
 
         // Team B row
+        drawCircularAvatar(ctx, teamBImg, card.teamBName, 174, boxY + 315, 36, '#1E293B');
         ctx.fillStyle = '#F8FAFC';
-        ctx.font = '700 40px system-ui, -apple-system, sans-serif';
-        ctx.fillText(card.teamBName.slice(0, 22), 140, boxY + 310);
-        if (card.teamBSecondary) {
-          ctx.fillStyle = '#94A3B8';
-          ctx.font = '600 26px system-ui, -apple-system, sans-serif';
-          ctx.fillText(card.teamBSecondary, 140, boxY + 358);
-        }
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '800 68px ui-monospace, SFMono-Regular, monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(card.teamBScore || '0', W - 140, boxY + 335);
-        ctx.textAlign = 'left';
+        ctx.font = '700 38px system-ui, -apple-system, sans-serif';
+        ctx.fillText(card.teamBName.slice(0, 20), 230, boxY + 312);
 
-        // Footer Info Banner (Venue or Result / MVP)
+        if (card.type === 'UPCOMING_MATCH') {
+          ctx.fillStyle = '#94A3B8';
+          ctx.font = '700 28px system-ui, -apple-system, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText('TEAM B', W - 140, boxY + 324);
+          ctx.textAlign = 'left';
+        } else {
+          if (card.teamBSecondary) {
+            ctx.fillStyle = '#94A3B8';
+            ctx.font = '600 24px system-ui, -apple-system, sans-serif';
+            ctx.fillText(card.teamBSecondary, 230, boxY + 358);
+          }
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = '800 66px ui-monospace, SFMono-Regular, monospace';
+          ctx.textAlign = 'right';
+          ctx.fillText(card.teamBScore || '0', W - 140, boxY + 335);
+          ctx.textAlign = 'left';
+        }
+
         const infoY = boxY + 465;
-        if (card.type === 'MATCH_RESULT') {
+        if (card.type === 'MATCH_RESULT' || (card.type === 'REPLAY' && card.resultText)) {
           ctx.fillStyle = 'rgba(16, 185, 129, 0.16)';
           ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
           drawRoundedRect(ctx, 96, infoY, W - 192, 130, 22);
@@ -260,20 +768,40 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
           ctx.font = '700 30px system-ui, -apple-system, sans-serif';
           wrapText(ctx, card.resultText || 'Match Completed', 132, infoY + 55, W - 264, 40, 2);
 
-          if (card.mvpName) {
+          if (card.type === 'MATCH_RESULT' && card.mvpName) {
             ctx.fillStyle = '#FDE68A';
             ctx.font = '700 24px system-ui, -apple-system, sans-serif';
             ctx.fillText(`Player of the Match: ${card.mvpName}`, 132, infoY + 104);
           }
-        } else if (card.venueName) {
+        } else if (card.type === 'UPCOMING_MATCH') {
+          const scheduleInfo = [card.scheduledText, card.venueName ? `Venue: ${card.venueName}` : '']
+            .filter(Boolean)
+            .join('  ·  ');
+          if (scheduleInfo) {
+            ctx.fillStyle = '#CBD5E1';
+            ctx.font = '600 26px system-ui, -apple-system, sans-serif';
+            wrapText(ctx, scheduleInfo, 96, infoY + 38, W - 192, 38, 2);
+          }
+        } else if (card.type === 'LIVE_SCORE' && card.venueName) {
           ctx.fillStyle = '#CBD5E1';
           ctx.font = '600 28px system-ui, -apple-system, sans-serif';
           ctx.fillText(`Venue: ${card.venueName}`, 96, infoY + 45);
         }
       } else {
-        // PLAYER_AWARD Card
+        // PLAYER_AWARD Card (with optional compressed portrait)
+        drawCircularAvatar(
+          ctx,
+          playerImg,
+          card.playerName,
+          170,
+          292,
+          74,
+          '#1E293B',
+          'rgba(249,115,22,0.6)'
+        );
+
         ctx.fillStyle = '#F97316';
-        ctx.font = '700 28px system-ui, -apple-system, sans-serif';
+        ctx.font = '700 26px system-ui, -apple-system, sans-serif';
         const headerMeta = [
           card.sport.toUpperCase(),
           card.role,
@@ -281,16 +809,16 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         ]
           .filter(Boolean)
           .join(' · ');
-        ctx.fillText(headerMeta, 96, 240);
+        ctx.fillText(headerMeta, 276, 250);
 
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = '800 62px system-ui, -apple-system, sans-serif';
-        const afterNameY = wrapText(ctx, card.playerName, 96, 325, W - 192, 74, 2);
+        ctx.font = '800 56px system-ui, -apple-system, sans-serif';
+        const afterNameY = wrapText(ctx, card.playerName, 276, 322, W - 372, 66, 2);
 
         if (card.teamName) {
           ctx.fillStyle = '#6EE7B7';
-          ctx.font = '700 32px system-ui, -apple-system, sans-serif';
-          ctx.fillText(card.teamName, 96, afterNameY + 16);
+          ctx.font = '700 30px system-ui, -apple-system, sans-serif';
+          ctx.fillText(card.teamName, 276, afterNameY + 8);
         }
 
         // Stats Grid
@@ -337,7 +865,7 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
         }
       }
 
-      // Bottom Branded CTA Footer Section (No QR Code)
+      // Bottom Branded CTA Footer Section
       const footerY = H - 250;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
@@ -361,7 +889,11 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       ctx.fillText(shareUrl.slice(0, 62), 168, footerY + 138);
 
       if (active) {
-        setPreviewUrl(canvas.toDataURL('image/png'));
+        try {
+          setPreviewUrl(canvas.toDataURL('image/png'));
+        } catch {
+          setPreviewUrl('');
+        }
         setRendering(false);
       }
     }
@@ -384,11 +916,8 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
   }
 
   async function handleShareCard() {
-    const title = card.type === 'PLAYER_AWARD' ? card.playerName : card.title;
-    const text =
-      card.type === 'PLAYER_AWARD'
-        ? `Check out ${card.playerName} on MaidanLive`
-        : `${card.title} on MaidanLive`;
+    const title = getCardTitle(card);
+    const text = getShareSummaryText(card);
 
     if (previewUrl && typeof navigator !== 'undefined' && navigator.share) {
       try {
@@ -420,10 +949,7 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
     }
   }
 
-  const shareText =
-    card.type === 'PLAYER_AWARD'
-      ? `${card.playerName} (${card.sport}) on MaidanLive`
-      : `${card.title} — ${card.teamAName} vs ${card.teamBName} on MaidanLive`;
+  const shareText = getShareSummaryText(card);
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`${shareText}\n${shareUrl}`)}`;
 
   return (
@@ -431,8 +957,9 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
       open={open}
       onClose={onClose}
       title="Shareable Sports Card"
-      subtitle="Download or share this live score & match card on WhatsApp or social feeds."
+      subtitle="Download or share this MaidanLive card on WhatsApp or social feeds."
       maxWidthClass="max-w-lg"
+      zIndexClass="z-[100]"
     >
       <div className="space-y-4">
         <canvas ref={canvasRef} className="hidden" />
@@ -487,7 +1014,7 @@ export function ShareCardModal({ open, onClose, card }: ShareCardModalProps) {
             className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-200"
           >
             {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-            <span>{copied ? 'Link Copied' : 'Copy Match URL'}</span>
+            <span>{copied ? 'Link Copied' : 'Copy Share Link'}</span>
           </button>
         </div>
       </div>

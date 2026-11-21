@@ -22,6 +22,7 @@ import {
   TournamentFormat,
   TournamentPaymentMode,
   TournamentPositionEntry,
+  TournamentPrizesConfig,
   TournamentTemplateData,
   VenueData,
 } from '../../types/index.ts';
@@ -54,6 +55,12 @@ export function AdminTournamentsPage() {
   const [format, setFormat] = useState<TournamentFormat>('KNOCKOUT');
   const [season, setSeason] = useState('');
   const [prizeMoney, setPrizeMoney] = useState('');
+  const [firstPrizeAmount, setFirstPrizeAmount] = useState('');
+  const [firstPrizeLabel, setFirstPrizeLabel] = useState('');
+  const [secondPrizeAmount, setSecondPrizeAmount] = useState('');
+  const [secondPrizeLabel, setSecondPrizeLabel] = useState('');
+  const [thirdPrizeAmount, setThirdPrizeAmount] = useState('');
+  const [thirdPrizeLabel, setThirdPrizeLabel] = useState('');
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [paymentMode, setPaymentMode] = useState<TournamentPaymentMode>('NONE');
   const [registrationFee, setRegistrationFee] = useState('0');
@@ -130,6 +137,12 @@ export function AdminTournamentsPage() {
     setFormat('KNOCKOUT');
     setSeason('');
     setPrizeMoney('');
+    setFirstPrizeAmount('');
+    setFirstPrizeLabel('');
+    setSecondPrizeAmount('');
+    setSecondPrizeLabel('');
+    setThirdPrizeAmount('');
+    setThirdPrizeLabel('');
     setRegistrationOpen(false);
     setPaymentMode('NONE');
     setRegistrationFee('0');
@@ -160,6 +173,12 @@ export function AdminTournamentsPage() {
     setFormat(t.format || 'KNOCKOUT');
     setSeason(t.season || '');
     setPrizeMoney(t.prizeMoney || '');
+    setFirstPrizeAmount(t.prizes?.first?.amount || '');
+    setFirstPrizeLabel(t.prizes?.first?.label || '');
+    setSecondPrizeAmount(t.prizes?.second?.amount || '');
+    setSecondPrizeLabel(t.prizes?.second?.label || '');
+    setThirdPrizeAmount(t.prizes?.third?.amount || '');
+    setThirdPrizeLabel(t.prizes?.third?.label || '');
     setRegistrationOpen(Boolean(t.registrationOpen));
     const derivedMode: TournamentPaymentMode =
       t.paymentMode || ((t.registrationFee || 0) > 0 ? 'ENTRY_FEE' : 'NONE');
@@ -283,6 +302,20 @@ export function AdminTournamentsPage() {
     setTeamIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   }
 
+  function buildPrizesPayload(): TournamentPrizesConfig {
+    const out: TournamentPrizesConfig = {};
+    if (firstPrizeAmount.trim() || firstPrizeLabel.trim()) {
+      out.first = { amount: firstPrizeAmount.trim(), label: firstPrizeLabel.trim() };
+    }
+    if (secondPrizeAmount.trim() || secondPrizeLabel.trim()) {
+      out.second = { amount: secondPrizeAmount.trim(), label: secondPrizeLabel.trim() };
+    }
+    if (thirdPrizeAmount.trim() || thirdPrizeLabel.trim()) {
+      out.third = { amount: thirdPrizeAmount.trim(), label: thirdPrizeLabel.trim() };
+    }
+    return out;
+  }
+
   function handleApplyTemplate(tplId: string) {
     setSelectedTemplateId(tplId);
     const tpl = templates.find((item) => item.id === tplId);
@@ -292,6 +325,12 @@ export function AdminTournamentsPage() {
     setGroupCount(String(tpl.groupCount || 2));
     if (tpl.location) setLocation(tpl.location);
     if (tpl.prizeMoney) setPrizeMoney(tpl.prizeMoney);
+    setFirstPrizeAmount(tpl.prizes?.first?.amount || '');
+    setFirstPrizeLabel(tpl.prizes?.first?.label || '');
+    setSecondPrizeAmount(tpl.prizes?.second?.amount || '');
+    setSecondPrizeLabel(tpl.prizes?.second?.label || '');
+    setThirdPrizeAmount(tpl.prizes?.third?.amount || '');
+    setThirdPrizeLabel(tpl.prizes?.third?.label || '');
     setRegistrationFee(String(tpl.registrationFee ?? 0));
     setRules(tpl.rules || '');
     setQualificationRules(tpl.qualificationRules || '');
@@ -310,6 +349,7 @@ export function AdminTournamentsPage() {
         groupCount: Math.max(1, Number(groupCount) || 2),
         location: location.trim(),
         prizeMoney: prizeMoney.trim(),
+        prizes: buildPrizesPayload(),
         registrationFee: Math.max(0, Number(registrationFee) || 0),
         rules: rules.trim(),
         qualificationRules: qualificationRules.trim(),
@@ -372,6 +412,7 @@ export function AdminTournamentsPage() {
         format,
         season: season.trim(),
         prizeMoney: prizeMoney.trim(),
+        prizes: buildPrizesPayload(),
         registrationOpen,
         paymentMode,
         registrationFee: paymentMode === 'ENTRY_FEE' ? entryAmt : 0,
@@ -515,9 +556,12 @@ export function AdminTournamentsPage() {
                               : ' (Free)'}
                         </span>
                       )}
-                      {t.prizeMoney && (
+                      {(t.prizeMoney || t.prizes?.first?.amount || t.prizes?.first?.label) && (
                         <span className="text-[11px] font-semibold text-[#EA580C] bg-orange-50 px-1.5 py-0.5 rounded">
-                          Prize: {t.prizeMoney}
+                          Prize:{' '}
+                          {t.prizeMoney ||
+                            t.prizes?.first?.amount ||
+                            t.prizes?.first?.label}
                         </span>
                       )}
                     </div>
@@ -814,7 +858,7 @@ export function AdminTournamentsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Prize Money / Pool (Optional)
+                Prize Pool Summary (Optional)
               </label>
               <input
                 type="text"
@@ -823,6 +867,78 @@ export function AdminTournamentsPage() {
                 placeholder="e.g. ₹50,000 + Trophy"
                 className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
+            </div>
+
+            {/* Optional 1st / 2nd / 3rd Prize Tiers */}
+            <div className="sm:col-span-2 p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-bold text-slate-800 inline-flex items-center gap-1.5">
+                  <Trophy className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Podium Prize Breakdown (Optional)</span>
+                </label>
+                <span className="text-[11px] text-slate-500">
+                  Leave any tier blank if not awarded
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="p-2.5 rounded-lg bg-white border border-amber-200 space-y-1.5">
+                  <p className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
+                    1st Prize
+                  </p>
+                  <input
+                    type="text"
+                    value={firstPrizeAmount}
+                    onChange={(e) => setFirstPrizeAmount(e.target.value)}
+                    placeholder="Amount (e.g. ₹25,000)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                  <input
+                    type="text"
+                    value={firstPrizeLabel}
+                    onChange={(e) => setFirstPrizeLabel(e.target.value)}
+                    placeholder="Label (e.g. Champion Trophy)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                </div>
+                <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1.5">
+                  <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    2nd Prize
+                  </p>
+                  <input
+                    type="text"
+                    value={secondPrizeAmount}
+                    onChange={(e) => setSecondPrizeAmount(e.target.value)}
+                    placeholder="Amount (e.g. ₹15,000)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                  <input
+                    type="text"
+                    value={secondPrizeLabel}
+                    onChange={(e) => setSecondPrizeLabel(e.target.value)}
+                    placeholder="Label (e.g. Runner-Up)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                </div>
+                <div className="p-2.5 rounded-lg bg-white border border-orange-200/80 space-y-1.5">
+                  <p className="text-[11px] font-bold text-orange-800 uppercase tracking-wider">
+                    3rd Prize
+                  </p>
+                  <input
+                    type="text"
+                    value={thirdPrizeAmount}
+                    onChange={(e) => setThirdPrizeAmount(e.target.value)}
+                    placeholder="Amount (e.g. ₹5,000)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                  <input
+                    type="text"
+                    value={thirdPrizeLabel}
+                    onChange={(e) => setThirdPrizeLabel(e.target.value)}
+                    placeholder="Label (e.g. Third Place)"
+                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Mutually Exclusive Payment Mode Configuration */}

@@ -28,6 +28,8 @@ export interface IRosterPlayerEntry {
   name: string;
   role: string;
   jerseyNumber?: number | null;
+  avatarUrl?: string;
+  avatarPublicId?: string;
   dateOfBirth: string;
   isMinor: boolean;
   guardianName?: string;
@@ -161,6 +163,8 @@ const tournamentRegistrationSchema = new Schema<ITournamentRegistration>(
         name: { type: String, required: true, trim: true, maxlength: 120 },
         role: { type: String, trim: true, default: '', maxlength: 80 },
         jerseyNumber: { type: Number, default: null },
+        avatarUrl: { type: String, trim: true, default: '' },
+        avatarPublicId: { type: String, trim: true, default: '' },
         dateOfBirth: { type: String, trim: true, default: '' },
         isMinor: { type: Boolean, default: false },
         guardianName: { type: String, trim: true, default: '', maxlength: 120 },

@@ -27,7 +27,7 @@ export function ConfirmDialog({
   error = null,
 }: ConfirmDialogProps) {
   return (
-    <Modal open={open} onClose={onClose} title={title} maxWidthClass="max-w-md">
+    <Modal open={open} onClose={onClose} title={title} maxWidthClass="max-w-md" zIndexClass="z-[110]">
       <div className="space-y-4">
         <div className="flex items-start gap-3">
           <div
