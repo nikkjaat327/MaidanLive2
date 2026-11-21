@@ -48,6 +48,8 @@ export function getEffectiveGranularPermissions(user: IUser): Set<string> {
   if (perms.manageStreams) {
     set.add('matches:manage_stream');
     set.add('matches:publish_replay');
+    set.add('broadcast:control');
+    set.add('broadcast:manage_cameras');
   }
   if (perms.manageScores) set.add('matches:score');
   if (perms.manageTournaments) {
@@ -73,6 +75,7 @@ export function getEffectiveGranularPermissions(user: IUser): Set<string> {
     set.add('registrations:review');
     set.add('users:view');
     set.add('audit_logs:view');
+    set.add('broadcast:override');
   }
   if (user.role === 'TOURNAMENT_ORGANIZER') {
     set.add('analytics:view');

@@ -3,6 +3,8 @@ export {
   getSocketIO,
   emitStreamEvent,
   emitRoomOnlyEvent,
+  emitBroadcastStudioEvent,
+  registerObsAgentHandlers,
   emitTournamentEvent,
   emitUserNotification,
   getActiveRoomViewerCount,

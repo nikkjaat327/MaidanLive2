@@ -1,0 +1,14 @@
+{
+  "name": "maidanlive-obs-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local OBS Studio WebSocket v5 bridge agent for MaidanLive Multi-Camera Broadcast Studio",
+  "scripts": {
+    "start": "node maidanlive-obs-agent.mjs"
+  },
+  "dependencies": {
+    "obs-websocket-js": "^5.0.6",
+    "socket.io-client": "^4.8.4"
+  }
+}

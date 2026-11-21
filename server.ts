@@ -19,6 +19,8 @@ import tournamentWorkflowRoutes from './server/routes/tournamentWorkflowRoutes.t
 import engagementRoutes from './server/routes/engagementRoutes.ts';
 import platformOpsRoutes from './server/routes/platformOpsRoutes.ts';
 import v1Routes from './server/routes/v1Routes.ts';
+import obsBroadcastRoutes from './server/routes/obsBroadcastRoutes.ts';
+import { initObsControllerBridge } from './server/services/obsControllerService.ts';
 import { User } from './server/models/User.ts';
 import { Tournament } from './server/models/Tournament.ts';
 import { LiveStream } from './server/models/LiveStream.ts';
@@ -337,6 +339,7 @@ async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
   const httpServer = http.createServer(app);
+  initObsControllerBridge();
   initSocketServer(httpServer);
 
   app.use(
@@ -393,6 +396,7 @@ async function startServer() {
   app.use('/api', tournamentWorkflowRoutes);
   app.use('/api', engagementRoutes);
   app.use('/api', platformOpsRoutes);
+  app.use('/api/obs', obsBroadcastRoutes);
 
   // API 404 handler (never return index.html for unknown /api routes)
   app.use('/api', (_req, res) => {

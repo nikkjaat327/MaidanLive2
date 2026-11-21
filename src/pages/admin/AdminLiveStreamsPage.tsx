@@ -765,6 +765,14 @@ export function AdminLiveStreamsPage() {
                     <span>OBS BROADCAST OVERLAY</span>
                   </Link>
 
+                  <Link
+                    to={`/admin/broadcast-studio/${stream.id}`}
+                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-800 rounded-lg hover:bg-slate-700 whitespace-nowrap"
+                  >
+                    <Video className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <span>Multi-Cam OBS</span>
+                  </Link>
+
                   <button
                     type="button"
                     onClick={() => openConfigModal(stream)}

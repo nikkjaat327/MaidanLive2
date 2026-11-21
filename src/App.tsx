@@ -55,6 +55,8 @@ import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.tsx';
 // Dedicated Broadcast Studio & OBS Browser Source Pages
 import { BroadcastOverlayConfigPage } from './pages/broadcast/BroadcastOverlayConfigPage.tsx';
 import { ObsOverlayViewerPage } from './pages/broadcast/ObsOverlayViewerPage.tsx';
+import { AdminObsBroadcastStudioPage } from './pages/admin/AdminObsBroadcastStudioPage.tsx';
+import { CameraCompanionPage } from './pages/broadcast/CameraCompanionPage.tsx';
 
 export default function App() {
   useEffect(() => {
@@ -70,6 +72,9 @@ export default function App() {
               {/* Isolated Public OBS Studio Browser Source Route (zero chrome, genuine transparency) */}
               <Route path="/broadcast/overlay/view/:matchId" element={<ObsOverlayViewerPage />} />
 
+              {/* Standalone Mobile Camera Companion Route (Scoped Camera Push Token Auth) */}
+              <Route path="/camera-connect/:cameraDocId" element={<CameraCompanionPage />} />
+
               {/* Dedicated OBS Broadcast Overlay Configuration Studio (Auth Protected) */}
               <Route path="/broadcast/overlay" element={<RequireAdminAuth />}>
                 <Route index element={<Navigate to="/admin/live-streams" replace />} />
@@ -83,6 +88,8 @@ export default function App() {
                   <Route index element={<Navigate to="/admin/dashboard" replace />} />
                   <Route path="dashboard" element={<AdminDashboardPage />} />
                   <Route path="live-streams" element={<AdminLiveStreamsPage />} />
+                  <Route path="broadcast-studio" element={<AdminObsBroadcastStudioPage />} />
+                  <Route path="broadcast-studio/:matchId" element={<AdminObsBroadcastStudioPage />} />
                   <Route path="match-health" element={<AdminMatchHealthPage />} />
                   <Route path="scoreboard" element={<AdminScoreboardPage />} />
                   <Route path="scoreboard/:id" element={<AdminScoreboardPage />} />

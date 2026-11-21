@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { Server as HttpServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import { getJwtSecret } from '../../server/middleware/auth.ts';
+import { canManageStream, getJwtSecret, hasGranularPermission } from '../../server/middleware/auth.ts';
 import type { JwtPayload } from '../../server/middleware/auth.ts';
 import { ADMIN_PORTAL_ROLES, User } from '../../server/models/User.ts';
 import { LiveStream } from '../../server/models/LiveStream.ts';
@@ -10,6 +10,20 @@ import { LiveStream } from '../../server/models/LiveStream.ts';
 let io: SocketIOServer | null = null;
 let eventSequence = 0;
 let cleanupTimer: NodeJS.Timeout | null = null;
+
+export interface ObsAgentRegistrationHandlers {
+  onAgentConnected: (socket: any, matchId: string, label: string) => Promise<void>;
+  onAgentDisconnected: (socket: any, matchId: string, reason: string) => Promise<void>;
+  onAgentStateUpdate: (matchId: string, payload: Record<string, any>) => Promise<void>;
+  onAgentError: (matchId: string, errorMessage: string) => Promise<void>;
+  verifyAgentToken: (matchId: string, token: string) => Promise<boolean>;
+}
+
+let obsAgentHandlers: ObsAgentRegistrationHandlers | null = null;
+
+export function registerObsAgentHandlers(handlers: ObsAgentRegistrationHandlers): void {
+  obsAgentHandlers = handlers;
+}
 
 interface TrackedViewerSession {
   sessionId: string;
@@ -316,6 +330,40 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       }
     );
 
+    // Authenticated Broadcast Studio room (for OBS camera/scene/layout real-time sync)
+    socket.on(
+      'broadcast-studio:join',
+      async (payload: { token?: string; matchId?: string }) => {
+        if (!payload?.token || !payload?.matchId) return;
+        const cleanMatchId = String(payload.matchId).trim();
+        if (!cleanMatchId) return;
+        try {
+          const decoded = jwt.verify(payload.token, getJwtSecret()) as JwtPayload;
+          if (decoded.portal !== 'admin') return;
+          const user: any = await User.findById(decoded.sub);
+          if (!user || !user.isActive || !ADMIN_PORTAL_ROLES.includes(user.role)) return;
+
+          const allowed =
+            (await canManageStream(user, cleanMatchId, 'stream')) ||
+            (await hasGranularPermission(user, 'broadcast:control', {
+              scopeType: 'match',
+              scopeId: cleanMatchId,
+            }));
+          if (!allowed) return;
+
+          socket.join(`broadcast-studio:${cleanMatchId}`);
+          socket.emit('broadcast-studio:joined', attachMeta({ matchId: cleanMatchId }));
+        } catch {
+          // Ignore invalid broadcast studio socket tokens
+        }
+      }
+    );
+
+    socket.on('broadcast-studio:leave', (matchId: string) => {
+      if (typeof matchId !== 'string' || !matchId.trim()) return;
+      socket.leave(`broadcast-studio:${matchId.trim()}`);
+    });
+
     socket.on('user:join', (payload: string | { token?: string; userId?: string }) => {
       let verifiedUserId = '';
       const tokenStr =
@@ -358,6 +406,59 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     });
   });
 
+  // Dedicated authenticated namespace for Local OBS Controller Agents
+  const obsAgentNs = io.of('/obs-agent');
+  obsAgentNs.use(async (socket, next) => {
+    try {
+      const auth = (socket.handshake.auth || {}) as Record<string, unknown>;
+      const matchId = typeof auth.matchId === 'string' ? auth.matchId.trim() : '';
+      const agentToken = typeof auth.agentToken === 'string' ? auth.agentToken.trim() : '';
+      if (!matchId || !agentToken || !obsAgentHandlers) {
+        next(new Error('Unauthorized OBS agent handshake.'));
+        return;
+      }
+      const ok = await obsAgentHandlers.verifyAgentToken(matchId, agentToken);
+      if (!ok) {
+        next(new Error('Invalid OBS agent token for this match.'));
+        return;
+      }
+      (socket.data as any).matchId = matchId;
+      (socket.data as any).agentLabel =
+        typeof auth.label === 'string' ? auth.label.trim().slice(0, 120) : 'Local OBS Agent';
+      next();
+    } catch {
+      next(new Error('OBS agent authentication error.'));
+    }
+  });
+
+  obsAgentNs.on('connection', (socket) => {
+    const matchId = String((socket.data as any).matchId || '');
+    const label = String((socket.data as any).agentLabel || 'Local OBS Agent');
+    if (obsAgentHandlers && matchId) {
+      obsAgentHandlers.onAgentConnected(socket, matchId, label).catch(() => {});
+    }
+
+    socket.on('agent:obs_state', (payload: Record<string, any>) => {
+      if (obsAgentHandlers && matchId && payload && typeof payload === 'object') {
+        obsAgentHandlers.onAgentStateUpdate(matchId, payload).catch(() => {});
+      }
+    });
+
+    socket.on('agent:obs_error', (payload: { message?: string }) => {
+      if (obsAgentHandlers && matchId) {
+        obsAgentHandlers
+          .onAgentError(matchId, String(payload?.message || 'OBS reported an error.'))
+          .catch(() => {});
+      }
+    });
+
+    socket.on('disconnect', (reason) => {
+      if (obsAgentHandlers && matchId) {
+        obsAgentHandlers.onAgentDisconnected(socket, matchId, String(reason || 'disconnected')).catch(() => {});
+      }
+    });
+  });
+
   return io;
 }
 
@@ -380,6 +481,12 @@ export function emitRoomOnlyEvent(streamId: string, event: string, payload: unkn
   const enriched = attachMeta(payload);
   io.to(`stream:${streamId}`).emit(event, enriched);
   io.to(`match:${streamId}`).emit(event, enriched);
+}
+
+export function emitBroadcastStudioEvent(matchId: string, event: string, payload: unknown): void {
+  if (!io) return;
+  const enriched = attachMeta(payload);
+  io.to(`broadcast-studio:${matchId}`).emit(event, enriched);
 }
 
 export function emitTournamentEvent(tournamentId: string, event: string, payload: unknown): void {

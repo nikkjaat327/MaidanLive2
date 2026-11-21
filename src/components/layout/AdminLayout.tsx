@@ -29,6 +29,7 @@ import {
   Trophy,
   UserCheck,
   Users,
+  Video,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
@@ -93,6 +94,12 @@ export function AdminLayout() {
     },
     { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: true },
     { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: true },
+    {
+      to: '/admin/broadcast-studio',
+      label: 'Multi-Cam OBS',
+      icon: Video,
+      show: isSuperOrAdmin || adminUser?.role === 'TOURNAMENT_ORGANIZER' || Boolean(perms?.manageStreams),
+    },
     { to: '/admin/match-health', label: 'Match Health', icon: HeartPulse, show: true },
     { to: '/admin/scoreboard', label: 'Live Score Control', icon: SlidersHorizontal, show: true },
     {

@@ -42,6 +42,10 @@ function refNameToCollection(refName: string): string {
     RevenueRecord: 'revenuerecords',
     TournamentTemplate: 'tournamenttemplates',
     StoredFile: 'storedfiles',
+    ObsControllerProfile: 'obscontrollerprofiles',
+    BroadcastCamera: 'broadcastcameras',
+    BroadcastScene: 'broadcastscenes',
+    BroadcastAuditLog: 'broadcastauditlogs',
   };
   return map[refName] || `${refName.toLowerCase()}s`;
 }

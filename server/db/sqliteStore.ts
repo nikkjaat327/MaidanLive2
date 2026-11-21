@@ -39,6 +39,10 @@ const KNOWN_COLLECTIONS = [
   'revenuerecords',
   'tournamenttemplates',
   'storedfiles',
+  'obscontrollerprofiles',
+  'broadcastcameras',
+  'broadcastscenes',
+  'broadcastauditlogs',
 ];
 
 export function resolveSqliteDbPath(): string {

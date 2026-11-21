@@ -17,6 +17,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Tv,
+  Video,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -266,6 +267,13 @@ export function BroadcastOverlayConfigPage() {
             >
               <Radio className="w-3.5 h-3.5 text-[#EA580C]" />
               <span>Streams</span>
+            </Link>
+            <Link
+              to={matchId ? `/admin/broadcast-studio/${matchId}` : '/admin/broadcast-studio'}
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800 whitespace-nowrap shrink-0"
+            >
+              <Video className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>Multi-Cam OBS</span>
             </Link>
 
             <div className="min-w-0">
