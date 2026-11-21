@@ -3,6 +3,8 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext.tsx';
 import { LanguageProvider } from './context/LanguageContext.tsx';
 import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
+import { LiveMonitorProvider } from './context/LiveMonitorContext.tsx';
+import { GlobalLiveMonitor } from './components/streaming/GlobalLiveMonitor.tsx';
 import { offlineScoreService } from './services/scoreboard/offlineScoreService.ts';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
 import { AdminLayout, RequireAdminAuth } from './components/layout/AdminLayout.tsx';
@@ -70,8 +72,9 @@ export default function App() {
     <LanguageProvider>
       <AdminThemeProvider>
         <AuthProvider>
-          <BrowserRouter>
-            <Routes>
+          <LiveMonitorProvider>
+            <BrowserRouter>
+              <Routes>
               {/* Isolated Public OBS Studio Browser Source Route (zero chrome, genuine transparency) */}
               <Route path="/broadcast/overlay/view/:matchId" element={<ObsOverlayViewerPage />} />
 
@@ -151,10 +154,12 @@ export default function App() {
                 <Route path="/register" element={<CustomerRegisterPage />} />
               </Route>
 
-              {/* Fallback */}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </BrowserRouter>
+                {/* Fallback */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+              <GlobalLiveMonitor />
+            </BrowserRouter>
+          </LiveMonitorProvider>
         </AuthProvider>
       </AdminThemeProvider>
     </LanguageProvider>

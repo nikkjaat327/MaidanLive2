@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MaidanLive OBS Bridge</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img src="../assets/icon.png" alt="MaidanLive" class="brand-logo" />
+          <div>
+            <div class="brand-title">MaidanLive OBS Bridge</div>
+            <div class="brand-sub">Local Windows Controller for OBS Studio WebSocket v5</div>
+          </div>
+        </div>
+        <div class="topbar-badges">
+          <span id="badge-server" class="status-pill pill-muted">MaidanLive: Offline</span>
+          <span id="badge-obs" class="status-pill pill-muted">OBS Studio: Disconnected</span>
+        </div>
+      </header>
+
+      <!-- PAIRING SCREEN (WHEN UNPAIRED) -->
+      <main id="view-pairing" class="panel-grid hidden">
+        <section class="card card-hero">
+          <div class="card-header">
+            <h1>Connect This Windows PC to MaidanLive</h1>
+            <p>
+              Pair once using a 1-time Pairing Code from your MaidanLive Broadcast Control Room, or
+              sign in directly with your MaidanLive Broadcaster account.
+            </p>
+          </div>
+
+          <div class="tab-bar">
+            <button type="button" id="tab-code-btn" class="tab-btn active">
+              Pairing Code (Recommended)
+            </button>
+            <button type="button" id="tab-login-btn" class="tab-btn">
+              Broadcaster Account Sign-In
+            </button>
+          </div>
+
+          <div id="pairing-error" class="alert alert-error hidden"></div>
+
+          <!-- TAB A: PAIRING CODE -->
+          <form id="form-pair-code" class="stack">
+            <div class="field">
+              <label for="code-server-url">MaidanLive Server URL</label>
+              <input
+                id="code-server-url"
+                type="url"
+                placeholder="https://your-maidanlive-app.run.app"
+                required
+              />
+              <span class="hint">
+                Copy from MaidanLive → Broadcast Studio → OBS Connection → Pair Windows Bridge.
+              </span>
+            </div>
+            <div class="field">
+              <label for="pairing-code-input">8-Character Pairing Code</label>
+              <input
+                id="pairing-code-input"
+                type="text"
+                maxlength="9"
+                placeholder="ABCD-EFGH"
+                class="code-input"
+                required
+              />
+            </div>
+            <button type="submit" id="btn-pair-code" class="btn btn-primary">
+              Pair &amp; Connect OBS Bridge
+            </button>
+          </form>
+
+          <!-- TAB B: BROADCASTER ACCOUNT SIGN IN -->
+          <form id="form-pair-login" class="stack hidden">
+            <div class="field">
+              <label for="login-server-url">MaidanLive Server URL</label>
+              <input
+                id="login-server-url"
+                type="url"
+                placeholder="https://your-maidanlive-app.run.app"
+                required
+              />
+            </div>
+            <div class="two-col">
+              <div class="field">
+                <label for="login-email">Broadcaster / Admin Email</label>
+                <input id="login-email" type="email" placeholder="broadcaster@example.com" required />
+              </div>
+              <div class="field">
+                <label for="login-password">Password</label>
+                <input id="login-password" type="password" placeholder="Enter password" required />
+              </div>
+            </div>
+            <div id="login-totp-row" class="field hidden">
+              <label for="login-totp">6-Digit 2FA Authenticator Code</label>
+              <input
+                id="login-totp"
+                type="text"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="123456"
+              />
+            </div>
+            <button type="submit" id="btn-pair-login" class="btn btn-primary">
+              Sign In &amp; Pair This PC
+            </button>
+          </form>
+        </section>
+
+        <aside class="card card-side">
+          <h2>Local OBS Pre-Check</h2>
+          <p class="muted">We automatically check your local OBS Studio installation.</p>
+          <div class="check-list">
+            <div class="check-row">
+              <span>OBS Studio Installed</span>
+              <strong id="precheck-installed">Checking...</strong>
+            </div>
+            <div class="check-row">
+              <span>OBS Process Running</span>
+              <strong id="precheck-running">Checking...</strong>
+            </div>
+            <div class="check-row">
+              <span>WebSocket Port 4455</span>
+              <strong id="precheck-port">Checking...</strong>
+            </div>
+          </div>
+          <div class="tip-box">
+            <strong>Security Guarantee:</strong> Your OBS WebSocket password stays encrypted inside
+            Windows Credential Protection (DPAPI) on this laptop and is never sent to MaidanLive.
+          </div>
+        </aside>
+      </main>
+
+      <!-- CONNECTED / PAIRED SCREEN -->
+      <main id="view-connected" class="connected-grid hidden">
+        <!-- Top Status & Match Card -->
+        <section class="card span-2">
+          <div class="status-banner">
+            <div class="stack-tight">
+              <div class="eyebrow">PAIRED BRIDGE ID: <span id="lbl-bridge-id" class="mono">—</span></div>
+              <h2 id="lbl-match-title">Ready for Assigned Match Broadcast</h2>
+              <p id="lbl-server-url" class="muted mono">—</p>
+            </div>
+            <div class="btn-row">
+              <button type="button" id="btn-reconnect-server" class="btn btn-secondary">
+                Reconnect MaidanLive
+              </button>
+              <button type="button" id="btn-minimize-tray" class="btn btn-secondary">
+                Minimize to Tray
+              </button>
+              <button type="button" id="btn-unpair" class="btn btn-danger-outline">
+                Unpair PC
+              </button>
+            </div>
+          </div>
+
+          <div id="banner-revoked" class="alert alert-error hidden"></div>
+          <div id="banner-server-error" class="alert alert-warn hidden"></div>
+        </section>
+
+        <!-- OBS Detection & Password Card -->
+        <section class="card">
+          <div class="section-head">
+            <div>
+              <h3>Local OBS Studio Setup</h3>
+              <p id="lbl-obs-subtitle" class="muted">Connecting to local OBS WebSocket v5...</p>
+            </div>
+            <div class="btn-row">
+              <button type="button" id="btn-scan-obs" class="btn btn-sm btn-secondary">Re-scan</button>
+              <button type="button" id="btn-launch-obs" class="btn btn-sm btn-accent hidden">
+                Launch OBS Studio
+              </button>
+            </div>
+          </div>
+
+          <div class="check-list">
+            <div class="check-row">
+              <span>OBS Studio Installed</span>
+              <strong id="obs-installed">—</strong>
+            </div>
+            <div class="check-row">
+              <span>OBS Running</span>
+              <strong id="obs-running">—</strong>
+            </div>
+            <div class="check-row">
+              <span>WebSocket v5 (Port 4455)</span>
+              <strong id="obs-port">—</strong>
+            </div>
+            <div class="check-row">
+              <span>OBS Version / Stream</span>
+              <strong id="obs-version">—</strong>
+            </div>
+          </div>
+
+          <div id="obs-setup-guide" class="guide-box hidden">
+            <strong>Quick OBS Setup (One Time):</strong>
+            <ol>
+              <li>Open <strong>OBS Studio</strong> on this Windows PC.</li>
+              <li>Click <strong>Tools → WebSocket Server Settings</strong>.</li>
+              <li>Check <strong>Enable WebSocket server</strong> (Server Port <code>4455</code>).</li>
+              <li>Click <strong>Generate Password</strong> (or copy existing password) and paste below.</li>
+            </ol>
+          </div>
+
+          <div id="obs-error-alert" class="alert alert-warn hidden"></div>
+
+          <form id="form-obs-settings" class="stack-tight top-gap">
+            <div class="two-col">
+              <div class="field">
+                <label for="obs-url-input">Local OBS Address</label>
+                <input id="obs-url-input" type="text" value="ws://127.0.0.1:4455" required />
+              </div>
+              <div class="field">
+                <label for="obs-password-input">
+                  OBS WebSocket Password <span id="lbl-obs-pw-saved" class="muted"></span>
+                </label>
+                <input
+                  id="obs-password-input"
+                  type="password"
+                  placeholder="Enter OBS port 4455 password"
+                />
+              </div>
+            </div>
+            <div class="btn-row">
+              <button type="submit" class="btn btn-primary">Save &amp; Connect OBS</button>
+              <button type="button" id="btn-reconnect-obs" class="btn btn-secondary">
+                Reconnect OBS
+              </button>
+            </div>
+          </form>
+
+          <label class="checkbox-row top-gap">
+            <input id="chk-autostart" type="checkbox" />
+            <span>Launch MaidanLive OBS Bridge automatically when Windows starts</span>
+          </label>
+        </section>
+
+        <!-- Dynamic OBS Scene Discovery & Switcher -->
+        <section class="card">
+          <div class="section-head">
+            <div>
+              <h3>OBS Scenes (<span id="lbl-scene-count">0</span>)</h3>
+              <p class="muted">
+                Active Scene: <strong id="lbl-active-scene" class="text-accent">None</strong>
+              </p>
+            </div>
+            <button type="button" id="btn-refresh-scenes" class="btn btn-sm btn-secondary">
+              Refresh Scenes
+            </button>
+          </div>
+
+          <div id="scene-grid" class="scene-grid">
+            <div class="empty-scenes">Connect OBS Studio to load your scenes dynamically.</div>
+          </div>
+
+          <div class="tip-box top-gap">
+            Switching scenes inside MaidanLive Control Room or here switches your OBS Program Scene
+            instantly without interrupting your YouTube Live stream.
+          </div>
+        </section>
+
+        <!-- Activity Logs -->
+        <section class="card span-2">
+          <div class="section-head">
+            <h3>Bridge Activity Log</h3>
+            <button type="button" id="btn-clear-logs" class="btn btn-sm btn-secondary">
+              Clear Logs
+            </button>
+          </div>
+          <div id="log-container" class="log-box"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

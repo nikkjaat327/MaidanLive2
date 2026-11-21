@@ -1,0 +1,115 @@
+import mongoose, { Schema } from 'mongoose';
+import type { Document } from 'mongoose';
+import { createDualModel } from '../db/dualModel.ts';
+
+export type ObsBridgeLifecycleStatus = 'ACTIVE' | 'REVOKED';
+export type ObsBridgeConnectionStatus = 'ONLINE' | 'OFFLINE';
+export type ObsBridgeObsStatus = 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'ERROR';
+
+export interface IObsBridge extends Document {
+  bridgeId: string;
+  name: string;
+  label: string;
+  ownerUserId: mongoose.Types.ObjectId;
+  ownerName: string;
+  ownerEmail: string;
+  tournamentId?: mongoose.Types.ObjectId | null;
+  assignedMatchIds: mongoose.Types.ObjectId[];
+  activeMatchId?: mongoose.Types.ObjectId | null;
+  tokenHash: string;
+  tokenPrefix: string;
+  status: ObsBridgeLifecycleStatus;
+  connectionStatus: ObsBridgeConnectionStatus;
+  obsStatus: ObsBridgeObsStatus;
+  obsVersion: string;
+  obsWebSocketVersion: string;
+  activeObsScene: string;
+  obsScenes: string[];
+  obsStreamActive: boolean;
+  lastConnectedAt?: Date | null;
+  lastDisconnectedAt?: Date | null;
+  lastHeartbeatAt?: Date | null;
+  lastError: string;
+  platform: string;
+  revokedAt?: Date | null;
+  revokedBy?: mongoose.Types.ObjectId | null;
+  revokeReason: string;
+  createdBy?: mongoose.Types.ObjectId | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const obsBridgeSchema = new Schema<IObsBridge>(
+  {
+    bridgeId: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      uppercase: true,
+      maxlength: 40,
+      index: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 120,
+    },
+    label: {
+      type: String,
+      trim: true,
+      default: '',
+      maxlength: 140,
+    },
+    ownerUserId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
+    ownerName: { type: String, trim: true, default: '', maxlength: 120 },
+    ownerEmail: { type: String, trim: true, default: '', maxlength: 180 },
+    tournamentId: { type: Schema.Types.ObjectId, ref: 'Tournament', default: null },
+    assignedMatchIds: [{ type: Schema.Types.ObjectId, ref: 'LiveStream' }],
+    activeMatchId: { type: Schema.Types.ObjectId, ref: 'LiveStream', default: null },
+    tokenHash: { type: String, required: true, select: false },
+    tokenPrefix: { type: String, default: '', maxlength: 40 },
+    status: {
+      type: String,
+      enum: ['ACTIVE', 'REVOKED'],
+      default: 'ACTIVE',
+      index: true,
+    },
+    connectionStatus: {
+      type: String,
+      enum: ['ONLINE', 'OFFLINE'],
+      default: 'OFFLINE',
+    },
+    obsStatus: {
+      type: String,
+      enum: ['CONNECTED', 'DISCONNECTED', 'CONNECTING', 'ERROR'],
+      default: 'DISCONNECTED',
+    },
+    obsVersion: { type: String, default: '' },
+    obsWebSocketVersion: { type: String, default: '' },
+    activeObsScene: { type: String, default: '' },
+    obsScenes: [{ type: String }],
+    obsStreamActive: { type: Boolean, default: false },
+    lastConnectedAt: { type: Date, default: null },
+    lastDisconnectedAt: { type: Date, default: null },
+    lastHeartbeatAt: { type: Date, default: null },
+    lastError: { type: String, default: '', maxlength: 500 },
+    platform: { type: String, default: 'win32', maxlength: 40 },
+    revokedAt: { type: Date, default: null },
+    revokedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    revokeReason: { type: String, default: '', maxlength: 240 },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  },
+  { timestamps: true }
+);
+
+obsBridgeSchema.index({ assignedMatchIds: 1, status: 1 });
+
+const MongooseObsBridge = mongoose.model<IObsBridge>('ObsBridge', obsBridgeSchema);
+export const ObsBridge = createDualModel<IObsBridge>('obsbridges', MongooseObsBridge);

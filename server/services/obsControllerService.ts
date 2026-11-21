@@ -1,25 +1,33 @@
+import crypto from 'crypto';
 import OBSWebSocket from 'obs-websocket-js';
 import type { Socket as IoSocket } from 'socket.io';
 import mongoose from 'mongoose';
 import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
 import type { IObsControllerProfile, MultiCameraLayoutType } from '../models/ObsControllerProfile.ts';
+import { ObsBridge } from '../models/ObsBridge.ts';
+import type { IObsBridge } from '../models/ObsBridge.ts';
+import { ObsBridgePairing } from '../models/ObsBridgePairing.ts';
 import { BroadcastCamera } from '../models/BroadcastCamera.ts';
-import type { CameraConnectionStatus, IBroadcastCamera } from '../models/BroadcastCamera.ts';
+import type { CameraConnectionStatus } from '../models/BroadcastCamera.ts';
 import { BroadcastScene } from '../models/BroadcastScene.ts';
 import { BroadcastAuditLog } from '../models/BroadcastAuditLog.ts';
 import type { BroadcastAuditAction } from '../models/BroadcastAuditLog.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { User } from '../models/User.ts';
 import type { IUser } from '../models/User.ts';
+import { hasBroadcastAccess } from '../middleware/auth.ts';
 import {
   buildVdoNinjaLinks,
   decryptObsSecret,
   encryptObsSecret,
   generateScopedToken,
+  hashScopedToken,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import { computeObsLayoutBoxes, LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
 import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/index.ts';
+import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { verifyMediaMTXStreamHealth } from './mediamtxService.ts';
 
@@ -35,64 +43,338 @@ interface DirectObsSession {
 
 const directSessions = new Map<string, DirectObsSession>();
 const agentSockets = new Map<string, IoSocket>();
+const bridgeSockets = new Map<string, IoSocket>();
+const activeSceneSwitchLocks = new Map<string, { inFlight: boolean; lastSwitchAt: number }>();
 const HEARTBEAT_STALE_MS = 45_000;
+const SCENE_SWITCH_COOLDOWN_MS = 350;
+
+function acquireSceneSwitchGuard(matchId: string): void {
+  const now = Date.now();
+  const state = activeSceneSwitchLocks.get(matchId);
+  if (state?.inFlight) {
+    const err: any = new Error('An OBS scene transition is already in progress. Please wait a moment.');
+    err.statusCode = 409;
+    throw err;
+  }
+  if (state && now - state.lastSwitchAt < SCENE_SWITCH_COOLDOWN_MS) {
+    const err: any = new Error('Switching too rapidly — waiting for OBS Studio to settle.');
+    err.statusCode = 429;
+    throw err;
+  }
+  activeSceneSwitchLocks.set(matchId, { inFlight: true, lastSwitchAt: now });
+}
+
+function releaseSceneSwitchGuard(matchId: string): void {
+  const prev = activeSceneSwitchLocks.get(matchId);
+  activeSceneSwitchLocks.set(matchId, {
+    inFlight: false,
+    lastSwitchAt: prev?.lastSwitchAt || Date.now(),
+  });
+}
+
+async function resolveMatchIdsForContext(context: ObsAgentContext): Promise<string[]> {
+  if (context.bridgeId) {
+    const bridge = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
+    if (!bridge || bridge.status === 'REVOKED') return [];
+    const set = new Set<string>();
+    for (const id of bridge.assignedMatchIds || []) {
+      const s = String(id);
+      if (mongoose.Types.ObjectId.isValid(s)) set.add(s);
+    }
+    if (bridge.activeMatchId) {
+      const s = String(bridge.activeMatchId);
+      if (mongoose.Types.ObjectId.isValid(s)) set.add(s);
+    }
+    if (context.matchId && mongoose.Types.ObjectId.isValid(context.matchId) && set.size === 0) {
+      set.add(context.matchId);
+    }
+    return Array.from(set);
+  }
+  if (context.matchId && mongoose.Types.ObjectId.isValid(context.matchId)) {
+    return [context.matchId];
+  }
+  return [];
+}
+
+async function resolveAgentSocketForMatch(
+  matchId: string
+): Promise<{ socket: IoSocket; bridgeId: string | null } | null> {
+  const directMatchAgent = agentSockets.get(matchId);
+  if (directMatchAgent && directMatchAgent.connected) {
+    return { socket: directMatchAgent, bridgeId: null };
+  }
+
+  const onlineBridges = await ObsBridge.find({
+    status: 'ACTIVE',
+    $or: [{ assignedMatchIds: matchId }, { activeMatchId: matchId }],
+  })
+    .sort({ lastConnectedAt: -1 })
+    .lean();
+
+  for (const br of onlineBridges) {
+    const sock = bridgeSockets.get(br.bridgeId);
+    if (sock && sock.connected) {
+      return { socket: sock, bridgeId: br.bridgeId };
+    }
+  }
+
+  return null;
+}
+
+async function isMatchBridgeOnline(matchId: string): Promise<boolean> {
+  const resolved = await resolveAgentSocketForMatch(matchId);
+  return Boolean(resolved);
+}
+
+function isMatchBridgeOnlineSync(matchId: string): boolean {
+  const directMatchAgent = agentSockets.get(matchId);
+  if (directMatchAgent && directMatchAgent.connected) return true;
+  for (const sock of bridgeSockets.values()) {
+    if (!sock.connected) continue;
+    const ctx = (sock.data as any)?.obsContext as ObsAgentContext | undefined;
+    if (ctx?.matchIds?.includes(matchId) || ctx?.matchId === matchId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function emitObsStateEvents(
+  matchId: string,
+  prevStatus: string,
+  nextStatus: string,
+  prevScenes: string[],
+  nextScenes: string[] | undefined,
+  prevActiveScene: string,
+  nextActiveScene: string
+) {
+  if (prevStatus !== 'CONNECTED' && nextStatus === 'CONNECTED') {
+    emitBroadcastStudioEvent(matchId, 'OBS_CONNECTED', {
+      matchId,
+      activeObsScene: nextActiveScene || prevActiveScene,
+      obsScenes: nextScenes || prevScenes,
+    });
+  } else if (prevStatus === 'CONNECTED' && nextStatus !== 'CONNECTED') {
+    emitBroadcastStudioEvent(matchId, 'OBS_DISCONNECTED', {
+      matchId,
+      connectionStatus: nextStatus,
+    });
+  }
+
+  if (Array.isArray(nextScenes)) {
+    const prevKey = prevScenes.join('\u0000');
+    const nextKey = nextScenes.join('\u0000');
+    if (prevKey !== nextKey) {
+      emitBroadcastStudioEvent(matchId, 'SCENE_LIST_UPDATED', {
+        matchId,
+        obsScenes: nextScenes,
+        activeObsScene: nextActiveScene || prevActiveScene,
+      });
+    }
+  }
+
+  if (nextActiveScene && nextActiveScene !== prevActiveScene) {
+    emitBroadcastStudioEvent(matchId, 'CURRENT_SCENE_CHANGED', {
+      matchId,
+      previousScene: prevActiveScene,
+      activeObsScene: nextActiveScene,
+    });
+  }
+}
+
+export function disconnectBridgeSocket(bridgeId: string, reason = 'Bridge revoked by Administrator'): void {
+  const sock = bridgeSockets.get(bridgeId);
+  if (sock) {
+    try {
+      sock.emit('server:bridge_revoked', { bridgeId, reason });
+      sock.disconnect(true);
+    } catch {
+      // Ignore disconnect error
+    }
+    bridgeSockets.delete(bridgeId);
+  }
+}
 
 export function initObsControllerBridge(): void {
   registerObsAgentHandlers({
-    verifyAgentToken: async (matchId: string, token: string): Promise<boolean> => {
-      if (!mongoose.Types.ObjectId.isValid(matchId)) return false;
-      const profile = await ObsControllerProfile.findOne({ matchId }).select('+agentTokenHash').lean();
-      if (!profile || !profile.agentTokenHash) return false;
-      return verifyScopedToken(token, profile.agentTokenHash);
-    },
-    onAgentConnected: async (socket: IoSocket, matchId: string, label: string) => {
-      agentSockets.set(matchId, socket);
-      await ObsControllerProfile.findOneAndUpdate(
-        { matchId },
-        {
-          $set: {
-            connectionMode: 'local_agent',
-            agentOnline: true,
-            agentLastSeenAt: new Date(),
-            agentLabel: label || 'Local OBS Agent',
-            lastError: '',
+    verifyAgentHandshake: async (auth) => {
+      if (auth.bridgeId && auth.bridgeToken) {
+        const bridge = await ObsBridge.findOne({ bridgeId: auth.bridgeId })
+          .select('+tokenHash')
+          .lean();
+        if (!bridge) {
+          return { ok: false, reason: 'Registered Bridge ID not found.' };
+        }
+        if (bridge.status === 'REVOKED') {
+          return { ok: false, reason: 'This Windows OBS Bridge has been revoked by Administrator.' };
+        }
+        if (!verifyScopedToken(auth.bridgeToken, bridge.tokenHash)) {
+          return { ok: false, reason: 'Invalid Bridge Token.' };
+        }
+        const matchIds = Array.from(
+          new Set(
+            [...(bridge.assignedMatchIds || []).map(String), bridge.activeMatchId ? String(bridge.activeMatchId) : '']
+              .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          )
+        );
+        return {
+          ok: true,
+          context: {
+            bridgeId: bridge.bridgeId,
+            matchId: matchIds[0] || undefined,
+            matchIds,
+            label: auth.label || bridge.label || bridge.name,
+            platform: auth.platform || bridge.platform || 'win32',
           },
-        },
-        { new: true }
-      );
-      await writeBroadcastAudit({
-        matchId,
-        actionType: 'AGENT_CONNECTED',
-        userName: label || 'Local OBS Agent',
-        userRole: 'AGENT',
-        obsStatus: 'SUCCESS',
-      });
-      await emitFullStudioState(matchId);
-    },
-    onAgentDisconnected: async (socket: IoSocket, matchId: string, reason: string) => {
-      const current = agentSockets.get(matchId);
-      if (current && current.id !== socket.id) return;
-      agentSockets.delete(matchId);
-
-      const profile = await ObsControllerProfile.findOne({ matchId });
-      if (profile && profile.connectionMode === 'local_agent') {
-        profile.agentOnline = false;
-        profile.connectionStatus = 'DISCONNECTED';
-        profile.lastError = `Local OBS Agent disconnected (${reason}).`;
-        await profile.save();
-        await reconcileCameraActiveStates(matchId, '');
+        };
       }
-      await writeBroadcastAudit({
-        matchId,
-        actionType: 'AGENT_DISCONNECTED',
-        userName: profile?.agentLabel || 'Local OBS Agent',
-        userRole: 'AGENT',
-        obsStatus: 'FAILED',
-        errorDetails: `Agent disconnected: ${reason}`,
-      });
-      await emitFullStudioState(matchId);
+
+      if (auth.matchId && auth.agentToken) {
+        if (!mongoose.Types.ObjectId.isValid(auth.matchId)) {
+          return { ok: false, reason: 'Invalid match ID.' };
+        }
+        const profile = await ObsControllerProfile.findOne({ matchId: auth.matchId })
+          .select('+agentTokenHash')
+          .lean();
+        if (!profile || !profile.agentTokenHash) {
+          return { ok: false, reason: 'Agent token not initialized for this match.' };
+        }
+        if (!verifyScopedToken(auth.agentToken, profile.agentTokenHash)) {
+          return { ok: false, reason: 'Invalid OBS agent token for this match.' };
+        }
+        return {
+          ok: true,
+          context: {
+            matchId: auth.matchId,
+            matchIds: [auth.matchId],
+            label: auth.label || 'Local OBS Agent',
+            platform: auth.platform || 'win32',
+          },
+        };
+      }
+
+      return { ok: false, reason: 'Provide bridgeId + bridgeToken or matchId + agentToken.' };
     },
-    onAgentStateUpdate: async (matchId: string, payload: Record<string, any>) => {
+    onAgentConnected: async (socket: IoSocket, context: ObsAgentContext) => {
+      if (context.bridgeId) {
+        bridgeSockets.set(context.bridgeId, socket);
+        await ObsBridge.findOneAndUpdate(
+          { bridgeId: context.bridgeId },
+          {
+            $set: {
+              connectionStatus: 'ONLINE',
+              lastConnectedAt: new Date(),
+              lastHeartbeatAt: new Date(),
+              lastError: '',
+              platform: context.platform || 'win32',
+              ...(context.label ? { label: context.label } : {}),
+            },
+          }
+        );
+      } else if (context.matchId) {
+        agentSockets.set(context.matchId, socket);
+      }
+
+      const matchIds = await resolveMatchIdsForContext(context);
+      (socket.data as any).obsContext = { ...context, matchIds };
+
+      for (const mid of matchIds) {
+        await ObsControllerProfile.findOneAndUpdate(
+          { matchId: mid },
+          {
+            $set: {
+              connectionMode: 'local_agent',
+              agentOnline: true,
+              agentLastSeenAt: new Date(),
+              agentLabel: context.label || 'Local OBS Bridge',
+              lastError: '',
+            },
+          },
+          { new: true }
+        );
+        await writeBroadcastAudit({
+          matchId: mid,
+          actionType: 'AGENT_CONNECTED',
+          userName: context.label || 'Local OBS Bridge',
+          userRole: 'AGENT',
+          obsStatus: 'SUCCESS',
+          metadata: context.bridgeId ? { bridgeId: context.bridgeId } : null,
+        });
+        emitBroadcastStudioEvent(mid, 'BRIDGE_CONNECTED', {
+          matchId: mid,
+          bridgeId: context.bridgeId || null,
+          label: context.label,
+        });
+        await emitFullStudioState(mid);
+      }
+    },
+    onAgentDisconnected: async (socket: IoSocket, context: ObsAgentContext, reason: string) => {
+      if (context.bridgeId) {
+        const current = bridgeSockets.get(context.bridgeId);
+        if (current && current.id !== socket.id) return;
+        bridgeSockets.delete(context.bridgeId);
+        await ObsBridge.findOneAndUpdate(
+          { bridgeId: context.bridgeId },
+          {
+            $set: {
+              connectionStatus: 'OFFLINE',
+              obsStatus: 'DISCONNECTED',
+              obsStreamActive: false,
+              lastDisconnectedAt: new Date(),
+              lastError: `Bridge disconnected (${reason}).`,
+            },
+          }
+        );
+      } else if (context.matchId) {
+        const current = agentSockets.get(context.matchId);
+        if (current && current.id !== socket.id) return;
+        agentSockets.delete(context.matchId);
+      }
+
+      const matchIds =
+        Array.isArray(context.matchIds) && context.matchIds.length > 0
+          ? context.matchIds
+          : context.matchId
+            ? [context.matchId]
+            : [];
+
+      for (const mid of matchIds) {
+        const stillHasOnlineBridge = await isMatchBridgeOnline(mid);
+        if (stillHasOnlineBridge) continue;
+
+        const profile = await ObsControllerProfile.findOne({ matchId: mid });
+        const wasObsConnected = profile?.connectionStatus === 'CONNECTED';
+        if (profile && profile.connectionMode === 'local_agent') {
+          profile.agentOnline = false;
+          profile.connectionStatus = 'DISCONNECTED';
+          profile.obsStreamActive = false;
+          profile.lastError = `Local OBS Bridge disconnected (${reason}).`;
+          await profile.save();
+          await reconcileCameraActiveStates(mid, '');
+        }
+        await writeBroadcastAudit({
+          matchId: mid,
+          actionType: 'AGENT_DISCONNECTED',
+          userName: profile?.agentLabel || context.label || 'Local OBS Bridge',
+          userRole: 'AGENT',
+          obsStatus: 'FAILED',
+          errorDetails: `Bridge disconnected: ${reason}`,
+        });
+        emitBroadcastStudioEvent(mid, 'BRIDGE_DISCONNECTED', {
+          matchId: mid,
+          bridgeId: context.bridgeId || null,
+          reason,
+        });
+        if (wasObsConnected) {
+          emitBroadcastStudioEvent(mid, 'OBS_DISCONNECTED', {
+            matchId: mid,
+            reason: `Bridge disconnected (${reason})`,
+          });
+        }
+        await emitFullStudioState(mid);
+      }
+    },
+    onAgentStateUpdate: async (context: ObsAgentContext, payload: Record<string, any>) => {
       const status =
         payload.connectionStatus === 'CONNECTED'
           ? 'CONNECTED'
@@ -107,77 +389,131 @@ export function initObsControllerBridge(): void {
         ? payload.obsScenes.filter((s: unknown): s is string => typeof s === 'string')
         : undefined;
 
-      const updateFields: Record<string, any> = {
-        agentOnline: true,
-        agentLastSeenAt: new Date(),
-        connectionStatus: status,
-        lastError: typeof payload.lastError === 'string' ? payload.lastError : '',
-        lastSyncedAt: new Date(),
-      };
-      if (typeof payload.obsVersion === 'string') updateFields.obsVersion = payload.obsVersion;
-      if (typeof payload.obsWebSocketVersion === 'string') {
-        updateFields.obsWebSocketVersion = payload.obsWebSocketVersion;
-      }
-      if (activeObsScene) updateFields.activeObsScene = activeObsScene;
-      if (obsScenes) updateFields.obsScenes = obsScenes;
-      if (typeof payload.obsStreamActive === 'boolean') {
-        updateFields.obsStreamActive = payload.obsStreamActive;
-      }
-      if (typeof payload.obsStreamTimecode === 'string') {
-        updateFields.obsStreamTimecode = payload.obsStreamTimecode;
-      }
-      if (typeof payload.obsStreamBytes === 'number' || payload.obsStreamBytes === null) {
-        updateFields.obsStreamBytes = payload.obsStreamBytes;
-      }
-      if (typeof payload.obsStreamDurationMs === 'number' || payload.obsStreamDurationMs === null) {
-        updateFields.obsStreamDurationMs = payload.obsStreamDurationMs;
-      }
-      if (typeof payload.obsRecordActive === 'boolean') {
-        updateFields.obsRecordActive = payload.obsRecordActive;
-      }
-      if (typeof payload.obsRecordTimecode === 'string') {
-        updateFields.obsRecordTimecode = payload.obsRecordTimecode;
-      }
-      if (payload.obsStats && typeof payload.obsStats === 'object') {
-        updateFields.obsStats = payload.obsStats;
-      }
-
-      await ObsControllerProfile.findOneAndUpdate({ matchId }, { $set: updateFields }, { new: true });
-
-      if (activeObsScene && status === 'CONNECTED') {
-        await reconcileCameraActiveStates(matchId, activeObsScene);
-      } else if (status !== 'CONNECTED') {
-        await reconcileCameraActiveStates(matchId, '');
-      }
-      await emitFullStudioState(matchId);
-    },
-    onAgentError: async (matchId: string, errorMessage: string) => {
-      await ObsControllerProfile.findOneAndUpdate(
-        { matchId },
-        {
-          $set: {
-            connectionStatus: 'ERROR',
-            lastError: errorMessage.slice(0, 500),
-            agentLastSeenAt: new Date(),
-          },
+      if (context.bridgeId) {
+        const br = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
+        if (!br || br.status === 'REVOKED') {
+          disconnectBridgeSocket(context.bridgeId, 'Bridge revoked');
+          return;
         }
-      );
-      await writeBroadcastAudit({
-        matchId,
-        actionType: 'OBS_ERROR',
-        userName: 'Local OBS Agent',
-        userRole: 'AGENT',
-        obsStatus: 'FAILED',
-        errorDetails: errorMessage,
-      });
-      emitBroadcastStudioEvent(matchId, 'obs:error', { matchId, message: errorMessage });
-      await emitFullStudioState(matchId);
+        const bridgeUpdate: Record<string, any> = {
+          connectionStatus: 'ONLINE',
+          obsStatus: status,
+          lastHeartbeatAt: new Date(),
+          lastError: typeof payload.lastError === 'string' ? payload.lastError.slice(0, 500) : '',
+        };
+        if (typeof payload.obsVersion === 'string') bridgeUpdate.obsVersion = payload.obsVersion;
+        if (typeof payload.obsWebSocketVersion === 'string') {
+          bridgeUpdate.obsWebSocketVersion = payload.obsWebSocketVersion;
+        }
+        if (activeObsScene) bridgeUpdate.activeObsScene = activeObsScene;
+        if (obsScenes) bridgeUpdate.obsScenes = obsScenes;
+        if (typeof payload.obsStreamActive === 'boolean') {
+          bridgeUpdate.obsStreamActive = payload.obsStreamActive;
+        }
+        await ObsBridge.findOneAndUpdate({ bridgeId: context.bridgeId }, { $set: bridgeUpdate });
+      }
+
+      const matchIds = await resolveMatchIdsForContext(context);
+      for (const mid of matchIds) {
+        const prev = await ObsControllerProfile.findOne({ matchId: mid }).lean();
+        const prevStatus = prev?.connectionStatus || 'DISCONNECTED';
+        const prevScenes = Array.isArray(prev?.obsScenes) ? prev.obsScenes : [];
+        const prevActiveScene = prev?.activeObsScene || '';
+
+        const updateFields: Record<string, any> = {
+          connectionMode: 'local_agent',
+          agentOnline: true,
+          agentLastSeenAt: new Date(),
+          connectionStatus: status,
+          lastError: typeof payload.lastError === 'string' ? payload.lastError : '',
+          lastSyncedAt: new Date(),
+        };
+        if (context.label) updateFields.agentLabel = context.label;
+        if (typeof payload.obsVersion === 'string') updateFields.obsVersion = payload.obsVersion;
+        if (typeof payload.obsWebSocketVersion === 'string') {
+          updateFields.obsWebSocketVersion = payload.obsWebSocketVersion;
+        }
+        if (activeObsScene || status !== 'CONNECTED') {
+          updateFields.activeObsScene = status === 'CONNECTED' ? activeObsScene : '';
+        }
+        if (obsScenes) updateFields.obsScenes = obsScenes;
+        if (typeof payload.obsStreamActive === 'boolean') {
+          updateFields.obsStreamActive = payload.obsStreamActive;
+        }
+        if (typeof payload.obsStreamTimecode === 'string') {
+          updateFields.obsStreamTimecode = payload.obsStreamTimecode;
+        }
+        if (typeof payload.obsStreamBytes === 'number' || payload.obsStreamBytes === null) {
+          updateFields.obsStreamBytes = payload.obsStreamBytes;
+        }
+        if (typeof payload.obsStreamDurationMs === 'number' || payload.obsStreamDurationMs === null) {
+          updateFields.obsStreamDurationMs = payload.obsStreamDurationMs;
+        }
+        if (typeof payload.obsRecordActive === 'boolean') {
+          updateFields.obsRecordActive = payload.obsRecordActive;
+        }
+        if (typeof payload.obsRecordTimecode === 'string') {
+          updateFields.obsRecordTimecode = payload.obsRecordTimecode;
+        }
+        if (payload.obsStats && typeof payload.obsStats === 'object') {
+          updateFields.obsStats = payload.obsStats;
+        }
+
+        await ObsControllerProfile.findOneAndUpdate({ matchId: mid }, { $set: updateFields }, { new: true });
+
+        if (activeObsScene && status === 'CONNECTED') {
+          await reconcileCameraActiveStates(mid, activeObsScene);
+        } else if (status !== 'CONNECTED') {
+          await reconcileCameraActiveStates(mid, '');
+        }
+
+        emitObsStateEvents(mid, prevStatus, status, prevScenes, obsScenes, prevActiveScene, activeObsScene);
+        await emitFullStudioState(mid);
+      }
+    },
+    onAgentError: async (context: ObsAgentContext, errorMessage: string) => {
+      if (context.bridgeId) {
+        await ObsBridge.findOneAndUpdate(
+          { bridgeId: context.bridgeId },
+          {
+            $set: {
+              obsStatus: 'ERROR',
+              lastError: errorMessage.slice(0, 500),
+              lastHeartbeatAt: new Date(),
+            },
+          }
+        );
+      }
+      const matchIds = await resolveMatchIdsForContext(context);
+      for (const mid of matchIds) {
+        await ObsControllerProfile.findOneAndUpdate(
+          { matchId: mid },
+          {
+            $set: {
+              connectionStatus: 'ERROR',
+              lastError: errorMessage.slice(0, 500),
+              agentLastSeenAt: new Date(),
+            },
+          }
+        );
+        await writeBroadcastAudit({
+          matchId: mid,
+          actionType: 'OBS_ERROR',
+          userName: context.label || 'Local OBS Bridge',
+          userRole: 'AGENT',
+          obsStatus: 'FAILED',
+          errorDetails: errorMessage,
+        });
+        emitBroadcastStudioEvent(mid, 'obs:error', { matchId: mid, message: errorMessage });
+        emitBroadcastStudioEvent(mid, 'OBS_DISCONNECTED', { matchId: mid, error: errorMessage });
+        await emitFullStudioState(mid);
+      }
     },
   });
 }
 
 export async function writeBroadcastAudit(params: {
-  matchId: string;
+  matchId?: string | null;
   tournamentId?: string | null;
   actionType: BroadcastAuditAction;
   cameraId?: string;
@@ -197,7 +533,7 @@ export async function writeBroadcastAudit(params: {
 }) {
   try {
     const doc = await BroadcastAuditLog.create({
-      matchId: params.matchId,
+      matchId: params.matchId || null,
       tournamentId: params.tournamentId || null,
       actionType: params.actionType,
       cameraId: params.cameraId || '',
@@ -216,10 +552,12 @@ export async function writeBroadcastAudit(params: {
       metadata: params.metadata || null,
       timestamp: new Date(),
     });
-    emitBroadcastStudioEvent(params.matchId, 'obs:audit_event', {
-      matchId: params.matchId,
-      log: formatAuditLog(doc.toObject ? doc.toObject() : doc),
-    });
+    if (params.matchId) {
+      emitBroadcastStudioEvent(params.matchId, 'obs:audit_event', {
+        matchId: params.matchId,
+        log: formatAuditLog(doc.toObject ? doc.toObject() : doc),
+      });
+    }
   } catch (err) {
     console.error('[OBS Audit] Failed writing audit log:', err);
   }
@@ -331,10 +669,9 @@ export function computeEffectiveCameraStatus(
 export function formatSafeProfile(profile: any) {
   if (!profile) return null;
   const matchId = String(profile.matchId || '');
-  const liveAgentSocket = agentSockets.get(matchId);
   const direct = directSessions.get(matchId);
 
-  const realAgentOnline = Boolean(liveAgentSocket && liveAgentSocket.connected);
+  const realAgentOnline = isMatchBridgeOnlineSync(matchId);
   let effectiveStatus = profile.connectionStatus || 'DISCONNECTED';
   if (profile.connectionMode === 'local_agent' && !realAgentOnline) {
     effectiveStatus = 'DISCONNECTED';
@@ -368,6 +705,12 @@ export function formatSafeProfile(profile: any) {
     activeLayoutType: profile.activeLayoutType || 'SINGLE',
     activeSceneId: profile.activeSceneId || '',
     obsScenes: Array.isArray(profile.obsScenes) ? profile.obsScenes : [],
+    sceneLabels:
+      profile.sceneLabels instanceof Map
+        ? Object.fromEntries(profile.sceneLabels.entries())
+        : profile.sceneLabels && typeof profile.sceneLabels === 'object'
+          ? { ...profile.sceneLabels }
+          : {},
     obsStreamActive: Boolean(profile.obsStreamActive),
     obsStreamTimecode: profile.obsStreamTimecode || '',
     obsStreamBytes: typeof profile.obsStreamBytes === 'number' ? profile.obsStreamBytes : null,
@@ -548,7 +891,7 @@ async function reconcileCameraActiveStates(matchId: string, activeObsScene: stri
   const cameras = await BroadcastCamera.find({ matchId });
   const obsConnected =
     profile?.connectionMode === 'local_agent'
-      ? Boolean(agentSockets.get(matchId)?.connected && profile?.connectionStatus === 'CONNECTED')
+      ? Boolean((await isMatchBridgeOnline(matchId)) && profile?.connectionStatus === 'CONNECTED')
       : Boolean(directSessions.get(matchId)?.connected);
 
   for (const cam of cameras) {
@@ -658,6 +1001,10 @@ export async function connectDirectObs(
       obsStatus: cur.manualDisconnect ? 'SUCCESS' : 'FAILED',
       errorDetails: cur.manualDisconnect ? '' : reasonMsg,
     });
+    emitBroadcastStudioEvent(matchId, 'OBS_DISCONNECTED', {
+      matchId,
+      reason: reasonMsg,
+    });
     await emitFullStudioState(matchId);
 
     if (!cur.manualDisconnect) {
@@ -684,6 +1031,11 @@ export async function connectDirectObs(
       previousScene: prev?.activeObsScene || '',
       activeObsScene: newScene,
     });
+    emitBroadcastStudioEvent(matchId, 'CURRENT_SCENE_CHANGED', {
+      matchId,
+      previousScene: prev?.activeObsScene || '',
+      activeObsScene: newScene,
+    });
     await emitFullStudioState(matchId);
   });
 
@@ -695,6 +1047,10 @@ export async function connectDirectObs(
       { matchId },
       { $set: { obsScenes: list, lastSyncedAt: new Date() } }
     );
+    emitBroadcastStudioEvent(matchId, 'SCENE_LIST_UPDATED', {
+      matchId,
+      obsScenes: list,
+    });
     await emitFullStudioState(matchId);
   });
 
@@ -747,6 +1103,16 @@ export async function connectDirectObs(
       obsStatus: 'SUCCESS',
     });
 
+    emitBroadcastStudioEvent(matchId, 'OBS_CONNECTED', {
+      matchId,
+      activeObsScene: snapshot.activeObsScene,
+      obsScenes: snapshot.obsScenes,
+    });
+    emitBroadcastStudioEvent(matchId, 'SCENE_LIST_UPDATED', {
+      matchId,
+      obsScenes: snapshot.obsScenes,
+      activeObsScene: snapshot.activeObsScene,
+    });
     await emitFullStudioState(matchId);
     return { ok: true, profile: formatSafeProfile(snapshot.profile) };
   } catch (err: any) {
@@ -860,6 +1226,10 @@ export async function disconnectObs(matchId: string, actor?: IUser | null) {
     actor: actor || null,
     obsStatus: 'SUCCESS',
   });
+  emitBroadcastStudioEvent(matchId, 'OBS_DISCONNECTED', {
+    matchId,
+    reason: 'Disconnected by operator',
+  });
   await emitFullStudioState(matchId);
   return formatSafeProfile(profile);
 }
@@ -875,27 +1245,40 @@ async function callObsRpc<T = any>(
   }
 
   if (profile.connectionMode === 'local_agent') {
-    const agent = agentSockets.get(matchId);
-    if (!agent || !agent.connected) {
+    const resolved = await resolveAgentSocketForMatch(matchId);
+    if (!resolved) {
       throw new Error(
-        'Local OBS Controller Agent is offline. Start the MaidanLive OBS Agent on the OBS computer and try again.'
+        'Windows Local OBS Bridge is offline. Start your registered OBS Bridge on the OBS laptop and assign it to this match.'
       );
     }
 
-    return await new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`OBS Local Agent timed out executing "${command}".`));
-      }, 10_000);
+    const emitOnce = () =>
+      new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`OBS Local Bridge timed out executing "${command}".`));
+        }, 10_000);
 
-      agent.emit('server:obs_command', { command, payload }, (ack: any) => {
-        clearTimeout(timer);
-        if (!ack || !ack.ok) {
-          reject(new Error(ack?.error || `OBS command "${command}" failed.`));
-          return;
-        }
-        resolve(ack.data as T);
+        resolved.socket.emit('server:obs_command', { command, payload }, (ack: any) => {
+          clearTimeout(timer);
+          if (!ack || !ack.ok) {
+            reject(new Error(ack?.error || `OBS command "${command}" failed.`));
+            return;
+          }
+          resolve(ack.data as T);
+        });
       });
-    });
+
+    try {
+      return await emitOnce();
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      const isTimeout = msg.toLowerCase().includes('timed out');
+      if (isTimeout && resolved.socket.connected) {
+        await new Promise((r) => setTimeout(r, 300));
+        return await emitOnce();
+      }
+      throw err;
+    }
   }
 
   // Direct WebSocket mode
@@ -1241,11 +1624,88 @@ export async function executeDirectObsCommand(
     };
   }
 
+  if (command === 'get_scene_items') {
+    let targetScene = String(payload.sceneName || '');
+    if (!targetScene) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      targetScene = String((cur as any)?.currentProgramSceneName || '');
+    }
+    if (!targetScene) throw new Error('No active OBS scene selected.');
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName: targetScene });
+    const items = Array.isArray(itemsRes?.sceneItems)
+      ? itemsRes.sceneItems.map((it: any) => ({
+          sceneItemId: Number(it.sceneItemId),
+          sourceName: String(it.sourceName || ''),
+          sourceType: String(it.sourceType || ''),
+          inputKind: String(it.inputKind || ''),
+          sceneItemEnabled: Boolean(it.sceneItemEnabled),
+          sceneItemLocked: Boolean(it.sceneItemLocked),
+        }))
+      : [];
+    return { sceneName: targetScene, items };
+  }
+
+  if (command === 'set_scene_item_enabled') {
+    const sceneName = String(payload.sceneName || '');
+    const sceneItemId = Number(payload.sceneItemId);
+    const enabled = Boolean(payload.enabled);
+    if (!sceneName || !Number.isFinite(sceneItemId)) {
+      throw new Error('sceneName and valid sceneItemId are required.');
+    }
+    await obs.call('SetSceneItemEnabled', {
+      sceneName,
+      sceneItemId,
+      sceneItemEnabled: enabled,
+    });
+    const verify = await obs
+      .call('GetSceneItemEnabled', { sceneName, sceneItemId })
+      .catch(() => ({ sceneItemEnabled: enabled }));
+    await pullDirectObsSnapshot(matchId, obs);
+    return {
+      sceneName,
+      sceneItemId,
+      sceneItemEnabled: Boolean((verify as any).sceneItemEnabled),
+    };
+  }
+
   throw new Error(`Unsupported OBS command: ${command}`);
 }
 
 export async function refreshObsState(matchId: string) {
   const data = await callObsRpc(matchId, 'get_snapshot', {});
+  const obsScenes = Array.isArray(data?.obsScenes)
+    ? data.obsScenes.filter((s: unknown): s is string => typeof s === 'string')
+    : undefined;
+  const activeObsScene =
+    typeof data?.activeObsScene === 'string' ? data.activeObsScene : undefined;
+
+  const updateFields: Record<string, any> = {
+    connectionStatus: 'CONNECTED',
+    lastError: '',
+    lastSyncedAt: new Date(),
+  };
+  if (obsScenes) updateFields.obsScenes = obsScenes;
+  if (activeObsScene !== undefined) updateFields.activeObsScene = activeObsScene;
+  if (typeof data?.obsVersion === 'string') updateFields.obsVersion = data.obsVersion;
+  if (typeof data?.obsWebSocketVersion === 'string') {
+    updateFields.obsWebSocketVersion = data.obsWebSocketVersion;
+  }
+  if (typeof data?.obsStreamActive === 'boolean') {
+    updateFields.obsStreamActive = data.obsStreamActive;
+  }
+  if (typeof data?.obsRecordActive === 'boolean') {
+    updateFields.obsRecordActive = data.obsRecordActive;
+  }
+
+  await ObsControllerProfile.findOneAndUpdate({ matchId }, { $set: updateFields });
+  if (obsScenes) {
+    emitBroadcastStudioEvent(matchId, 'SCENE_LIST_UPDATED', {
+      matchId,
+      obsScenes,
+      activeObsScene: activeObsScene || '',
+    });
+  }
+  await emitFullStudioState(matchId);
   return data;
 }
 
@@ -1447,6 +1907,13 @@ export async function switchCameraLive(
     };
   }
 
+  acquireSceneSwitchGuard(matchId);
+  emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_REQUESTED', {
+    matchId,
+    targetScene: targetSceneName,
+    cameraId: camera.cameraId,
+    requestedBy: actor.name,
+  });
   try {
     const rpcRes = await callObsRpc(matchId, 'switch_scene', {
       sceneName: targetSceneName,
@@ -1513,10 +1980,22 @@ export async function switchCameraLive(
       activeCameraId: camera.cameraId,
       activeLayoutType: 'SINGLE',
     });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_SUCCESS', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+      cameraId: camera.cameraId,
+    });
+    emitBroadcastStudioEvent(matchId, 'CURRENT_SCENE_CHANGED', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+    });
     await emitFullStudioState(matchId);
 
     return { verifiedScene, cameraId: camera.cameraId };
   } catch (err: any) {
+    const errMsg = err?.message || 'OBS failed to switch camera.';
     await writeBroadcastAudit({
       matchId,
       tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
@@ -1531,13 +2010,21 @@ export async function switchCameraLive(
       actor,
       adminOverride: Boolean(options.override),
       obsStatus: 'FAILED',
-      errorDetails: err?.message || 'OBS failed to switch camera.',
+      errorDetails: errMsg,
     });
     emitBroadcastStudioEvent(matchId, 'obs:error', {
       matchId,
-      message: err?.message || 'OBS failed to switch camera.',
+      message: errMsg,
+    });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_FAILED', {
+      matchId,
+      targetScene: targetSceneName,
+      cameraId: camera.cameraId,
+      error: errMsg,
     });
     throw err;
+  } finally {
+    releaseSceneSwitchGuard(matchId);
   }
 }
 
@@ -1641,6 +2128,13 @@ export async function applyDynamicLayoutToObs(
   const prevScene = profile.activeObsScene || '';
   const prevCameraId = profile.activeCameraId || '';
 
+  acquireSceneSwitchGuard(matchId);
+  emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_REQUESTED', {
+    matchId,
+    targetScene: targetSceneName,
+    layoutType: params.layoutType,
+    requestedBy: actor.name,
+  });
   try {
     const rpcRes = await callObsRpc(matchId, 'apply_layout', {
       sceneName: targetSceneName,
@@ -1707,6 +2201,17 @@ export async function applyDynamicLayoutToObs(
       cameraIds: selectedIds,
       boxes,
     });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_SUCCESS', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+      layoutType: params.layoutType,
+    });
+    emitBroadcastStudioEvent(matchId, 'CURRENT_SCENE_CHANGED', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+    });
     await emitFullStudioState(matchId);
 
     return {
@@ -1715,6 +2220,7 @@ export async function applyDynamicLayoutToObs(
       boxes,
     };
   } catch (err: any) {
+    const errMsg = err?.message || 'OBS failed applying multi-camera layout.';
     await writeBroadcastAudit({
       matchId,
       actionType: 'LAYOUT_SWITCH',
@@ -1724,13 +2230,20 @@ export async function applyDynamicLayoutToObs(
       actor,
       adminOverride: Boolean(params.override),
       obsStatus: 'FAILED',
-      errorDetails: err?.message || 'OBS failed applying multi-camera layout.',
+      errorDetails: errMsg,
     });
     emitBroadcastStudioEvent(matchId, 'obs:error', {
       matchId,
-      message: err?.message || 'OBS failed applying multi-camera layout.',
+      message: errMsg,
+    });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_FAILED', {
+      matchId,
+      targetScene: targetSceneName,
+      error: errMsg,
     });
     throw err;
+  } finally {
+    releaseSceneSwitchGuard(matchId);
   }
 }
 
@@ -1758,6 +2271,12 @@ export async function switchObsSceneByName(
   }
 
   const prevScene = profile.activeObsScene || '';
+  acquireSceneSwitchGuard(matchId);
+  emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_REQUESTED', {
+    matchId,
+    targetScene: sceneName,
+    requestedBy: actor.name,
+  });
   try {
     const rpcRes = await callObsRpc(matchId, 'switch_scene', { sceneName });
     const verifiedScene = String(rpcRes?.verifiedScene || sceneName);
@@ -1801,10 +2320,21 @@ export async function switchObsSceneByName(
       activeCameraId: profile.activeCameraId,
       activeLayoutType: profile.activeLayoutType,
     });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_SUCCESS', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+    });
+    emitBroadcastStudioEvent(matchId, 'CURRENT_SCENE_CHANGED', {
+      matchId,
+      previousScene: prevScene,
+      activeObsScene: verifiedScene,
+    });
     await emitFullStudioState(matchId);
 
     return { verifiedScene };
   } catch (err: any) {
+    const errMsg = err?.message || 'OBS scene switch failed.';
     await writeBroadcastAudit({
       matchId,
       actionType: 'SCENE_SWITCH',
@@ -1812,10 +2342,79 @@ export async function switchObsSceneByName(
       newScene: sceneName,
       actor,
       obsStatus: 'FAILED',
-      errorDetails: err?.message || 'OBS scene switch failed.',
+      errorDetails: errMsg,
+    });
+    emitBroadcastStudioEvent(matchId, 'obs:error', {
+      matchId,
+      message: errMsg,
+    });
+    emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_FAILED', {
+      matchId,
+      targetScene: sceneName,
+      error: errMsg,
     });
     throw err;
+  } finally {
+    releaseSceneSwitchGuard(matchId);
   }
+}
+
+export async function listObsSceneItems(matchId: string, sceneName = '') {
+  const res = await callObsRpc<{
+    sceneName: string;
+    items: Array<{
+      sceneItemId: number;
+      sourceName: string;
+      sourceType: string;
+      inputKind: string;
+      sceneItemEnabled: boolean;
+      sceneItemLocked: boolean;
+    }>;
+  }>(matchId, 'get_scene_items', { sceneName });
+  return res;
+}
+
+export async function toggleObsSceneItem(
+  matchId: string,
+  params: {
+    sceneName: string;
+    sceneItemId: number;
+    sourceName?: string;
+    enabled: boolean;
+  },
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const res = await callObsRpc<{
+    sceneName: string;
+    sceneItemId: number;
+    sceneItemEnabled: boolean;
+  }>(matchId, 'set_scene_item_enabled', {
+    sceneName: params.sceneName,
+    sceneItemId: params.sceneItemId,
+    enabled: params.enabled,
+  });
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_UPDATED',
+    cameraName: params.sourceName || `Source #${params.sceneItemId}`,
+    newScene: res.sceneName,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: 'SUCCESS',
+    metadata: {
+      sceneItemId: res.sceneItemId,
+      sourceName: params.sourceName || '',
+      sceneItemEnabled: res.sceneItemEnabled,
+    },
+  });
+  await emitFullStudioState(matchId);
+  return res;
 }
 
 export async function captureObsPreviewImage(matchId: string, sourceName: string): Promise<string> {
@@ -1902,7 +2501,7 @@ export async function setCameraObsAudioMute(
   const targetInput = cam.obsInputName || `ML_CAM_${cam.cameraNumber}`;
   const isObsConnected =
     profile.connectionMode === 'local_agent'
-      ? Boolean(agentSockets.get(matchId)?.connected && profile.connectionStatus === 'CONNECTED')
+      ? Boolean((await isMatchBridgeOnline(matchId)) && profile.connectionStatus === 'CONNECTED')
       : Boolean(directSessions.get(matchId)?.connected);
 
   if (isObsConnected && targetInput) {
@@ -2024,7 +2623,7 @@ export async function reconnectCameraSource(
 
   const isObsConnected =
     profile.connectionMode === 'local_agent'
-      ? Boolean(agentSockets.get(matchId)?.connected && profile.connectionStatus === 'CONNECTED')
+      ? Boolean((await isMatchBridgeOnline(matchId)) && profile.connectionStatus === 'CONNECTED')
       : Boolean(directSessions.get(matchId)?.connected);
 
   let obsSynced = false;
@@ -2159,4 +2758,918 @@ export async function manageBroadcastSession(
   await emitFullStudioState(matchId);
   return formatSafeProfile(profile);
 }
+
+// =========================================================================
+// REGISTERED WINDOWS OBS BRIDGE MANAGEMENT SERVICE
+// =========================================================================
+
+export function formatSafeBridge(bridge: any) {
+  if (!bridge) return null;
+  const sock = bridgeSockets.get(String(bridge.bridgeId || ''));
+  const socketOnline = Boolean(sock && sock.connected);
+  return {
+    id: String(bridge._id || bridge.id || ''),
+    bridgeId: bridge.bridgeId,
+    name: bridge.name,
+    label: bridge.label || '',
+    ownerUserId: bridge.ownerUserId ? String(bridge.ownerUserId) : null,
+    ownerName: bridge.ownerName || '',
+    ownerEmail: bridge.ownerEmail || '',
+    tournamentId: bridge.tournamentId ? String(bridge.tournamentId) : null,
+    assignedMatchIds: Array.isArray(bridge.assignedMatchIds)
+      ? bridge.assignedMatchIds.map((id: any) => String(id))
+      : [],
+    activeMatchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    tokenPrefix: bridge.tokenPrefix || '',
+    status: bridge.status || 'ACTIVE',
+    connectionStatus:
+      bridge.status === 'REVOKED' ? 'OFFLINE' : socketOnline ? 'ONLINE' : 'OFFLINE',
+    obsStatus: socketOnline ? bridge.obsStatus || 'DISCONNECTED' : 'DISCONNECTED',
+    obsVersion: bridge.obsVersion || '',
+    obsWebSocketVersion: bridge.obsWebSocketVersion || '',
+    activeObsScene: socketOnline ? bridge.activeObsScene || '' : '',
+    obsScenes: Array.isArray(bridge.obsScenes) ? bridge.obsScenes : [],
+    obsStreamActive: Boolean(socketOnline && bridge.obsStreamActive),
+    lastConnectedAt: bridge.lastConnectedAt || null,
+    lastDisconnectedAt: bridge.lastDisconnectedAt || null,
+    lastHeartbeatAt: bridge.lastHeartbeatAt || null,
+    lastError: bridge.lastError || '',
+    platform: bridge.platform || 'win32',
+    revokedAt: bridge.revokedAt || null,
+    revokeReason: bridge.revokeReason || '',
+    createdAt: bridge.createdAt || null,
+    updatedAt: bridge.updatedAt || null,
+  };
+}
+
+function generateUniqueBridgeId(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(6);
+  let code = '';
+  for (let i = 0; i < 6; i += 1) {
+    code += chars[bytes[i] % chars.length];
+  }
+  return `ML-BRG-${code}`;
+}
+
+export function buildBridgeConfigPayload(params: {
+  serverUrl: string;
+  bridgeId: string;
+  bridgeToken: string;
+  label?: string;
+}) {
+  return {
+    serverUrl: params.serverUrl,
+    bridgeId: params.bridgeId,
+    bridgeToken: params.bridgeToken,
+    obsUrl: 'ws://127.0.0.1:4455',
+    obsPassword: 'YOUR_OBS_WEBSOCKET_PASSWORD',
+    label: params.label || 'Ground-Windows-OBS-Laptop',
+  };
+}
+
+export async function canManageBridge(actor: IUser, bridge: IObsBridge): Promise<boolean> {
+  if (actor.role === 'SUPER_ADMIN' || actor.role === 'ADMIN') return true;
+  if (String(bridge.ownerUserId) === String(actor._id)) return true;
+  for (const mid of bridge.assignedMatchIds || []) {
+    if (await hasBroadcastAccess(actor, String(mid), 'broadcast:control')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function listBridgesForActor(actor: IUser, matchIdFilter?: string) {
+  const allBridges = await ObsBridge.find().sort({ createdAt: -1 }).lean();
+  const visible: any[] = [];
+  for (const b of allBridges) {
+    const allowed =
+      actor.role === 'SUPER_ADMIN' ||
+      actor.role === 'ADMIN' ||
+      String(b.ownerUserId) === String(actor._id) ||
+      (await canManageBridge(actor, b as any));
+    if (!allowed) continue;
+    if (
+      matchIdFilter &&
+      !(b.assignedMatchIds || []).some((id: any) => String(id) === matchIdFilter) &&
+      String(b.activeMatchId || '') !== matchIdFilter
+    ) {
+      // Still include un-assigned bridges owned by actor so they can attach them from studio
+      if ((b.assignedMatchIds || []).length > 0) continue;
+    }
+    visible.push(formatSafeBridge(b));
+  }
+  return visible;
+}
+
+async function syncBridgeLiveStateToMatches(bridge: any) {
+  const sock = bridgeSockets.get(bridge.bridgeId);
+  if (!sock || !sock.connected || bridge.status === 'REVOKED') return;
+  for (const rawId of bridge.assignedMatchIds || []) {
+    const mid = String(rawId);
+    if (!mongoose.Types.ObjectId.isValid(mid)) continue;
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId: mid },
+      {
+        $set: {
+          connectionMode: 'local_agent',
+          agentOnline: true,
+          agentLastSeenAt: new Date(),
+          agentLabel: bridge.label || bridge.name,
+          connectionStatus: bridge.obsStatus || 'DISCONNECTED',
+          obsVersion: bridge.obsVersion || '',
+          obsWebSocketVersion: bridge.obsWebSocketVersion || '',
+          obsScenes: Array.isArray(bridge.obsScenes) ? bridge.obsScenes : [],
+          activeObsScene: bridge.activeObsScene || '',
+          obsStreamActive: Boolean(bridge.obsStreamActive),
+          lastSyncedAt: new Date(),
+        },
+      }
+    );
+    await emitFullStudioState(mid);
+  }
+}
+
+export async function registerObsBridge(params: {
+  name: string;
+  label?: string;
+  ownerUserId?: string;
+  tournamentId?: string;
+  assignedMatchIds?: string[];
+  actor: IUser;
+  baseAppUrl: string;
+}) {
+  let owner: IUser | null = params.actor;
+  if (
+    params.ownerUserId &&
+    mongoose.Types.ObjectId.isValid(params.ownerUserId) &&
+    (params.actor.role === 'SUPER_ADMIN' || params.actor.role === 'ADMIN' || params.actor.role === 'TOURNAMENT_ORGANIZER')
+  ) {
+    const candidate = await User.findById(params.ownerUserId);
+    if (candidate && candidate.isActive) owner = candidate;
+  }
+
+  const cleanMatchIds = Array.from(
+    new Set(
+      (params.assignedMatchIds || [])
+        .map((id) => String(id).trim())
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    )
+  ).map((id) => new mongoose.Types.ObjectId(id));
+
+  let bridgeId = generateUniqueBridgeId();
+  while (await ObsBridge.findOne({ bridgeId }).lean()) {
+    bridgeId = generateUniqueBridgeId();
+  }
+
+  const tokenPair = generateScopedToken('mlbrg');
+  const bridge = await ObsBridge.create({
+    bridgeId,
+    name: params.name.trim(),
+    label: (params.label || params.name).trim(),
+    ownerUserId: owner._id,
+    ownerName: owner.name,
+    ownerEmail: owner.email,
+    tournamentId:
+      params.tournamentId && mongoose.Types.ObjectId.isValid(params.tournamentId)
+        ? new mongoose.Types.ObjectId(params.tournamentId)
+        : null,
+    assignedMatchIds: cleanMatchIds,
+    activeMatchId: cleanMatchIds[0] || null,
+    tokenHash: tokenPair.hash,
+    tokenPrefix: tokenPair.displayPrefix,
+    status: 'ACTIVE',
+    connectionStatus: 'OFFLINE',
+    obsStatus: 'DISCONNECTED',
+    createdBy: params.actor._id,
+  });
+
+  await writeBroadcastAudit({
+    matchId: cleanMatchIds[0] ? String(cleanMatchIds[0]) : null,
+    tournamentId: params.tournamentId || null,
+    actionType: 'BRIDGE_REGISTERED',
+    actor: params.actor,
+    obsStatus: 'SUCCESS',
+    metadata: {
+      bridgeId: bridge.bridgeId,
+      ownerName: owner.name,
+      assignedMatchCount: cleanMatchIds.length,
+    },
+  });
+
+  await recordActivity(
+    params.actor,
+    'OBS_BRIDGE_REGISTERED',
+    'ObsBridge',
+    String(bridge._id),
+    `Registered Windows OBS Bridge ${bridge.bridgeId} (${bridge.name})`
+  );
+
+  const configJson = buildBridgeConfigPayload({
+    serverUrl: params.baseAppUrl,
+    bridgeId: bridge.bridgeId,
+    bridgeToken: tokenPair.raw,
+    label: bridge.label || bridge.name,
+  });
+
+  return {
+    bridge: formatSafeBridge(bridge.toObject()),
+    bridgeToken: tokenPair.raw,
+    configJson,
+    command: `node maidanlive-obs-agent.mjs --server ${params.baseAppUrl} --bridge ${bridge.bridgeId} --token ${tokenPair.raw}`,
+  };
+}
+
+export async function updateObsBridge(
+  bridgeId: string,
+  updates: {
+    name?: string;
+    label?: string;
+    ownerUserId?: string;
+    tournamentId?: string | null;
+    assignedMatchIds?: string[];
+  },
+  actor: IUser
+) {
+  const bridge = await ObsBridge.findOne({ bridgeId: bridgeId.toUpperCase() });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: You do not have permission to update this OBS bridge.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  if (typeof updates.name === 'string' && updates.name.trim()) {
+    bridge.name = updates.name.trim();
+  }
+  if (typeof updates.label === 'string') {
+    bridge.label = updates.label.trim();
+  }
+  if (
+    updates.ownerUserId &&
+    mongoose.Types.ObjectId.isValid(updates.ownerUserId) &&
+    (actor.role === 'SUPER_ADMIN' || actor.role === 'ADMIN')
+  ) {
+    const owner = await User.findById(updates.ownerUserId);
+    if (owner && owner.isActive) {
+      bridge.ownerUserId = owner._id as mongoose.Types.ObjectId;
+      bridge.ownerName = owner.name;
+      bridge.ownerEmail = owner.email;
+    }
+  }
+  if (updates.tournamentId !== undefined) {
+    bridge.tournamentId =
+      updates.tournamentId && mongoose.Types.ObjectId.isValid(updates.tournamentId)
+        ? new mongoose.Types.ObjectId(updates.tournamentId)
+        : null;
+  }
+  if (Array.isArray(updates.assignedMatchIds)) {
+    const cleanMatchIds = Array.from(
+      new Set(
+        updates.assignedMatchIds
+          .map((id) => String(id).trim())
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      )
+    ).map((id) => new mongoose.Types.ObjectId(id));
+    bridge.assignedMatchIds = cleanMatchIds;
+    bridge.activeMatchId = cleanMatchIds[0] || null;
+  }
+
+  await bridge.save();
+  await syncBridgeLiveStateToMatches(bridge);
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_UPDATED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId, assignedMatchIds: bridge.assignedMatchIds.map(String) },
+  });
+
+  return formatSafeBridge(bridge.toObject());
+}
+
+export async function rotateObsBridgeToken(bridgeId: string, actor: IUser, baseAppUrl: string) {
+  const bridge = await ObsBridge.findOne({ bridgeId: bridgeId.toUpperCase() });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: You do not have permission to rotate this bridge token.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const tokenPair = generateScopedToken('mlbrg');
+  bridge.tokenHash = tokenPair.hash;
+  bridge.tokenPrefix = tokenPair.displayPrefix;
+  bridge.status = 'ACTIVE';
+  bridge.revokedAt = null;
+  bridge.revokedBy = null;
+  bridge.revokeReason = '';
+  await bridge.save();
+
+  // Disconnect active bridge session so old token cannot linger
+  disconnectBridgeSocket(bridge.bridgeId, 'Bridge token rotated — reconnect with new token.');
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_TOKEN_ROTATED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId },
+  });
+
+  const configJson = buildBridgeConfigPayload({
+    serverUrl: baseAppUrl,
+    bridgeId: bridge.bridgeId,
+    bridgeToken: tokenPair.raw,
+    label: bridge.label || bridge.name,
+  });
+
+  return {
+    bridge: formatSafeBridge(bridge.toObject()),
+    bridgeToken: tokenPair.raw,
+    configJson,
+    command: `node maidanlive-obs-agent.mjs --server ${baseAppUrl} --bridge ${bridge.bridgeId} --token ${tokenPair.raw}`,
+  };
+}
+
+export async function revokeObsBridge(bridgeId: string, reason: string, actor: IUser) {
+  const bridge = await ObsBridge.findOne({ bridgeId: bridgeId.toUpperCase() });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: You do not have permission to revoke this bridge.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  bridge.status = 'REVOKED';
+  bridge.connectionStatus = 'OFFLINE';
+  bridge.obsStatus = 'DISCONNECTED';
+  bridge.obsStreamActive = false;
+  bridge.revokedAt = new Date();
+  bridge.revokedBy = actor._id as mongoose.Types.ObjectId;
+  bridge.revokeReason = reason.trim() || 'Revoked by administrator';
+  bridge.lastError = `Revoked: ${bridge.revokeReason}`;
+  await bridge.save();
+
+  disconnectBridgeSocket(bridge.bridgeId, bridge.revokeReason);
+
+  for (const rawId of bridge.assignedMatchIds || []) {
+    const mid = String(rawId);
+    if (!(await isMatchBridgeOnline(mid))) {
+      await ObsControllerProfile.findOneAndUpdate(
+        { matchId: mid },
+        {
+          $set: {
+            agentOnline: false,
+            connectionStatus: 'DISCONNECTED',
+            obsStreamActive: false,
+            lastError: `Bridge ${bridge.bridgeId} revoked.`,
+          },
+        }
+      );
+      emitBroadcastStudioEvent(mid, 'BRIDGE_DISCONNECTED', {
+        matchId: mid,
+        bridgeId: bridge.bridgeId,
+        reason: 'REVOKED',
+      });
+      emitBroadcastStudioEvent(mid, 'OBS_DISCONNECTED', {
+        matchId: mid,
+        reason: 'Bridge revoked',
+      });
+      await emitFullStudioState(mid);
+    }
+  }
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_REVOKED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId, reason: bridge.revokeReason },
+  });
+
+  return formatSafeBridge(bridge.toObject());
+}
+
+export async function reactivateObsBridge(bridgeId: string, actor: IUser) {
+  const bridge = await ObsBridge.findOne({ bridgeId: bridgeId.toUpperCase() });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: You do not have permission to reactivate this bridge.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  bridge.status = 'ACTIVE';
+  bridge.revokedAt = null;
+  bridge.revokedBy = null;
+  bridge.revokeReason = '';
+  bridge.lastError = '';
+  await bridge.save();
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_REACTIVATED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId },
+  });
+
+  return formatSafeBridge(bridge.toObject());
+}
+
+// =========================================================================
+// ONE-CLICK WINDOWS BRIDGE PAIRING, VERIFICATION & CONTROL
+// =========================================================================
+
+const PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
+const PAIRING_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generatePairingCode(): string {
+  const bytes = crypto.randomBytes(8);
+  let raw = '';
+  for (let i = 0; i < 8; i += 1) {
+    raw += PAIRING_CHARS[bytes[i] % PAIRING_CHARS.length];
+  }
+  return `${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
+}
+
+function normalizePairingCode(raw: string): string {
+  const alnum = String(raw || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (alnum.length !== 8) return '';
+  return `${alnum.slice(0, 4)}-${alnum.slice(4, 8)}`;
+}
+
+async function resolveMatchSummary(matchId?: string | null) {
+  if (!matchId || !mongoose.Types.ObjectId.isValid(matchId)) return null;
+  const s: any = await LiveStream.findById(matchId)
+    .select('matchTitle teamAName teamBName gameName tournamentName status')
+    .lean();
+  if (!s) return null;
+  return {
+    id: String(s._id),
+    matchTitle:
+      s.matchTitle || [s.teamAName, s.teamBName].filter(Boolean).join(' vs ') || 'Match Broadcast',
+    gameName: s.gameName || '',
+    tournamentName: s.tournamentName || '',
+    status: s.status || 'UPCOMING',
+  };
+}
+
+export async function createBridgePairingCode(params: {
+  actor: IUser;
+  matchId?: string;
+  tournamentId?: string;
+  bridgeId?: string;
+  label?: string;
+  requestedOrigin?: string;
+  baseAppUrl: string;
+}) {
+  const pairingCode = generatePairingCode();
+  const codeHash = hashScopedToken(pairingCode);
+  const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
+
+  const cleanMatchId =
+    params.matchId && mongoose.Types.ObjectId.isValid(params.matchId)
+      ? new mongoose.Types.ObjectId(params.matchId)
+      : null;
+
+  let resolvedTournamentId =
+    params.tournamentId && mongoose.Types.ObjectId.isValid(params.tournamentId)
+      ? new mongoose.Types.ObjectId(params.tournamentId)
+      : null;
+
+  if (!resolvedTournamentId && cleanMatchId) {
+    const stream: any = await LiveStream.findById(cleanMatchId).select('tournamentId').lean();
+    if (stream?.tournamentId) {
+      resolvedTournamentId = stream.tournamentId as mongoose.Types.ObjectId;
+    }
+  }
+
+  let targetBridgeId = '';
+  if (params.bridgeId) {
+    const existing = await ObsBridge.findOne({ bridgeId: params.bridgeId.trim().toUpperCase() });
+    if (existing && (await canManageBridge(params.actor, existing))) {
+      targetBridgeId = existing.bridgeId;
+    }
+  }
+
+  await ObsBridgePairing.create({
+    codeHash,
+    codePrefix: pairingCode.slice(0, 4),
+    createdByUserId: params.actor._id,
+    ownerName: params.actor.name,
+    ownerEmail: params.actor.email,
+    tournamentId: resolvedTournamentId,
+    matchId: cleanMatchId,
+    bridgeId: targetBridgeId,
+    label: (params.label || 'Windows OBS Bridge').trim().slice(0, 140),
+    requestedOrigin: (params.requestedOrigin || params.baseAppUrl || '').slice(0, 300),
+    expiresAt,
+    usedAt: null,
+  });
+
+  await writeBroadcastAudit({
+    matchId: cleanMatchId ? String(cleanMatchId) : null,
+    tournamentId: resolvedTournamentId ? String(resolvedTournamentId) : null,
+    actionType: 'BRIDGE_PAIRING_CREATED',
+    actor: params.actor,
+    obsStatus: 'SUCCESS',
+    metadata: {
+      codePrefix: pairingCode.slice(0, 4),
+      targetBridgeId: targetBridgeId || null,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
+
+  const qp = new URLSearchParams();
+  qp.set('code', pairingCode);
+  qp.set('server', params.baseAppUrl);
+  if (cleanMatchId) qp.set('matchId', String(cleanMatchId));
+
+  return {
+    pairingCode,
+    expiresAt: expiresAt.toISOString(),
+    ttlSeconds: Math.floor(PAIRING_CODE_TTL_MS / 1000),
+    protocolUrl: `maidanlive-bridge://pair?${qp.toString()}`,
+    serverUrl: params.baseAppUrl,
+    matchId: cleanMatchId ? String(cleanMatchId) : null,
+  };
+}
+
+export async function exchangeBridgePairingCode(params: {
+  code: string;
+  deviceName?: string;
+  deviceLabel?: string;
+  platform?: string;
+  baseAppUrl: string;
+}) {
+  const normalized = normalizePairingCode(params.code);
+  if (!normalized) {
+    const err: any = new Error('Enter a valid 8-character pairing code (e.g. ABCD-EFGH).');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const codeHash = hashScopedToken(normalized);
+  // Single-use atomic claim (replay protection)
+  const pairing = await ObsBridgePairing.findOneAndUpdate(
+    {
+      codeHash,
+      usedAt: null,
+      expiresAt: { $gt: new Date() },
+    },
+    { $set: { usedAt: new Date() } },
+    { new: true }
+  );
+
+  if (!pairing) {
+    const err: any = new Error(
+      'Pairing code is invalid, expired, or has already been used. Generate a fresh code in MaidanLive.'
+    );
+    err.statusCode = 401;
+    throw err;
+  }
+
+  const owner: any = await User.findById(pairing.createdByUserId);
+  if (!owner || !owner.isActive) {
+    const err: any = new Error('The broadcaster account for this pairing code is inactive.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  if (
+    pairing.matchId &&
+    owner.role !== 'SUPER_ADMIN' &&
+    owner.role !== 'ADMIN' &&
+    !(await hasBroadcastAccess(owner, String(pairing.matchId), 'broadcast:control'))
+  ) {
+    const err: any = new Error('Broadcaster no longer holds permission for the target match.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const cleanDeviceName = (params.deviceName || pairing.label || 'MaidanLive OBS Bridge')
+    .trim()
+    .slice(0, 120);
+  const cleanLabel = (params.deviceLabel || cleanDeviceName).trim().slice(0, 140);
+  const cleanPlatform = (params.platform || 'win32').trim().slice(0, 40);
+
+  let bridge: IObsBridge | null = null;
+  let tokenPair = generateScopedToken('mlbrg');
+
+  if (pairing.bridgeId) {
+    bridge = await ObsBridge.findOne({ bridgeId: pairing.bridgeId });
+  }
+
+  if (bridge && bridge.status !== 'REVOKED') {
+    bridge.tokenHash = tokenPair.hash;
+    bridge.tokenPrefix = tokenPair.displayPrefix;
+    bridge.label = cleanLabel || bridge.label;
+    bridge.platform = cleanPlatform;
+    if (pairing.matchId) {
+      const midStr = String(pairing.matchId);
+      const existingIds = (bridge.assignedMatchIds || []).map(String);
+      if (!existingIds.includes(midStr)) {
+        bridge.assignedMatchIds.push(pairing.matchId);
+      }
+      bridge.activeMatchId = pairing.matchId;
+    }
+    await bridge.save();
+    disconnectBridgeSocket(bridge.bridgeId, 'Bridge re-paired on device.');
+  } else {
+    let bridgeId = generateUniqueBridgeId();
+    while (await ObsBridge.findOne({ bridgeId }).lean()) {
+      bridgeId = generateUniqueBridgeId();
+    }
+    const assigned = pairing.matchId ? [pairing.matchId] : [];
+    bridge = await ObsBridge.create({
+      bridgeId,
+      name: cleanDeviceName,
+      label: cleanLabel,
+      ownerUserId: owner._id,
+      ownerName: owner.name,
+      ownerEmail: owner.email,
+      tournamentId: pairing.tournamentId || null,
+      assignedMatchIds: assigned,
+      activeMatchId: pairing.matchId || null,
+      tokenHash: tokenPair.hash,
+      tokenPrefix: tokenPair.displayPrefix,
+      status: 'ACTIVE',
+      connectionStatus: 'OFFLINE',
+      obsStatus: 'DISCONNECTED',
+      platform: cleanPlatform,
+      createdBy: owner._id,
+    });
+  }
+
+  pairing.usedByBridgeId = bridge.bridgeId;
+  await pairing.save();
+
+  if (pairing.matchId) {
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId: pairing.matchId },
+      { $set: { connectionMode: 'local_agent' } }
+    );
+  }
+
+  await writeBroadcastAudit({
+    matchId: pairing.matchId ? String(pairing.matchId) : null,
+    tournamentId: pairing.tournamentId ? String(pairing.tournamentId) : null,
+    actionType: 'BRIDGE_PAIRED',
+    actor: owner,
+    obsStatus: 'SUCCESS',
+    metadata: {
+      bridgeId: bridge.bridgeId,
+      method: 'PAIRING_CODE',
+      platform: cleanPlatform,
+    },
+  });
+
+  await recordActivity(
+    owner,
+    'OBS_BRIDGE_PAIRED',
+    'ObsBridge',
+    String(bridge._id),
+    `Paired Windows OBS Bridge ${bridge.bridgeId} via one-time pairing code`
+  );
+
+  const match = await resolveMatchSummary(
+    bridge.activeMatchId ? String(bridge.activeMatchId) : pairing.matchId ? String(pairing.matchId) : null
+  );
+
+  return {
+    bridgeId: bridge.bridgeId,
+    bridgeToken: tokenPair.raw,
+    serverUrl: params.baseAppUrl,
+    bridge: formatSafeBridge(bridge.toObject()),
+    match,
+  };
+}
+
+export async function pairBridgeViaUserAccount(params: {
+  actor: IUser;
+  matchId?: string;
+  deviceName?: string;
+  deviceLabel?: string;
+  platform?: string;
+  baseAppUrl: string;
+}) {
+  if (
+    params.matchId &&
+    mongoose.Types.ObjectId.isValid(params.matchId) &&
+    params.actor.role !== 'SUPER_ADMIN' &&
+    params.actor.role !== 'ADMIN'
+  ) {
+    const allowed = await hasBroadcastAccess(params.actor, params.matchId, 'broadcast:control');
+    if (!allowed) {
+      const err: any = new Error('Forbidden: You are not assigned to broadcast this match.');
+      err.statusCode = 403;
+      throw err;
+    }
+  }
+
+  const result = await registerObsBridge({
+    name: params.deviceName || 'Windows OBS Bridge',
+    label: params.deviceLabel || params.deviceName || 'Windows OBS Bridge',
+    assignedMatchIds:
+      params.matchId && mongoose.Types.ObjectId.isValid(params.matchId) ? [params.matchId] : [],
+    actor: params.actor,
+    baseAppUrl: params.baseAppUrl,
+  });
+
+  if (params.matchId && mongoose.Types.ObjectId.isValid(params.matchId)) {
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId: params.matchId },
+      { $set: { connectionMode: 'local_agent' } }
+    );
+  }
+
+  if (!result.bridge) {
+    throw new Error('Failed to create bridge registration.');
+  }
+
+  const match = await resolveMatchSummary(params.matchId || null);
+  return {
+    bridgeId: result.bridge.bridgeId,
+    bridgeToken: result.bridgeToken,
+    serverUrl: params.baseAppUrl,
+    bridge: result.bridge,
+    match,
+  };
+}
+
+export async function verifyBridgeCredentials(bridgeId: string, bridgeToken: string) {
+  const cleanId = String(bridgeId || '').trim().toUpperCase();
+  const cleanToken = String(bridgeToken || '').trim();
+  if (!cleanId || !cleanToken) {
+    const err: any = new Error('Bridge credentials missing.');
+    err.statusCode = 401;
+    throw err;
+  }
+
+  const bridge = await ObsBridge.findOne({ bridgeId: cleanId }).select('+tokenHash').lean();
+  if (!bridge) {
+    const err: any = new Error('Bridge registration not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (bridge.status === 'REVOKED') {
+    const err: any = new Error(bridge.revokeReason || 'This Bridge has been revoked.');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (!verifyScopedToken(cleanToken, bridge.tokenHash || '')) {
+    const err: any = new Error('Invalid or rotated Bridge token.');
+    err.statusCode = 401;
+    throw err;
+  }
+
+  const matchId = bridge.activeMatchId
+    ? String(bridge.activeMatchId)
+    : bridge.assignedMatchIds?.[0]
+      ? String(bridge.assignedMatchIds[0])
+      : null;
+  const match = await resolveMatchSummary(matchId);
+
+  return {
+    bridge: formatSafeBridge(bridge),
+    match,
+  };
+}
+
+export async function requestBridgeObsReconnect(bridgeId: string, actor: IUser) {
+  const cleanId = String(bridgeId || '').trim().toUpperCase();
+  const bridge = await ObsBridge.findOne({ bridgeId: cleanId });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: Insufficient permissions for this bridge.');
+    err.statusCode = 403;
+    throw err;
+  }
+  const sock = bridgeSockets.get(bridge.bridgeId);
+  if (!sock || !sock.connected) {
+    const err: any = new Error('Bridge desktop app is currently offline. Open MaidanLive OBS Bridge on Windows.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const res = await new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Bridge reconnect command timed out.'));
+    }, 10_000);
+    sock.emit('server:obs_command', { command: 'reconnect_obs', payload: {} }, (ack: any) => {
+      clearTimeout(timer);
+      if (!ack || !ack.ok) {
+        reject(new Error(ack?.error || 'OBS reconnect command failed on Windows Bridge.'));
+        return;
+      }
+      resolve(ack.data || {});
+    });
+  });
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_RECONNECT_REQUESTED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId },
+  });
+
+  return { ok: true, bridge: formatSafeBridge(bridge.toObject()), result: res };
+}
+
+export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: IUser) {
+  const cleanId = String(bridgeId || '').trim().toUpperCase();
+  const bridge = await ObsBridge.findOne({ bridgeId: cleanId });
+  if (!bridge) {
+    const err: any = new Error('Registered OBS bridge not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!(await canManageBridge(actor, bridge))) {
+    const err: any = new Error('Forbidden: Insufficient permissions for this bridge.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const sock = bridgeSockets.get(bridge.bridgeId);
+  if (sock) {
+    try {
+      sock.emit('server:disconnect_bridge', {
+        bridgeId: bridge.bridgeId,
+        reason: `Disconnected by ${actor.name} from Control Room`,
+      });
+      sock.disconnect(true);
+    } catch {
+      // Ignore disconnect error
+    }
+    bridgeSockets.delete(bridge.bridgeId);
+  }
+
+  bridge.connectionStatus = 'OFFLINE';
+  bridge.obsStatus = 'DISCONNECTED';
+  bridge.obsStreamActive = false;
+  bridge.lastDisconnectedAt = new Date();
+  bridge.lastError = `Disconnected by ${actor.name}`;
+  await bridge.save();
+
+  for (const rawId of bridge.assignedMatchIds || []) {
+    const mid = String(rawId);
+    if (!(await isMatchBridgeOnline(mid))) {
+      await ObsControllerProfile.findOneAndUpdate(
+        { matchId: mid },
+        {
+          $set: {
+            agentOnline: false,
+            connectionStatus: 'DISCONNECTED',
+            obsStreamActive: false,
+            lastError: `Disconnected by ${actor.name}`,
+          },
+        }
+      );
+      emitBroadcastStudioEvent(mid, 'BRIDGE_DISCONNECTED', {
+        matchId: mid,
+        bridgeId: bridge.bridgeId,
+        reason: 'OPERATOR_DISCONNECT',
+      });
+      await emitFullStudioState(mid);
+    }
+  }
+
+  await writeBroadcastAudit({
+    matchId: bridge.activeMatchId ? String(bridge.activeMatchId) : null,
+    actionType: 'BRIDGE_DISCONNECTED',
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { bridgeId: bridge.bridgeId },
+  });
+
+  return formatSafeBridge(bridge.toObject());
+}
+
+
 

@@ -6,10 +6,17 @@ import type {
   BroadcasterDashboardPayload,
   BroadcastersManagementPayload,
   BroadcastSceneData,
+  LocalBridgeProbeStatus,
+  ObsBridgeData,
+  ObsBridgeInstallerStatus,
+  ObsBridgePairingResponse,
+  ObsBridgeTokenResponse,
   ObsControllerProfileData,
+  ObsSceneItemData,
   ObsStudioPayload,
 } from '../../types/obs.ts';
 import type { ObsLayoutType } from '../../utils/obsLayoutGeometry.ts';
+import type { StreamingProvider } from '../../types/index.ts';
 
 export const obsStudioService = {
   async getStudio(matchId: string): Promise<ObsStudioPayload> {
@@ -30,6 +37,7 @@ export const obsStudioService = {
       autoSyncScoreboardSource?: boolean;
       scoreboardSourceName?: string;
       selectedSponsorIds?: string[];
+      sceneLabels?: Record<string, string>;
     }
   ): Promise<{ profile: ObsControllerProfileData }> {
     const { data } = await adminApi.patch<{ profile: ObsControllerProfileData }>(
@@ -79,6 +87,146 @@ export const obsStudioService = {
   async refreshObs(matchId: string) {
     const { data } = await adminApi.post(`/obs/matches/${matchId}/refresh`);
     return data;
+  },
+
+  async refreshScenes(matchId: string) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/scenes/refresh`);
+    return data;
+  },
+
+  async listBridges(matchId?: string): Promise<{ bridges: ObsBridgeData[] }> {
+    const { data } = await adminApi.get<{ bridges: ObsBridgeData[] }>('/obs/bridges', {
+      params: matchId ? { matchId } : undefined,
+    });
+    return data;
+  },
+
+  async registerBridge(payload: {
+    name: string;
+    label?: string;
+    ownerUserId?: string;
+    tournamentId?: string;
+    assignedMatchIds?: string[];
+    matchId?: string;
+  }): Promise<ObsBridgeTokenResponse> {
+    const { data } = await adminApi.post<ObsBridgeTokenResponse>('/obs/bridges', payload);
+    return data;
+  },
+
+  async updateBridge(
+    bridgeId: string,
+    payload: {
+      name?: string;
+      label?: string;
+      ownerUserId?: string;
+      tournamentId?: string | null;
+      assignedMatchIds?: string[];
+    }
+  ): Promise<{ bridge: ObsBridgeData }> {
+    const { data } = await adminApi.patch<{ bridge: ObsBridgeData }>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}`,
+      payload
+    );
+    return data;
+  },
+
+  async rotateBridgeToken(bridgeId: string): Promise<ObsBridgeTokenResponse> {
+    const { data } = await adminApi.post<ObsBridgeTokenResponse>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/rotate-token`
+    );
+    return data;
+  },
+
+  async revokeBridge(bridgeId: string, reason = ''): Promise<{ ok: boolean; bridge: ObsBridgeData }> {
+    const { data } = await adminApi.post<{ ok: boolean; bridge: ObsBridgeData }>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/revoke`,
+      { reason }
+    );
+    return data;
+  },
+
+  async reactivateBridge(bridgeId: string): Promise<{ ok: boolean; bridge: ObsBridgeData }> {
+    const { data } = await adminApi.post<{ ok: boolean; bridge: ObsBridgeData }>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/reactivate`
+    );
+    return data;
+  },
+
+  async createBridgePairingCode(payload: {
+    matchId?: string;
+    tournamentId?: string;
+    bridgeId?: string;
+    label?: string;
+  }): Promise<ObsBridgePairingResponse> {
+    const { data } = await adminApi.post<ObsBridgePairingResponse>(
+      '/obs/bridges/pairing-code',
+      payload
+    );
+    return data;
+  },
+
+  async reconnectBridgeObs(bridgeId: string): Promise<{
+    ok: boolean;
+    bridge: ObsBridgeData;
+    result?: { reconnected: boolean; obsUrl?: string; lastError?: string };
+  }> {
+    const { data } = await adminApi.post(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/reconnect-obs`
+    );
+    return data;
+  },
+
+  async disconnectBridge(bridgeId: string): Promise<{ ok: boolean; bridge: ObsBridgeData }> {
+    const { data } = await adminApi.post<{ ok: boolean; bridge: ObsBridgeData }>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/disconnect`
+    );
+    return data;
+  },
+
+  async getBridgeInstallerStatus(): Promise<ObsBridgeInstallerStatus> {
+    const { data } = await adminApi.get<ObsBridgeInstallerStatus>('/obs/bridge/installer/status');
+    return data;
+  },
+
+  async probeLocalBridgeStatus(): Promise<LocalBridgeProbeStatus | null> {
+    try {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 1200);
+      const res = await fetch('http://127.0.0.1:44691/status', {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      window.clearTimeout(timer);
+      if (!res.ok) return null;
+      return (await res.json()) as LocalBridgeProbeStatus;
+    } catch {
+      return null;
+    }
+  },
+
+  async activateLocalBridge(
+    code: string,
+    serverUrl: string
+  ): Promise<{ ok: boolean; bridgeId?: string; message?: string }> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 7000);
+    try {
+      const res = await fetch('http://127.0.0.1:44691/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, serverUrl }),
+        signal: controller.signal,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, message: json?.message || 'Failed activating local bridge.' };
+      }
+      return json;
+    } catch {
+      return { ok: false };
+    } finally {
+      window.clearTimeout(timer);
+    }
   },
 
   async createCamera(
@@ -290,6 +438,50 @@ export const obsStudioService = {
       sceneName,
       override,
     });
+    return data;
+  },
+
+  async getSceneItems(
+    matchId: string,
+    sceneName = ''
+  ): Promise<{ ok: boolean; sceneName: string; items: ObsSceneItemData[] }> {
+    const { data } = await adminApi.get(`/obs/matches/${matchId}/scene-items`, {
+      params: sceneName ? { sceneName } : undefined,
+    });
+    return data;
+  },
+
+  async toggleSceneItem(
+    matchId: string,
+    payload: {
+      sceneName: string;
+      sceneItemId: number;
+      sourceName?: string;
+      enabled: boolean;
+      override?: boolean;
+    }
+  ): Promise<{ ok: boolean; sceneName: string; sceneItemId: number; sceneItemEnabled: boolean }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/scene-items/toggle`, payload);
+    return data;
+  },
+
+  async updateYouTubeOutput(
+    matchId: string,
+    payload: {
+      youtubeInput?: string;
+      activeStreamingProvider?: StreamingProvider;
+      youtubeStreamStatus?: 'UNKNOWN' | 'READY' | 'LIVE' | 'UNAVAILABLE';
+    }
+  ): Promise<{
+    ok: boolean;
+    match: {
+      id: string;
+      youtubeVideoId: string;
+      youtubeStreamStatus: string;
+      activeStreamingProvider: StreamingProvider;
+    };
+  }> {
+    const { data } = await adminApi.patch(`/obs/matches/${matchId}/youtube`, payload);
     return data;
   },
 

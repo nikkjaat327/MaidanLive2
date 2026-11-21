@@ -1,7 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import rateLimit from 'express-rate-limit';
+import bcrypt from 'bcryptjs';
 import {
   authenticate,
   canManageStream,
@@ -15,7 +18,8 @@ import type { AuthenticatedRequest, BroadcastAccessPermission } from '../middlew
 import { LiveStream } from '../models/LiveStream.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Sponsor } from '../models/Sponsor.ts';
-import { User } from '../models/User.ts';
+import { ADMIN_PORTAL_ROLES, User } from '../models/User.ts';
+import { SecurityPolicy } from '../models/SecurityPolicy.ts';
 import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
 import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
 import { BroadcastCamera } from '../models/BroadcastCamera.ts';
@@ -27,22 +31,36 @@ import {
   captureObsPreviewImage,
   connectDirectObs,
   controlObsOutput,
+  createBridgePairingCode,
+  disconnectActiveBridgeByOperator,
   disconnectCameraByOperator,
   disconnectObs,
   emitFullStudioState,
   ensureObsProfileForMatch,
+  exchangeBridgePairingCode,
   formatAuditLog,
   formatSafeCamera,
   formatSafeProfile,
   formatSafeScene,
   getStudioSnapshot,
+  listBridgesForActor,
+  listObsSceneItems,
   manageBroadcastSession,
+  pairBridgeViaUserAccount,
+  reactivateObsBridge,
   reconnectCameraSource,
   refreshObsState,
+  registerObsBridge,
+  requestBridgeObsReconnect,
+  revokeObsBridge,
+  rotateObsBridgeToken,
   setCameraObsAudioMute,
   switchCameraLive,
   switchObsSceneByName,
   testObsConnection,
+  toggleObsSceneItem,
+  updateObsBridge,
+  verifyBridgeCredentials,
   writeBroadcastAudit,
 } from '../services/obsControllerService.ts';
 import {
@@ -52,12 +70,14 @@ import {
   generateScopedToken,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
+import { verifyTotpCode } from '../services/totpService.ts';
 import { LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
-import { emitBroadcastStudioEvent } from '../socket/index.ts';
+import { emitBroadcastStudioEvent, emitStreamEvent } from '../socket/index.ts';
 import { verifyMediaMTXStreamHealth } from '../services/mediamtxService.ts';
+import { extractYouTubeVideoId } from '../../src/utils/youtube.ts';
 
 const router = Router();
 
@@ -68,6 +88,23 @@ const broadcastCommandLimiter = rateLimit({
   legacyHeaders: false,
   message: { message: 'Too many broadcast control commands. Please slow down.' },
 });
+
+const pairingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many pairing or download attempts. Please wait a few minutes and try again.' },
+});
+
+const INSTALLER_FILE_NAME = 'MaidanLive OBS Bridge Setup.exe';
+
+function resolveInstallerPaths() {
+  const cwd = process.cwd();
+  const exePath = path.resolve(cwd, 'dist-installers', INSTALLER_FILE_NAME);
+  const pkgPath = path.resolve(cwd, 'desktop', 'obs-bridge', 'package.json');
+  return { exePath, pkgPath };
+}
 
 const VALID_CAMERA_TYPES: CameraType[] = [
   'smartphone_vdo',
@@ -1089,6 +1126,17 @@ router.patch(
           .filter((s: unknown): s is string => typeof s === 'string')
           .slice(0, 20);
       }
+      if (req.body.sceneLabels && typeof req.body.sceneLabels === 'object' && !Array.isArray(req.body.sceneLabels)) {
+        const sanitizedMap = new Map<string, string>();
+        for (const [k, v] of Object.entries(req.body.sceneLabels as Record<string, unknown>).slice(0, 60)) {
+          const cleanKey = sanitizeText(k, 120);
+          const cleanVal = sanitizeText(v, 120);
+          if (cleanKey && cleanVal) {
+            sanitizedMap.set(cleanKey, cleanVal);
+          }
+        }
+        profile.sceneLabels = sanitizedMap;
+      }
       profile.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await profile.save();
 
@@ -1226,6 +1274,566 @@ router.post(
     }
   }
 );
+
+// POST /api/obs/matches/:matchId/scenes/refresh
+router.post(
+  '/matches/:matchId/scenes/refresh',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const data = await refreshObsState(matchId);
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, data, ...snapshot });
+    } catch (err: any) {
+      res.status(503).json({ ok: false, message: err?.message || 'OBS Studio is not connected.' });
+    }
+  }
+);
+
+// =========================================================================
+// REGISTERED WINDOWS LOCAL OBS BRIDGE MANAGEMENT ENDPOINTS
+// =========================================================================
+
+// GET /api/obs/bridges
+router.get(
+  '/bridges',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const matchIdFilter =
+        typeof req.query.matchId === 'string' && mongoose.Types.ObjectId.isValid(req.query.matchId)
+          ? req.query.matchId.trim()
+          : undefined;
+      const bridges = await listBridgesForActor(req.user!, matchIdFilter);
+      res.json({ bridges });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to load registered OBS bridges.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges
+router.post(
+  '/bridges',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const actor = req.user!;
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER'].includes(actor.role)) {
+        res.status(403).json({ message: 'Forbidden: Broadcaster or Admin role required to register an OBS bridge.' });
+        return;
+      }
+      const name = sanitizeText(req.body.name, 120) || 'Windows OBS Bridge';
+      const label = sanitizeText(req.body.label, 140) || name;
+      const ownerUserId =
+        typeof req.body.ownerUserId === 'string' ? req.body.ownerUserId.trim() : undefined;
+      const tournamentId =
+        typeof req.body.tournamentId === 'string' ? req.body.tournamentId.trim() : undefined;
+      const assignedMatchIds = Array.isArray(req.body.assignedMatchIds)
+        ? req.body.assignedMatchIds.filter((id: unknown): id is string => typeof id === 'string')
+        : typeof req.body.matchId === 'string' && req.body.matchId.trim()
+          ? [req.body.matchId.trim()]
+          : [];
+
+      // Broadcasters / Organizers must hold control access to any match they bind on registration
+      if (actor.role !== 'SUPER_ADMIN' && actor.role !== 'ADMIN') {
+        for (const mid of assignedMatchIds) {
+          if (mongoose.Types.ObjectId.isValid(mid) && !(await hasBroadcastAccess(actor, mid, 'broadcast:control'))) {
+            res.status(403).json({
+              message: `Forbidden: You do not have broadcast access for match ${mid}.`,
+            });
+            return;
+          }
+        }
+      }
+
+      const result = await registerObsBridge({
+        name,
+        label,
+        ownerUserId,
+        tournamentId,
+        assignedMatchIds,
+        actor,
+        baseAppUrl: resolveBaseAppUrl(req),
+      });
+
+      res.status(201).json(result);
+    } catch (err: any) {
+      console.error('[OBS Bridge] Register error:', err);
+      res.status(500).json({ message: err?.message || 'Failed to register Windows OBS bridge.' });
+    }
+  }
+);
+
+// PATCH /api/obs/bridges/:bridgeId
+router.patch(
+  '/bridges/:bridgeId',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const assignedMatchIds = Array.isArray(req.body.assignedMatchIds)
+        ? req.body.assignedMatchIds.filter((id: unknown): id is string => typeof id === 'string')
+        : undefined;
+
+      if (assignedMatchIds && req.user!.role !== 'SUPER_ADMIN' && req.user!.role !== 'ADMIN') {
+        for (const mid of assignedMatchIds) {
+          if (mongoose.Types.ObjectId.isValid(mid) && !(await hasBroadcastAccess(req.user!, mid, 'broadcast:control'))) {
+            res.status(403).json({
+              message: `Forbidden: You do not have broadcast access for match ${mid}.`,
+            });
+            return;
+          }
+        }
+      }
+
+      const bridge = await updateObsBridge(
+        bridgeId,
+        {
+          name: typeof req.body.name === 'string' ? sanitizeText(req.body.name, 120) : undefined,
+          label: typeof req.body.label === 'string' ? sanitizeText(req.body.label, 140) : undefined,
+          ownerUserId: typeof req.body.ownerUserId === 'string' ? req.body.ownerUserId.trim() : undefined,
+          tournamentId:
+            req.body.tournamentId === null
+              ? null
+              : typeof req.body.tournamentId === 'string'
+                ? req.body.tournamentId.trim()
+                : undefined,
+          assignedMatchIds,
+        },
+        req.user!
+      );
+
+      res.json({ bridge });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to update OBS bridge.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/:bridgeId/rotate-token
+router.post(
+  '/bridges/:bridgeId/rotate-token',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const result = await rotateObsBridgeToken(bridgeId, req.user!, resolveBaseAppUrl(req));
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to rotate OBS bridge token.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/:bridgeId/revoke
+router.post(
+  '/bridges/:bridgeId/revoke',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const reason = sanitizeText(req.body.reason, 240);
+      const bridge = await revokeObsBridge(bridgeId, reason, req.user!);
+      res.json({ ok: true, bridge });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to revoke OBS bridge.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/:bridgeId/reactivate
+router.post(
+  '/bridges/:bridgeId/reactivate',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const bridge = await reactivateObsBridge(bridgeId, req.user!);
+      res.json({ ok: true, bridge });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to reactivate OBS bridge.' });
+    }
+  }
+);
+
+// =========================================================================
+// ONE-CLICK WINDOWS BRIDGE PAIRING, VERIFICATION & INSTALLER DISTRIBUTION
+// =========================================================================
+
+function isAllowedPairingOrigin(req: Request): boolean {
+  const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (!rawOrigin) return true;
+  try {
+    const parsedOrigin = new URL(rawOrigin);
+    const appOrigin = new URL(resolveBaseAppUrl(req)).origin;
+    if (parsedOrigin.origin === appOrigin) return true;
+    const hostHeader = (req.get('host') || '').trim();
+    if (hostHeader && parsedOrigin.host === hostHeader) return true;
+    const envPublic = (process.env.PUBLIC_APP_URL || process.env.VITE_PUBLIC_APP_URL || '').trim();
+    if (envPublic && parsedOrigin.origin === new URL(envPublic).origin) return true;
+    if (['localhost', '127.0.0.1'].includes(parsedOrigin.hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// POST /api/obs/bridges/pairing-code
+router.post(
+  '/bridges/pairing-code',
+  authenticate,
+  requireAdminPortal,
+  pairingLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!isAllowedPairingOrigin(req)) {
+        res.status(403).json({ message: 'Forbidden: Untrusted pairing origin.' });
+        return;
+      }
+      const actor = req.user!;
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'SCORER'].includes(actor.role)) {
+        res.status(403).json({ message: 'Forbidden: Broadcaster or Admin access required to pair a bridge.' });
+        return;
+      }
+
+      const matchId = typeof req.body.matchId === 'string' ? req.body.matchId.trim() : '';
+      if (matchId && !(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      if (!matchId && actor.role === 'SCORER') {
+        const hasPerm = await hasGranularPermission(actor, 'broadcast:control');
+        if (!hasPerm) {
+          res.status(403).json({ message: 'Forbidden: Broadcast control permission required.' });
+          return;
+        }
+      }
+
+      const result = await createBridgePairingCode({
+        actor,
+        matchId: matchId || undefined,
+        tournamentId:
+          typeof req.body.tournamentId === 'string' ? req.body.tournamentId.trim() : undefined,
+        bridgeId: typeof req.body.bridgeId === 'string' ? req.body.bridgeId.trim() : undefined,
+        label: sanitizeText(req.body.label, 140) || 'Windows OBS Bridge',
+        requestedOrigin: typeof req.headers.origin === 'string' ? req.headers.origin : '',
+        baseAppUrl: resolveBaseAppUrl(req),
+      });
+
+      res.status(201).json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to generate pairing code.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/pairing/exchange
+router.post(
+  '/bridges/pairing/exchange',
+  pairingLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const code = typeof req.body.code === 'string' ? req.body.code.trim() : '';
+      if (!code) {
+        res.status(400).json({ message: 'Pairing code is required.' });
+        return;
+      }
+
+      const result = await exchangeBridgePairingCode({
+        code,
+        deviceName: sanitizeText(req.body.deviceName, 120) || 'Windows OBS Bridge',
+        deviceLabel: sanitizeText(req.body.deviceLabel, 140) || sanitizeText(req.body.deviceName, 120) || 'Windows OBS Bridge',
+        platform: sanitizeText(req.body.platform, 40) || 'win32',
+        baseAppUrl: resolveBaseAppUrl(req),
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      const status = Number(err?.statusCode) || 400;
+      res.status(status).json({ message: err?.message || 'Failed to pair OBS bridge.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/pairing/login
+router.post(
+  '/bridges/pairing/login',
+  pairingLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const email = sanitizeText(req.body.email, 160).toLowerCase();
+      const password = typeof req.body.password === 'string' ? req.body.password : '';
+      const totpCode = typeof req.body.totpCode === 'string' ? req.body.totpCode.trim() : '';
+      const matchId = typeof req.body.matchId === 'string' ? req.body.matchId.trim() : '';
+
+      if (!email || !password) {
+        res.status(400).json({ message: 'Email and password are required.' });
+        return;
+      }
+
+      let policy = await SecurityPolicy.findOne({ key: 'default' });
+      if (!policy) {
+        policy = await SecurityPolicy.create({
+          key: 'default',
+          enforceAdmin2FA: false,
+          maxFailedLoginAttempts: 5,
+          lockoutMinutes: 15,
+          providerSwitchGraceSeconds: 15,
+        });
+      }
+
+      const user = await User.findOne({ email }).select('+passwordHash +totpSecret');
+      if (!user || !user.isActive) {
+        res.status(401).json({ message: 'Invalid credentials or inactive account.' });
+        return;
+      }
+
+      if (!ADMIN_PORTAL_ROLES.includes(user.role)) {
+        res.status(403).json({
+          message: 'Access denied. Only authorized Broadcasters or Admins can pair an OBS Bridge.',
+        });
+        return;
+      }
+
+      if (user.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now()) {
+        res.status(423).json({
+          message: `Account locked due to failed logins. Try again after ${new Date(
+            user.lockedUntil
+          ).toLocaleTimeString()}.`,
+        });
+        return;
+      }
+
+      const valid = await bcrypt.compare(password, user.passwordHash);
+      if (!valid) {
+        const nextFails = (user.failedLoginAttempts || 0) + 1;
+        user.failedLoginAttempts = nextFails;
+        if (nextFails >= (policy.maxFailedLoginAttempts || 5)) {
+          user.lockedUntil = new Date(Date.now() + (policy.lockoutMinutes || 15) * 60 * 1000);
+          user.failedLoginAttempts = 0;
+        }
+        await user.save();
+        res.status(401).json({ message: 'Invalid credentials.' });
+        return;
+      }
+
+      if (user.totpEnabled && user.totpSecret) {
+        if (!totpCode) {
+          res.status(200).json({
+            requires2FA: true,
+            message: 'Enter your 6-digit authenticator code to complete bridge pairing.',
+          });
+          return;
+        }
+        if (!verifyTotpCode(user.totpSecret, totpCode)) {
+          res.status(401).json({
+            requires2FA: true,
+            message: 'Invalid 6-digit authenticator code.',
+          });
+          return;
+        }
+      }
+
+      user.failedLoginAttempts = 0;
+      user.lockedUntil = null;
+      await user.save();
+
+      if (
+        !['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER'].includes(user.role)
+      ) {
+        const hasControl = await hasGranularPermission(user, 'broadcast:control');
+        const activeAssignCount = await BroadcastAssignment.countDocuments({
+          userId: user._id,
+          status: 'ACTIVE',
+        });
+        if (!hasControl && activeAssignCount === 0) {
+          res.status(403).json({
+            message: 'This account does not have Broadcaster permission to pair an OBS Bridge.',
+          });
+          return;
+        }
+      }
+
+      // Pick provided matchId or the latest LIVE/UPCOMING authorized match if available
+      let resolvedMatchId = matchId;
+      if (!resolvedMatchId) {
+        const scope = await getAuthorizedBroadcastScope(user);
+        const recentStreams = await LiveStream.find({ status: { $in: ['LIVE', 'UPCOMING'] } })
+          .sort({ status: 1, startedAt: -1, createdAt: -1 })
+          .limit(30)
+          .lean();
+        const candidate = recentStreams.find((s: any) => {
+          if (scope.allAccess) return true;
+          const sid = String(s._id);
+          const tid = s.tournamentId ? String(s.tournamentId) : '';
+          return scope.matchIds.includes(sid) || (tid && scope.tournamentIds.includes(tid));
+        });
+        if (candidate) {
+          resolvedMatchId = String(candidate._id);
+        }
+      }
+
+      const result = await pairBridgeViaUserAccount({
+        actor: user,
+        matchId: resolvedMatchId || undefined,
+        deviceName: sanitizeText(req.body.deviceName, 120) || 'Windows OBS Bridge',
+        deviceLabel:
+          sanitizeText(req.body.deviceLabel, 140) ||
+          sanitizeText(req.body.deviceName, 120) ||
+          'Windows OBS Bridge',
+        platform: sanitizeText(req.body.platform, 40) || 'win32',
+        baseAppUrl: resolveBaseAppUrl(req),
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to sign in and pair OBS bridge.' });
+    }
+  }
+);
+
+// GET /api/obs/bridges/me (Bridge token header verification without user session)
+router.get('/bridges/me', pairingLimiter, async (req: Request, res: Response) => {
+  try {
+    const bridgeId = String(req.headers['x-bridge-id'] || '').trim();
+    const bridgeToken = String(req.headers['x-bridge-token'] || '').trim();
+    const result = await verifyBridgeCredentials(bridgeId, bridgeToken);
+    res.json(result);
+  } catch (err: any) {
+    const code = Number(err?.statusCode) || 401;
+    res.status(code).json({ message: err?.message || 'Invalid bridge credentials.' });
+  }
+});
+
+// POST /api/obs/bridges/:bridgeId/reconnect-obs
+router.post(
+  '/bridges/:bridgeId/reconnect-obs',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const result = await requestBridgeObsReconnect(bridgeId, req.user!);
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to request OBS reconnect.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/:bridgeId/disconnect
+router.post(
+  '/bridges/:bridgeId/disconnect',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const bridge = await disconnectActiveBridgeByOperator(bridgeId, req.user!);
+      res.json({ ok: true, bridge });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to disconnect active bridge.' });
+    }
+  }
+);
+
+// GET /api/obs/bridge/installer/status
+router.get(
+  '/bridge/installer/status',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { exePath, pkgPath } = resolveInstallerPaths();
+      let version = '1.0.0';
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg?.version) version = String(pkg.version);
+        } catch {
+          // ignore
+        }
+      }
+      if (!fs.existsSync(exePath)) {
+        res.json({
+          available: false,
+          fileName: INSTALLER_FILE_NAME,
+          version,
+          sizeBytes: 0,
+          updatedAt: null,
+          downloadUrl: `${resolveBaseAppUrl(req)}/api/obs/bridge/installer/download`,
+        });
+        return;
+      }
+      const stat = fs.statSync(exePath);
+      res.json({
+        available: true,
+        fileName: INSTALLER_FILE_NAME,
+        version,
+        sizeBytes: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+        downloadUrl: `${resolveBaseAppUrl(req)}/api/obs/bridge/installer/download`,
+      });
+    } catch {
+      res.status(500).json({ message: 'Failed to check Windows Bridge installer status.' });
+    }
+  }
+);
+
+// GET /api/obs/bridge/installer/download
+router.get('/bridge/installer/download', pairingLimiter, (req: Request, res: Response) => {
+  try {
+    const { exePath } = resolveInstallerPaths();
+    if (!fs.existsSync(exePath)) {
+      res.status(404).json({
+        message: 'Windows Bridge installer package is not currently available on this server.',
+      });
+      return;
+    }
+    const stat = fs.statSync(exePath);
+    res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${INSTALLER_FILE_NAME}"`
+    );
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-store');
+    const stream = fs.createReadStream(exePath);
+    stream.on('error', (err) => {
+      console.error('[OBS Bridge Installer] Stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Failed to stream installer file.' });
+      }
+    });
+    stream.pipe(res);
+  } catch (err) {
+    console.error('[OBS Bridge Installer] Download error:', err);
+    res.status(500).json({ message: 'Failed to download Windows Bridge installer.' });
+  }
+});
 
 // POST /api/obs/matches/:matchId/cameras - Add new dynamic camera (no limit)
 router.post(
@@ -1851,6 +2459,155 @@ router.post(
     } catch (err: any) {
       const code = Number(err?.statusCode) || 503;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to switch OBS scene.' });
+    }
+  }
+);
+
+// GET /api/obs/matches/:matchId/scene-items?sceneName=...
+router.get(
+  '/matches/:matchId/scene-items',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const sceneName = typeof req.query.sceneName === 'string' ? sanitizeText(req.query.sceneName, 120) : '';
+      const result = await listObsSceneItems(matchId, sceneName);
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'OBS Studio is not connected to inspect scene sources.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/scene-items/toggle
+router.post(
+  '/matches/:matchId/scene-items/toggle',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const sceneName = sanitizeText(req.body.sceneName, 120);
+      const sceneItemId = Number(req.body.sceneItemId);
+      const sourceName = sanitizeText(req.body.sourceName, 120);
+      const enabled = Boolean(req.body.enabled);
+      if (!sceneName || !Number.isFinite(sceneItemId)) {
+        res.status(400).json({ message: 'sceneName and valid sceneItemId are required.' });
+        return;
+      }
+      const result = await toggleObsSceneItem(
+        matchId,
+        { sceneName, sceneItemId, sourceName, enabled },
+        req.user!,
+        Boolean(req.body.override)
+      );
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to toggle OBS scene source visibility.',
+      });
+    }
+  }
+);
+
+// PATCH /api/obs/matches/:matchId/youtube - Associate ongoing YouTube Live URL / ID & Broadcast Mode from Control Room
+router.patch(
+  '/matches/:matchId/youtube',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const stream = await LiveStream.findById(matchId);
+      if (!stream) {
+        res.status(404).json({ message: 'Match stream not found.' });
+        return;
+      }
+
+      const prevProvider = stream.activeStreamingProvider || stream.streamingProvider || 'youtube';
+      const prevYtId = stream.youtubeVideoId || '';
+
+      if (typeof req.body.youtubeInput === 'string' && req.body.youtubeInput.trim()) {
+        const parsed = extractYouTubeVideoId(req.body.youtubeInput);
+        if (!parsed.valid || !parsed.videoId) {
+          res.status(400).json({ message: parsed.error || 'Invalid YouTube URL or 11-character Video ID.' });
+          return;
+        }
+        stream.youtubeVideoId = parsed.videoId;
+        stream.youtubeInput = parsed.watchUrl || req.body.youtubeInput.trim();
+        if (stream.youtubeStreamStatus === 'UNKNOWN' || stream.youtubeStreamStatus === 'UNAVAILABLE') {
+          stream.youtubeStreamStatus = 'READY';
+        }
+      }
+
+      if (req.body.activeStreamingProvider === 'youtube' || req.body.activeStreamingProvider === 'mediamtx') {
+        stream.streamingProvider = req.body.activeStreamingProvider;
+        stream.activeStreamingProvider = req.body.activeStreamingProvider;
+        stream.lastProviderSwitchAt = new Date();
+        stream.lastProviderSwitchBy = req.user!._id as mongoose.Types.ObjectId;
+        stream.lastProviderSwitchByName = req.user!.name;
+      }
+
+      if (req.body.youtubeStreamStatus && ['UNKNOWN', 'READY', 'LIVE', 'UNAVAILABLE'].includes(req.body.youtubeStreamStatus)) {
+        stream.youtubeStreamStatus = req.body.youtubeStreamStatus;
+      }
+
+      stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await stream.save();
+
+      if (prevProvider !== stream.activeStreamingProvider || prevYtId !== stream.youtubeVideoId) {
+        emitStreamEvent(matchId, 'streaming_provider_changed', {
+          streamId: matchId,
+          fromProvider: prevProvider,
+          toProvider: stream.activeStreamingProvider,
+          activeStreamingProvider: stream.activeStreamingProvider,
+          youtubeVideoId: stream.youtubeVideoId,
+          mediamtxPlaybackUrl: stream.mediamtxPlaybackUrl || '',
+          mediamtxWebrtcUrl: stream.mediamtxWebrtcUrl || '',
+          switchedAt: new Date().toISOString(),
+          switchedByName: req.user!.name,
+          reason: 'Updated from Multi-Cam Broadcast Control Room',
+        });
+      }
+
+      await writeBroadcastAudit({
+        matchId,
+        tournamentId: stream.tournamentId ? String(stream.tournamentId) : null,
+        actionType: 'CAMERA_UPDATED',
+        cameraName: 'YouTube Live Output',
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
+        metadata: {
+          youtubeVideoId: stream.youtubeVideoId,
+          activeStreamingProvider: stream.activeStreamingProvider,
+        },
+      });
+      await emitFullStudioState(matchId);
+
+      res.json({
+        ok: true,
+        match: {
+          id: String(stream._id),
+          youtubeVideoId: stream.youtubeVideoId,
+          youtubeStreamStatus: stream.youtubeStreamStatus,
+          activeStreamingProvider: stream.activeStreamingProvider,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to update YouTube Live association.' });
     }
   }
 );

@@ -8,6 +8,7 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  Monitor,
   PlaySquare,
   Plus,
   Radio,
@@ -47,10 +48,12 @@ import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { CRICKET_OVER_PRESETS } from '../../utils/cricketScoring.ts';
+import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
 
 type AdminStreamTab = 'ACTIVE' | 'UPCOMING' | 'HISTORY' | 'REPLAYS';
 
 export function AdminLiveStreamsPage() {
+  const { isOpen: monitorOpen, selectedStreamId, toggleMonitor } = useLiveMonitor();
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [teams, setTeams] = useState<TeamData[]>([]);
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
@@ -749,9 +752,29 @@ export function AdminLiveStreamsPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {stream.status === 'LIVE' && (
+                    <button
+                      type="button"
+                      onClick={() => toggleMonitor(stream.id, stream)}
+                      aria-pressed={monitorOpen && selectedStreamId === stream.id}
+                      className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        monitorOpen && selectedStreamId === stream.id
+                          ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                          : 'bg-slate-50 text-slate-900 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Monitor className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {monitorOpen && selectedStreamId === stream.id
+                          ? 'Hide Monitor'
+                          : 'Show Monitor'}
+                      </span>
+                    </button>
+                  )}
+
                   <Link
                     to={`/admin/scoreboard/${stream.id}`}
-                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap shrink-0"
                   >
                     <SlidersHorizontal className="w-3.5 h-3.5" />
                     <span>Score Control</span>

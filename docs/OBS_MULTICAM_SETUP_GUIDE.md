@@ -31,28 +31,21 @@ YouTube Live → MaidanLive Live Match Page (/live/:id)
 
 ## 2. Connect OBS Studio to MaidanLive
 
-Choose either connection mode in **OBS Connection & Agent** inside `/admin/broadcast-studio/:matchId`:
+Choose either connection mode in **OBS Connection & Agent** inside `/admin/broadcast-studio/:matchId` (or `/broadcaster/control-room/:matchId`):
 
-### Option A: Local OBS Controller Agent (Recommended for Cloud-Hosted MaidanLive & Stadium Laptops)
-When your OBS laptop is behind a router/4G hotspot/NAT, the MaidanLive server cannot dial `127.0.0.1:4455` directly. The Local Agent connects **outbound** over Socket.IO to MaidanLive:
+### Option A: One-Click Windows OBS Bridge Desktop App (Recommended)
+When your OBS laptop runs behind a router, 4G hotspot, or NAT, MaidanLive never connects directly to `localhost:4455` and you never need router port forwarding, Node.js, npm, Git, or JSON editing:
 
-1. In MaidanLive **OBS Connection & Agent**, click **Generate Local Agent Token**.
-2. Copy the generated command and run it on the OBS laptop (requires Node.js 18+):
-   ```bash
-   cd deploy/obs-agent
-   npm install
-   node maidanlive-obs-agent.mjs \
-     --server https://YOUR_MAIDANLIVE_URL \
-     --match YOUR_MATCH_ID \
-     --token YOUR_GENERATED_AGENT_TOKEN \
-     --obs-url ws://127.0.0.1:4455 \
-     --obs-password YOUR_OBS_WS_PASSWORD
-   ```
-3. You will see **AGENT ONLINE** and **OBS CONNECTED** in MaidanLive immediately.
+1. Open **OBS Connection & Agent** in MaidanLive (`/admin/broadcast-studio/:matchId` or `/broadcaster/control-room/:matchId`).
+2. Click **Download Windows Bridge** to download `MaidanLive OBS Bridge Setup.exe`.
+3. Double-click the installer — it installs cleanly as a per-user Windows app (zero terminal steps) and registers `maidanlive-bridge://` one-click pairing.
+4. Click **Open / Pair Bridge** inside MaidanLive (or enter the 8-character single-use Pairing Code / sign in with your Broadcaster account inside the desktop app).
+5. Enter your OBS WebSocket v5 password (`Tools → WebSocket Server Settings → port 4455`) once in the app — it is encrypted locally using Windows DPAPI (`safeStorage`) and never transmitted to MaidanLive.
+6. You will immediately see **BRIDGE ONLINE**, **OBS CONNECTED**, and your dynamic OBS scene list inside the Control Room. Minimize the app to your Windows System Tray; it reconnects automatically across brief internet or OBS restarts.
 
-### Option B: Direct OBS WebSocket v5 (LAN / Self-Hosted Server)
-If MaidanLive runs on the same machine or LAN as OBS Studio (or via secure `wss://` tunnel):
-1. Select **Direct OBS WebSocket v5**.
+### Option B: Direct OBS WebSocket v5 (Same-Machine / LAN Only)
+If MaidanLive backend runs on the exact same machine or trusted LAN as OBS Studio (or via secure `wss://` tunnel):
+1. Expand **Advanced: Manual Registration & Direct WS** in **OBS Connection & Agent** and select **Direct OBS WebSocket v5**.
 2. Enter `ws` (or `wss`), Host (`127.0.0.1` or LAN IP), Port (`4455`), and OBS WebSocket Password.
 3. Click **Test Connection**, then **Connect OBS Studio**.
 
@@ -71,9 +64,9 @@ If MaidanLive runs on the same machine or LAN as OBS Studio (or via secure `wss:
 ## 4. Continuous YouTube Live Output & Scoreboard Layer
 
 1. In OBS Studio, add your **YouTube Live Stream Key** under **Settings → Stream → YouTube - RTMPS**.
-2. Start **Start Streaming** once in OBS Studio before the match begins.
+2. Click **Start Streaming** once in OBS Studio before the match begins.
 3. MaidanLive also automatically includes your live transparent Scoreboard Browser Source (`/broadcast/overlay/view/:matchId?obs=1&controls=0`) as the top layer in generated layouts so runs, wickets, overs, and chase targets stay visible across every camera cut and split screen.
-4. Switching between Camera 1, Camera 2, Split 2, Grid 4, or Dynamic N-Camera Grids never drops or restarts the YouTube Live ingest.
+4. Switching between Camera 1, Camera 2, Split 2, Grid 4, custom OBS scenes, or Dynamic N-Camera Grids issues `SetCurrentProgramScene` inside OBS and **never** stops or restarts the YouTube Live ingest.
 
 ---
 
@@ -82,16 +75,44 @@ If MaidanLive runs on the same machine or LAN as OBS Studio (or via secure `wss:
 - **Network**: Enable **Low-Bandwidth Ground Mode** on cameras over 4G (`854×480 @ 24–30fps`, `800–1200 kbps`) to keep latency low without stalling OBS.
 - **Orientation**: Lock all field phones to **Landscape** before tapping Start.
 - **Heat & Power**: Keep phones shaded, lower screen brightness, and attach a USB-C power bank during full T20 or tournament days.
+- **Broadcaster Role**: Assign Broadcasters per tournament or match in `/admin/broadcasters`; broadcasters manage switching & audio inside `/broadcaster/control-room/:matchId`.
+- **Show Monitor (Admin Streams Page)**: Whenever a stream is **LIVE**, Admins can click **Show Monitor** next to **Score Control** in **Admin → Live Streams** to preview the live broadcast video.
 - **Admin Override**: During critical overs or finals, engage **Admin Override** from the studio header to lock OBS scene switching exclusively to Admins/Super Admins.
 
 ---
 
-## 6. Broadcaster Role & Scoped Production Access
+## 6. Windows Desktop App & Legacy CLI Quick Reference
 
-MaidanLive supports a dedicated **Broadcaster** role (`BROADCASTER`), completely independent of the **Scorer** role (`SCORER`):
+### Recommended: Windows Desktop Installer (`MaidanLive OBS Bridge Setup.exe`)
+- **Zero prerequisites**: Bundles Node.js, `obs-websocket-js`, and `socket.io-client` inside the installer.
+- **System Tray**: Closing the window minimizes it to the Windows System Tray with **Open**, **Reconnect Local OBS**, **Reconnect MaidanLive**, and **Quit**.
+- **Optional Startup Launch**: Toggle **"Launch MaidanLive OBS Bridge automatically when Windows starts"** inside the app.
+- **Security**: Permanent bridge credentials and `obsPassword` are encrypted via Windows DPAPI; pairing codes expire in 5 minutes and work only once; browser links never carry permanent bridge secrets.
 
-- **Assignment Panel (`/admin/broadcasters`)**: Super Admins, Admins, and Tournament Organizers (for tournaments they manage) can assign Broadcasters at either **Tournament Scope** (all matches in a tournament) or **Match Scope** (specific matches, enabling multiple broadcasters per tournament on parallel grounds).
-- **Broadcaster Dashboard (`/broadcaster/dashboard`)**: Broadcasters are redirected here automatically upon sign-in to see only their assigned tournaments, matches, OBS connection states, and connected cameras.
-- **Broadcast Control Room (`/broadcaster/control-room/:matchId`)**: Authorized broadcasters can switch cameras, apply multi-cam split/grid layouts, control OBS streaming/recording (when permitted), mute/unmute camera inputs (`SetInputMute`), configure scoreboard overlays, and generate time-expiring smartphone QR links (`2h–48h`).
-- **Session & Conflict Control**: Only one active broadcast session runs per match; **Take Active Control** updates the active controller banner in real time, while **Admin Override** allows Admins/Organizers to lock production away from broadcasters when needed.
+### Advanced / Legacy CLI (`deploy/obs-agent`)
+1. Expand **Advanced: Manual Registration & Direct WS** -> **Register Windows Bridge** to generate a manual `config.json`.
+2. Copy `deploy/obs-agent` onto a machine with Node.js 18+, run `npm install`, add your `obsPassword`, and launch `start-windows-bridge.bat`.
+3. **Security Reminder**: Never expose OBS WebSocket port `4455` publicly on your router or store `obsPassword` in MaidanLive frontend/cloud logs. If a laptop is lost or rotated, click **Revoke** or **Rotate Token** inside **OBS Connection & Agent** to cut off that bridge immediately.
+
+---
+
+## 7. Verification & Testing Checklist
+
+1. **OBS WebSocket Auth (`127.0.0.1:4455`)**: Start OBS Studio 28+ with WebSocket v5 enabled on `127.0.0.1:4455` + authentication enabled and verify bridge connection succeeds.
+2. **Wrong OBS Password Handling**: Temporarily configure a wrong `obsPassword` in `config.json` — verify the bridge logs an auth failure (`4009`) clearly without leaking secrets and MaidanLive surfaces `OBS ERROR`.
+3. **Registered Bridge Lifecycle**: Register a Windows bridge (`ML-BRG-...`), download `config.json`, verify initial `BRIDGE OFFLINE` -> `BRIDGE ONLINE`, and verify attaching/detaching the bridge to a match.
+4. **Dynamic Scene Discovery & Refresh**: Add or rename a scene in OBS Studio, click **Refresh Scenes** in Tab 1 (`OBS Scene Switcher`), and confirm the exact OBS scene list updates via `SCENE_LIST_UPDATED`.
+5. **Remote Scene Switching**: Click any OBS scene button in MaidanLive — verify `SCENE_SWITCH_REQUESTED` -> `SetCurrentProgramScene` -> `GetCurrentProgramScene` -> `SCENE_SWITCH_SUCCESS` & `CURRENT_SCENE_CHANGED` updates the `LIVE` badge across open Control Room tabs.
+6. **Continuous YouTube Live Stream**: While streaming live to YouTube from OBS, switch between 3+ OBS scenes rapidly and confirm YouTube Live broadcast uptime remains continuous without restarting or dropping ingest.
+7. **Active Scene Source Visibility**: Toggle Active Scene Sources (`Visible` / `Hidden`) in Tab 1 and confirm OBS scene items update cleanly.
+8. **Custom Scene Display Labels**: Rename friendly labels via **Rename Labels** and confirm buttons keep targeting the underlying OBS scene names.
+9. **OBS Offline & Recovery**: Close OBS Studio while the bridge runs — confirm MaidanLive reports `OBS DISCONNECTED`, then reopen OBS and confirm automatic reconnection & `OBS CONNECTED` recovery.
+10. **Backend Disconnect & Reconnect**: Restart the backend or simulate brief network drop — confirm the Windows bridge buffers safely and auto-reconnects without manual intervention.
+11. **Multi-Match Bridge Assignment**: Attach one registered bridge to another match and confirm scenes & switch commands route to the newly active match cleanly.
+12. **Token Rotation**: Click **Rotate Token** on a bridge — verify old credentials fail handshake and new credentials connect immediately.
+13. **Bridge Revocation**: Click **Revoke** on an active bridge — confirm the connected bridge receives `server:bridge_revoked`, disconnects immediately, stops reconnect loops, and is blocked on any new handshake until reactivated.
+14. **RBAC Isolation**: Verify spectators, logged-out players, and unauthorized broadcasters cannot view bridge lists, receive studio events, or trigger scene switches (`401`/`403`).
+15. **Command Allowlist**: Confirm the bridge rejects any non-allowlisted command (`APPROVED_COMMANDS`) and contains zero shell/OS execution capability.
+16. **Admin Show Monitor Guardrail**: In **Admin → Live Streams**, confirm **Show Monitor** appears strictly before **Score Control** only on `LIVE` streams and opens the live video preview cleanly.
+
 

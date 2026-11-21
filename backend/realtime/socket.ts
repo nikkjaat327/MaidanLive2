@@ -11,12 +11,27 @@ let io: SocketIOServer | null = null;
 let eventSequence = 0;
 let cleanupTimer: NodeJS.Timeout | null = null;
 
+export interface ObsAgentContext {
+  bridgeId?: string;
+  matchId?: string;
+  matchIds?: string[];
+  label: string;
+  platform?: string;
+}
+
 export interface ObsAgentRegistrationHandlers {
-  onAgentConnected: (socket: any, matchId: string, label: string) => Promise<void>;
-  onAgentDisconnected: (socket: any, matchId: string, reason: string) => Promise<void>;
-  onAgentStateUpdate: (matchId: string, payload: Record<string, any>) => Promise<void>;
-  onAgentError: (matchId: string, errorMessage: string) => Promise<void>;
-  verifyAgentToken: (matchId: string, token: string) => Promise<boolean>;
+  verifyAgentHandshake: (auth: {
+    bridgeId?: string;
+    bridgeToken?: string;
+    matchId?: string;
+    agentToken?: string;
+    label?: string;
+    platform?: string;
+  }) => Promise<{ ok: boolean; reason?: string; context?: ObsAgentContext }>;
+  onAgentConnected: (socket: any, context: ObsAgentContext) => Promise<void>;
+  onAgentDisconnected: (socket: any, context: ObsAgentContext, reason: string) => Promise<void>;
+  onAgentStateUpdate: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
+  onAgentError: (context: ObsAgentContext, errorMessage: string) => Promise<void>;
 }
 
 let obsAgentHandlers: ObsAgentRegistrationHandlers | null = null;
@@ -414,55 +429,74 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     });
   });
 
-  // Dedicated authenticated namespace for Local OBS Controller Agents
+  // Dedicated authenticated namespace for Local OBS Controller Bridges / Agents
   const obsAgentNs = io.of('/obs-agent');
   obsAgentNs.use(async (socket, next) => {
     try {
       const auth = (socket.handshake.auth || {}) as Record<string, unknown>;
+      const bridgeId = typeof auth.bridgeId === 'string' ? auth.bridgeId.trim().toUpperCase() : '';
+      const bridgeToken =
+        typeof auth.bridgeToken === 'string'
+          ? auth.bridgeToken.trim()
+          : typeof auth.token === 'string'
+            ? auth.token.trim()
+            : '';
       const matchId = typeof auth.matchId === 'string' ? auth.matchId.trim() : '';
       const agentToken = typeof auth.agentToken === 'string' ? auth.agentToken.trim() : '';
-      if (!matchId || !agentToken || !obsAgentHandlers) {
-        next(new Error('Unauthorized OBS agent handshake.'));
+      const label = typeof auth.label === 'string' ? auth.label.trim().slice(0, 120) : '';
+      const platform = typeof auth.platform === 'string' ? auth.platform.trim().slice(0, 40) : '';
+
+      if (!obsAgentHandlers) {
+        next(new Error('OBS bridge handler unavailable.'));
         return;
       }
-      const ok = await obsAgentHandlers.verifyAgentToken(matchId, agentToken);
-      if (!ok) {
-        next(new Error('Invalid OBS agent token for this match.'));
+
+      const result = await obsAgentHandlers.verifyAgentHandshake({
+        bridgeId,
+        bridgeToken: bridgeToken || agentToken,
+        matchId,
+        agentToken: agentToken || bridgeToken,
+        label,
+        platform,
+      });
+
+      if (!result.ok || !result.context) {
+        next(new Error(result.reason || 'Unauthorized OBS bridge handshake.'));
         return;
       }
-      (socket.data as any).matchId = matchId;
-      (socket.data as any).agentLabel =
-        typeof auth.label === 'string' ? auth.label.trim().slice(0, 120) : 'Local OBS Agent';
+
+      (socket.data as any).obsContext = result.context;
       next();
     } catch {
-      next(new Error('OBS agent authentication error.'));
+      next(new Error('OBS bridge authentication error.'));
     }
   });
 
   obsAgentNs.on('connection', (socket) => {
-    const matchId = String((socket.data as any).matchId || '');
-    const label = String((socket.data as any).agentLabel || 'Local OBS Agent');
-    if (obsAgentHandlers && matchId) {
-      obsAgentHandlers.onAgentConnected(socket, matchId, label).catch(() => {});
+    const context = ((socket.data as any).obsContext || {}) as ObsAgentContext;
+    if (obsAgentHandlers && (context.bridgeId || context.matchId)) {
+      obsAgentHandlers.onAgentConnected(socket, context).catch(() => {});
     }
 
     socket.on('agent:obs_state', (payload: Record<string, any>) => {
-      if (obsAgentHandlers && matchId && payload && typeof payload === 'object') {
-        obsAgentHandlers.onAgentStateUpdate(matchId, payload).catch(() => {});
+      if (obsAgentHandlers && payload && typeof payload === 'object') {
+        obsAgentHandlers.onAgentStateUpdate(context, payload).catch(() => {});
       }
     });
 
     socket.on('agent:obs_error', (payload: { message?: string }) => {
-      if (obsAgentHandlers && matchId) {
+      if (obsAgentHandlers) {
         obsAgentHandlers
-          .onAgentError(matchId, String(payload?.message || 'OBS reported an error.'))
+          .onAgentError(context, String(payload?.message || 'OBS reported an error.'))
           .catch(() => {});
       }
     });
 
     socket.on('disconnect', (reason) => {
-      if (obsAgentHandlers && matchId) {
-        obsAgentHandlers.onAgentDisconnected(socket, matchId, String(reason || 'disconnected')).catch(() => {});
+      if (obsAgentHandlers) {
+        obsAgentHandlers
+          .onAgentDisconnected(socket, context, String(reason || 'disconnected'))
+          .catch(() => {});
       }
     });
   });

@@ -283,7 +283,7 @@ export function AdminScoreboardPage() {
                 className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 whitespace-nowrap"
               >
                 {showVideoMonitor ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                <span>{showVideoMonitor ? 'Hide Monitor' : 'Show Monitor'}</span>
+                <span>{showVideoMonitor ? 'Hide Video Preview' : 'Live Video Preview'}</span>
               </button>
               <Link
                 to={`/broadcast/overlay/${stream.id}`}

@@ -60,6 +60,7 @@ export interface ObsControllerProfileData {
   activeLayoutType: ObsLayoutType;
   activeSceneId: string;
   obsScenes: string[];
+  sceneLabels?: Record<string, string>;
   obsStreamActive: boolean;
   obsStreamTimecode: string;
   obsStreamBytes?: number | null;
@@ -84,6 +85,15 @@ export interface ObsControllerProfileData {
   selectedSponsorIds: string[];
   lastSyncedAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface ObsSceneItemData {
+  sceneItemId: number;
+  sourceName: string;
+  sourceType: string;
+  inputKind: string;
+  sceneItemEnabled: boolean;
+  sceneItemLocked: boolean;
 }
 
 export interface CameraTelemetry {
@@ -336,3 +346,86 @@ export interface BroadcastersManagementPayload {
   }>;
   recentAuditLogs: BroadcastAuditLogData[];
 }
+
+export interface ObsBridgeConfigPayload {
+  serverUrl: string;
+  bridgeId: string;
+  bridgeToken: string;
+  obsUrl: string;
+  obsPassword: string;
+  label: string;
+}
+
+export interface ObsBridgeData {
+  id: string;
+  bridgeId: string;
+  name: string;
+  label: string;
+  ownerUserId?: string | null;
+  ownerName: string;
+  ownerEmail: string;
+  tournamentId?: string | null;
+  assignedMatchIds: string[];
+  activeMatchId?: string | null;
+  tokenPrefix: string;
+  status: 'ACTIVE' | 'REVOKED';
+  connectionStatus: 'ONLINE' | 'OFFLINE';
+  obsStatus: ObsConnectionStatus;
+  obsVersion: string;
+  obsWebSocketVersion: string;
+  activeObsScene: string;
+  obsScenes: string[];
+  obsStreamActive: boolean;
+  lastConnectedAt?: string | null;
+  lastDisconnectedAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  lastError: string;
+  platform: string;
+  revokedAt?: string | null;
+  revokeReason: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ObsBridgeTokenResponse {
+  bridge: ObsBridgeData;
+  bridgeToken: string;
+  configJson: ObsBridgeConfigPayload;
+  command: string;
+}
+
+export interface ObsBridgePairingResponse {
+  pairingCode: string;
+  expiresAt: string;
+  ttlSeconds: number;
+  protocolUrl: string;
+  serverUrl: string;
+  matchId: string | null;
+}
+
+export interface ObsBridgeInstallerStatus {
+  available: boolean;
+  fileName: string;
+  version: string;
+  sizeBytes: number;
+  updatedAt: string | null;
+  downloadUrl: string;
+}
+
+export interface LocalBridgeProbeStatus {
+  running: boolean;
+  app?: string;
+  paired?: boolean;
+  bridgeId?: string | null;
+  serverUrl?: string | null;
+  serverConnected?: boolean;
+  serverStatus?: string;
+  obsConnected?: boolean;
+  obsStatus?: string;
+  obsVersion?: string;
+  activeObsScene?: string;
+  sceneCount?: number;
+  obsDetected?: boolean;
+  obsRunning?: boolean;
+}
+

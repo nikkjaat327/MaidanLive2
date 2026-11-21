@@ -4,12 +4,19 @@ import { obsStudioService } from '../services/obs/obsStudioService.ts';
 import { ADMIN_TOKEN_KEY, extractApiError } from '../services/api/httpClient.ts';
 import type { ObsStudioPayload } from '../types/obs.ts';
 
+export interface SceneSwitchRequestState {
+  targetScene: string;
+  requestedBy?: string;
+}
+
 export function useObsStudio(matchId?: string) {
   const [studio, setStudio] = useState<ObsStudioPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [liveErrorToast, setLiveErrorToast] = useState<string | null>(null);
+  const [switchingSceneRequest, setSwitchingSceneRequest] =
+    useState<SceneSwitchRequestState | null>(null);
   const matchIdRef = useRef(matchId);
   matchIdRef.current = matchId;
 
@@ -91,6 +98,7 @@ export function useObsStudio(matchId?: string) {
 
     const onSceneChanged = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
+      setSwitchingSceneRequest(null);
       setStudio((prev) => {
         if (!prev) return prev;
         return {
@@ -106,6 +114,131 @@ export function useObsStudio(matchId?: string) {
           },
         };
       });
+    };
+
+    const onSceneListUpdated = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setStudio((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          profile: {
+            ...prev.profile,
+            obsScenes: Array.isArray(payload.obsScenes)
+              ? payload.obsScenes
+              : prev.profile.obsScenes,
+            activeObsScene: payload.activeObsScene || prev.profile.activeObsScene,
+          },
+        };
+      });
+    };
+
+    const onBridgeConnected = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                agentOnline: true,
+                agentLabel: payload.label || prev.profile.agentLabel,
+              },
+            }
+          : prev
+      );
+    };
+
+    const onBridgeDisconnected = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setSwitchingSceneRequest(null);
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                agentOnline: false,
+                connectionStatus: 'DISCONNECTED',
+              },
+            }
+          : prev
+      );
+    };
+
+    const onObsConnected = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setLiveErrorToast(null);
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                connectionStatus: 'CONNECTED',
+                lastError: '',
+                obsScenes: Array.isArray(payload.obsScenes)
+                  ? payload.obsScenes
+                  : prev.profile.obsScenes,
+                activeObsScene: payload.activeObsScene || prev.profile.activeObsScene,
+              },
+            }
+          : prev
+      );
+    };
+
+    const onObsDisconnected = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setSwitchingSceneRequest(null);
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                connectionStatus: 'DISCONNECTED',
+                obsStreamActive: false,
+                lastError: payload?.reason || prev.profile.lastError,
+              },
+            }
+          : prev
+      );
+    };
+
+    const onSceneSwitchRequested = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      if (payload?.targetScene) {
+        setSwitchingSceneRequest({
+          targetScene: String(payload.targetScene),
+          requestedBy: payload.requestedBy ? String(payload.requestedBy) : undefined,
+        });
+      }
+    };
+
+    const onSceneSwitchSuccess = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setSwitchingSceneRequest(null);
+      if (payload?.activeObsScene) {
+        setStudio((prev) =>
+          prev
+            ? {
+                ...prev,
+                profile: {
+                  ...prev.profile,
+                  activeObsScene: String(payload.activeObsScene),
+                },
+              }
+            : prev
+        );
+      }
+    };
+
+    const onSceneSwitchFailed = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setSwitchingSceneRequest(null);
+      if (payload?.error) {
+        setLiveErrorToast(String(payload.error));
+      }
     };
 
     const onAdminOverride = (payload: any) => {
@@ -171,6 +304,16 @@ export function useObsStudio(matchId?: string) {
     socket.on('obs:audit_event', onAuditEvent);
     socket.on('obs:error', onObsError);
     socket.on('obs:controller_presence', onControllerPresence);
+    // Explicit Remote OBS Bridge events
+    socket.on('BRIDGE_CONNECTED', onBridgeConnected);
+    socket.on('BRIDGE_DISCONNECTED', onBridgeDisconnected);
+    socket.on('OBS_CONNECTED', onObsConnected);
+    socket.on('OBS_DISCONNECTED', onObsDisconnected);
+    socket.on('SCENE_LIST_UPDATED', onSceneListUpdated);
+    socket.on('SCENE_SWITCH_REQUESTED', onSceneSwitchRequested);
+    socket.on('SCENE_SWITCH_SUCCESS', onSceneSwitchSuccess);
+    socket.on('SCENE_SWITCH_FAILED', onSceneSwitchFailed);
+    socket.on('CURRENT_SCENE_CHANGED', onSceneChanged);
 
     return () => {
       socket.emit('broadcast-studio:leave', matchId);
@@ -183,6 +326,15 @@ export function useObsStudio(matchId?: string) {
       socket.off('obs:audit_event', onAuditEvent);
       socket.off('obs:error', onObsError);
       socket.off('obs:controller_presence', onControllerPresence);
+      socket.off('BRIDGE_CONNECTED', onBridgeConnected);
+      socket.off('BRIDGE_DISCONNECTED', onBridgeDisconnected);
+      socket.off('OBS_CONNECTED', onObsConnected);
+      socket.off('OBS_DISCONNECTED', onObsDisconnected);
+      socket.off('SCENE_LIST_UPDATED', onSceneListUpdated);
+      socket.off('SCENE_SWITCH_REQUESTED', onSceneSwitchRequested);
+      socket.off('SCENE_SWITCH_SUCCESS', onSceneSwitchSuccess);
+      socket.off('SCENE_SWITCH_FAILED', onSceneSwitchFailed);
+      socket.off('CURRENT_SCENE_CHANGED', onSceneChanged);
     };
   }, [matchId]);
 
@@ -193,6 +345,7 @@ export function useObsStudio(matchId?: string) {
     error,
     socketConnected,
     liveErrorToast,
+    switchingSceneRequest,
     clearLiveErrorToast: () => setLiveErrorToast(null),
     refetch,
   };

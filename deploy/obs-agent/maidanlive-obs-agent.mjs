@@ -1,13 +1,49 @@
 #!/usr/bin/env node
 /**
- * MaidanLive Local OBS Controller Agent
- * Runs on the same Windows / macOS / Linux PC (or LAN) as OBS Studio.
- * Connects outbound to MaidanLive over Socket.IO (/obs-agent) and bridges
- * OBS WebSocket v5 commands & events cleanly without exposing OBS to the internet.
+ * MaidanLive Windows Local OBS Bridge / Agent
+ * Runs locally on the broadcaster's Windows/macOS/Linux PC alongside OBS Studio 28+.
+ * - Connects locally ONLY to OBS WebSocket v5 (default ws://127.0.0.1:4455)
+ * - Initiates an authenticated outbound Socket.IO connection to MaidanLive (/obs-agent)
+ * - Strictly allowlists OBS commands; zero shell execution or unrestricted OS access.
+ * - Never exposes OBS passwords or bridge tokens to logs or the frontend.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
 import OBSWebSocket from 'obs-websocket-js';
+
+const APPROVED_COMMANDS = new Set([
+  'get_snapshot',
+  'switch_scene',
+  'apply_layout',
+  'screenshot',
+  'start_stream',
+  'stop_stream',
+  'start_record',
+  'stop_record',
+  'set_input_mute',
+  'get_input_mute',
+  'reconnect_input',
+  'get_scene_items',
+  'set_scene_item_enabled',
+  'reconnect_obs',
+]);
+
+function nowIso() {
+  return new Date().toISOString();
+}
+function logInfo(msg) {
+  console.log(`[${nowIso()}] [MaidanLive Bridge] ${msg}`);
+}
+function logWarn(msg) {
+  console.warn(`[${nowIso()}] [MaidanLive Bridge] WARN: ${msg}`);
+}
+function logErr(msg) {
+  console.error(`[${nowIso()}] [MaidanLive Bridge] ERROR: ${msg}`);
+}
 
 function parseArgs(argv) {
   const out = {};
@@ -28,17 +64,95 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const SERVER_URL = (args.server || process.env.MAIDANLIVE_URL || 'http://127.0.0.1:3000').replace(/\/+$/, '');
-const MATCH_ID = args.match || process.env.MAIDANLIVE_MATCH_ID || '';
-const AGENT_TOKEN = args.token || process.env.MAIDANLIVE_AGENT_TOKEN || '';
-const OBS_URL = args['obs-url'] || process.env.OBS_WS_URL || 'ws://127.0.0.1:4455';
-const OBS_PASSWORD = args['obs-password'] || process.env.OBS_WS_PASSWORD || '';
-const AGENT_LABEL = args.label || process.env.OBS_AGENT_LABEL || `OBS-PC (${process.platform})`;
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+let fileConfig = {};
+const configPath = args.config
+  ? path.resolve(process.cwd(), String(args.config))
+  : path.join(scriptDir, 'config.json');
 
-if (!MATCH_ID || !AGENT_TOKEN) {
-  console.error(
-    'Usage: node maidanlive-obs-agent.mjs --server <url> --match <matchId> --token <agentToken> [--obs-url ws://127.0.0.1:4455] [--obs-password <pwd>]'
+if (fs.existsSync(configPath)) {
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      fileConfig = parsed;
+      logInfo(`Loaded bridge configuration from ${path.basename(configPath)}.`);
+    }
+  } catch (err) {
+    logWarn(`Could not parse ${path.basename(configPath)}: ${err?.message || err}`);
+  }
+}
+
+const SERVER_URL = String(
+  args.server || process.env.MAIDANLIVE_URL || fileConfig.serverUrl || 'http://127.0.0.1:3000'
+)
+  .trim()
+  .replace(/\/+$/, '');
+
+const BRIDGE_ID = String(
+  args.bridge || process.env.MAIDANLIVE_BRIDGE_ID || fileConfig.bridgeId || ''
+)
+  .trim()
+  .toUpperCase();
+
+const BRIDGE_TOKEN = String(
+  args['bridge-token'] ||
+    args.token ||
+    process.env.MAIDANLIVE_BRIDGE_TOKEN ||
+    fileConfig.bridgeToken ||
+    ''
+).trim();
+
+const MATCH_ID = String(
+  args.match || process.env.MAIDANLIVE_MATCH_ID || fileConfig.matchId || ''
+).trim();
+
+const AGENT_TOKEN = String(
+  args.token ||
+    process.env.MAIDANLIVE_AGENT_TOKEN ||
+    fileConfig.agentToken ||
+    BRIDGE_TOKEN ||
+    ''
+).trim();
+
+const OBS_URL = String(
+  args['obs-url'] || process.env.OBS_WS_URL || fileConfig.obsUrl || 'ws://127.0.0.1:4455'
+).trim();
+
+const OBS_PASSWORD = String(
+  args['obs-password'] || process.env.OBS_WS_PASSWORD || fileConfig.obsPassword || ''
+);
+
+const AGENT_LABEL = String(
+  args.label ||
+    process.env.OBS_AGENT_LABEL ||
+    fileConfig.label ||
+    `${os.hostname()} (${process.platform})`
+).trim();
+
+const useRegisteredBridgeAuth = Boolean(BRIDGE_ID && BRIDGE_TOKEN);
+const useLegacyMatchAuth = Boolean(MATCH_ID && AGENT_TOKEN);
+
+if (!useRegisteredBridgeAuth && !useLegacyMatchAuth) {
+  logErr(
+    'Missing bridge credentials.\n' +
+      'Provide either:\n' +
+      '  1) Registered Bridge: --server <url> --bridge <ML-BRG-XXXXXX> --token <bridgeToken>\n' +
+      '  2) Match Agent:       --server <url> --match <matchId> --token <agentToken>\n' +
+      'Or store them in deploy/obs-agent/config.json.'
   );
+  process.exit(1);
+}
+
+try {
+  const parsedObs = new URL(OBS_URL);
+  if (!['127.0.0.1', 'localhost', '::1'].includes(parsedObs.hostname)) {
+    logWarn(
+      `OBS URL host "${parsedObs.hostname}" is not loopback. Recommended OBS address is ws://127.0.0.1:4455.`
+    );
+  }
+} catch {
+  logErr(`Invalid OBS WebSocket URL: ${OBS_URL}`);
   process.exit(1);
 }
 
@@ -46,20 +160,48 @@ const obs = new OBSWebSocket();
 let obsConnected = false;
 let obsConnecting = false;
 let lastError = '';
+let obsReconnectTimer = null;
+let bridgeRevoked = false;
+
+const socketAuth = useRegisteredBridgeAuth
+  ? {
+      bridgeId: BRIDGE_ID,
+      bridgeToken: BRIDGE_TOKEN,
+      label: AGENT_LABEL,
+      platform: process.platform,
+    }
+  : {
+      matchId: MATCH_ID,
+      agentToken: AGENT_TOKEN,
+      label: AGENT_LABEL,
+      platform: process.platform,
+    };
+
+logInfo(
+  `Starting MaidanLive OBS Bridge (${useRegisteredBridgeAuth ? `Bridge ${BRIDGE_ID}` : `Match ${MATCH_ID}`}) -> Server: ${SERVER_URL} | Local OBS: ${OBS_URL}`
+);
 
 const socket = io(`${SERVER_URL}/obs-agent`, {
   path: '/socket.io',
   transports: ['websocket', 'polling'],
-  auth: {
-    matchId: MATCH_ID,
-    agentToken: AGENT_TOKEN,
-    label: AGENT_LABEL,
-  },
+  auth: socketAuth,
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 2000,
-  reconnectionDelayMax: 10000,
+  reconnectionDelayMax: 15000,
 });
+
+function formatObsConnectError(err) {
+  const code = Number(err?.code);
+  const raw = String(err?.message || err || '');
+  if (code === 4009 || raw.toLowerCase().includes('authentication failed')) {
+    return 'OBS WebSocket authentication failed. Check obsPassword in config.json (must match OBS -> Tools -> WebSocket Server Settings).';
+  }
+  if (raw.includes('ECONNREFUSED')) {
+    return `OBS Studio WebSocket is not listening at ${OBS_URL}. Ensure OBS Studio 28+ is open and WebSocket server is enabled on port 4455.`;
+  }
+  return raw || `Unable to reach OBS at ${OBS_URL}`;
+}
 
 async function emitObsSnapshot() {
   if (!socket.connected) return;
@@ -78,7 +220,9 @@ async function emitObsSnapshot() {
     const [ver, sceneRes, streamRes, recordRes, statsRes] = await Promise.all([
       obs.call('GetVersion'),
       obs.call('GetSceneList'),
-      obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
+      obs
+        .call('GetStreamStatus')
+        .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
       obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
       obs.call('GetStats').catch(() => null),
     ]);
@@ -163,8 +307,30 @@ async function ensureSceneAndInput(sceneName, inputName, inputKind, inputSetting
 }
 
 async function handleCommand(command, payload) {
+  if (!APPROVED_COMMANDS.has(String(command || ''))) {
+    throw new Error(`Rejected unauthorized bridge command: "${String(command || '')}"`);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Command payload must be a JSON object.');
+  }
+  if (command === 'reconnect_obs') {
+    logInfo('Operator requested OBS WebSocket reconnect...');
+    try {
+      await obs.disconnect().catch(() => {});
+    } catch {
+      // ignore disconnect error
+    }
+    obsConnected = false;
+    obsConnecting = false;
+    await connectObsLoop();
+    return {
+      reconnected: obsConnected,
+      obsUrl: OBS_URL,
+      lastError: obsConnected ? '' : lastError,
+    };
+  }
   if (!obsConnected) {
-    throw new Error(`OBS Studio is not connected on ${OBS_URL}.`);
+    throw new Error(`OBS Studio is offline on ${OBS_URL}. Open OBS Studio and enable WebSocket v5 on port 4455.`);
   }
 
   if (command === 'get_snapshot') {
@@ -188,14 +354,14 @@ async function handleCommand(command, payload) {
   }
 
   if (command === 'switch_scene') {
-    const sceneName = String(payload.sceneName || '');
+    const sceneName = String(payload.sceneName || '').trim();
     if (!sceneName) throw new Error('sceneName is required.');
 
-    if (payload.ensureInput) {
+    if (payload.ensureInput && payload.ensureInput.inputName) {
       await ensureSceneAndInput(
         sceneName,
-        payload.ensureInput.inputName,
-        payload.ensureInput.inputKind || 'browser_source',
+        String(payload.ensureInput.inputName),
+        String(payload.ensureInput.inputKind || 'browser_source'),
         payload.ensureInput.inputSettings || {}
       );
     }
@@ -203,22 +369,28 @@ async function handleCommand(command, payload) {
     if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
       const sbItemId = await ensureSceneAndInput(
         sceneName,
-        payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay',
+        String(payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay'),
         'browser_source',
-        { url: payload.scoreboardOverlay.url, width: 1920, height: 1080, reroute_audio: false }
+        { url: String(payload.scoreboardOverlay.url), width: 1920, height: 1080, reroute_audio: false }
       );
       if (sbItemId !== null) {
-        await obs.call('SetSceneItemEnabled', { sceneName, sceneItemId: sbItemId, sceneItemEnabled: true }).catch(() => {});
+        await obs
+          .call('SetSceneItemEnabled', { sceneName, sceneItemId: sbItemId, sceneItemEnabled: true })
+          .catch(() => {});
       }
     }
 
+    logInfo(`Switching OBS program scene -> "${sceneName}"`);
     await obs.call('SetCurrentProgramScene', { sceneName });
     const verified = await obs.call('GetCurrentProgramScene');
     if (verified.currentProgramSceneName !== sceneName) {
-      throw new Error(`Expected scene "${sceneName}", OBS reported "${verified.currentProgramSceneName}".`);
+      throw new Error(
+        `OBS scene mismatch: expected "${sceneName}", reported "${verified.currentProgramSceneName}".`
+      );
     }
     await emitObsSnapshot();
     const listRes = await obs.call('GetSceneList');
+    logInfo(`Verified OBS scene switch -> "${verified.currentProgramSceneName}"`);
     return {
       verifiedScene: verified.currentProgramSceneName,
       obsScenes: (listRes.scenes || []).map((s) => String(s.sceneName || '')).filter(Boolean),
@@ -226,7 +398,8 @@ async function handleCommand(command, payload) {
   }
 
   if (command === 'apply_layout') {
-    const sceneName = String(payload.sceneName || '');
+    const sceneName = String(payload.sceneName || '').trim();
+    if (!sceneName) throw new Error('Target layout sceneName is required.');
     const boxes = Array.isArray(payload.boxes) ? payload.boxes : [];
     const allInputs = Array.isArray(payload.allCameraInputs) ? payload.allCameraInputs : [];
 
@@ -243,7 +416,11 @@ async function handleCommand(command, payload) {
     for (const item of currentItems) {
       if (allInputs.includes(item.sourceName) && !selectedSet.has(item.sourceName)) {
         await obs
-          .call('SetSceneItemEnabled', { sceneName, sceneItemId: Number(item.sceneItemId), sceneItemEnabled: false })
+          .call('SetSceneItemEnabled', {
+            sceneName,
+            sceneItemId: Number(item.sceneItemId),
+            sceneItemEnabled: false,
+          })
           .catch(() => {});
       }
     }
@@ -252,8 +429,8 @@ async function handleCommand(command, payload) {
       if (!box.inputName) continue;
       const itemId = await ensureSceneAndInput(
         sceneName,
-        box.inputName,
-        box.inputKind || 'browser_source',
+        String(box.inputName),
+        String(box.inputKind || 'browser_source'),
         box.inputSettings || {}
       );
       if (itemId !== null) {
@@ -278,7 +455,7 @@ async function handleCommand(command, payload) {
       const sbName = String(payload.scoreboardOverlay.sourceName);
       if (payload.scoreboardOverlay.enabled && payload.scoreboardOverlay.url) {
         const sbId = await ensureSceneAndInput(sceneName, sbName, 'browser_source', {
-          url: payload.scoreboardOverlay.url,
+          url: String(payload.scoreboardOverlay.url),
           width: 1920,
           height: 1080,
           reroute_audio: false,
@@ -312,6 +489,7 @@ async function handleCommand(command, payload) {
       }
     }
 
+    logInfo(`Applying multi-camera layout scene -> "${sceneName}" (${boxes.length} sources)`);
     await obs.call('SetCurrentProgramScene', { sceneName });
     const verified = await obs.call('GetCurrentProgramScene');
     if (verified.currentProgramSceneName !== sceneName) {
@@ -326,8 +504,10 @@ async function handleCommand(command, payload) {
   }
 
   if (command === 'screenshot') {
+    const sourceName = String(payload.sourceName || '').trim();
+    if (!sourceName) throw new Error('sourceName is required.');
     const res = await obs.call('GetSourceScreenshot', {
-      sourceName: String(payload.sourceName || ''),
+      sourceName,
       imageFormat: 'jpeg',
       imageWidth: 640,
       imageHeight: 360,
@@ -337,31 +517,35 @@ async function handleCommand(command, payload) {
   }
 
   if (command === 'start_stream') {
+    logInfo('Starting OBS stream output...');
     await obs.call('StartStream');
     await emitObsSnapshot();
     return { obsStreamActive: true };
   }
 
   if (command === 'stop_stream') {
+    logInfo('Stopping OBS stream output...');
     await obs.call('StopStream');
     await emitObsSnapshot();
     return { obsStreamActive: false };
   }
 
   if (command === 'start_record') {
+    logInfo('Starting OBS local recording...');
     await obs.call('StartRecord');
     await emitObsSnapshot();
     return { obsRecordActive: true };
   }
 
   if (command === 'stop_record') {
+    logInfo('Stopping OBS local recording...');
     const res = await obs.call('StopRecord');
     await emitObsSnapshot();
     return { obsRecordActive: false, outputPath: res?.outputPath || '' };
   }
 
   if (command === 'set_input_mute') {
-    const inputName = String(payload.inputName || '');
+    const inputName = String(payload.inputName || '').trim();
     const inputMuted = Boolean(payload.inputMuted);
     if (!inputName) throw new Error('inputName is required.');
     await obs.call('SetInputMute', { inputName, inputMuted });
@@ -370,20 +554,20 @@ async function handleCommand(command, payload) {
   }
 
   if (command === 'get_input_mute') {
-    const inputName = String(payload.inputName || '');
+    const inputName = String(payload.inputName || '').trim();
     if (!inputName) throw new Error('inputName is required.');
     const res = await obs.call('GetInputMute', { inputName });
     return { inputName, inputMuted: Boolean(res.inputMuted) };
   }
 
   if (command === 'reconnect_input') {
-    const sceneName = String(payload.sceneName || '');
-    const inputName = String(payload.inputName || '');
+    const sceneName = String(payload.sceneName || '').trim();
+    const inputName = String(payload.inputName || '').trim();
     if (sceneName && inputName) {
       await ensureSceneAndInput(
         sceneName,
         inputName,
-        payload.inputKind || 'browser_source',
+        String(payload.inputKind || 'browser_source'),
         payload.inputSettings || {}
       ).catch(() => {});
     }
@@ -396,11 +580,63 @@ async function handleCommand(command, payload) {
     return { reconnected: true, inputName };
   }
 
+  if (command === 'get_scene_items') {
+    let targetScene = String(payload.sceneName || '').trim();
+    if (!targetScene) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      targetScene = String(cur?.currentProgramSceneName || '');
+    }
+    if (!targetScene) throw new Error('No active OBS scene selected.');
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName: targetScene });
+    const items = Array.isArray(itemsRes?.sceneItems)
+      ? itemsRes.sceneItems.map((it) => ({
+          sceneItemId: Number(it.sceneItemId),
+          sourceName: String(it.sourceName || ''),
+          sourceType: String(it.sourceType || ''),
+          inputKind: String(it.inputKind || ''),
+          sceneItemEnabled: Boolean(it.sceneItemEnabled),
+          sceneItemLocked: Boolean(it.sceneItemLocked),
+        }))
+      : [];
+    return { sceneName: targetScene, items };
+  }
+
+  if (command === 'set_scene_item_enabled') {
+    const sceneName = String(payload.sceneName || '').trim();
+    const sceneItemId = Number(payload.sceneItemId);
+    const enabled = Boolean(payload.enabled);
+    if (!sceneName || !Number.isFinite(sceneItemId)) {
+      throw new Error('sceneName and valid sceneItemId are required.');
+    }
+    await obs.call('SetSceneItemEnabled', {
+      sceneName,
+      sceneItemId,
+      sceneItemEnabled: enabled,
+    });
+    const verify = await obs
+      .call('GetSceneItemEnabled', { sceneName, sceneItemId })
+      .catch(() => ({ sceneItemEnabled: enabled }));
+    await emitObsSnapshot();
+    return {
+      sceneName,
+      sceneItemId,
+      sceneItemEnabled: Boolean(verify.sceneItemEnabled),
+    };
+  }
+
   throw new Error(`Unsupported command: ${command}`);
 }
 
+function scheduleObsReconnect(delayMs = 4000) {
+  if (obsReconnectTimer || bridgeRevoked) return;
+  obsReconnectTimer = setTimeout(() => {
+    obsReconnectTimer = null;
+    connectObsLoop();
+  }, delayMs);
+}
+
 async function connectObsLoop() {
-  if (obsConnected || obsConnecting) return;
+  if (obsConnected || obsConnecting || bridgeRevoked) return;
   obsConnecting = true;
   emitObsSnapshot().catch(() => {});
   try {
@@ -408,54 +644,112 @@ async function connectObsLoop() {
     obsConnected = true;
     obsConnecting = false;
     lastError = '';
-    console.log(`[MaidanLive Agent] Connected to OBS WebSocket at ${OBS_URL}`);
+    logInfo(`Connected to local OBS Studio WebSocket v5 (${OBS_URL})`);
+    const sceneList = await obs.call('GetSceneList').catch(() => null);
+    if (sceneList) {
+      const count = Array.isArray(sceneList.scenes) ? sceneList.scenes.length : 0;
+      logInfo(
+        `Discovered ${count} OBS scenes. Active program scene: "${sceneList.currentProgramSceneName || 'None'}"`
+      );
+    }
     await emitObsSnapshot();
   } catch (err) {
     obsConnected = false;
     obsConnecting = false;
-    lastError = err?.message || `Unable to reach OBS at ${OBS_URL}`;
-    console.warn(`[MaidanLive Agent] OBS connect failed: ${lastError}. Retrying in 5s...`);
+    lastError = formatObsConnectError(err);
+    logWarn(`${lastError} — retrying in 5s...`);
+    if (socket.connected) {
+      socket.emit('agent:obs_error', { message: lastError });
+    }
     await emitObsSnapshot();
-    setTimeout(connectObsLoop, 5000);
+    scheduleObsReconnect(5000);
   }
 }
 
 obs.on('ConnectionClosed', (err) => {
   obsConnected = false;
   obsConnecting = false;
-  lastError = err?.message || 'OBS WebSocket closed';
-  console.warn(`[MaidanLive Agent] OBS closed (${lastError}). Reconnecting in 4s...`);
+  lastError = formatObsConnectError(err);
+  logWarn(`OBS WebSocket disconnected (${lastError}). Reconnecting in 4s...`);
   emitObsSnapshot().catch(() => {});
-  setTimeout(connectObsLoop, 4000);
+  scheduleObsReconnect(4000);
 });
 
-obs.on('CurrentProgramSceneChanged', () => emitObsSnapshot().catch(() => {}));
-obs.on('SceneListChanged', () => emitObsSnapshot().catch(() => {}));
-obs.on('StreamStateChanged', () => emitObsSnapshot().catch(() => {}));
+obs.on('CurrentProgramSceneChanged', (ev) => {
+  logInfo(`OBS program scene changed -> "${ev?.sceneName || ''}"`);
+  emitObsSnapshot().catch(() => {});
+});
+obs.on('SceneListChanged', () => {
+  logInfo('OBS scene list updated — syncing scenes to MaidanLive...');
+  emitObsSnapshot().catch(() => {});
+});
+obs.on('StreamStateChanged', (ev) => {
+  logInfo(`OBS stream output state: ${ev?.outputActive ? 'LIVE STREAMING' : 'STOPPED'}`);
+  emitObsSnapshot().catch(() => {});
+});
 obs.on('RecordStateChanged', () => emitObsSnapshot().catch(() => {}));
 
 socket.on('connect', () => {
-  console.log(`[MaidanLive Agent] Authenticated to ${SERVER_URL}/obs-agent for match ${MATCH_ID}`);
+  logInfo(
+    `Authenticated outbound bridge to ${SERVER_URL}/obs-agent (${useRegisteredBridgeAuth ? `Bridge ${BRIDGE_ID}` : `Match ${MATCH_ID}`})`
+  );
   emitObsSnapshot().catch(() => {});
 });
 
+socket.on('disconnect', (reason) => {
+  logWarn(`Disconnected from MaidanLive backend (${reason}). Auto-reconnecting...`);
+});
+
 socket.on('connect_error', (err) => {
-  console.error(`[MaidanLive Agent] Server connection error: ${err?.message || err}`);
+  const msg = String(err?.message || err);
+  logErr(`Backend handshake failed: ${msg}`);
+  if (msg.toLowerCase().includes('revoked')) {
+    bridgeRevoked = true;
+    socket.io.opts.reconnection = false;
+    logErr('Bridge was REVOKED by Administrator. Generate or reactivate your bridge token in MaidanLive before restarting.');
+  }
+});
+
+socket.on('server:bridge_revoked', (payload) => {
+  bridgeRevoked = true;
+  socket.io.opts.reconnection = false;
+  logErr(`Bridge revoked by Administrator: ${payload?.reason || 'Access revoked'}. Stopping bridge.`);
+  obs.disconnect().catch(() => {});
+  process.exit(2);
+});
+
+socket.on('server:disconnect_bridge', (payload) => {
+  logWarn(`Disconnected by operator: ${payload?.reason || 'Control Room disconnect'}.`);
+  socket.disconnect();
 });
 
 socket.on('server:obs_command', async (req, ack) => {
+  const cmd = req?.command;
   try {
-    const data = await handleCommand(req?.command, req?.payload || {});
+    const data = await handleCommand(cmd, req?.payload || {});
     if (typeof ack === 'function') ack({ ok: true, data });
   } catch (err) {
-    if (typeof ack === 'function') ack({ ok: false, error: err?.message || 'OBS command failed.' });
+    const msg = err?.message || 'OBS command failed.';
+    logErr(`Command "${String(cmd || '')}" failed: ${msg}`);
+    if (typeof ack === 'function') ack({ ok: false, error: msg });
   }
 });
 
 setInterval(() => {
-  if (obsConnected && socket.connected) {
+  if (obsConnected && socket.connected && !bridgeRevoked) {
     emitObsSnapshot().catch(() => {});
   }
 }, 5000);
+
+process.on('SIGINT', async () => {
+  logInfo('Shutting down Windows Local OBS Bridge cleanly...');
+  try {
+    socket.disconnect();
+    await obs.disconnect();
+  } catch {
+    // Ignore close errors
+  }
+  process.exit(0);
+});
 
 connectObsLoop();

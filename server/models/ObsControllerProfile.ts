@@ -46,6 +46,7 @@ export interface IObsControllerProfile extends Document {
   activeLayoutType: MultiCameraLayoutType;
   activeSceneId: string;
   obsScenes: string[];
+  sceneLabels?: Map<string, string> | Record<string, string>;
   obsStreamActive: boolean;
   obsStreamTimecode: string;
   obsStreamBytes?: number | null;
@@ -126,6 +127,7 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     },
     activeSceneId: { type: String, default: '' },
     obsScenes: [{ type: String }],
+    sceneLabels: { type: Map, of: String, default: {} },
     obsStreamActive: { type: Boolean, default: false },
     obsStreamTimecode: { type: String, default: '' },
     obsStreamBytes: { type: Number, default: null },

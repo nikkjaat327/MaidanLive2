@@ -30,10 +30,19 @@ export type BroadcastAuditAction =
   | 'BROADCASTER_STATUS_CHANGED'
   | 'CONTROLLER_TAKEOVER'
   | 'ADMIN_OVERRIDE_ON'
-  | 'ADMIN_OVERRIDE_OFF';
+  | 'ADMIN_OVERRIDE_OFF'
+  | 'BRIDGE_REGISTERED'
+  | 'BRIDGE_UPDATED'
+  | 'BRIDGE_REVOKED'
+  | 'BRIDGE_REACTIVATED'
+  | 'BRIDGE_TOKEN_ROTATED'
+  | 'BRIDGE_PAIRING_CREATED'
+  | 'BRIDGE_PAIRED'
+  | 'BRIDGE_DISCONNECTED'
+  | 'BRIDGE_RECONNECT_REQUESTED';
 
 export interface IBroadcastAuditLog extends Document {
-  matchId: mongoose.Types.ObjectId;
+  matchId?: mongoose.Types.ObjectId | null;
   tournamentId?: mongoose.Types.ObjectId | null;
   actionType: BroadcastAuditAction;
   cameraId: string;
@@ -56,7 +65,7 @@ export interface IBroadcastAuditLog extends Document {
 
 const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
   {
-    matchId: { type: Schema.Types.ObjectId, ref: 'LiveStream', required: true, index: true },
+    matchId: { type: Schema.Types.ObjectId, ref: 'LiveStream', required: false, default: null, index: true },
     tournamentId: { type: Schema.Types.ObjectId, ref: 'Tournament', default: null },
     actionType: {
       type: String,
@@ -89,6 +98,15 @@ const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
         'CONTROLLER_TAKEOVER',
         'ADMIN_OVERRIDE_ON',
         'ADMIN_OVERRIDE_OFF',
+        'BRIDGE_REGISTERED',
+        'BRIDGE_UPDATED',
+        'BRIDGE_REVOKED',
+        'BRIDGE_REACTIVATED',
+        'BRIDGE_TOKEN_ROTATED',
+        'BRIDGE_PAIRING_CREATED',
+        'BRIDGE_PAIRED',
+        'BRIDGE_DISCONNECTED',
+        'BRIDGE_RECONNECT_REQUESTED',
       ],
       required: true,
       index: true,

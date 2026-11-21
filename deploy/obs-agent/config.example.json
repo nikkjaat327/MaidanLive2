@@ -1,0 +1,8 @@
+{
+  "serverUrl": "https://your-maidanlive-app.example.com",
+  "bridgeId": "ML-BRG-XXXXXX",
+  "bridgeToken": "PASTE_YOUR_BRIDGE_TOKEN_HERE",
+  "obsUrl": "ws://127.0.0.1:4455",
+  "obsPassword": "YOUR_OBS_WEBSOCKET_PASSWORD",
+  "label": "Ground-Windows-OBS-Laptop"
+}

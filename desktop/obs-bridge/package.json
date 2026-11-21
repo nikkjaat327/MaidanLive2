@@ -1,0 +1,71 @@
+{
+  "name": "maidanlive-obs-bridge",
+  "version": "1.0.0",
+  "description": "MaidanLive OBS Bridge desktop companion for one-click Windows remote OBS Studio control.",
+  "author": "MaidanLive",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "obs-websocket-js": "^5.0.6",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.maidanlive.obsbridge",
+    "productName": "MaidanLive OBS Bridge",
+    "asar": true,
+    "directories": {
+      "output": "../../dist-installers",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "store.cjs",
+      "obsDetector.cjs",
+      "bridgeEngine.cjs",
+      "localServer.cjs",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "MaidanLive OBS Bridge",
+        "schemes": [
+          "maidanlive-bridge"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "MaidanLive OBS Bridge Setup.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MaidanLive OBS Bridge",
+      "include": "build/installer.nsh"
+    }
+  }
+}

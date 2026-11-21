@@ -5,16 +5,21 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Ban,
   Camera,
   Check,
+  CheckCircle2,
   Circle,
   ClipboardList,
   Copy,
+  Download,
   Edit3,
   Eye,
   EyeOff,
   KeyRound,
+  Laptop,
   Layers,
+  Loader2,
   Lock,
   Mic,
   MicOff,
@@ -45,8 +50,18 @@ import { liveStreamService } from '../../services/liveStream/liveStreamService.t
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
-import type { LiveStreamData } from '../../types/index.ts';
-import type { BroadcastCameraData, CameraConnectionStatus, ObsConnectionStatus } from '../../types/obs.ts';
+import type { LiveStreamData, StreamingProvider } from '../../types/index.ts';
+import type {
+  BroadcastCameraData,
+  CameraConnectionStatus,
+  LocalBridgeProbeStatus,
+  ObsBridgeData,
+  ObsBridgeInstallerStatus,
+  ObsBridgePairingResponse,
+  ObsBridgeTokenResponse,
+  ObsConnectionStatus,
+  ObsSceneItemData,
+} from '../../types/obs.ts';
 import {
   OVERLAY_MODES,
   OVERLAY_POSITIONS,
@@ -64,6 +79,7 @@ import {
   GridPromoteAction,
 } from '../../components/obsStudio/CameraPreviewGrid.tsx';
 import { DynamicLayoutBuilder } from '../../components/obsStudio/DynamicLayoutBuilder.tsx';
+import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
@@ -124,6 +140,7 @@ export function AdminObsBroadcastStudioPage() {
     error,
     socketConnected,
     liveErrorToast,
+    switchingSceneRequest,
     clearLiveErrorToast,
     refetch,
   } = useObsStudio(matchId);
@@ -175,12 +192,46 @@ export function AdminObsBroadcastStudioPage() {
   } | null>(null);
   const [generatingAgentToken, setGeneratingAgentToken] = useState(false);
 
+  // Registered Windows Local OBS Bridges
+  const [bridges, setBridges] = useState<ObsBridgeData[]>([]);
+  const [loadingBridges, setLoadingBridges] = useState(false);
+  const [bridgeNameDraft, setBridgeNameDraft] = useState('');
+  const [bridgeLabelDraft, setBridgeLabelDraft] = useState('');
+  const [bridgeOwnerDraft, setBridgeOwnerDraft] = useState('');
+  const [assignBridgeToCurrentMatch, setAssignBridgeToCurrentMatch] = useState(true);
+  const [registeringBridge, setRegisteringBridge] = useState(false);
+  const [createdBridgeSecret, setCreatedBridgeSecret] = useState<ObsBridgeTokenResponse | null>(null);
+  const [busyBridgeId, setBusyBridgeId] = useState<string | null>(null);
+  const [installerStatus, setInstallerStatus] = useState<ObsBridgeInstallerStatus | null>(null);
+  const [localBridgeProbe, setLocalBridgeProbe] = useState<LocalBridgeProbeStatus | null>(null);
+  const [probingLocalBridge, setProbingLocalBridge] = useState(false);
+  const [pairingInfo, setPairingInfo] = useState<ObsBridgePairingResponse | null>(null);
+  const [generatingPairing, setGeneratingPairing] = useState(false);
+  const [pairingRemainingSec, setPairingRemainingSec] = useState(0);
+  const [showAdvancedBridgeSetup, setShowAdvancedBridgeSetup] = useState(false);
+
   // Overlay & Sponsor tab state
   const [savingOverlay, setSavingOverlay] = useState(false);
   const [savingSponsors, setSavingSponsors] = useState(false);
 
   // Audit log filter
   const [auditFilter, setAuditFilter] = useState('');
+
+  // Dynamic Scene Items & Friendly Scene Labels
+  const [sceneItems, setSceneItems] = useState<ObsSceneItemData[]>([]);
+  const [sceneItemsSceneName, setSceneItemsSceneName] = useState('');
+  const [loadingSceneItems, setLoadingSceneItems] = useState(false);
+  const [refreshingScenes, setRefreshingScenes] = useState(false);
+  const [togglingItemId, setTogglingItemId] = useState<number | null>(null);
+  const [editingSceneLabels, setEditingSceneLabels] = useState(false);
+  const [sceneLabelDrafts, setSceneLabelDrafts] = useState<Record<string, string>>({});
+  const [savingSceneLabels, setSavingSceneLabels] = useState(false);
+
+  // YouTube Live Output Association & Preview in Control Room
+  const [ytInputDraft, setYtInputDraft] = useState('');
+  const [ytProviderDraft, setYtProviderDraft] = useState<StreamingProvider>('youtube');
+  const [savingYtOutput, setSavingYtOutput] = useState(false);
+  const [showInlineYtPreview, setShowInlineYtPreview] = useState(false);
 
   // Load match selector list (strictly scoped for Broadcasters)
   const loadMatches = useCallback(async () => {
@@ -215,6 +266,57 @@ export function AdminObsBroadcastStudioPage() {
     loadMatches();
   }, [loadMatches]);
 
+  const loadBridges = useCallback(async () => {
+    try {
+      setLoadingBridges(true);
+      const res = await obsStudioService.listBridges();
+      setBridges(res.bridges || []);
+    } catch {
+      // Non-blocking
+    } finally {
+      setLoadingBridges(false);
+    }
+  }, []);
+
+  const checkInstallerAndLocalBridge = useCallback(async () => {
+    try {
+      setProbingLocalBridge(true);
+      const [inst, probe] = await Promise.all([
+        obsStudioService.getBridgeInstallerStatus().catch(() => null),
+        obsStudioService.probeLocalBridgeStatus().catch(() => null),
+      ]);
+      if (inst) setInstallerStatus(inst);
+      setLocalBridgeProbe(probe);
+    } finally {
+      setProbingLocalBridge(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBridges();
+  }, [loadBridges, studio?.profile?.agentOnline, studio?.profile?.connectionStatus]);
+
+  useEffect(() => {
+    checkInstallerAndLocalBridge();
+  }, [checkInstallerAndLocalBridge, activeTab]);
+
+  useEffect(() => {
+    if (!pairingInfo?.expiresAt) {
+      setPairingRemainingSec(0);
+      return;
+    }
+    const updateTick = () => {
+      const rem = Math.max(
+        0,
+        Math.floor((new Date(pairingInfo.expiresAt).getTime() - Date.now()) / 1000)
+      );
+      setPairingRemainingSec(rem);
+    };
+    updateTick();
+    const id = window.setInterval(updateTick, 1000);
+    return () => window.clearInterval(id);
+  }, [pairingInfo?.expiresAt]);
+
   // Sync profile form fields when profile updates
   useEffect(() => {
     const p = studio?.profile;
@@ -226,10 +328,17 @@ export function AdminObsBroadcastStudioPage() {
     setVdoRoomName(p.vdoRoomName || '');
     setScoreboardSourceName(p.scoreboardSourceName || 'MaidanLive Scoreboard');
     setAutoSyncScoreboard(p.autoSyncScoreboardSource !== false);
+    setSceneLabelDrafts(p.sceneLabels || {});
     if (p.activeCameraId) {
       setPreferredMainCameraId(p.activeCameraId);
     }
   }, [studio?.profile]);
+
+  useEffect(() => {
+    if (!studio?.match) return;
+    setYtInputDraft(studio.match.youtubeVideoId || '');
+    setYtProviderDraft(studio.match.activeStreamingProvider || 'youtube');
+  }, [studio?.match?.id, studio?.match?.youtubeVideoId, studio?.match?.activeStreamingProvider]);
 
   function notifySuccess(msg: string) {
     setActionError(null);
@@ -641,10 +750,107 @@ export function AdminObsBroadcastStudioPage() {
   async function handleSyncObsState() {
     if (!matchId) return;
     try {
-      await obsStudioService.refreshObs(matchId);
-      notifySuccess('Refreshed scenes and stats from OBS.');
+      setRefreshingScenes(true);
+      setActionError(null);
+      await obsStudioService.refreshScenes(matchId);
+      notifySuccess('Refreshed live OBS scenes and telemetry.');
+      await refetch();
+      await loadSceneItems(profile?.activeObsScene || '');
     } catch (err) {
       setActionError(extractApiError(err, 'OBS Studio is not connected.'));
+    } finally {
+      setRefreshingScenes(false);
+    }
+  }
+
+  const loadSceneItems = useCallback(
+    async (targetScene = '') => {
+      if (!matchId || !obsConnected) {
+        setSceneItems([]);
+        return;
+      }
+      try {
+        setLoadingSceneItems(true);
+        const res = await obsStudioService.getSceneItems(matchId, targetScene);
+        setSceneItems(res.items || []);
+        setSceneItemsSceneName(res.sceneName || targetScene);
+      } catch {
+        setSceneItems([]);
+      } finally {
+        setLoadingSceneItems(false);
+      }
+    },
+    [matchId, obsConnected]
+  );
+
+  useEffect(() => {
+    if (obsConnected && activeTab === 'live') {
+      loadSceneItems(profile?.activeObsScene || '');
+    } else if (!obsConnected) {
+      setSceneItems([]);
+    }
+  }, [obsConnected, activeTab, profile?.activeObsScene, loadSceneItems]);
+
+  async function handleToggleSceneItem(item: ObsSceneItemData) {
+    if (!matchId || !sceneItemsSceneName) return;
+    try {
+      setTogglingItemId(item.sceneItemId);
+      setActionError(null);
+      const nextEnabled = !item.sceneItemEnabled;
+      const res = await obsStudioService.toggleSceneItem(matchId, {
+        sceneName: sceneItemsSceneName,
+        sceneItemId: item.sceneItemId,
+        sourceName: item.sourceName,
+        enabled: nextEnabled,
+        override: Boolean(profile?.adminOverrideLocked),
+      });
+      setSceneItems((prev) =>
+        prev.map((s) =>
+          s.sceneItemId === item.sceneItemId ? { ...s, sceneItemEnabled: res.sceneItemEnabled } : s
+        )
+      );
+      notifySuccess(`Source "${item.sourceName}" ${res.sceneItemEnabled ? 'shown' : 'hidden'} in OBS.`);
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to toggle source "${item.sourceName}".`));
+    } finally {
+      setTogglingItemId(null);
+    }
+  }
+
+  async function handleSaveSceneLabels() {
+    if (!matchId) return;
+    try {
+      setSavingSceneLabels(true);
+      setActionError(null);
+      await obsStudioService.updateProfile(matchId, { sceneLabels: sceneLabelDrafts });
+      setEditingSceneLabels(false);
+      notifySuccess('Friendly OBS scene labels saved.');
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to save scene labels.'));
+    } finally {
+      setSavingSceneLabels(false);
+    }
+  }
+
+  async function handleSaveYouTubeOutput(e: React.FormEvent) {
+    e.preventDefault();
+    if (!matchId) return;
+    try {
+      setSavingYtOutput(true);
+      setActionError(null);
+      const res = await obsStudioService.updateYouTubeOutput(matchId, {
+        ...(ytInputDraft.trim() ? { youtubeInput: ytInputDraft.trim() } : {}),
+        activeStreamingProvider: ytProviderDraft,
+      });
+      notifySuccess(
+        `Broadcast output updated (${res.match.activeStreamingProvider === 'youtube' ? 'YouTube Live' : 'MediaMTX Direct'}${res.match.youtubeVideoId ? ` · ID: ${res.match.youtubeVideoId}` : ''}).`
+      );
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to save YouTube Live output settings.'));
+    } finally {
+      setSavingYtOutput(false);
     }
   }
 
@@ -758,6 +964,209 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
+  function downloadBridgeConfigJson(resp: ObsBridgeTokenResponse) {
+    try {
+      const blob = new Blob([JSON.stringify(resp.configJson, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'config.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      copyText('bridgeConfigJson', JSON.stringify(resp.configJson, null, 2));
+    }
+  }
+
+  async function handleRegisterBridge(e: React.FormEvent) {
+    e.preventDefault();
+    const cleanName = bridgeNameDraft.trim() || 'Windows OBS Bridge';
+    try {
+      setRegisteringBridge(true);
+      setActionError(null);
+      const res = await obsStudioService.registerBridge({
+        name: cleanName,
+        label: bridgeLabelDraft.trim() || cleanName,
+        ownerUserId: bridgeOwnerDraft || undefined,
+        tournamentId: studio?.match?.tournamentId || undefined,
+        assignedMatchIds: assignBridgeToCurrentMatch && matchId ? [matchId] : [],
+      });
+      setCreatedBridgeSecret(res);
+      setBridgeNameDraft('');
+      setBridgeLabelDraft('');
+      setConnMode('local_agent');
+      notifySuccess(`Registered Bridge ${res.bridge.bridgeId}. Save or download config.json on your OBS laptop.`);
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to register Windows OBS bridge.'));
+    } finally {
+      setRegisteringBridge(false);
+    }
+  }
+
+  async function handleToggleBridgeMatch(bridge: ObsBridgeData) {
+    if (!matchId) return;
+    const assigned = bridge.assignedMatchIds.includes(matchId);
+    const nextMatchIds = assigned
+      ? bridge.assignedMatchIds.filter((id) => id !== matchId)
+      : [...bridge.assignedMatchIds, matchId];
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      await obsStudioService.updateBridge(bridge.bridgeId, { assignedMatchIds: nextMatchIds });
+      notifySuccess(
+        assigned
+          ? `Detached ${bridge.bridgeId} from this match.`
+          : `Assigned ${bridge.bridgeId} to this match.`
+      );
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed updating match assignment for ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
+  async function handleRotateBridgeToken(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      const res = await obsStudioService.rotateBridgeToken(bridge.bridgeId);
+      setCreatedBridgeSecret(res);
+      notifySuccess(`Rotated token for ${bridge.bridgeId}. Reconnect Windows Bridge with updated config.json.`);
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed rotating token for ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
+  async function handleRevokeBridge(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      await obsStudioService.revokeBridge(bridge.bridgeId, 'Revoked from MaidanLive Broadcast Studio');
+      notifySuccess(`Revoked ${bridge.bridgeId} and disconnected any active session.`);
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed revoking ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
+  async function handleReactivateBridge(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      await obsStudioService.reactivateBridge(bridge.bridgeId);
+      notifySuccess(`Reactivated ${bridge.bridgeId}.`);
+      await loadBridges();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed reactivating ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
+  async function handleOpenOrPairBridge(existingBridgeId?: string) {
+    try {
+      setGeneratingPairing(true);
+      setActionError(null);
+      const res = await obsStudioService.createBridgePairingCode({
+        matchId: matchId || undefined,
+        tournamentId: studio?.match?.tournamentId || undefined,
+        bridgeId: existingBridgeId,
+        label: 'Windows OBS Bridge',
+      });
+      setPairingInfo(res);
+      setConnMode('local_agent');
+
+      const probe = await obsStudioService.probeLocalBridgeStatus();
+      setLocalBridgeProbe(probe);
+      if (probe?.running) {
+        const activated = await obsStudioService.activateLocalBridge(res.pairingCode, res.serverUrl);
+        if (activated.ok) {
+          setPairingInfo(null);
+          notifySuccess(
+            `Windows OBS Bridge paired (${activated.bridgeId || 'connected'}) and syncing with OBS Studio!`
+          );
+          await loadBridges();
+          await refetch();
+          await checkInstallerAndLocalBridge();
+          return;
+        }
+      }
+
+      // Trigger custom Windows URI protocol without opening a blank tab
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = res.protocolUrl;
+        document.body.appendChild(iframe);
+        window.setTimeout(() => {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        }, 2500);
+      } catch {
+        // User can copy the fallback pairing code shown below
+      }
+      notifySuccess(
+        `Pairing code ${res.pairingCode} generated (valid 5 min). Opening MaidanLive OBS Bridge app...`
+      );
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to generate Windows Bridge pairing code.'));
+    } finally {
+      setGeneratingPairing(false);
+    }
+  }
+
+  async function handleReconnectBridgeObs(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      const res = await obsStudioService.reconnectBridgeObs(bridge.bridgeId);
+      if (res.result?.reconnected) {
+        notifySuccess(`OBS Studio reconnected on ${bridge.bridgeId}.`);
+      } else {
+        setActionError(
+          res.result?.lastError ||
+            'Reconnect requested, but OBS Studio is still offline on port 4455.'
+        );
+      }
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed reconnecting OBS on ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
+  async function handleDisconnectBridge(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      await obsStudioService.disconnectBridge(bridge.bridgeId);
+      notifySuccess(`Disconnected active bridge session for ${bridge.bridgeId}.`);
+      await loadBridges();
+      await refetch();
+      await checkInstallerAndLocalBridge();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed disconnecting ${bridge.bridgeId}.`));
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
   // Admin Override toggle
   async function handleConfirmOverride(locked: boolean) {
     if (!matchId) return;
@@ -829,117 +1238,184 @@ export function AdminObsBroadcastStudioPage() {
   return (
     <div className="space-y-5">
       {/* Studio Header Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Video className="w-5 h-5 text-[#EA580C] shrink-0" />
-            <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 truncate">
-              Multi-Camera OBS Broadcast Studio
-            </h1>
-            {profile && (
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Video className="w-5 h-5 text-[#EA580C] shrink-0" />
+              <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 truncate">
+                Multi-Camera OBS Broadcast Studio
+              </h1>
+              {profile && (
+                <>
+                  {profile.connectionMode === 'local_agent' && (
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${
+                        profile.agentOnline
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-slate-100 text-slate-700 border-slate-300'
+                      }`}
+                    >
+                      <Laptop className="w-3 h-3" />
+                      {profile.agentOnline ? 'BRIDGE ONLINE' : 'BRIDGE OFFLINE'}
+                    </span>
+                  )}
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${obsStatusBadgeClass(
+                      profile.connectionStatus
+                    )}`}
+                  >
+                    {profile.connectionStatus === 'CONNECTED'
+                      ? 'OBS CONNECTED'
+                      : profile.connectionStatus === 'CONNECTING'
+                        ? 'OBS CONNECTING'
+                        : profile.connectionStatus === 'ERROR'
+                          ? 'OBS ERROR'
+                          : 'OBS DISCONNECTED'}
+                  </span>
+                </>
+              )}
               <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold border ${obsStatusBadgeClass(
-                  profile.connectionStatus
-                )}`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold border whitespace-nowrap shrink-0 ${
+                  socketConnected
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    profile.connectionStatus === 'CONNECTED'
-                      ? 'bg-emerald-500'
-                      : profile.connectionStatus === 'ERROR'
-                        ? 'bg-red-500'
-                        : 'bg-slate-400'
-                  }`}
-                />
-                OBS {profile.connectionStatus}
+                {socketConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                {socketConnected ? 'Sync Live' : 'Reconnecting...'}
               </span>
-            )}
-            <span
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold border ${
-                socketConnected
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
-            >
-              {socketConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              {socketConnected ? 'Sync Live' : 'Syncing...'}
-            </span>
+              {profile?.lastSyncedAt && (
+                <span className="text-[11px] font-mono text-slate-400 whitespace-nowrap">
+                  Synced {new Date(profile.lastSyncedAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500">
+              Switch field smartphones &amp; studio cameras in OBS Studio — changes apply seamlessly into one continuous YouTube Live stream without restart.
+            </p>
           </div>
-          <p className="text-xs text-slate-500">
-            Control unlimited smartphone &amp; studio cameras in OBS Studio — switches stream seamlessly into your continuous YouTube Live feed without restart.
-          </p>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <select
-            value={matchId || ''}
-            disabled={loadingMatches}
-            onChange={(e) => {
-              if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
-            }}
-            aria-label="Select broadcast match"
-            className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[260px]"
-          >
-            {matches.length === 0 && <option value="">No matches available</option>}
-            {matches.map((m) => (
-              <option key={m.id} value={m.id}>
-                [{m.status}] {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
-              </option>
-            ))}
-          </select>
-
-          {matchId && (
-            <>
-              <Link
-                to={`/broadcast/overlay/${matchId}`}
-                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap"
-              >
-                <Tv className="w-3.5 h-3.5 text-[#EA580C]" />
-                <span>Overlay Studio</span>
-              </Link>
-              {!isBroadcasterRole && (
-                <Link
-                  to={`/admin/scoreboard/${matchId}`}
-                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap"
-                >
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  <span>Scoreboard</span>
-                </Link>
-              )}
-            </>
-          )}
-
-          {profile && studio?.permissions?.canOverride && (
-            <button
-              type="button"
-              onClick={() => {
-                if (profile.adminOverrideLocked) {
-                  handleConfirmOverride(false);
-                } else {
-                  setOverrideModalOpen(true);
-                }
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <select
+              value={matchId || ''}
+              disabled={loadingMatches}
+              onChange={(e) => {
+                if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
               }}
-              disabled={togglingOverride}
-              className={`min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap ${
-                profile.adminOverrideLocked
-                  ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
-                  : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-              }`}
+              aria-label="Select broadcast match"
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[260px]"
             >
-              {profile.adminOverrideLocked ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5" />
-                  <span>Release Override Lock</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Admin Override</span>
-                </>
-              )}
-            </button>
-          )}
+              {matches.length === 0 && <option value="">No matches available</option>}
+              {matches.map((m) => (
+                <option key={m.id} value={m.id}>
+                  [{m.status}] {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
+                </option>
+              ))}
+            </select>
+
+            {matchId && (
+              <>
+                <Link
+                  to={`/broadcast/overlay/${matchId}`}
+                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
+                >
+                  <Tv className="w-3.5 h-3.5 text-[#EA580C]" />
+                  <span>Overlay Studio</span>
+                </Link>
+                {!isBroadcasterRole && (
+                  <Link
+                    to={`/admin/scoreboard/${matchId}`}
+                    className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <span>Scoreboard</span>
+                  </Link>
+                )}
+              </>
+            )}
+
+            {profile && studio?.permissions?.canOverride && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (profile.adminOverrideLocked) {
+                    handleConfirmOverride(false);
+                  } else {
+                    setOverrideModalOpen(true);
+                  }
+                }}
+                disabled={togglingOverride}
+                className={`min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  profile.adminOverrideLocked
+                    ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
+                }`}
+              >
+                {profile.adminOverrideLocked ? (
+                  <>
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>Release Override Lock</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Admin Override</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Match Context Strip */}
+        {studio?.match && (
+          <div className="pt-3 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tournament</p>
+              <p className="font-semibold text-slate-900 truncate">
+                {studio.match.tournamentName || 'Open / Standalone'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teams</p>
+              <p className="font-semibold text-slate-900 truncate">
+                {[studio.match.teamAName, studio.match.teamBName].filter(Boolean).join(' vs ') ||
+                  studio.match.matchTitle}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match Status</p>
+              <p className="font-mono font-bold text-slate-900">
+                {studio.match.status} · {studio.match.gameName || 'Sport'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Broadcast Mode</p>
+              <p className="font-mono font-semibold text-slate-900">
+                {studio.match.activeStreamingProvider === 'mediamtx' ? 'MediaMTX Direct' : 'YouTube Live'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">YouTube Output</p>
+              <p className="font-mono font-semibold text-slate-900 truncate">
+                {profile?.obsStreamActive
+                  ? 'STREAMING LIVE'
+                  : studio.match.youtubeVideoId
+                    ? `Linked (${studio.match.youtubeVideoId})`
+                    : 'No YouTube ID linked'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Program Scene</p>
+              <p className="font-mono font-bold text-[#EA580C] truncate">
+                {obsConnected
+                  ? profile?.sceneLabels?.[profile.activeObsScene] || profile?.activeObsScene || 'Connected'
+                  : 'OBS DISCONNECTED'}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Banners */}
@@ -1255,116 +1731,338 @@ export function AdminObsBroadcastStudioPage() {
                 onSaveAsScene={handleSaveScenePreset}
               />
 
-              {/* OBS Native Scenes & Saved Layout Presets */}
+              {/* OBS Native Scenes (with Friendly Labels), Scene Sources Toggle, Saved Presets & YouTube Output */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                 <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
-                      Live OBS Studio Scenes ({profile.obsScenes.length})
-                    </h3>
-                    <span className="text-[11px] text-slate-500">Direct from connected OBS</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                        Live OBS Studio Scenes ({profile.obsScenes.length})
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Dynamically discovered from your local OBS — click any scene to switch live without restarting YouTube.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleSyncObsState}
+                        disabled={!profile.agentOnline && profile.connectionMode === 'local_agent' ? true : refreshingScenes}
+                        className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 whitespace-nowrap shrink-0"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${refreshingScenes ? 'animate-spin' : ''}`} />
+                        <span>{refreshingScenes ? 'Refreshing...' : 'Refresh Scenes'}</span>
+                      </button>
+                      {profile.obsScenes.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (editingSceneLabels) {
+                              handleSaveSceneLabels();
+                            } else {
+                              setEditingSceneLabels(true);
+                            }
+                          }}
+                          disabled={savingSceneLabels}
+                          className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>
+                            {savingSceneLabels
+                              ? 'Saving...'
+                              : editingSceneLabels
+                                ? 'Save Labels'
+                                : 'Rename Labels'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {profile.obsScenes.length === 0 ? (
                     <p className="text-xs text-slate-500">
                       {obsConnected
-                        ? 'No scenes reported by OBS Studio yet.'
-                        : 'Connect OBS Studio to list and switch all existing OBS scenes.'}
+                        ? 'No scenes reported by OBS Studio yet. Add scenes in OBS and click Refresh Scenes.'
+                        : 'OBS DISCONNECTED — Start OBS Studio on Windows and connect your Local OBS Bridge to load scenes dynamically.'}
                     </p>
+                  ) : editingSceneLabels ? (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {profile.obsScenes.map((sceneName) => (
+                        <div key={sceneName} className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono text-slate-500 w-36 truncate" title={sceneName}>
+                            {sceneName}
+                          </span>
+                          <input
+                            type="text"
+                            value={sceneLabelDrafts[sceneName] ?? ''}
+                            onChange={(e) =>
+                              setSceneLabelDrafts((prev) => ({ ...prev, [sceneName]: e.target.value }))
+                            }
+                            placeholder={`Label for ${sceneName}`}
+                            className="flex-1 min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-lg"
+                          />
+                        </div>
+                      ))}
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setEditingSceneLabels(false)}
+                          className="min-h-[30px] px-3 text-xs font-semibold border border-slate-200 rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {profile.obsScenes.map((sceneName) => {
                         const active = obsConnected && profile.activeObsScene === sceneName;
+                        const isSwitchingThis =
+                          switchingKey === `scene:${sceneName}` ||
+                          switchingSceneRequest?.targetScene === sceneName;
+                        const isAnySwitching =
+                          switchingKey !== null || Boolean(switchingSceneRequest);
+                        const friendly = profile.sceneLabels?.[sceneName]?.trim();
                         return (
                           <button
                             key={sceneName}
                             type="button"
-                            disabled={!obsConnected || switchingKey === `scene:${sceneName}`}
+                            disabled={!obsConnected || isAnySwitching}
                             onClick={() => handleSwitchSceneName(sceneName)}
-                            className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-mono font-semibold border transition-colors ${
+                            title={friendly ? `OBS Scene: ${sceneName}` : sceneName}
+                            className={`min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 ${
                               active
-                                ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                                : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
-                            }`}
+                                ? 'bg-[#EA580C] text-white border-[#EA580C] shadow-xs'
+                                : isSwitchingThis
+                                  ? 'bg-orange-50 text-[#EA580C] border-[#EA580C]'
+                                  : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+                            } disabled:opacity-55`}
                           >
-                            {sceneName}
+                            {isSwitchingThis && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                            <span>{friendly || sceneName}</span>
+                            {friendly && (
+                              <span
+                                className={`font-mono text-[10px] ${
+                                  active ? 'text-orange-100' : 'text-slate-400'
+                                }`}
+                              >
+                                ({sceneName})
+                              </span>
+                            )}
+                            {active && !isSwitchingThis && (
+                              <span className="ml-1 px-1.5 py-0.5 rounded bg-white/20 text-[9px] font-mono font-bold uppercase tracking-wider">
+                                LIVE
+                              </span>
+                            )}
                           </button>
                         );
                       })}
                     </div>
                   )}
-                </section>
 
-                <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
-                      Saved Layout Presets ({scenes.length})
-                    </h3>
-                    <span className="text-[11px] text-slate-500">One-click multi-cam recall</span>
-                  </div>
-
-                  {scenes.length === 0 ? (
-                    <p className="text-xs text-slate-500">
-                      Use &ldquo;Save Preset&rdquo; in the Dynamic Layout Builder above to store reusable split-screen scenes.
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {scenes.map((sc) => {
-                        const isActive = obsConnected && profile.activeObsScene === sc.obsSceneName;
-                        return (
+                  {/* Active Scene Source Visibility Control (GetSceneItemList / SetSceneItemEnabled) */}
+                  <div className="pt-3 mt-2 border-t border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                        Active Scene Sources {sceneItemsSceneName ? `(${sceneItemsSceneName})` : ''}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={!obsConnected || loadingSceneItems}
+                        onClick={() => loadSceneItems(profile.activeObsScene || '')}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${loadingSceneItems ? 'animate-spin' : ''}`} />
+                        <span>Refresh Sources</span>
+                      </button>
+                    </div>
+                    {!obsConnected ? (
+                      <p className="text-[11px] text-slate-500">
+                        Connect OBS Studio to inspect and toggle individual sources (cameras, scoreboard, overlays).
+                      </p>
+                    ) : loadingSceneItems ? (
+                      <p className="text-[11px] text-slate-500">Reading scene sources from OBS...</p>
+                    ) : sceneItems.length === 0 ? (
+                      <p className="text-[11px] text-slate-500">No sources reported in current program scene.</p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {sceneItems.map((item) => (
                           <div
-                            key={sc.id}
-                            className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50"
+                            key={`${item.sceneItemId}-${item.sourceName}`}
+                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs"
                           >
                             <div className="min-w-0">
-                              <p className="text-xs font-bold text-slate-900 truncate">{sc.name}</p>
-                              <p className="text-[11px] font-mono text-slate-500 truncate">
-                                {sc.obsSceneName} · {sc.layoutType} · {sc.cameraIds.length} cams
+                              <p className="font-semibold text-slate-900 truncate">{item.sourceName}</p>
+                              <p className="text-[10px] font-mono text-slate-500 truncate">
+                                {item.inputKind || item.sourceType || 'source'}
                               </p>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button
-                                type="button"
-                                disabled={!obsConnected || applyingLayout}
-                                onClick={() =>
-                                  handleApplyLayout({
-                                    layoutType: sc.layoutType,
-                                    cameraIds: sc.cameraIds,
-                                    mainCameraId: sc.mainCameraId || undefined,
-                                    sceneName: sc.obsSceneName,
-                                    includeScoreboardOverlay: sc.includeScoreboardOverlay,
-                                  })
-                                }
-                                className={`min-h-[32px] px-3 py-1 rounded text-xs font-semibold ${
-                                  isActive
-                                    ? 'bg-emerald-600 text-white'
-                                    : 'bg-[#EA580C] text-white hover:bg-orange-600'
-                                } disabled:opacity-40`}
-                              >
-                                {isActive ? 'Live' : 'Go Live'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    await obsStudioService.deleteScene(matchId!, sc.id);
-                                    await refetch();
-                                  } catch (err) {
-                                    setActionError(extractApiError(err, 'Failed to delete preset.'));
-                                  }
-                                }}
-                                title="Delete preset"
-                                className="min-h-[32px] px-2 text-slate-400 hover:text-red-600"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              disabled={togglingItemId === item.sceneItemId}
+                              onClick={() => handleToggleSceneItem(item)}
+                              className={`min-h-[28px] inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border whitespace-nowrap shrink-0 ${
+                                item.sceneItemEnabled
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                  : 'bg-slate-200 text-slate-600 border-slate-300 hover:bg-slate-300'
+                              } disabled:opacity-50`}
+                            >
+                              {item.sceneItemEnabled ? (
+                                <>
+                                  <Eye className="w-3 h-3" />
+                                  <span>Visible</span>
+                                </>
+                              ) : (
+                                <>
+                                  <EyeOff className="w-3 h-3" />
+                                  <span>Hidden</span>
+                                </>
+                              )}
+                            </button>
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </section>
+
+                <div className="space-y-5">
+                  {/* Saved Layout Presets */}
+                  <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                        Saved Layout Presets ({scenes.length})
+                      </h3>
+                      <span className="text-[11px] text-slate-500">One-click multi-cam recall</span>
+                    </div>
+
+                    {scenes.length === 0 ? (
+                      <p className="text-xs text-slate-500">
+                        Use &ldquo;Save Preset&rdquo; in the Dynamic Layout Builder above to store reusable split-screen scenes.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {scenes.map((sc) => {
+                          const isActive = obsConnected && profile.activeObsScene === sc.obsSceneName;
+                          return (
+                            <div
+                              key={sc.id}
+                              className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-900 truncate">{sc.name}</p>
+                                <p className="text-[11px] font-mono text-slate-500 truncate">
+                                  {sc.obsSceneName} · {sc.layoutType} · {sc.cameraIds.length} cams
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  disabled={!obsConnected || applyingLayout}
+                                  onClick={() =>
+                                    handleApplyLayout({
+                                      layoutType: sc.layoutType,
+                                      cameraIds: sc.cameraIds,
+                                      mainCameraId: sc.mainCameraId || undefined,
+                                      sceneName: sc.obsSceneName,
+                                      includeScoreboardOverlay: sc.includeScoreboardOverlay,
+                                    })
+                                  }
+                                  className={`min-h-[32px] px-3 py-1 rounded text-xs font-semibold ${
+                                    isActive
+                                      ? 'bg-emerald-600 text-white'
+                                      : 'bg-[#EA580C] text-white hover:bg-orange-600'
+                                  } disabled:opacity-40`}
+                                >
+                                  {isActive ? 'Live' : 'Go Live'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await obsStudioService.deleteScene(matchId!, sc.id);
+                                      await refetch();
+                                    } catch (err) {
+                                      setActionError(extractApiError(err, 'Failed to delete preset.'));
+                                    }
+                                  }}
+                                  title="Delete preset"
+                                  className="min-h-[32px] px-2 text-slate-400 hover:text-red-600"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  {/* YouTube Live Broadcast Output & Live Monitor Preview */}
+                  <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                          YouTube Live &amp; Broadcast Monitor
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          Associate the ongoing YouTube Live URL / ID for spectators without restarting OBS.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowInlineYtPreview((v) => !v)}
+                        className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
+                      >
+                        <Tv className="w-3 h-3 text-[#EA580C]" />
+                        <span>{showInlineYtPreview ? 'Hide Player' : 'Preview Live Feed'}</span>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSaveYouTubeOutput} className="space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          value={ytInputDraft}
+                          onChange={(e) => setYtInputDraft(e.target.value)}
+                          placeholder="YouTube Live URL or 11-char ID"
+                          className="sm:col-span-2 min-h-[36px] px-3 text-xs font-mono border border-slate-300 rounded-lg"
+                        />
+                        <select
+                          value={ytProviderDraft}
+                          onChange={(e) => setYtProviderDraft(e.target.value as StreamingProvider)}
+                          className="min-h-[36px] px-2.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
+                        >
+                          <option value="youtube">YouTube Live</option>
+                          <option value="mediamtx">MediaMTX Direct</option>
+                        </select>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-500">
+                          Stream keys stay private inside OBS Studio — never stored in browser code.
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={savingYtOutput}
+                          className="min-h-[32px] px-3.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                        >
+                          {savingYtOutput ? 'Saving...' : 'Update Output'}
+                        </button>
+                      </div>
+                    </form>
+
+                    {showInlineYtPreview && (
+                      <div className="relative aspect-video w-full rounded-lg overflow-hidden border border-slate-800 bg-black">
+                        <LiveStreamPlayer
+                          provider={studio.match.activeStreamingProvider}
+                          youtubeVideoId={studio.match.youtubeVideoId || ''}
+                          title={studio.match.matchTitle}
+                        />
+                      </div>
+                    )}
+                  </section>
+                </div>
               </div>
             </div>
           )}
@@ -1845,10 +2543,616 @@ export function AdminObsBroadcastStudioPage() {
           )}
 
           {/* ============================================================== */}
-          {/* TAB 4: OBS CONNECTION & LOCAL AGENT SETUP                       */}
+          {/* TAB 4: ONE-CLICK WINDOWS OBS BRIDGE & CONNECTION STUDIO         */}
           {/* ============================================================== */}
-          {activeTab === 'connection' && (
+          {activeTab === 'connection' && (() => {
+            const activeMatchBridge =
+              bridges.find(
+                (b) =>
+                  b.status === 'ACTIVE' &&
+                  ((matchId && b.assignedMatchIds.includes(matchId)) || b.connectionStatus === 'ONLINE')
+              ) || bridges.find((b) => b.status === 'ACTIVE') || null;
+            const bridgeIsOnline = Boolean(
+              profile.agentOnline || activeMatchBridge?.connectionStatus === 'ONLINE'
+            );
+            const installerSizeMb =
+              installerStatus?.sizeBytes && installerStatus.sizeBytes > 0
+                ? `${(installerStatus.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                : 'Windows x64 Installer';
+            const countdownMin = String(Math.floor(pairingRemainingSec / 60)).padStart(2, '0');
+            const countdownSec = String(pairingRemainingSec % 60).padStart(2, '0');
+
+            return (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              {/* BEGINNER-FRIENDLY ONE-CLICK WINDOWS BRIDGE SETUP CARD */}
+              <section className="lg:col-span-12 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Laptop className="w-4 h-4 text-[#EA580C]" />
+                      <h2 className="font-display text-base font-bold text-slate-900">
+                        MaidanLive Windows OBS Bridge (One-Click Desktop App)
+                      </h2>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      No Node.js, terminal commands, or JSON editing required. Install once on your streaming PC, pair in one click, and switch OBS scenes remotely while YouTube Live stays continuous.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={checkInstallerAndLocalBridge}
+                      disabled={probingLocalBridge}
+                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${probingLocalBridge ? 'animate-spin' : ''}`} />
+                      <span>Check Local App</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={loadBridges}
+                      disabled={loadingBridges}
+                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingBridges ? 'animate-spin' : ''}`} />
+                      <span>Refresh Status</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Clear Real-Time Bridge & OBS Status Strip */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                    <p className="text-[11px] font-semibold text-slate-500">Desktop Bridge App</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      {localBridgeProbe?.running ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Running Locally on PC
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                          <Circle className="w-3.5 h-3.5 text-slate-400" />
+                          Not Detected in Browser
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {localBridgeProbe?.running
+                        ? localBridgeProbe.paired
+                          ? `Paired (${localBridgeProbe.bridgeId || 'Active'})`
+                          : 'Ready to pair in 1 click'
+                        : 'Download & launch setup if not installed'}
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                    <p className="text-[11px] font-semibold text-slate-500">Bridge Connection</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      {bridgeIsOnline ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                          <Wifi className="w-4 h-4" />
+                          ONLINE ({activeMatchBridge?.bridgeId || profile.agentLabel || 'Connected'})
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                          <WifiOff className="w-4 h-4 text-slate-400" />
+                          OFFLINE
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Outbound secure tunnel (zero router ports)
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                    <p className="text-[11px] font-semibold text-slate-500">OBS Studio (Local PC)</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${obsStatusBadgeClass(
+                          profile.connectionStatus
+                        )}`}
+                      >
+                        OBS {profile.connectionStatus}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {obsConnected
+                        ? `${profile.obsVersion || 'OBS'} · ${profile.obsScenes.length} scenes`
+                        : profile.lastError || 'Waiting for OBS port 4455'}
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                    <p className="text-[11px] font-semibold text-slate-500">Assigned Match</p>
+                    <p className="mt-1 text-xs font-bold text-slate-900 truncate" title={studio?.match?.matchTitle}>
+                      {studio?.match?.matchTitle || 'Current Match'}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Active Scene: <strong className="text-[#EA580C]">{profile.activeObsScene || 'None'}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Primary Beginner Action Row */}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {installerStatus?.available ? (
+                    <a
+                      href="/api/obs/bridge/installer/download"
+                      download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
+                      className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-900 rounded-xl hover:bg-slate-800 whitespace-nowrap shrink-0"
+                    >
+                      <Download className="w-4 h-4 text-[#EA580C]" />
+                      <span>Download Windows Bridge ({installerSizeMb})</span>
+                    </a>
+                  ) : (
+                    <span className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded-xl">
+                      <Download className="w-4 h-4" />
+                      <span>Windows Installer Preparing...</span>
+                    </span>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenOrPairBridge(activeMatchBridge?.bridgeId)}
+                    disabled={generatingPairing}
+                    className="min-h-[42px] inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-[#EA580C] rounded-xl hover:bg-orange-600 disabled:opacity-50 whitespace-nowrap shrink-0"
+                  >
+                    {generatingPairing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Laptop className="w-4 h-4" />
+                    )}
+                    <span>
+                      {localBridgeProbe?.running
+                        ? localBridgeProbe.paired
+                          ? 'Re-Pair / Link This Match'
+                          : 'Pair Running Bridge Now'
+                        : 'Open / Pair Bridge'}
+                    </span>
+                  </button>
+
+                  {obsConnected && (
+                    <button
+                      type="button"
+                      onClick={handleSyncObsState}
+                      disabled={refreshingScenes}
+                      className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${refreshingScenes ? 'animate-spin' : ''}`} />
+                      <span>Refresh Scenes</span>
+                    </button>
+                  )}
+
+                  {activeMatchBridge && activeMatchBridge.connectionStatus === 'ONLINE' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleReconnectBridgeObs(activeMatchBridge)}
+                        disabled={busyBridgeId === activeMatchBridge.bridgeId}
+                        className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Reconnect OBS</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDisconnectBridge(activeMatchBridge)}
+                        disabled={busyBridgeId === activeMatchBridge.bridgeId}
+                        className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-xl hover:bg-red-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                      >
+                        <Unplug className="w-3.5 h-3.5" />
+                        <span>Disconnect Bridge</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* Live 5-Minute Single-Use Pairing Code Box (Fallback if browser blocks protocol) */}
+                {pairingInfo && (
+                  <div className="p-4 rounded-xl bg-slate-950 text-slate-100 border border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-emerald-400">
+                          One-Time Pairing Code Ready (Single-Use · Expires in{' '}
+                          <span className="font-mono tabular-nums">
+                            {countdownMin}:{countdownSec}
+                          </span>
+                          )
+                        </p>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          If MaidanLive OBS Bridge did not open automatically, open it from your Windows Desktop shortcut and enter this Pairing Code:
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPairingInfo(null)}
+                        className="text-xs text-slate-400 hover:text-white px-2 py-1"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-xl font-extrabold tracking-[0.18em] text-amber-300 tabular-nums">
+                        {pairingInfo.pairingCode}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyText('pairCode', pairingInfo.pairingCode)}
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-bold hover:bg-orange-600"
+                      >
+                        {copiedKey === 'pairCode' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy Code</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => copyText('pairServer', pairingInfo.serverUrl)}
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-100 text-xs font-semibold hover:bg-slate-700"
+                      >
+                        {copiedKey === 'pairServer' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy Server URL</span>
+                      </button>
+                      <a
+                        href={pairingInfo.protocolUrl}
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-100 text-xs font-semibold hover:bg-slate-700"
+                      >
+                        <Laptop className="w-3.5 h-3.5" />
+                        <span>Launch App Protocol</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Dynamic OBS Scenes Quick Switcher (Zero Hardcoded Scenes) */}
+                {profile.obsScenes.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-bold text-slate-800">
+                        Discovered OBS Studio Scenes ({profile.obsScenes.length}) — Click to Switch Live
+                      </p>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Active Program Scene: <strong className="text-[#EA580C]">{profile.activeObsScene || 'None'}</strong>
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {profile.obsScenes.map((sceneName) => {
+                        const isActive = profile.activeObsScene === sceneName;
+                        const label = profile.sceneLabels?.[sceneName] || sceneName;
+                        return (
+                          <button
+                            key={sceneName}
+                            type="button"
+                            onClick={() => handleSwitchSceneName(sceneName)}
+                            disabled={!obsConnected || switchingKey === sceneName}
+                            className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                              isActive
+                                ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                                : 'bg-slate-50 text-slate-800 border-slate-300 hover:border-[#EA580C]'
+                            } disabled:opacity-50`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* Registered Windows Local OBS Bridges Panel (Paired Devices List + Advanced Toggle) */}
+              <section className="lg:col-span-12 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="w-4 h-4 text-[#EA580C]" />
+                      <h2 className="font-display text-base font-bold text-slate-900">
+                        Paired Bridges &amp; Match Assignments
+                      </h2>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Manage authorized OBS Bridge devices, switch assigned matches, reconnect OBS, or revoke access at any time.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedBridgeSetup((v) => !v)}
+                    className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>
+                      {showAdvancedBridgeSetup
+                        ? 'Hide Advanced / Manual Setup'
+                        : 'Advanced: Manual Registration & Direct WS'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Register New Bridge Form (Shown inside Advanced Manual Setup) */}
+                {showAdvancedBridgeSetup && (
+                <form
+                  onSubmit={handleRegisterBridge}
+                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end bg-slate-50 border border-slate-200 rounded-xl p-3.5"
+                >
+                  <div className="lg:col-span-3">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Bridge Name
+                    </label>
+                    <input
+                      type="text"
+                      value={bridgeNameDraft}
+                      onChange={(e) => setBridgeNameDraft(e.target.value)}
+                      placeholder="e.g. Ground Laptop OBS"
+                      className="w-full min-h-[38px] px-3 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                  <div className="lg:col-span-3">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Device / Operator Label
+                    </label>
+                    <input
+                      type="text"
+                      value={bridgeLabelDraft}
+                      onChange={(e) => setBridgeLabelDraft(e.target.value)}
+                      placeholder="e.g. Stadium Pitch-1 Windows PC"
+                      className="w-full min-h-[38px] px-3 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                  <div className="lg:col-span-3">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Bridge Owner
+                    </label>
+                    <select
+                      value={bridgeOwnerDraft}
+                      onChange={(e) => setBridgeOwnerDraft(e.target.value)}
+                      className="w-full min-h-[38px] px-3 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">Current User ({adminUser?.name || 'Me'})</option>
+                      {(studio?.operators || []).map((op) => (
+                        <option key={op.id} value={op.id}>
+                          {op.name} ({op.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="lg:col-span-3 flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={assignBridgeToCurrentMatch}
+                        onChange={(e) => setAssignBridgeToCurrentMatch(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+                      />
+                      <span>Assign to match</span>
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={registeringBridge}
+                      className="min-h-[38px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{registeringBridge ? 'Registering...' : 'Register Windows Bridge'}</span>
+                    </button>
+                  </div>
+                </form>
+                )}
+
+                {/* One-Time Generated Bridge Token & Downloadable config.json */}
+                {createdBridgeSecret && (
+                  <div className="p-4 rounded-xl bg-slate-950 text-slate-100 border border-slate-800 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-emerald-400">
+                          Bridge Credentials Ready (Token shown once — store locally on your OBS laptop):
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-300 mt-0.5">
+                          Bridge ID: <strong className="text-white">{createdBridgeSecret.bridge.bridgeId}</strong> · Token Prefix: {createdBridgeSecret.bridge.tokenPrefix}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => downloadBridgeConfigJson(createdBridgeSecret)}
+                          className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-bold hover:bg-orange-600 whitespace-nowrap shrink-0"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download config.json</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyText('bridgeCmd', createdBridgeSecret.command)}
+                          className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-semibold hover:bg-slate-700 whitespace-nowrap shrink-0"
+                        >
+                          {copiedKey === 'bridgeCmd' ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                          <span>Copy CLI</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCreatedBridgeSecret(null)}
+                          className="min-h-[34px] px-2.5 py-1 text-xs text-slate-400 hover:text-white"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="text-[11px] font-mono whitespace-pre-wrap break-all bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 text-slate-200">
+                      {createdBridgeSecret.command}
+                    </pre>
+                    <p className="text-[11px] text-slate-400">
+                      Tip: Open the downloaded <span className="font-mono text-slate-200">config.json</span> inside <span className="font-mono text-slate-200">deploy/obs-agent/</span> and replace <span className="font-mono text-amber-300">YOUR_OBS_WEBSOCKET_PASSWORD</span> with your local OBS Studio port 4455 password, then run <span className="font-mono text-slate-200">start-windows-bridge.bat</span>.
+                    </p>
+                  </div>
+                )}
+
+                {/* Registered Bridges Table / Cards */}
+                {bridges.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-2">
+                    No registered Windows OBS bridges yet. Click <strong>Register Windows Bridge</strong> above to generate your persistent Bridge ID and <span className="font-mono">config.json</span>.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {bridges.map((br) => {
+                      const isAssigned = matchId ? br.assignedMatchIds.includes(matchId) : false;
+                      const isRevoked = br.status === 'REVOKED';
+                      const isOnline = br.connectionStatus === 'ONLINE' && !isRevoked;
+                      const busy = busyBridgeId === br.bridgeId;
+                      return (
+                        <div
+                          key={br.bridgeId}
+                          className={`p-3.5 rounded-xl border space-y-2.5 ${
+                            isRevoked
+                              ? 'border-red-200 bg-red-50/40'
+                              : isOnline && isAssigned
+                                ? 'border-emerald-300 bg-emerald-50/30'
+                                : 'border-slate-200 bg-slate-50/70'
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono text-xs font-bold text-slate-900">
+                                  {br.bridgeId}
+                                </span>
+                                <span className="text-xs font-bold text-slate-800 truncate">
+                                  · {br.name}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                Owner: <strong>{br.ownerName || 'Admin'}</strong>
+                                {br.label && br.label !== br.name ? ` · ${br.label}` : ''}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                                  isRevoked
+                                    ? 'bg-red-100 text-red-800 border-red-200'
+                                    : isOnline
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                      : 'bg-slate-200 text-slate-700 border-slate-300'
+                                }`}
+                              >
+                                {isRevoked ? 'REVOKED' : isOnline ? 'ONLINE' : 'OFFLINE'}
+                              </span>
+                              {!isRevoked && (
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${obsStatusBadgeClass(
+                                    br.obsStatus
+                                  )}`}
+                                >
+                                  OBS {br.obsStatus}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-[11px] font-mono text-slate-600 space-y-0.5">
+                            <p>
+                              Token: {br.tokenPrefix || '—'} · Matches: {br.assignedMatchIds.length}
+                              {br.obsVersion ? ` · OBS ${br.obsVersion}` : ''}
+                            </p>
+                            {br.activeObsScene && isOnline && (
+                              <p className="text-[#EA580C] font-semibold">
+                                Active Scene: {br.activeObsScene} ({br.obsScenes.length} scenes)
+                              </p>
+                            )}
+                            {br.lastConnectedAt && (
+                              <p className="text-slate-500">
+                                Last Connected: {new Date(br.lastConnectedAt).toLocaleString()}
+                              </p>
+                            )}
+                            {br.lastError && (
+                              <p className="text-red-700 truncate" title={br.lastError}>
+                                {br.lastError}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/80">
+                            {matchId && !isRevoked && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleToggleBridgeMatch(br)}
+                                className={`min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border whitespace-nowrap shrink-0 ${
+                                  isAssigned
+                                    ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                                    : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-100'
+                                } disabled:opacity-50`}
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>{isAssigned ? 'Assigned to Match' : 'Attach to Match'}</span>
+                              </button>
+                            )}
+                            {!isRevoked ? (
+                              <>
+                                {isOnline && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => handleReconnectBridgeObs(br)}
+                                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      <RefreshCw className="w-3 h-3" />
+                                      <span>Reconnect OBS</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => handleDisconnectBridge(br)}
+                                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      <Unplug className="w-3 h-3" />
+                                      <span>Disconnect</span>
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => handleRotateBridgeToken(br)}
+                                  className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                >
+                                  <KeyRound className="w-3 h-3" />
+                                  <span>Rotate Token</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => handleRevokeBridge(br)}
+                                  className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                >
+                                  <Ban className="w-3 h-3" />
+                                  <span>Revoke</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleReactivateBridge(br)}
+                                className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                <span>Reactivate Bridge</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              {showAdvancedBridgeSetup && (
+              <>
               <form
                 onSubmit={handleSaveConnectionSettings}
                 className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4"
@@ -2031,13 +3335,13 @@ export function AdminObsBroadcastStudioPage() {
                     </h3>
                   </div>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${
                       profile.agentOnline
                         ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-slate-100 text-slate-600'
+                        : 'bg-slate-100 text-slate-700'
                     }`}
                   >
-                    {profile.agentOnline ? 'AGENT ONLINE' : 'AGENT OFFLINE'}
+                    {profile.agentOnline ? 'BRIDGE ONLINE' : 'BROADCASTER BRIDGE OFFLINE'}
                   </span>
                 </div>
 
@@ -2047,7 +3351,7 @@ export function AdminObsBroadcastStudioPage() {
                     <strong className="text-slate-900">
                       {profile.agentOnline
                         ? `Connected (${profile.agentLabel || 'OBS Host'})`
-                        : 'Waiting for local agent handshake'}
+                        : 'BROADCASTER BRIDGE OFFLINE — Waiting for local agent handshake'}
                     </strong>
                   </p>
                   {profile.obsVersion && (
@@ -2082,7 +3386,7 @@ export function AdminObsBroadcastStudioPage() {
                   <div className="p-3 rounded-xl bg-slate-950 text-slate-100 space-y-2 border border-slate-800">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="font-semibold text-emerald-400">
-                        Run this command on the OBS laptop (token shown once):
+                        Run on your Windows OBS laptop (token shown once):
                       </span>
                       <button
                         type="button"
@@ -2100,13 +3404,52 @@ export function AdminObsBroadcastStudioPage() {
                 )}
 
                 <ol className="text-[11px] text-slate-600 list-decimal list-inside space-y-1 pt-1">
-                  <li>Open OBS Studio → <strong>Tools → WebSocket Server Settings</strong> → Enable WebSocket server on port <strong>4455</strong>.</li>
-                  <li>Add <span className="font-mono">--obs-password YOUR_OBS_PASS</span> if OBS authentication is enabled.</li>
-                  <li>Once the agent connects, you can switch cameras, create multi-camera split layouts, and monitor FPS/CPU from anywhere.</li>
+                  <li>Open OBS Studio → <strong>Tools → WebSocket Server Settings</strong> → Enable server on port <strong>4455</strong>.</li>
+                  <li>On Windows, either install <strong>MaidanLive OBS Bridge Setup.exe</strong> or use legacy CLI <span className="font-mono">deploy/obs-agent</span>.</li>
+                  <li>Once online, switch cameras, toggle scene sources, apply split layouts, and monitor YouTube Live continuously.</li>
                 </ol>
               </section>
+              </>
+              )}
+
+              {/* Beginner-Friendly Windows Setup & Verification Checklist */}
+              <section className="lg:col-span-12 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+                <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  One-Click Windows Broadcast Setup Guide (Zero-Cost Stack)
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-600">
+                  <div className="space-y-1.5">
+                    <p className="font-bold text-slate-900">1. Install MaidanLive OBS Bridge</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Click <strong>Download Windows Bridge</strong> above and run the installer once (no Node.js needed).</li>
+                      <li>Open OBS Studio 28+ (free, built-in WebSocket v5).</li>
+                      <li>Go to Tools → WebSocket Server Settings → Enable WebSocket server (port <strong>4455</strong>) &amp; set a password.</li>
+                      <li>Paste your YouTube Live Stream Key in OBS Settings → Stream → YouTube - RTMPS.</li>
+                    </ol>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="font-bold text-slate-900">2. Pair in One Click &amp; Connect OBS</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Click <strong>Open / Pair Bridge</strong> above (or enter the 8-character Pairing Code / sign in inside the app).</li>
+                      <li>Enter your OBS port 4455 password once inside the desktop app (saved with Windows DPAPI encryption).</li>
+                      <li>Verify status reads <span className="font-mono font-semibold text-emerald-700">OBS CONNECTED</span> and your OBS scenes appear dynamically.</li>
+                      <li>Click Start Streaming once in OBS for a single continuous YouTube Live feed.</li>
+                    </ol>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="font-bold text-slate-900">3. Switch Live &amp; Verify Match Page</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Paste your YouTube Live URL/ID in Live Switching &amp; Multi-Cam so viewers see your broadcast.</li>
+                      <li>Click any camera or scene button; OBS switches scenes remotely without restarting YouTube Live.</li>
+                      <li>Minimize the Windows Bridge to the System Tray—it runs quietly and auto-reconnects if dropped.</li>
+                      <li>Use <strong>Show Monitor</strong> on a live match row inside Admin Live Streams to preview the broadcast anytime.</li>
+                    </ol>
+                  </div>
+                </div>
+              </section>
             </div>
-          )}
+            );
+          })()}
 
           {/* ============================================================== */}
           {/* TAB 5: BROADCAST PRODUCTION AUDIT LOGS                          */}

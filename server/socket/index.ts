@@ -11,3 +11,5 @@ export {
   getAllActiveViewerCounts,
   invalidateViewerVisibilityCache,
 } from '../../backend/realtime/socket.ts';
+export type { ObsAgentContext } from '../../backend/realtime/socket.ts';
+
