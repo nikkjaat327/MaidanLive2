@@ -363,9 +363,11 @@ async function startServer() {
 
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 400,
+    max: 1200,
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.path === '/health',
+    message: { message: 'Too many API requests. Please wait a moment and try again.' },
   });
 
   app.use('/api/auth/login', authLimiter);

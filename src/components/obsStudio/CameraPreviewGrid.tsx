@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 import {
   Camera,
@@ -165,19 +165,26 @@ export function CameraPreviewGrid({
     return null;
   }, [enabledCameras, profile.activeCameraId, profile.activeObsScene, obsConnected]);
 
+  const displayedCamerasRef = useRef(displayedCameras);
+  displayedCamerasRef.current = displayedCameras;
+  const refreshingAllPreviewsRef = useRef(refreshingAllPreviews);
+  refreshingAllPreviewsRef.current = refreshingAllPreviews;
+  const onRefreshAllPreviewsRef = useRef(onRefreshAllPreviews);
+  onRefreshAllPreviewsRef.current = onRefreshAllPreviews;
+  const hasDisplayedCameras = displayedCameras.length > 0;
+
   // Optional auto-polling of genuine OBS source screenshots
   useEffect(() => {
-    if (!obsConnected || previewMode !== 'snapshots' || pollSeconds === 0) return;
-    if (displayedCameras.length === 0) return;
+    if (!obsConnected || previewMode !== 'snapshots' || pollSeconds === 0 || !hasDisplayedCameras) return;
 
     const id = window.setInterval(() => {
-      if (!refreshingAllPreviews) {
-        void onRefreshAllPreviews(displayedCameras);
+      if (!refreshingAllPreviewsRef.current && displayedCamerasRef.current.length > 0) {
+        void onRefreshAllPreviewsRef.current(displayedCamerasRef.current);
       }
     }, pollSeconds * 1000);
 
     return () => window.clearInterval(id);
-  }, [obsConnected, previewMode, pollSeconds, displayedCameras, refreshingAllPreviews, onRefreshAllPreviews]);
+  }, [obsConnected, previewMode, pollSeconds, hasDisplayedCameras]);
 
   const primarySnapshot = primaryCamera ? previewSnapshots[primaryCamera.cameraId] : undefined;
   const primaryMuted = primaryCamera

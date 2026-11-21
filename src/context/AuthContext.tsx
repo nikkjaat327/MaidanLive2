@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { AuthUser, NotificationData } from '../types/index.ts';
 import { authService } from '../services/auth/authService.ts';
@@ -68,6 +68,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [adminUnreadNotifications, setAdminUnreadNotifications] = useState(0);
+
+  const customerUserRef = useRef<AuthUser | null>(customerUser);
+  customerUserRef.current = customerUser;
+  const adminUserRef = useRef<AuthUser | null>(adminUser);
+  adminUserRef.current = adminUser;
 
   const clearAuthNotice = useCallback(() => setAuthNotice(null), []);
 
@@ -200,7 +205,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUnreadNotifications(0);
       } else if (e.key === CUSTOMER_USER_CACHE_KEY) {
         setCustomerUser(e.newValue ? (JSON.parse(e.newValue) as AuthUser) : null);
-      } else if (e.key === CUSTOMER_TOKEN_KEY && e.newValue && !customerUser) {
+      } else if (e.key === CUSTOMER_TOKEN_KEY && e.newValue && !customerUserRef.current) {
         refreshCustomer();
       }
 
@@ -209,7 +214,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAdminUnreadNotifications(0);
       } else if (e.key === ADMIN_USER_CACHE_KEY) {
         setAdminUser(e.newValue ? (JSON.parse(e.newValue) as AuthUser) : null);
-      } else if (e.key === ADMIN_TOKEN_KEY && e.newValue && !adminUser) {
+      } else if (e.key === ADMIN_TOKEN_KEY && e.newValue && !adminUserRef.current) {
         refreshAdmin();
       }
     };
@@ -225,7 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('storage', onStorageSync);
     };
-  }, [refreshCustomer, refreshAdmin, customerUser, adminUser]);
+  }, [refreshCustomer, refreshAdmin]);
 
   useEffect(() => {
     if (!customerUser) return;
