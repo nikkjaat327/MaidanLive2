@@ -12,7 +12,8 @@ export function ObsOverlayViewerPage() {
   const { matchId } = useParams<{ matchId: string }>();
   const location = useLocation();
   const { adminUser, adminLoading } = useAuth();
-  const { stream, score, setScore, overlayConfig, loading, refetch } = useObsOverlay(matchId);
+  const { stream, score, setScore, overlayConfig, setOverlayConfig, loading, refetch } =
+    useObsOverlay(matchId);
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const obsForced = searchParams.get('obs') === '1' || searchParams.get('controls') === '0';
@@ -34,6 +35,34 @@ export function ObsOverlayViewerPage() {
     return () => {
       root.removeAttribute('data-obs-overlay-view');
     };
+  }, []);
+
+  // Ensure OBS Studio Browser Source never runs under a stale cached PWA Service Worker
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    let hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker
+      .getRegistrations()
+      .then(async (regs) => {
+        if (regs.length === 0) return;
+        await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
+        if ('caches' in window) {
+          const keys = await window.caches.keys().catch(() => []);
+          await Promise.all(keys.map((k) => window.caches.delete(k).catch(() => false)));
+        }
+        if (hadController) {
+          const reloadKey = 'maidanlive_obs_sw_cleared';
+          try {
+            if (!window.sessionStorage.getItem(reloadKey)) {
+              window.sessionStorage.setItem(reloadKey, '1');
+              window.location.reload();
+            }
+          } catch {
+            // Ignore sessionStorage restrictions in private browser contexts
+          }
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -106,6 +135,8 @@ export function ObsOverlayViewerPage() {
             stream={stream}
             score={score}
             overlayPosition={effectiveConfig.position}
+            overlayConfig={overlayConfig}
+            onOverlayConfigChange={setOverlayConfig}
             onScoreChange={setScore}
             onRefresh={refetch}
             onClose={() => setControlsOpen(false)}

@@ -68,22 +68,22 @@ export const OVERLAY_THEMES: readonly OverlayTheme[] = [
 
 /**
  * Recalibrated scale multipliers:
- * - Medium (1.24) is >= old Large (1.24) so default broadcast graphics are crisp & readable on 1080p
- * - Large (1.48) gives bold stadium-TV legibility inside the 90%/100% bar without overflowing
+ * - Clear 0.78 -> 1.12 -> 1.50 spread so Small, Medium, and Large look unmistakably distinct on 1080p OBS
+ * - customScale (0.6x–1.65x) compounds smoothly with presets for fine sizing
  */
 export const PRESET_SCALE_MULTIPLIERS: Record<OverlayScale, number> = {
-  small: 0.96,
-  medium: 1.24,
-  large: 1.48,
+  small: 0.78,
+  medium: 1.12,
+  large: 1.5,
 };
 
 export const OVERLAY_SLIDER_BOUNDS = {
-  customScale: { min: 0.7, max: 1.6, step: 0.02, defaultVal: 1 },
-  textScale: { min: 0.75, max: 1.6, step: 0.02, defaultVal: 1 },
-  scoreScale: { min: 0.75, max: 1.65, step: 0.02, defaultVal: 1 },
-  logoScale: { min: 0.7, max: 1.65, step: 0.02, defaultVal: 1 },
-  teamNameScale: { min: 0.75, max: 1.6, step: 0.02, defaultVal: 1 },
-  metaScale: { min: 0.75, max: 1.6, step: 0.02, defaultVal: 1 },
+  customScale: { min: 0.6, max: 1.65, step: 0.02, defaultVal: 1 },
+  textScale: { min: 0.7, max: 1.65, step: 0.02, defaultVal: 1 },
+  scoreScale: { min: 0.7, max: 1.75, step: 0.02, defaultVal: 1 },
+  logoScale: { min: 0.65, max: 1.75, step: 0.02, defaultVal: 1 },
+  teamNameScale: { min: 0.7, max: 1.65, step: 0.02, defaultVal: 1 },
+  metaScale: { min: 0.7, max: 1.65, step: 0.02, defaultVal: 1 },
 } as const;
 
 export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
@@ -295,6 +295,7 @@ export function applyOverlayQueryParams(
 
 export interface OverlayRenderMetrics {
   overallScale: number;
+  barWidthPct: number;
   scoreFontPx: number;
   teamNameFontPx: number;
   subTeamFontPx: number;
@@ -325,9 +326,9 @@ function clampPx(val: number, min: number, max: number): number {
 }
 
 /**
- * Computes bounded pixel typography, spacing, and logo sizing from the scale preset
- * plus granular sliders so the overlay scales cleanly inside 90% landscape or 100% portrait
- * without horizontal overflow.
+ * Computes responsive bar width percentage and pixel typography/spacing/logo sizing
+ * from the scale preset plus granular sliders so the overlay scales unmistakably on
+ * 1920x1080 landscape and 1080x1920 portrait OBS canvases without horizontal overflow.
  */
 export function computeOverlayMetrics(
   config: BroadcastOverlayConfig,
@@ -373,32 +374,39 @@ export function computeOverlayMetrics(
 
   // Portrait canvas is 1080px wide vs 1920px landscape, so apply a gentle 0.88 multiplier
   const portraitDamp = isPortrait ? 0.88 : 1;
-  const overallScale = Math.round(Math.min(2.1, Math.max(0.65, preset * custom * portraitDamp)) * 100) / 100;
+  const overallScale = Math.round(Math.min(2.4, Math.max(0.5, preset * custom * portraitDamp)) * 100) / 100;
+
+  const barWidthPct = isPortrait
+    ? overallScale < 0.92
+      ? Math.round(Math.min(100, Math.max(76, 66 + overallScale * 34)))
+      : 100
+    : Math.round(Math.min(96, Math.max(52, 42 + overallScale * 34)));
 
   return {
     overallScale,
-    scoreFontPx: clampPx(21 * overallScale * score, 14, 42),
-    teamNameFontPx: clampPx(16 * overallScale * text * teamName, 11, 30),
-    subTeamFontPx: clampPx(12 * overallScale * text * teamName, 9, 22),
-    metaFontPx: clampPx(12.5 * overallScale * text * meta, 9.5, 22),
-    metaLabelPx: clampPx(10 * overallScale * text * meta, 8, 18),
-    logoMdPx: clampPx(34 * overallScale * logo, 22, 62),
-    logoSmPx: clampPx(26 * overallScale * logo, 18, 48),
-    brandIconPx: clampPx(17 * overallScale * logo, 12, 32),
-    brandFontPx: clampPx(12 * overallScale * text, 9, 21),
-    brandPadX: clampPx(13 * overallScale, 8, 26),
-    brandPadY: clampPx(8 * overallScale, 5, 16),
-    pillFontPx: clampPx(10.5 * overallScale * text * meta, 8.5, 19),
-    pillPadX: clampPx(10 * overallScale, 6, 18),
-    pillPadY: clampPx(4.5 * overallScale, 3, 9),
-    stripPadX: clampPx(15 * overallScale, 9, 28),
-    stripPadY: clampPx(9 * overallScale, 5, 18),
-    subStripPadX: clampPx(15 * overallScale, 9, 28),
-    subStripPadY: clampPx(6.5 * overallScale, 4, 13),
-    sectionGapPx: clampPx(13 * overallScale, 7, 24),
-    scorePillPadX: clampPx(13 * overallScale, 8, 24),
-    scorePillPadY: clampPx(6.5 * overallScale, 4, 13),
-    ballChipPx: clampPx(21 * overallScale * meta, 16, 36),
-    ballChipFontPx: clampPx(10.5 * overallScale * text * meta, 8.5, 18),
+    barWidthPct,
+    scoreFontPx: clampPx(22 * overallScale * score, 12, 68),
+    teamNameFontPx: clampPx(16 * overallScale * text * teamName, 10, 48),
+    subTeamFontPx: clampPx(12 * overallScale * text * teamName, 8.5, 32),
+    metaFontPx: clampPx(12.5 * overallScale * text * meta, 9, 32),
+    metaLabelPx: clampPx(10 * overallScale * text * meta, 7.5, 24),
+    logoMdPx: clampPx(34 * overallScale * logo, 18, 92),
+    logoSmPx: clampPx(26 * overallScale * logo, 15, 72),
+    brandIconPx: clampPx(17 * overallScale * logo, 10, 46),
+    brandFontPx: clampPx(12 * overallScale * text, 8, 28),
+    brandPadX: clampPx(13 * overallScale, 6, 38),
+    brandPadY: clampPx(8 * overallScale, 4, 24),
+    pillFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 26),
+    pillPadX: clampPx(10 * overallScale, 5, 24),
+    pillPadY: clampPx(4.5 * overallScale, 2.5, 14),
+    stripPadX: clampPx(15 * overallScale, 7, 38),
+    stripPadY: clampPx(9 * overallScale, 4, 28),
+    subStripPadX: clampPx(15 * overallScale, 7, 38),
+    subStripPadY: clampPx(6.5 * overallScale, 3, 20),
+    sectionGapPx: clampPx(13 * overallScale, 5, 34),
+    scorePillPadX: clampPx(13 * overallScale, 6, 34),
+    scorePillPadY: clampPx(6.5 * overallScale, 3, 20),
+    ballChipPx: clampPx(21 * overallScale * meta, 13, 48),
+    ballChipFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 24),
   };
 }

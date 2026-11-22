@@ -119,7 +119,7 @@ export function FootballObsOverlay({
     );
   }
 
-  const barRadiusClass = isPortrait ? 'rounded-none border-x-0' : 'rounded-lg';
+  const barRadiusClass = isPortrait && m.barWidthPct >= 98 ? 'rounded-none border-x-0' : 'rounded-lg';
 
   return (
     <div

@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
-import { KabaddiDetails, createInitialKabaddiDetails } from '../../utils/kabaddiScoring.ts';
+import {
+  computeEffectiveKabaddiClock,
+  normalizeKabaddiDetails,
+} from '../../utils/kabaddiScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
 import type { ObsThemeTokens } from './obsTheme.ts';
 import { ObsBrandMark, ObsLiveStatusPill, ObsTeamBadge } from './ObsBrandMark.tsx';
+import { KabaddiAnimations } from '../scoreboard/kabaddi/KabaddiAnimations.tsx';
 
 interface KabaddiObsOverlayProps {
   stream: LiveStreamData;
@@ -24,10 +28,15 @@ export function KabaddiObsOverlay({
   isPortrait = false,
 }: KabaddiObsOverlayProps) {
   const m = computeOverlayMetrics(config, isPortrait);
-  const d: KabaddiDetails = {
-    ...createInitialKabaddiDetails(),
-    ...((score?.sportSpecificDetails || {}) as Partial<KabaddiDetails>),
-  };
+  const d = normalizeKabaddiDetails(score?.sportSpecificDetails);
+  const vis = d.viewerDisplaySettings;
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    return () => window.clearInterval(id);
+  }, []);
+  const effClock = computeEffectiveKabaddiClock(d, nowMs);
 
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
@@ -47,63 +56,88 @@ export function KabaddiObsOverlay({
     }
   }, [scoreA, scoreB]);
 
-  const clock = `${String(d.timerMinutes ?? 0).padStart(2, '0')}:${String(d.timerSeconds ?? 0).padStart(2, '0')}`;
+  const clock = effClock.formattedClock;
   const stdStatus = resolveMatchStatus(stream, score);
   const resultDeclared = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
 
+  const obsAnimationBanner = (
+    <KabaddiAnimations
+      streamId={stream.id}
+      teamAName={nameA}
+      teamBName={nameB}
+      doOrDie={d.doOrDie}
+      doOrDieVisible={effClock.doOrDieVisible}
+      doOrDieRemainingSec={effClock.doOrDieRemainingSec}
+      lastAllOut={d.lastAllOut}
+      allOutDurationSec={d.rules.allOutBannerDurationSec}
+      timeoutActive={d.clock.timeoutActive}
+      timeoutTeam={d.clock.timeoutTeam}
+      timeoutRemainingSec={effClock.timeoutRemainingSec}
+      displaySettings={vis}
+      compact
+      showTimer={false}
+      scaleMultiplier={m.overallScale}
+    />
+  );
+
   if (config.mode === 'score_only') {
     return (
-      <div
-        style={{
-          background: theme.barBg,
-          borderColor: theme.barBorder,
-          color: theme.primaryText,
-          gap: Math.max(8, Math.round(m.sectionGapPx * 0.8)),
-          paddingLeft: m.stripPadX,
-          paddingRight: m.stripPadX,
-          paddingTop: m.stripPadY,
-          paddingBottom: m.stripPadY,
-        }}
-        className="inline-flex items-center rounded-lg border shadow-xl backdrop-blur-md max-w-full"
-      >
-        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-          {shortA}
-        </span>
-        <span
-          key={pulseKey}
+      <div className="inline-flex flex-col items-stretch gap-2 max-w-full">
+        {obsAnimationBanner}
+        <div
           style={{
-            background: theme.scorePillBg,
-            color: theme.scorePillText,
-            fontSize: m.scoreFontPx,
-            paddingLeft: m.scorePillPadX,
-            paddingRight: m.scorePillPadX,
-            paddingTop: Math.max(3, Math.round(m.scorePillPadY * 0.6)),
-            paddingBottom: Math.max(3, Math.round(m.scorePillPadY * 0.6)),
+            background: theme.barBg,
+            borderColor: theme.barBorder,
+            color: theme.primaryText,
+            gap: Math.max(8, Math.round(m.sectionGapPx * 0.8)),
+            paddingLeft: m.stripPadX,
+            paddingRight: m.stripPadX,
+            paddingTop: m.stripPadY,
+            paddingBottom: m.stripPadY,
           }}
-          className="obs-score-pop font-mono tabular-nums font-extrabold rounded leading-none shrink-0"
+          className="inline-flex items-center rounded-lg border shadow-xl backdrop-blur-md max-w-full"
         >
-          {scoreA} - {scoreB}
-        </span>
-        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-          {shortB}
-        </span>
-        <span
-          className="font-mono tabular-nums font-bold shrink-0"
-          style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}
-        >
-          {clock}
-        </span>
+          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
+            {shortA}
+          </span>
+          <span
+            key={pulseKey}
+            style={{
+              background: theme.scorePillBg,
+              color: theme.scorePillText,
+              fontSize: m.scoreFontPx,
+              paddingLeft: m.scorePillPadX,
+              paddingRight: m.scorePillPadX,
+              paddingTop: Math.max(3, Math.round(m.scorePillPadY * 0.6)),
+              paddingBottom: Math.max(3, Math.round(m.scorePillPadY * 0.6)),
+            }}
+            className="obs-score-pop font-mono tabular-nums font-extrabold rounded leading-none shrink-0"
+          >
+            {scoreA} - {scoreB}
+          </span>
+          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
+            {shortB}
+          </span>
+          <span
+            className="font-mono tabular-nums font-bold shrink-0"
+            style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}
+          >
+            {clock}
+          </span>
+        </div>
       </div>
     );
   }
 
-  const barRadiusClass = isPortrait ? 'rounded-none border-x-0' : 'rounded-lg';
+  const barRadiusClass = isPortrait && m.barWidthPct >= 98 ? 'rounded-none border-x-0' : 'rounded-lg';
 
   return (
-    <div
-      style={{ background: theme.barBg, borderColor: theme.barBorder, color: theme.primaryText }}
-      className={`w-full flex flex-col border shadow-[0_18px_46px_rgba(0,0,0,0.65)] overflow-hidden backdrop-blur-md ${barRadiusClass}`}
-    >
+    <div className="w-full flex flex-col gap-2">
+      {obsAnimationBanner}
+      <div
+        style={{ background: theme.barBg, borderColor: theme.barBorder, color: theme.primaryText }}
+        className={`w-full flex flex-col border shadow-[0_18px_46px_rgba(0,0,0,0.65)] overflow-hidden backdrop-blur-md ${barRadiusClass}`}
+      >
       <div className="flex items-stretch min-w-0">
         {!isPortrait && (
           <ObsBrandMark
@@ -155,31 +189,42 @@ export function KabaddiObsOverlay({
             }}
             className="obs-score-pop flex items-center gap-3 rounded-md font-mono tabular-nums font-extrabold leading-none shrink-0"
           >
-            <span style={{ fontSize: m.scoreFontPx }}>{scoreA}</span>
+            <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreA : '•'}</span>
             {config.showMatchStatus && (
               <span className="flex flex-col items-center px-1.5 leading-tight opacity-90">
-                <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}>{clock}</span>
-                <span style={{ fontSize: m.metaLabelPx }} className="uppercase tracking-wider opacity-80">
-                  {d.half}
-                </span>
+                {vis.showMatchTimer && (
+                  <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}>
+                    {clock}
+                    {vis.showRaidTimer && d.clock.raidTimerEnabled && !d.matchCompleted
+                      ? ` · R${effClock.raidRemainingSec}s`
+                      : ''}
+                  </span>
+                )}
+                {vis.showHalf && (
+                  <span style={{ fontSize: m.metaLabelPx }} className="uppercase tracking-wider opacity-80">
+                    {d.clock.halfLabel || d.half}
+                  </span>
+                )}
               </span>
             )}
-            <span style={{ fontSize: m.scoreFontPx }}>{scoreB}</span>
+            <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreB : '•'}</span>
           </div>
 
           <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-start">
-            <span
-              style={{ fontSize: m.teamNameFontPx }}
-              className="font-display font-extrabold uppercase tracking-wide truncate"
-            >
-              {config.mode === 'compact' || isPortrait ? shortB : nameB}
-            </span>
+            {vis.showTeamNames && (
+              <span
+                style={{ fontSize: m.teamNameFontPx }}
+                className="font-display font-extrabold uppercase tracking-wide truncate"
+              >
+                {config.mode === 'compact' || isPortrait ? shortB : nameB}
+              </span>
+            )}
             <ObsTeamBadge
               logoUrl={stream.teamBLogo}
               shortName={shortB}
               accentColor={config.teamBColor}
               sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
+              showLogo={config.showTeamLogos && vis.showTeamLogos}
             />
           </div>
 
@@ -215,15 +260,24 @@ export function KabaddiObsOverlay({
           <span className="truncate">
             {shortA}: R {d.teamA.raidPoints} · T {d.teamA.tacklePoints} · B {d.teamA.bonusPoints} · AO{' '}
             {d.teamA.allOutPoints}
+            {vis.showPlayersOnCourtDots ? ` · Mat ${d.playersOnCourtA}/${d.rules.playersPerSide}` : ''}
           </span>
           {resultDeclared ? (
             <span className="inline-flex items-center gap-1 font-sans font-bold text-emerald-300 uppercase truncate">
               <Trophy className="w-3.5 h-3.5 shrink-0" />
               {score?.resultDescription || score?.winnerTeamName}
             </span>
+          ) : vis.showDoOrDieBanner && effClock.doOrDieVisible && d.doOrDie.team ? (
+            <span className="font-sans font-black text-amber-300 uppercase truncate">
+              DO OR DIE · {d.doOrDie.team === 'A' ? shortA : shortB}
+            </span>
+          ) : vis.showTimeoutBanner && d.clock.timeoutActive ? (
+            <span className="font-sans font-bold text-sky-300 uppercase truncate">
+              TIMEOUT · {d.clock.timeoutTeam === 'A' ? shortA : shortB} ({effClock.timeoutRemainingSec}s)
+            </span>
           ) : d.superRaidNote ? (
             <span className="font-sans font-bold text-amber-300 uppercase truncate">{d.superRaidNote}</span>
-          ) : config.showTournamentName && stream.tournamentName ? (
+          ) : vis.showTournamentLogo && config.showTournamentName && stream.tournamentName ? (
             <span style={{ color: theme.accentPrimary }} className="font-sans font-bold uppercase truncate">
               {stream.tournamentName}
             </span>
@@ -231,9 +285,11 @@ export function KabaddiObsOverlay({
           <span className="truncate">
             {shortB}: R {d.teamB.raidPoints} · T {d.teamB.tacklePoints} · B {d.teamB.bonusPoints} · AO{' '}
             {d.teamB.allOutPoints}
+            {vis.showPlayersOnCourtDots ? ` · Mat ${d.playersOnCourtB}/${d.rules.playersPerSide}` : ''}
           </span>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -240,7 +240,7 @@ export interface NormalizedBroadcast {
 export interface ScoreHistoryItem {
   _id: string;
   liveStreamId: string;
-  entryType?: 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION';
+  entryType?: 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION' | 'UNDO';
   sportType?: SportOption;
   teamSide?: 'A' | 'B' | '';
   eventCategory?: string;

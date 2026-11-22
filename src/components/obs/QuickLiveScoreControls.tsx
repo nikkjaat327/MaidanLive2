@@ -20,7 +20,7 @@ import {
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
-import { KabaddiDetails, createInitialKabaddiDetails } from '../../utils/kabaddiScoring.ts';
+import { normalizeKabaddiDetails } from '../../utils/kabaddiScoring.ts';
 import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
@@ -540,73 +540,100 @@ export function QuickLiveScoreControls({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {(['A', 'B'] as const).map((side) => {
             const label = side === 'A' ? shortA : shortB;
-            const kd = {
-              ...createInitialKabaddiDetails(),
-              ...((score?.sportSpecificDetails || {}) as Partial<KabaddiDetails>),
-            };
+            const kd = normalizeKabaddiDetails(score?.sportSpecificDetails);
             const curScore = side === 'A' ? score?.teamAScore ?? 0 : score?.teamBScore ?? 0;
+            const courtCount = side === 'A' ? kd.playersOnCourtA : kd.playersOnCourtB;
+            const triggerKabaddi = async (
+              action: Record<string, unknown>,
+              fallbackText: string
+            ) => {
+              try {
+                setBusy(true);
+                setFeedback(null);
+                const res = await scoreboardService.recordKabaddiEvent(stream.id, {
+                  clientEventId: makeClientEventId('quick_kbd'),
+                  action,
+                });
+                onScoreChange(res.score);
+                onRefresh?.();
+                setFeedback({
+                  type: 'success',
+                  text: res.historyItem?.action || fallbackText,
+                });
+              } catch (err) {
+                setFeedback({
+                  type: 'error',
+                  text: extractApiError(err, 'Failed to update Kabaddi score.'),
+                });
+              } finally {
+                setBusy(false);
+              }
+            };
             return (
               <div key={side} className={`p-2.5 rounded-lg border space-y-2 ${subBarClass}`}>
                 <div className="flex items-center justify-between text-xs font-bold">
-                  <span>{label} ({kd.half})</span>
+                  <span>
+                    {label} ({kd.half} · {courtCount} on court)
+                  </span>
                   <span className="font-mono text-sm">{curScore}</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || kd.matchCompleted}
                     onClick={() =>
-                      submitEvent(
-                        { type: 'ADD_POINTS', team: side, category: 'raidPoints', points: 1 },
-                        `${label} +1 Raid`,
-                        'Kabaddi'
-                      )
+                      triggerKabaddi({ type: 'TOUCH_POINT', team: side }, `${label} Touch Point`)
                     }
-                    className="min-h-[36px] px-2.5 py-1 rounded bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
+                    className="min-h-[36px] px-2.5 py-1 rounded bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold disabled:opacity-40"
                   >
-                    +1 Raid
+                    Touch Point (+{kd.rules.touchPointValue})
                   </button>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || kd.matchCompleted}
                     onClick={() =>
-                      submitEvent(
-                        { type: 'ADD_POINTS', team: side, category: 'tacklePoints', points: 1 },
-                        `${label} +1 Tackle`,
-                        'Kabaddi'
+                      triggerKabaddi(
+                        { type: 'TACKLE_POINT', team: side },
+                        `${label} Tackle Point (+${kd.rules.unsuccessfulRaidDefenderPoints})`
                       )
                     }
-                    className="min-h-[36px] px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold"
+                    className="min-h-[36px] px-2.5 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-xs font-bold disabled:opacity-40"
                   >
-                    +1 Tackle
+                    Tackle Point (+{kd.rules.unsuccessfulRaidDefenderPoints})
                   </button>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || kd.matchCompleted}
                     onClick={() =>
-                      submitEvent(
-                        { type: 'ADD_POINTS', team: side, category: 'bonusPoints', points: 1 },
-                        `${label} +1 Bonus`,
-                        'Kabaddi'
-                      )
+                      triggerKabaddi({ type: 'EMPTY_RAID', team: side }, `${label} Empty Raid`)
                     }
-                    className="min-h-[36px] px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                    className={`min-h-[36px] px-2.5 py-1 rounded border text-xs font-bold disabled:opacity-40 ${btnNeutral}`}
                   >
-                    +1 Bonus
+                    Empty Raid
                   </button>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || kd.matchCompleted}
                     onClick={() =>
-                      submitEvent(
-                        { type: 'ADD_POINTS', team: side, category: 'superRaids', points: 3 },
-                        `${label} +3 Super Raid`,
-                        'Kabaddi'
-                      )
+                      triggerKabaddi({ type: 'BONUS_POINT', team: side }, `${label} Bonus Point`)
                     }
-                    className="min-h-[36px] px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold"
+                    className="min-h-[36px] px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40"
                   >
-                    +3 Super Raid
+                    Bonus (+{kd.rules.bonusPointValue})
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      kd.matchCompleted ||
+                      courtCount > kd.rules.superTackleMaxDefenders
+                    }
+                    onClick={() =>
+                      triggerKabaddi({ type: 'SUPER_TACKLE', team: side }, `${label} Super Tackle`)
+                    }
+                    className="min-h-[36px] px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-35"
+                  >
+                    Super Tackle
                   </button>
                 </div>
               </div>

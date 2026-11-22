@@ -376,3 +376,37 @@ export function getPreviewMediaStyles(options: {
     needsRotatedContainerSwap: isQuarter,
   };
 }
+
+export function resolveCameraLiveWebUrl(cam?: {
+  sourceType?: string;
+  obsBrowserSourceUrl?: string;
+  connectionUrl?: string;
+} | null): string {
+  if (!cam) return '';
+  const candidates = [cam.obsBrowserSourceUrl, cam.connectionUrl]
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter(Boolean);
+
+  for (const rawUrl of candidates) {
+    // Skip raw media protocols that browsers cannot iframe directly
+    if (/^(rtsp|rtmp|srt|udp|tcp):\/\//i.test(rawUrl)) continue;
+    try {
+      const parsed = new URL(rawUrl, typeof window !== 'undefined' ? window.location.origin : 'https://maidanlive.local');
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+      if (parsed.hostname.includes('vdo.ninja') || parsed.searchParams.has('view')) {
+        // Skip push-only camera links; only embed viewer/browser-source links
+        if (parsed.searchParams.has('push') && !parsed.searchParams.has('view')) {
+          continue;
+        }
+        parsed.searchParams.set('muted', '1');
+        parsed.searchParams.set('autoplay', '1');
+        parsed.searchParams.set('noaudio', '1');
+      }
+      return parsed.toString();
+    } catch {
+      continue;
+    }
+  }
+  return '';
+}
+

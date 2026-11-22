@@ -38,6 +38,7 @@ import {
   OverlayScale,
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
+  computeOverlayMetrics,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails } from '../../utils/cricketScoring.ts';
@@ -222,20 +223,26 @@ export function BroadcastOverlayConfigPage() {
     [overlayConfig, sliderDraft]
   );
 
+  const pendingSliderPatchRef = useRef<Partial<BroadcastOverlayConfig>>({});
+
   async function persistOverlayPatch(partial: Partial<BroadcastOverlayConfig>) {
     if (!matchId) return;
     const prev = overlayConfig;
-    const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...partial });
-    if (partial.mode === 'hidden') next.visible = false;
-    else if (partial.mode && partial.visible === undefined) next.visible = true;
-    if (partial.visible === true && next.mode === 'hidden') next.mode = 'full';
+    const apiPatch: Partial<BroadcastOverlayConfig> = { ...partial };
+    if (partial.mode === 'hidden') apiPatch.visible = false;
+    else if (partial.mode && partial.visible === undefined) apiPatch.visible = true;
+    if (partial.visible === true && (partial.mode ?? effectiveOverlayConfig.mode) === 'hidden') {
+      apiPatch.mode = 'full';
+    }
 
+    const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...apiPatch });
+    pendingSliderPatchRef.current = {};
     setSliderDraft(null);
     setOverlayConfig(next);
     setSaving(true);
     setActionError(null);
     try {
-      const res = await liveStreamService.updateOverlayConfig(matchId, next);
+      const res = await liveStreamService.updateOverlayConfig(matchId, apiPatch);
       if (Date.now() - lastSliderEditAtRef.current >= 400) {
         setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
       }
@@ -253,6 +260,7 @@ export function BroadcastOverlayConfigPage() {
     if (!matchId) return;
     lastSliderEditAtRef.current = Date.now();
     const nextDraft = { ...(sliderDraft || {}), [key]: val };
+    pendingSliderPatchRef.current = { ...pendingSliderPatchRef.current, [key]: val };
     setSliderDraft(nextDraft);
     const next = normalizeOverlayConfig({ ...overlayConfig, ...nextDraft });
     setOverlayConfig(next);
@@ -266,10 +274,16 @@ export function BroadcastOverlayConfigPage() {
 
     sliderDebounceRef.current = window.setTimeout(async () => {
       sliderDebounceRef.current = null;
+      const patchToSend = { ...pendingSliderPatchRef.current };
+      pendingSliderPatchRef.current = {};
+      if (Object.keys(patchToSend).length === 0) return;
       setSaving(true);
       setActionError(null);
       try {
-        await liveStreamService.updateOverlayConfig(matchId, next);
+        const res = await liveStreamService.updateOverlayConfig(matchId, patchToSend);
+        if (Date.now() - lastSliderEditAtRef.current >= 350) {
+          setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+        }
         setSaveNotice('Synced slider sizes to live OBS');
         window.setTimeout(() => setSaveNotice(null), 1800);
       } catch (err) {
@@ -282,7 +296,7 @@ export function BroadcastOverlayConfigPage() {
           }
         }, 400);
       }
-    }, 220);
+    }, 160);
   }
 
   function handleResetSliders() {
@@ -332,6 +346,10 @@ export function BroadcastOverlayConfigPage() {
   const stageCanvasW = isPreviewPortrait ? 1080 : 1920;
   const stageCanvasH = isPreviewPortrait ? 1920 : 1080;
   const previewScale = Math.max(0.15, previewWidth / stageCanvasW);
+  const previewMetrics = useMemo(
+    () => computeOverlayMetrics(effectiveOverlayConfig, isPreviewPortrait),
+    [effectiveOverlayConfig, isPreviewPortrait]
+  );
 
   // Match summary helpers
   const sport = score?.sportType || stream?.gameName || 'Other';
@@ -971,7 +989,7 @@ export function BroadcastOverlayConfigPage() {
                       Graphic Scale Preset
                     </label>
                     <span className="text-[10px] font-mono text-slate-400">
-                      90% Landscape · 100% Portrait
+                      Width {previewMetrics.barWidthPct}% · Scale {Math.round(previewMetrics.overallScale * 100)}%
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-2">

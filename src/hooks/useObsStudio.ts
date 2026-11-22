@@ -310,6 +310,21 @@ export function useObsStudio(matchId?: string) {
       });
     };
 
+    const onOverlayConfigUpdated = (payload: any) => {
+      if (payload?.streamId !== matchIdRef.current || !payload?.overlayConfig) return;
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              match: {
+                ...prev.match,
+                overlayConfig: payload.overlayConfig,
+              },
+            }
+          : prev
+      );
+    };
+
     if (socket.connected) joinStudio();
 
     socket.on('connect', joinStudio);
@@ -331,6 +346,7 @@ export function useObsStudio(matchId?: string) {
     socket.on('SCENE_SWITCH_SUCCESS', onSceneSwitchSuccess);
     socket.on('SCENE_SWITCH_FAILED', onSceneSwitchFailed);
     socket.on('CURRENT_SCENE_CHANGED', onSceneChanged);
+    socket.on('overlay:config_updated', onOverlayConfigUpdated);
 
     return () => {
       socket.emit('broadcast-studio:leave', matchId);
@@ -352,6 +368,7 @@ export function useObsStudio(matchId?: string) {
       socket.off('SCENE_SWITCH_SUCCESS', onSceneSwitchSuccess);
       socket.off('SCENE_SWITCH_FAILED', onSceneSwitchFailed);
       socket.off('CURRENT_SCENE_CHANGED', onSceneChanged);
+      socket.off('overlay:config_updated', onOverlayConfigUpdated);
     };
   }, [matchId]);
 

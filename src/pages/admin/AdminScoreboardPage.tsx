@@ -4,8 +4,10 @@ import {
   ArrowLeftRight,
   Eye,
   EyeOff,
+  Maximize2,
   Radio,
   RefreshCw,
+  RotateCcw,
   Server,
   SlidersHorizontal,
   TrendingUp,
@@ -13,6 +15,7 @@ import {
   Youtube,
 } from 'lucide-react';
 import {
+  BroadcastOverlayConfig,
   LiveStreamData,
   MatchHighlightData,
   PlayerData,
@@ -21,6 +24,20 @@ import {
   StreamingProvider,
 } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import { getSocketClient } from '../../services/socket/socketClient.ts';
+import {
+  DEFAULT_OVERLAY_CONFIG,
+  OVERLAY_MODES,
+  OVERLAY_POSITIONS,
+  OVERLAY_SCALES,
+  OVERLAY_SLIDER_BOUNDS,
+  OverlayMode,
+  OverlayPosition,
+  OverlayScale,
+  PRESET_SCALE_MULTIPLIERS,
+  computeOverlayMetrics,
+  normalizeOverlayConfig,
+} from '../../utils/overlayConfig.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
@@ -57,6 +74,12 @@ export function AdminScoreboardPage() {
   const [players, setPlayers] = useState<PlayerData[]>([]);
   const [highlights, setHighlights] = useState<MatchHighlightData[]>([]);
   const [playerStats, setPlayerStats] = useState<PlayerMatchStatRecord[]>([]);
+
+  // Live OBS Overlay state (Admin + Scorer size/position/mode sync)
+  const [obsOverlayConfig, setObsOverlayConfig] = useState<BroadcastOverlayConfig>(DEFAULT_OVERLAY_CONFIG);
+  const [obsOverlaySaving, setObsOverlaySaving] = useState(false);
+  const obsSliderDebounceRef = React.useRef<number | null>(null);
+  const pendingObsSliderRef = React.useRef<Partial<BroadcastOverlayConfig>>({});
 
   // Quick provider switch modal
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -130,6 +153,101 @@ export function AdminScoreboardPage() {
       .catch(() => setPlayers([]));
   }, [stream?.id, stream?.gameName, stream?.teamAId, stream?.teamBId, loadHighlights, loadPlayerStats]);
 
+  useEffect(() => {
+    if (!selectedId) {
+      setObsOverlayConfig(DEFAULT_OVERLAY_CONFIG);
+      return;
+    }
+    let cancelled = false;
+    liveStreamService
+      .getOverlayData(selectedId)
+      .then((res) => {
+        if (!cancelled && res?.overlayConfig) {
+          setObsOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+        }
+      })
+      .catch(() => {});
+
+    const socket = getSocketClient();
+    const handleOverlayUpdated = (payload: {
+      streamId?: string;
+      overlayConfig?: BroadcastOverlayConfig;
+    }) => {
+      if (payload?.streamId !== selectedId || !payload.overlayConfig) return;
+      setObsOverlayConfig(normalizeOverlayConfig(payload.overlayConfig));
+    };
+    socket.on('overlay:config_updated', handleOverlayUpdated);
+    return () => {
+      cancelled = true;
+      socket.off('overlay:config_updated', handleOverlayUpdated);
+    };
+  }, [selectedId]);
+
+  useEffect(() => {
+    return () => {
+      if (obsSliderDebounceRef.current !== null) {
+        window.clearTimeout(obsSliderDebounceRef.current);
+      }
+    };
+  }, []);
+
+  async function handleUpdateObsOverlay(patch: Partial<BroadcastOverlayConfig>) {
+    if (!stream) return;
+    const prev = obsOverlayConfig;
+    const apiPatch: Partial<BroadcastOverlayConfig> = { ...patch };
+    if (patch.mode === 'hidden') apiPatch.visible = false;
+    else if (patch.mode && patch.visible === undefined) apiPatch.visible = true;
+    if (patch.visible === true && (patch.mode ?? prev.mode) === 'hidden') {
+      apiPatch.mode = 'full';
+    }
+    const next = normalizeOverlayConfig({ ...prev, ...apiPatch });
+    pendingObsSliderRef.current = {};
+    setObsOverlayConfig(next);
+    setObsOverlaySaving(true);
+    setListError(null);
+    try {
+      const res = await liveStreamService.updateOverlayConfig(stream.id, apiPatch);
+      if (res?.overlayConfig) {
+        setObsOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+      }
+      setListSuccess('OBS overlay settings synced live.');
+    } catch (err) {
+      setObsOverlayConfig(prev);
+      setListError(extractApiError(err, 'Failed to sync OBS overlay settings.'));
+    } finally {
+      setObsOverlaySaving(false);
+    }
+  }
+
+  function handleObsSizeSliderChange(val: number) {
+    if (!stream) return;
+    const next = normalizeOverlayConfig({ ...obsOverlayConfig, customScale: val });
+    pendingObsSliderRef.current = { ...pendingObsSliderRef.current, customScale: val };
+    setObsOverlayConfig(next);
+    if (obsSliderDebounceRef.current !== null) {
+      window.clearTimeout(obsSliderDebounceRef.current);
+    }
+    obsSliderDebounceRef.current = window.setTimeout(async () => {
+      obsSliderDebounceRef.current = null;
+      const patchToSend = { ...pendingObsSliderRef.current };
+      pendingObsSliderRef.current = {};
+      if (Object.keys(patchToSend).length === 0) return;
+      setObsOverlaySaving(true);
+      setListError(null);
+      try {
+        const res = await liveStreamService.updateOverlayConfig(stream.id, patchToSend);
+        if (res?.overlayConfig) {
+          setObsOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+        }
+        setListSuccess('OBS scoreboard size updated.');
+      } catch (err) {
+        setListError(extractApiError(err, 'Failed to update OBS scoreboard size.'));
+      } finally {
+        setObsOverlaySaving(false);
+      }
+    }, 160);
+  }
+
   async function handleToggleOverlayDefault() {
     if (!stream) return;
     try {
@@ -191,6 +309,7 @@ export function AdminScoreboardPage() {
 
   const activeProvider = stream?.activeStreamingProvider || stream?.streamingProvider || 'youtube';
   const normalized = stream ? normalizeBroadcast(stream, score) : null;
+  const obsOverlayMetrics = computeOverlayMetrics(obsOverlayConfig, false);
 
   return (
     <div className="space-y-6">
@@ -343,6 +462,126 @@ export function AdminScoreboardPage() {
               )}
             </div>
           )}
+
+          {/* Live OBS Broadcast Size & Position Sync Bar (Admin + Scorer) */}
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Maximize2 className="w-4 h-4 text-[#EA580C]" />
+                <h2 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  OBS Scoreboard Size &amp; Position Sync
+                </h2>
+                <span className="text-[11px] font-mono text-slate-500">
+                  Width {obsOverlayMetrics.barWidthPct}% · {Math.round(obsOverlayMetrics.overallScale * 100)}%
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={obsOverlaySaving}
+                onClick={() => handleUpdateObsOverlay({ scale: 'medium', customScale: 1 })}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset Size</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+              {/* Size Presets */}
+              <div className="md:col-span-4 space-y-1">
+                <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  OBS Size Preset
+                </span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {OVERLAY_SCALES.map((sc: OverlayScale) => {
+                    const active = obsOverlayConfig.scale === sc;
+                    return (
+                      <button
+                        key={sc}
+                        type="button"
+                        disabled={obsOverlaySaving}
+                        onClick={() => handleUpdateObsOverlay({ scale: sc })}
+                        className={`min-h-[38px] px-2 py-1 rounded-lg text-xs font-semibold border capitalize transition-colors ${
+                          active
+                            ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                            : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {sc} ({Math.round(PRESET_SCALE_MULTIPLIERS[sc] * 100)}%)
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Fine Size Slider */}
+              <div className="md:col-span-4 space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold uppercase tracking-wider text-slate-500">
+                    Custom OBS Size
+                  </span>
+                  <span className="font-mono font-bold text-[#EA580C]">
+                    {Math.round(obsOverlayConfig.customScale * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={OVERLAY_SLIDER_BOUNDS.customScale.min}
+                  max={OVERLAY_SLIDER_BOUNDS.customScale.max}
+                  step={OVERLAY_SLIDER_BOUNDS.customScale.step}
+                  value={obsOverlayConfig.customScale}
+                  aria-label="Custom OBS Scoreboard Size"
+                  onChange={(e) => handleObsSizeSliderChange(Number(e.target.value))}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#EA580C]"
+                />
+              </div>
+
+              {/* OBS Position & Mode */}
+              <div className="md:col-span-4 grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    OBS Position
+                  </span>
+                  <select
+                    value={obsOverlayConfig.position}
+                    disabled={obsOverlaySaving}
+                    onChange={(e) =>
+                      handleUpdateObsOverlay({ position: e.target.value as OverlayPosition })
+                    }
+                    aria-label="OBS overlay screen position"
+                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg"
+                  >
+                    {OVERLAY_POSITIONS.map((pos) => (
+                      <option key={pos} value={pos}>
+                        {pos}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    OBS Mode
+                  </span>
+                  <select
+                    value={obsOverlayConfig.visible ? obsOverlayConfig.mode : 'hidden'}
+                    disabled={obsOverlaySaving}
+                    onChange={(e) => {
+                      const nextMode = e.target.value as OverlayMode;
+                      handleUpdateObsOverlay({ mode: nextMode, visible: nextMode !== 'hidden' });
+                    }}
+                    aria-label="OBS overlay display mode"
+                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg"
+                  >
+                    {OVERLAY_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {m.replace('_', ' ').toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </section>
 
           {/* Live TV Broadcast Strip Preview */}
           {score && (

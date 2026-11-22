@@ -6,7 +6,11 @@ import {
   getTotalExtras,
   normalizeCricketDetails,
 } from './cricketScoring.ts';
-import { KabaddiDetails, createInitialKabaddiDetails } from './kabaddiScoring.ts';
+import {
+  computeEffectiveKabaddiClock,
+  KabaddiDetails,
+  normalizeKabaddiDetails,
+} from './kabaddiScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from './footballScoring.ts';
 import { VolleyballDetails, createInitialVolleyballDetails } from './volleyballScoring.ts';
 
@@ -28,7 +32,8 @@ function shortCode(name: string, explicit?: string): string {
 
 export function normalizeBroadcast(
   stream: LiveStreamData,
-  scoreOverride?: LiveScoreData | null
+  scoreOverride?: LiveScoreData | null,
+  nowMs: number = Date.now()
 ): NormalizedBroadcast {
   const score = scoreOverride !== undefined ? scoreOverride : stream.score || null;
   const sport = score?.sportType || stream.gameName || 'Other';
@@ -200,18 +205,55 @@ export function normalizeBroadcast(
   }
 
   if (sport === 'Kabaddi') {
-    const kd = { ...createInitialKabaddiDetails(), ...(details as Partial<KabaddiDetails>) };
+    const kd = normalizeKabaddiDetails(details as Partial<KabaddiDetails>);
+    const eff = computeEffectiveKabaddiClock(kd, nowMs);
+    const vSet = kd.viewerDisplaySettings;
+
     teamASecondary = `Raid ${kd.teamA.raidPoints} · Tackle ${kd.teamA.tacklePoints}`;
     teamBSecondary = `Raid ${kd.teamB.raidPoints} · Tackle ${kd.teamB.tacklePoints}`;
-    if (kd.teamA.playersOut > 0) teamABadge = `${Math.max(0, 7 - kd.teamA.playersOut)} ON MAT`;
-    if (kd.teamB.playersOut > 0) teamBBadge = `${Math.max(0, 7 - kd.teamB.playersOut)} ON MAT`;
 
-    periodLabel = kd.half || '1st Half';
-    timerOrClock = `${String(kd.timerMinutes).padStart(2, '0')}:${String(kd.timerSeconds).padStart(
-      2,
-      '0'
-    )}`;
+    if (vSet.showPlayersOnCourtDots) {
+      teamABadge = `${kd.playersOnCourtA}/${kd.rules.playersPerSide} ON MAT`;
+      teamBBadge = `${kd.playersOnCourtB}/${kd.rules.playersPerSide} ON MAT`;
+    }
 
+    if (kd.matchCompleted || (score?.resultStatus && score.resultStatus !== 'NOT_DECLARED')) {
+      statusLabel = 'FINAL';
+    }
+    periodLabel = vSet.showHalf ? kd.clock.halfLabel || kd.half || '1st Half' : 'Kabaddi';
+    timerOrClock = vSet.showMatchTimer
+      ? eff.formattedClock
+      : kd.matchCompleted
+        ? 'Completed'
+        : score?.matchStatus || 'LIVE';
+
+    if (vSet.showRaidTimer && kd.clock.raidTimerEnabled && kd.clock.raidRunning && !kd.matchCompleted) {
+      subStripItems.push({
+        label: 'Raid Clock',
+        value: `${eff.raidRemainingSec}s`,
+        accent: eff.raidRemainingSec <= 5 ? 'red' : 'orange',
+      });
+    }
+    if (vSet.showDoOrDieBanner && eff.doOrDieVisible && !kd.matchCompleted) {
+      subStripItems.push({
+        label: 'DO OR DIE',
+        value: kd.doOrDie.team === 'B' ? teamBName : teamAName,
+        accent: 'red',
+      });
+    }
+    if (vSet.showTimeoutBanner && kd.clock.timeoutActive && !kd.matchCompleted) {
+      const toTeam =
+        kd.clock.timeoutTeam === 'A'
+          ? teamAName
+          : kd.clock.timeoutTeam === 'B'
+            ? teamBName
+            : 'Official';
+      subStripItems.push({
+        label: 'TIMEOUT',
+        value: `${toTeam} (${eff.timeoutRemainingSec}s)`,
+        accent: 'orange',
+      });
+    }
     if (kd.teamA.allOutPoints > 0 || kd.teamB.allOutPoints > 0) {
       subStripItems.push({
         label: 'All-Out Pts',
@@ -219,18 +261,25 @@ export function normalizeBroadcast(
         accent: 'orange',
       });
     }
-    if (kd.teamA.bonusPoints > 0 || kd.teamB.bonusPoints > 0) {
+    if (vSet.showBonusBadge && (kd.teamA.bonusPoints > 0 || kd.teamB.bonusPoints > 0)) {
       subStripItems.push({
         label: 'Bonus Pts',
         value: `${kd.teamA.bonusPoints} - ${kd.teamB.bonusPoints}`,
         accent: 'blue',
       });
     }
-    if (kd.teamA.superTackles > 0 || kd.teamB.superTackles > 0) {
+    if (vSet.showSuperTackleBadge && (kd.teamA.superTackles > 0 || kd.teamB.superTackles > 0)) {
       subStripItems.push({
         label: 'Super Tackles',
         value: `${kd.teamA.superTackles} - ${kd.teamB.superTackles}`,
         accent: 'emerald',
+      });
+    }
+    if (vSet.showSuperRaidBadge && (kd.teamA.superRaids > 0 || kd.teamB.superRaids > 0)) {
+      subStripItems.push({
+        label: 'Super Raids',
+        value: `${kd.teamA.superRaids} - ${kd.teamB.superRaids}`,
+        accent: 'orange',
       });
     }
     if (kd.superRaidNote) {

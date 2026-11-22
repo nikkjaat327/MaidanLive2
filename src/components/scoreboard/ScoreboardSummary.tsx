@@ -9,7 +9,8 @@ import {
 } from '../../utils/cricketScoring.ts';
 import {
   KabaddiDetails,
-  createInitialKabaddiDetails,
+  computeEffectiveKabaddiClock,
+  normalizeKabaddiDetails,
 } from '../../utils/kabaddiScoring.ts';
 import {
   FootballDetails,
@@ -256,15 +257,13 @@ export function ScoreboardSummary({
   };
 
   const renderKabaddiSummary = () => {
-    const details: KabaddiDetails = {
-      ...createInitialKabaddiDetails(),
-      ...(rawDetails as Partial<KabaddiDetails>),
-    };
+    const details = normalizeKabaddiDetails(rawDetails as Partial<KabaddiDetails>);
+    const eff = computeEffectiveKabaddiClock(details);
     const statRows = [
       { label: 'Raid Points', a: details.teamA.raidPoints, b: details.teamB.raidPoints },
       { label: 'Tackle Points', a: details.teamA.tacklePoints, b: details.teamB.tacklePoints },
       { label: 'Bonus Points', a: details.teamA.bonusPoints, b: details.teamB.bonusPoints },
-      { label: 'All-Out Points', a: details.teamA.allOutPoints, b: details.teamB.allOutPoints },
+      { label: 'All-Out / ST', a: `${details.teamA.allOutPoints} (${details.teamA.superTackles})`, b: `${details.teamB.allOutPoints} (${details.teamB.superTackles})` },
     ];
 
     return (
@@ -273,18 +272,24 @@ export function ScoreboardSummary({
           <div className="min-w-0">
             <p className="text-xs text-slate-300 truncate">{teamA}</p>
             <p className="font-mono text-2xl font-bold tabular-nums">{scoreA}</p>
+            <p className="text-[10px] font-mono text-emerald-300">
+              {details.playersOnCourtA}/{details.rules.playersPerSide} on mat
+            </p>
           </div>
           <div className="text-center">
             <p className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
-              {details.half}
+              {details.clock.halfLabel || details.half}
             </p>
             <p className="font-mono text-sm font-semibold tabular-nums text-slate-200 mt-0.5">
-              {formatClock(details.timerMinutes, details.timerSeconds)}
+              {eff.formattedClock}
             </p>
           </div>
           <div className="min-w-0 text-right">
             <p className="text-xs text-slate-300 truncate">{teamB}</p>
             <p className="font-mono text-2xl font-bold tabular-nums">{scoreB}</p>
+            <p className="text-[10px] font-mono text-emerald-300">
+              {details.playersOnCourtB}/{details.rules.playersPerSide} on mat
+            </p>
           </div>
         </div>
 

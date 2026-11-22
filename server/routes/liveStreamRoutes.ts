@@ -17,6 +17,8 @@ import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
 import {
   authenticate,
   canManageStream,
+  hasBroadcastAccess,
+  hasGranularPermission,
   optionalAuthenticate,
   requireAdminPortal,
   requirePermission,
@@ -35,6 +37,7 @@ import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
 import { normalizeOverlayConfig } from '../../src/utils/overlayConfig.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import {
+  emitBroadcastStudioEvent,
   emitRoomOnlyEvent,
   emitStreamEvent,
   getActiveRoomViewerCount,
@@ -626,6 +629,9 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
     delete (safeStream as any).mediamtxPlaybackWebrtcUrl;
     delete (safeStream as any).mediamtxHlsUrl;
 
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json({
       stream: safeStream,
       score: score || null,
@@ -650,11 +656,13 @@ router.patch(
         return;
       }
 
-      const [canStream, canScore] = await Promise.all([
+      const [canStream, canScore, canOverlayAccess, canScoreGranular] = await Promise.all([
         canManageStream(req.user!, id, 'stream'),
         canManageStream(req.user!, id, 'score'),
+        hasBroadcastAccess(req.user!, id, 'broadcast:manage_overlays'),
+        hasGranularPermission(req.user!, 'matches:score', { scopeType: 'match', scopeId: id }),
       ]);
-      if (!canStream && !canScore) {
+      if (!canStream && !canScore && !canOverlayAccess && !canScoreGranular) {
         res.status(403).json({
           message: 'Forbidden: You are not authorized to configure broadcast overlays for this match.',
         });
@@ -713,6 +721,10 @@ router.patch(
       );
 
       emitRoomOnlyEvent(id, 'overlay:config_updated', {
+        streamId: id,
+        overlayConfig: nextConfig,
+      });
+      emitBroadcastStudioEvent(id, 'overlay:config_updated', {
         streamId: id,
         overlayConfig: nextConfig,
       });

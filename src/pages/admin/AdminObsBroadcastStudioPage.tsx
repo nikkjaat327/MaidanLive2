@@ -31,6 +31,7 @@ import {
   QrCode,
   Radio,
   RefreshCw,
+  RotateCcw,
   Server,
   Shield,
   ShieldAlert,
@@ -73,10 +74,15 @@ import type {
 import {
   OVERLAY_MODES,
   OVERLAY_POSITIONS,
+  OVERLAY_SCALES,
+  OVERLAY_SLIDER_BOUNDS,
   OVERLAY_THEMES,
   OverlayMode,
   OverlayPosition,
+  OverlayScale,
   OverlayTheme,
+  PRESET_SCALE_MULTIPLIERS,
+  computeOverlayMetrics,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
@@ -174,6 +180,8 @@ export function AdminObsBroadcastStudioPage() {
   const [programSnapshotError, setProgramSnapshotError] = useState<string | null>(null);
   const pollingInFlightRef = useRef(false);
   const programPollingInFlightRef = useRef(false);
+  const overlaySliderDebounceRef = useRef<number | null>(null);
+  const pendingOverlaySliderRef = useRef<Record<string, unknown>>({});
 
   // Staged Multi-Cam Composition & Production Desk state (explicit Preview vs Program separation)
   const [stagedCameraIds, setStagedCameraIds] = useState<string[]>([]);
@@ -845,7 +853,7 @@ export function AdminObsBroadcastStudioPage() {
     );
     return (
       activeCams.length > 0 &&
-      activeCams.every((c) => c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl))
+      activeCams.every((c) => Boolean(c.obsBrowserSourceUrl || (c.connectionUrl && /^https?:\/\//i.test(c.connectionUrl))))
     );
   }, [obsConnected, profile, enabledCameras, programMonitorMode]);
 
@@ -1501,17 +1509,25 @@ export function AdminObsBroadcastStudioPage() {
   async function handleUpdateOverlay(patch: Record<string, unknown>) {
     if (!matchId || !studio?.match) return;
     const current = normalizeOverlayConfig(studio.match.overlayConfig);
-    const next = normalizeOverlayConfig({ ...current, ...patch });
-    if (patch.mode === 'hidden') next.visible = false;
-    else if (patch.mode && patch.visible === undefined) next.visible = true;
-    if (patch.visible === true && next.mode === 'hidden') next.mode = 'full';
+    const apiPatch: Record<string, unknown> = { ...patch };
+    if (patch.mode === 'hidden') apiPatch.visible = false;
+    else if (patch.mode && patch.visible === undefined) apiPatch.visible = true;
+    if (patch.visible === true && (patch.mode ?? current.mode) === 'hidden') {
+      apiPatch.mode = 'full';
+    }
+    const next = normalizeOverlayConfig({ ...current, ...apiPatch });
 
     setStudio((prev) =>
       prev ? { ...prev, match: { ...prev.match, overlayConfig: next } } : prev
     );
     try {
       setSavingOverlay(true);
-      await liveStreamService.updateOverlayConfig(matchId, next);
+      const res = await liveStreamService.updateOverlayConfig(matchId, apiPatch);
+      if (res?.overlayConfig) {
+        setStudio((prev) =>
+          prev ? { ...prev, match: { ...prev.match, overlayConfig: normalizeOverlayConfig(res.overlayConfig) } } : prev
+        );
+      }
       notifySuccess('Scoreboard overlay synced live to OBS Browser Source.');
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to update scoreboard overlay.'));
@@ -1519,6 +1535,48 @@ export function AdminObsBroadcastStudioPage() {
     } finally {
       setSavingOverlay(false);
     }
+  }
+
+  function handleOverlaySliderChange(key: 'customScale', val: number) {
+    if (!matchId || !studio?.match) return;
+    const current = normalizeOverlayConfig(studio.match.overlayConfig);
+    const next = normalizeOverlayConfig({ ...current, [key]: val });
+    pendingOverlaySliderRef.current = { ...pendingOverlaySliderRef.current, [key]: val };
+    setStudio((prev) =>
+      prev ? { ...prev, match: { ...prev.match, overlayConfig: next } } : prev
+    );
+    if (overlaySliderDebounceRef.current !== null) {
+      window.clearTimeout(overlaySliderDebounceRef.current);
+    }
+    overlaySliderDebounceRef.current = window.setTimeout(async () => {
+      overlaySliderDebounceRef.current = null;
+      const patchToSend = { ...pendingOverlaySliderRef.current };
+      pendingOverlaySliderRef.current = {};
+      if (Object.keys(patchToSend).length === 0) return;
+      try {
+        setSavingOverlay(true);
+        const res = await liveStreamService.updateOverlayConfig(matchId, patchToSend);
+        if (res?.overlayConfig) {
+          setStudio((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  match: {
+                    ...prev.match,
+                    overlayConfig: normalizeOverlayConfig(res.overlayConfig),
+                  },
+                }
+              : prev
+          );
+        }
+        notifySuccess('Scoreboard overlay size synced live to OBS.');
+      } catch (err) {
+        setActionError(extractApiError(err, 'Failed to update scoreboard size.'));
+        await refetch();
+      } finally {
+        setSavingOverlay(false);
+      }
+    }, 160);
   }
 
   async function handleToggleSponsor(sponsorId: string) {
@@ -1546,6 +1604,7 @@ export function AdminObsBroadcastStudioPage() {
   }, [studio?.auditLogs, auditFilter]);
 
   const currentOverlay = normalizeOverlayConfig(studio?.match?.overlayConfig);
+  const currentOverlayMetrics = computeOverlayMetrics(currentOverlay, false);
 
   return (
     <div className="space-y-5">
@@ -2888,6 +2947,72 @@ export function AdminObsBroadcastStudioPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                {/* OBS Scoreboard Size & Scale Control */}
+                <div className="pt-3 border-t border-slate-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="text-xs font-semibold text-slate-700">
+                      OBS Scoreboard Size Preset &amp; Scale
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Width {currentOverlayMetrics.barWidthPct}% · Scale{' '}
+                        {Math.round(currentOverlayMetrics.overallScale * 100)}%
+                      </span>
+                      <button
+                        type="button"
+                        disabled={savingOverlay}
+                        onClick={() =>
+                          handleUpdateOverlay({ scale: 'medium', customScale: 1 })
+                        }
+                        className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-slate-600 bg-slate-100 border border-slate-300 rounded hover:bg-slate-200"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Reset</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {OVERLAY_SCALES.map((sc: OverlayScale) => {
+                      const active = currentOverlay.scale === sc;
+                      return (
+                        <button
+                          key={sc}
+                          type="button"
+                          disabled={savingOverlay}
+                          onClick={() => handleUpdateOverlay({ scale: sc })}
+                          className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-semibold border capitalize transition-colors ${
+                            active
+                              ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {sc} ({Math.round(PRESET_SCALE_MULTIPLIERS[sc] * 100)}%)
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-700">Fine Size Slider</span>
+                      <span className="font-mono font-bold text-[#EA580C]">
+                        {Math.round(currentOverlay.customScale * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={OVERLAY_SLIDER_BOUNDS.customScale.min}
+                      max={OVERLAY_SLIDER_BOUNDS.customScale.max}
+                      step={OVERLAY_SLIDER_BOUNDS.customScale.step}
+                      value={currentOverlay.customScale}
+                      aria-label="OBS Scoreboard Size Slider"
+                      onChange={(e) =>
+                        handleOverlaySliderChange('customScale', Number(e.target.value))
+                      }
+                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#EA580C]"
+                    />
                   </div>
                 </div>
 

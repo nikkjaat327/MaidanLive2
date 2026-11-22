@@ -6,7 +6,8 @@ export function getSocketClient(): Socket {
   if (!socketInstance) {
     socketInstance = io({
       path: '/socket.io',
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
+      upgrade: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,

@@ -8,7 +8,8 @@ import { ADMIN_PORTAL_ROLES, User } from '../../server/models/User.ts';
 import { LiveStream } from '../../server/models/LiveStream.ts';
 
 let io: SocketIOServer | null = null;
-let eventSequence = 0;
+const SERVER_BOOT_ID = crypto.randomUUID();
+let eventSequence = Date.now() * 100;
 let cleanupTimer: NodeJS.Timeout | null = null;
 
 export interface ObsAgentContext {
@@ -58,6 +59,7 @@ function nextMetadata() {
     eventId: crypto.randomUUID(),
     emittedAt: new Date().toISOString(),
     sequence: eventSequence,
+    serverBootId: SERVER_BOOT_ID,
   };
 }
 

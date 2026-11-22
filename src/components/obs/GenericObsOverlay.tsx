@@ -45,7 +45,7 @@ export function GenericObsOverlay({
   const resultDeclared = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
   const sportLabel = score?.sportType || stream.gameName || 'MATCH';
   const isScoreOnly = config.mode === 'score_only';
-  const barRadiusClass = isPortrait && !isScoreOnly ? 'rounded-none border-x-0' : 'rounded-lg';
+  const barRadiusClass = isPortrait && !isScoreOnly && m.barWidthPct >= 98 ? 'rounded-none border-x-0' : 'rounded-lg';
 
   return (
     <div

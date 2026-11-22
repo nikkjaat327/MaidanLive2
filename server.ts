@@ -501,7 +501,15 @@ export class ErrorOverlay extends HTMLElement {}
         const transformed = await vite.transformIndexHtml(req.originalUrl, template);
         const baseUrl = resolvePublicBaseUrl(req);
         const meta = await resolveShareMetadata(req, baseUrl);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(injectMetaIntoHtml(transformed, meta));
+        res
+          .status(200)
+          .set({
+            'Content-Type': 'text/html',
+            'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+          })
+          .end(injectMetaIntoHtml(transformed, meta));
       } catch (err) {
         vite.ssrFixStacktrace(err as Error);
         next();

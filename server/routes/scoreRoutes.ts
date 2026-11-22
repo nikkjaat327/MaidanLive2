@@ -37,6 +37,14 @@ import { emitStreamEvent, emitTournamentEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
+import {
+  applyKabaddiPlayerStatDeltas,
+  handleKabaddiClockRoute,
+  handleKabaddiCompleteRoute,
+  handleKabaddiEventRoute,
+  handleKabaddiReopenRoute,
+  handleKabaddiSettingsRoute,
+} from '../utils/kabaddiServerEngine.ts';
 
 const router = Router();
 
@@ -1436,6 +1444,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
     score.sportSpecificDetails =
       prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
+    score.markModified?.('sportSpecificDetails');
     if (prev.matchStatus) score.matchStatus = prev.matchStatus;
 
     let revertedAutoResult = false;
@@ -1460,7 +1469,46 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     score.lastUpdatedAt = new Date();
     await score.save();
 
-    await ScoreHistory.deleteOne({ _id: latestHistory._id });
+    if (score.sportType === 'Kabaddi') {
+      // Preserve full audit history for Kabaddi: mark original reverted & log an UNDO audit record
+      latestHistory.reverted = true;
+      await latestHistory.save();
+
+      const statDeltas = (latestHistory.details as any)?.playerStatDeltas;
+      if (statDeltas && typeof statDeltas === 'object' && Object.keys(statDeltas).length > 0) {
+        const streamDoc = await LiveStream.findById(id);
+        if (streamDoc) {
+          await applyKabaddiPlayerStatDeltas({
+            stream: streamDoc,
+            playerStatDeltas: statDeltas,
+            actorId: req.user!._id as mongoose.Types.ObjectId,
+            direction: -1,
+            session: null,
+          });
+        }
+      }
+
+      await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'UNDO',
+        sportType: 'Kabaddi',
+        eventCategory: 'UNDO',
+        eventType: 'UNDO',
+        correctionOfId: latestHistory._id,
+        previousScore: previousSnapshot,
+        updatedScore: {
+          sportType: score.sportType,
+          teamAScore: score.teamAScore,
+          teamBScore: score.teamBScore,
+          sportSpecificDetails: score.sportSpecificDetails,
+          matchStatus: score.matchStatus,
+        },
+        action: `Undid: ${latestHistory.action}`.slice(0, 280),
+        updatedBy: req.user!._id,
+      });
+    } else {
+      await ScoreHistory.deleteOne({ _id: latestHistory._id });
+    }
 
     if (revertedAutoResult) {
       await ScoreHistory.deleteMany({
@@ -1498,6 +1546,13 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     };
 
     emitStreamEvent(id, 'score:undo', payload);
+    if (score.sportType === 'Kabaddi') {
+      emitStreamEvent(id, 'kabaddi:state', {
+        streamId: id,
+        score: payload.score,
+        serverNowIso: new Date().toISOString(),
+      });
+    }
     if (revertedAutoResult) {
       emitStreamEvent(id, 'match:result:updated', { streamId: id, score: score.toObject(), isCorrection: true });
     }
@@ -1550,6 +1605,7 @@ router.post(
       score.teamAScore = 0;
       score.teamBScore = 0;
       score.sportSpecificDetails = getInitialSportDetails(score.sportType);
+      score.markModified?.('sportSpecificDetails');
       score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
       score.lastUpdatedAt = new Date();
       await score.save();
@@ -2033,4 +2089,12 @@ router.post(
   }
 );
 
+// Dedicated Kabaddi Scorer Console Routes
+router.post('/:id/kabaddi/event', authenticate, requireAdminPortal, handleKabaddiEventRoute);
+router.post('/:id/kabaddi/clock', authenticate, requireAdminPortal, handleKabaddiClockRoute);
+router.patch('/:id/kabaddi/settings', authenticate, requireAdminPortal, handleKabaddiSettingsRoute);
+router.post('/:id/kabaddi/complete', authenticate, requireAdminPortal, handleKabaddiCompleteRoute);
+router.post('/:id/kabaddi/reopen', authenticate, requireAdminPortal, handleKabaddiReopenRoute);
+
 export default router;
+

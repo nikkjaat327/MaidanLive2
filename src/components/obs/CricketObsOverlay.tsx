@@ -238,7 +238,7 @@ export function CricketObsOverlay({
     );
   }
 
-  const barRadiusClass = isPortrait ? 'rounded-none border-x-0' : 'rounded-lg';
+  const barRadiusClass = isPortrait && m.barWidthPct >= 98 ? 'rounded-none border-x-0' : 'rounded-lg';
 
   // 2) COMPACT single-bar broadcast strip (90% landscape / 100% portrait)
   if (config.mode === 'compact') {

@@ -33,6 +33,7 @@ export function useScoreboard(
   const [error, setError] = useState<string | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const lastSequenceRef = useRef<number>(0);
+  const lastBootIdRef = useRef<string | null>(null);
 
   const onProviderChangedRef = useRef(options?.onProviderChanged);
   const onViewerCountUpdatedRef = useRef(options?.onViewerCountUpdated);
@@ -61,6 +62,7 @@ export function useScoreboard(
   useEffect(() => {
     seenEventIdsRef.current.clear();
     lastSequenceRef.current = 0;
+    lastBootIdRef.current = null;
     if (!streamId) {
       setScore(null);
       setHistory([]);
@@ -120,6 +122,10 @@ export function useScoreboard(
           const first = seenEventIdsRef.current.values().next().value;
           if (first) seenEventIdsRef.current.delete(first);
         }
+      }
+      if (payload?.serverBootId && payload.serverBootId !== lastBootIdRef.current) {
+        lastBootIdRef.current = payload.serverBootId;
+        lastSequenceRef.current = 0;
       }
       if (enforceOrder && typeof payload?.sequence === 'number') {
         if (payload.sequence < lastSequenceRef.current) return false;
@@ -227,6 +233,10 @@ export function useScoreboard(
     socket.on('score:updated', handleScoreUpdated);
     socket.on('score:event:created', handleScoreUpdated);
     socket.on('score:event:corrected', handleScoreUpdated);
+    socket.on('kabaddi:state', handleScoreUpdated);
+    socket.on('kabaddi:timer', handleScoreUpdated);
+    socket.on('kabaddi:settings_updated', handleScoreUpdated);
+    socket.on('kabaddi:match_completed', handleResultEvent);
     socket.on('cricket:innings_completed', handleScoreUpdated);
     socket.on('cricket:second_innings_started', handleScoreUpdated);
     socket.on('cricket:match_completed', handleResultEvent);
@@ -243,6 +253,10 @@ export function useScoreboard(
       socket.off('score:updated', handleScoreUpdated);
       socket.off('score:event:created', handleScoreUpdated);
       socket.off('score:event:corrected', handleScoreUpdated);
+      socket.off('kabaddi:state', handleScoreUpdated);
+      socket.off('kabaddi:timer', handleScoreUpdated);
+      socket.off('kabaddi:settings_updated', handleScoreUpdated);
+      socket.off('kabaddi:match_completed', handleResultEvent);
       socket.off('cricket:innings_completed', handleScoreUpdated);
       socket.off('cricket:second_innings_started', handleScoreUpdated);
       socket.off('cricket:match_completed', handleResultEvent);

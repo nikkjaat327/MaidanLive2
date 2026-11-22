@@ -33,6 +33,7 @@ import {
   normalizeOrientationMode,
   normalizePreviewFit,
   parseOrientationDegrees,
+  resolveCameraLiveWebUrl,
   resolveCameraOrientationSummary,
 } from '../../utils/obsTransformGeometry.ts';
 import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
@@ -243,6 +244,7 @@ export function ProgramAndCompositionWorkspace({
   onUpdateCameraFraming,
 }: ProgramAndCompositionWorkspaceProps) {
   const [savingPreset, setSavingPreset] = useState(false);
+  const [stagedPreviewMode, setStagedPreviewMode] = useState<'live_vdo' | 'snapshots'>('live_vdo');
 
   const enabledCameras = useMemo(() => cameras.filter((c) => c.enabled), [cameras]);
   const cameraLookup = useMemo(() => new Map(cameras.map((c) => [c.cameraId, c])), [cameras]);
@@ -254,55 +256,61 @@ export function ProgramAndCompositionWorkspace({
     return map;
   }, [obsTransforms]);
 
-  // Determine actual live cameras currently on OBS Program
+  // Determine actual live cameras currently on OBS Program, with staged/enabled fallback for web preview when OBS is offline
   const programCameras = useMemo(() => {
     if (!obsConnected) return [];
     const activeIds = new Set<string>(profile.activeCameraIds || []);
     if (profile.activeCameraId) activeIds.add(profile.activeCameraId);
-    const matched = enabledCameras.filter(
+    return enabledCameras.filter(
       (c) =>
         activeIds.has(c.cameraId) ||
         (c.obsSceneName && profile.activeObsScene && c.obsSceneName === profile.activeObsScene)
     );
-    return matched;
   }, [obsConnected, profile.activeCameraIds, profile.activeCameraId, profile.activeObsScene, enabledCameras]);
 
+  const effectiveProgramCameras = useMemo(() => {
+    if (programCameras.length > 0) return programCameras;
+    const staged = selectedCameraIds
+      .map((id) => cameraLookup.get(id))
+      .filter((c): c is BroadcastCameraData => Boolean(c));
+    if (staged.length > 0) return staged;
+    return enabledCameras.filter((c) => Boolean(resolveCameraLiveWebUrl(c))).slice(0, 1);
+  }, [programCameras, selectedCameraIds, cameraLookup, enabledCameras]);
+
   const canUseLiveVideoMonitor = useMemo(
-    () =>
-      obsConnected &&
-      programCameras.length > 0 &&
-      programCameras.every((c) => c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl)),
-    [obsConnected, programCameras]
+    () => effectiveProgramCameras.some((c) => Boolean(resolveCameraLiveWebUrl(c))),
+    [effectiveProgramCameras]
   );
 
   const effectiveProgramMode: ProgramMonitorMode =
     canUseLiveVideoMonitor && programMonitorMode === 'live_video' ? 'live_video' : 'obs_frame';
 
   const programBoxes = useMemo(() => {
-    if (effectiveProgramMode !== 'live_video' || programCameras.length === 0) return [];
-    const programIds = programCameras.map((c) => c.cameraId);
-    const primaryId =
+    if (effectiveProgramMode !== 'live_video' || effectiveProgramCameras.length === 0) return [];
+    const programIds = effectiveProgramCameras.map((c) => c.cameraId);
+    const activePrimary =
       profile.activeCameraId && programIds.includes(profile.activeCameraId)
         ? profile.activeCameraId
-        : programIds[0];
-    return computeObsLayoutBoxes(
-      profile.activeLayoutType || 'SINGLE',
-      programIds,
-      primaryId,
-      1920,
-      1080,
-      {
-        pipPosition: profile.activePipPosition,
-        pipSize: profile.activePipSize,
-      }
-    );
+        : mainCameraId && programIds.includes(mainCameraId)
+          ? mainCameraId
+          : programIds[0];
+    const activeLayout = obsConnected ? profile.activeLayoutType || 'SINGLE' : layoutType || 'SINGLE';
+    return computeObsLayoutBoxes(activeLayout, programIds, activePrimary, 1920, 1080, {
+      pipPosition: obsConnected ? profile.activePipPosition : pipPosition,
+      pipSize: obsConnected ? profile.activePipSize : pipSize,
+    });
   }, [
     effectiveProgramMode,
-    programCameras,
+    effectiveProgramCameras,
+    obsConnected,
     profile.activeLayoutType,
     profile.activeCameraId,
     profile.activePipPosition,
     profile.activePipSize,
+    mainCameraId,
+    layoutType,
+    pipPosition,
+    pipSize,
   ]);
 
   const programSnapshot = previewSnapshots['__active_scene__'];
@@ -439,36 +447,34 @@ export function ProgramAndCompositionWorkspace({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-            {canUseLiveVideoMonitor && (
-              <div
-                className="inline-flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800"
-                role="group"
-                aria-label="Program preview feed mode"
+            <div
+              className="inline-flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800"
+              role="group"
+              aria-label="Program preview feed mode"
+            >
+              <button
+                type="button"
+                onClick={() => onChangeProgramMonitorMode('live_video')}
+                className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                  effectiveProgramMode === 'live_video'
+                    ? 'bg-[#EA580C] text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
               >
-                <button
-                  type="button"
-                  onClick={() => onChangeProgramMonitorMode('live_video')}
-                  className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
-                    effectiveProgramMode === 'live_video'
-                      ? 'bg-[#EA580C] text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Live Video
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onChangeProgramMonitorMode('obs_frame')}
-                  className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
-                    effectiveProgramMode === 'obs_frame'
-                      ? 'bg-slate-700 text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  OBS Frame
-                </button>
-              </div>
-            )}
+                Live Web Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeProgramMonitorMode('obs_frame')}
+                className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                  effectiveProgramMode === 'obs_frame'
+                    ? 'bg-slate-700 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                OBS Frame
+              </button>
+            </div>
 
             <button
               type="button"
@@ -484,27 +490,17 @@ export function ProgramAndCompositionWorkspace({
 
         {/* Genuine 16:9 Program Preview Stage */}
         <div className="relative aspect-video w-full rounded-lg border border-slate-800 bg-black overflow-hidden">
-          {!obsConnected ? (
-            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2.5">
-              <Monitor className="w-8 h-8 text-slate-600" />
-              <p className="text-sm font-bold text-slate-200">OBS Studio Disconnected</p>
-              <p className="text-xs text-slate-400 max-w-sm">
-                Connect OBS Studio via Windows Bridge or Direct WebSocket to view live program output and switch cameras.
-              </p>
-              <button
-                type="button"
-                onClick={onOpenConnectionTab}
-                className="min-h-[34px] px-3.5 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-600"
-              >
-                Connect OBS Studio
-              </button>
-            </div>
-          ) : effectiveProgramMode === 'live_video' && programBoxes.length > 0 ? (
+          {effectiveProgramMode === 'live_video' && programBoxes.length > 0 ? (
             <div className="relative w-full h-full bg-black">
+              {!obsConnected && (
+                <div className="pointer-events-none absolute top-2 right-2 z-20 px-2 py-0.5 rounded bg-slate-950/85 border border-amber-500/40 font-mono text-[10px] font-bold text-amber-300">
+                  LIVE WEB PREVIEW · OBS OFFLINE
+                </div>
+              )}
               {programBoxes.map((box) => {
                 const cam = cameraLookup.get(box.cameraId);
-                const vdoUrl = buildVdoProgramMonitorUrl(cam?.obsBrowserSourceUrl);
-                if (!cam || !vdoUrl) return null;
+                const vdoUrl = resolveCameraLiveWebUrl(cam) || buildVdoProgramMonitorUrl(cam?.obsBrowserSourceUrl);
+                if (!cam) return null;
                 const boxTransform =
                   obsTransformLookup.get(cam.obsInputName || '') ||
                   obsTransformLookup.get(cam.obsSceneName || '') ||
@@ -560,21 +556,33 @@ export function ProgramAndCompositionWorkspace({
                         />
                       )
                     )}
-                    <iframe
-                      key={`prog-iframe-${cam.cameraId}:${vdoUrl}`}
-                      title={`Live program feed ${cam.label || cam.name}`}
-                      src={vdoUrl}
-                      allow="autoplay; fullscreen; encrypted-media"
-                      style={
-                        boxMediaStyles.transform !== 'none'
-                          ? {
-                              transform: boxMediaStyles.transform,
-                              transformOrigin: 'center center',
-                            }
-                          : undefined
-                      }
-                      className="relative z-[1] w-full h-full border-0 pointer-events-none bg-transparent transition-transform duration-150"
-                    />
+                    {vdoUrl ? (
+                      <iframe
+                        key={`prog-iframe-${cam.cameraId}:${vdoUrl}`}
+                        title={`Live program feed ${cam.label || cam.name}`}
+                        src={vdoUrl}
+                        allow="autoplay; fullscreen; encrypted-media"
+                        style={
+                          boxMediaStyles.transform !== 'none'
+                            ? {
+                                transform: boxMediaStyles.transform,
+                                transformOrigin: 'center center',
+                              }
+                            : undefined
+                        }
+                        className="relative z-[1] w-full h-full border-0 pointer-events-none bg-transparent transition-transform duration-150"
+                      />
+                    ) : boxBackdropSnap ? (
+                      <img
+                        src={boxBackdropSnap.imageData}
+                        alt={cam.label || cam.name}
+                        className={`relative z-[1] w-full h-full ${boxMediaStyles.objectClass} bg-black`}
+                      />
+                    ) : (
+                      <div className="relative z-[1] w-full h-full flex items-center justify-center text-xs text-slate-400">
+                        Waiting for camera feed...
+                      </div>
+                    )}
                     {programBoxes.length > 1 && (
                       <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/75 border border-white/15 font-mono text-[10px] font-bold text-white">
                         CAM {cam.cameraNumber} · {cam.label || cam.name}
@@ -583,6 +591,21 @@ export function ProgramAndCompositionWorkspace({
                   </div>
                 );
               })}
+            </div>
+          ) : !obsConnected ? (
+            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2.5">
+              <Monitor className="w-8 h-8 text-slate-600" />
+              <p className="text-sm font-bold text-slate-200">OBS Studio Disconnected</p>
+              <p className="text-xs text-slate-400 max-w-sm">
+                Connect OBS Studio via Windows Bridge or Direct WebSocket to view OBS snapshots, or switch cameras with a Live Web Preview URL.
+              </p>
+              <button
+                type="button"
+                onClick={onOpenConnectionTab}
+                className="min-h-[34px] px-3.5 py-1.5 rounded-lg bg-[#EA580C] text-white text-xs font-semibold hover:bg-orange-600"
+              >
+                Connect OBS Studio
+              </button>
             </div>
           ) : programSnapshot ? (
             <div className="relative w-full h-full bg-black">
@@ -1127,13 +1150,43 @@ export function ProgramAndCompositionWorkspace({
 
         {/* Proportional 16:9 Preview Blueprint of What Viewers Will See */}
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
             <span className="font-semibold uppercase tracking-wider">
               Staged 16:9 Viewer Preview ({boxes.length} slot{boxes.length === 1 ? '' : 's'})
             </span>
-            <span className="font-mono text-slate-300 truncate max-w-[200px]">
-              {resolvedSceneName}
-            </span>
+            <div className="flex items-center gap-2">
+              <div
+                className="inline-flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800"
+                role="group"
+                aria-label="Staged composition preview feed mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => setStagedPreviewMode('live_vdo')}
+                  className={`min-h-[26px] px-2 py-0.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                    stagedPreviewMode === 'live_vdo'
+                      ? 'bg-[#EA580C] text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Live Web Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStagedPreviewMode('snapshots')}
+                  className={`min-h-[26px] px-2 py-0.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                    stagedPreviewMode === 'snapshots'
+                      ? 'bg-slate-700 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  OBS Snapshots
+                </button>
+              </div>
+              <span className="font-mono text-slate-300 truncate max-w-[160px]">
+                {resolvedSceneName}
+              </span>
+            </div>
           </div>
 
           <div className="relative w-full aspect-video rounded-lg border border-slate-700 bg-slate-950 overflow-hidden">
@@ -1148,6 +1201,26 @@ export function ProgramAndCompositionWorkspace({
               boxes.map((box) => {
                 const cam = cameraLookup.get(box.cameraId);
                 const snap = previewSnapshots[box.cameraId];
+                const liveWebUrl = resolveCameraLiveWebUrl(cam);
+                const showLiveWeb = stagedPreviewMode === 'live_vdo' && Boolean(liveWebUrl);
+                const boxFit = normalizePreviewFit(cam?.previewFit);
+                const boxRot = parseOrientationDegrees(cam?.orientationMode);
+                const boxFrameInfo = detectedContentMap[box.cameraId] || null;
+                const boxOri = resolveCameraOrientationSummary({
+                  telemetry: cam?.telemetry,
+                  frameContent: boxFrameInfo,
+                });
+                const boxMediaStyles = getPreviewMediaStyles({
+                  rotationDeg: boxRot,
+                  previewFit: boxFit,
+                  isPortraitContent: boxOri.isPortraitFeed,
+                  contentAspectRatio: boxFrameInfo?.aspectRatio,
+                  skipRotation: !showLiveWeb,
+                });
+                const showBoxBlur =
+                  cam?.portraitBackdropFill !== false &&
+                  boxFit === 'contain' &&
+                  boxOri.isPortraitFeed;
                 const leftPct = (box.x / 1920) * 100;
                 const topPct = (box.y / 1080) * 100;
                 const widthPct = (box.width / 1920) * 100;
@@ -1169,24 +1242,44 @@ export function ProgramAndCompositionWorkspace({
                     <div
                       className={`relative w-full h-full rounded overflow-hidden border flex flex-col justify-between p-1.5 ${
                         isMain
-                          ? 'border-[#EA580C] bg-slate-900'
-                          : 'border-amber-400/70 bg-slate-900 shadow-lg'
+                          ? 'border-[#EA580C] bg-black'
+                          : 'border-amber-400/70 bg-black shadow-lg'
                       }`}
                     >
-                      {snap && (
+                      {showBoxBlur && snap && (
+                        <img
+                          src={snap.imageData}
+                          alt=""
+                          aria-hidden="true"
+                          className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-45 pointer-events-none"
+                        />
+                      )}
+                      {showLiveWeb ? (
+                        <iframe
+                          key={`staged-live-${box.cameraId}:${liveWebUrl}`}
+                          title={`Staged live preview ${cam?.label || cam?.name || box.cameraId}`}
+                          src={liveWebUrl}
+                          allow="autoplay; fullscreen; encrypted-media"
+                          style={
+                            boxMediaStyles.transform !== 'none'
+                              ? {
+                                  transform: boxMediaStyles.transform,
+                                  transformOrigin: 'center center',
+                                }
+                              : undefined
+                          }
+                          className="absolute inset-0 z-[1] w-full h-full border-0 pointer-events-none bg-transparent transition-transform duration-150"
+                        />
+                      ) : snap ? (
                         <img
                           src={snap.imageData}
                           alt={cam?.label || cam?.name || box.cameraId}
-                          className={`absolute inset-0 w-full h-full opacity-55 ${
-                            normalizePreviewFit(cam?.previewFit) === 'cover'
-                              ? 'object-cover'
-                              : normalizePreviewFit(cam?.previewFit) === 'fill'
-                                ? 'object-fill'
-                                : 'object-contain'
+                          className={`absolute inset-0 z-[1] w-full h-full ${boxMediaStyles.objectClass} ${
+                            showBoxBlur ? 'bg-transparent' : 'bg-black'
                           }`}
                         />
-                      )}
-                      <div className="relative z-10 flex items-center justify-between gap-1">
+                      ) : null}
+                      <div className="relative z-10 flex items-center justify-between gap-1 pointer-events-none">
                         <span
                           className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded ${
                             isMain ? 'bg-[#EA580C] text-white' : 'bg-slate-950/90 text-amber-200'
@@ -1194,11 +1287,11 @@ export function ProgramAndCompositionWorkspace({
                         >
                           {layoutType === 'PIP' ? (isMain ? 'MAIN' : 'INSET') : `CAM ${cam?.cameraNumber || box.slotIndex + 1}`}
                         </span>
-                        <span className="font-mono text-[9px] px-1 rounded bg-black/70 text-slate-200">
+                        <span className="font-mono text-[9px] px-1 rounded bg-black/75 text-slate-200">
                           {box.width}×{box.height}
                         </span>
                       </div>
-                      <p className="relative z-10 text-[10px] font-bold text-white truncate bg-black/65 px-1.5 py-0.5 rounded">
+                      <p className="relative z-10 text-[10px] font-bold text-white truncate bg-black/75 px-1.5 py-0.5 rounded pointer-events-none">
                         {cam?.label || cam?.name || box.cameraId}
                       </p>
                     </div>

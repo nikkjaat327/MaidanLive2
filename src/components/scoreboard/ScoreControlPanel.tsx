@@ -42,11 +42,7 @@ import {
   applyCricketAction,
 } from '../../utils/cricketScoring.ts';
 import { CricketScorerConsole } from './CricketScorerConsole.tsx';
-import {
-  KabaddiDetails,
-  applyKabaddiAction,
-  createInitialKabaddiDetails,
-} from '../../utils/kabaddiScoring.ts';
+import { KabaddiScorerConsole } from './kabaddi/KabaddiScorerConsole.tsx';
 import {
   FootballDetails,
   applyFootballAction,
@@ -115,7 +111,7 @@ export function ScoreControlPanel({
   const teamB = stream.teamBName || 'Team B';
   const [matchStatusInput, setMatchStatusInput] = useState(score?.matchStatus || 'Live');
   const scoreUpdateCount = history.filter(
-    (h) => !h.entryType || h.entryType === 'SCORE_UPDATE'
+    (h) => (!h.entryType || h.entryType === 'SCORE_UPDATE') && !h.reverted
   ).length;
   const resultDeclared = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
 
@@ -705,8 +701,8 @@ export function ScoreControlPanel({
         </div>
       </form>
 
-      {/* Advanced Multi-Point & Structured Scorer (non-Cricket sports; Cricket has full Scorer Console below) */}
-      {sport !== 'Cricket' && (
+      {/* Advanced Multi-Point & Structured Scorer (Football / Volleyball / Other; Cricket & Kabaddi have dedicated Consoles) */}
+      {sport !== 'Cricket' && sport !== 'Kabaddi' && (
         <AdvancedEventComposer
           stream={stream}
           score={score}
@@ -734,24 +730,17 @@ export function ScoreControlPanel({
       )}
 
       {sport === 'Kabaddi' && (
-        <KabaddiControls
-          teamA={teamA}
-          teamB={teamB}
-          scoreA={score?.teamAScore ?? 0}
-          scoreB={score?.teamBScore ?? 0}
-          details={{
-            ...createInitialKabaddiDetails(),
-            ...((score?.sportSpecificDetails || {}) as Partial<KabaddiDetails>),
-          }}
-          saving={saving}
-          onApply={(next) =>
-            commitUpdate({
-              teamAScore: next.teamAScore,
-              teamBScore: next.teamBScore,
-              sportSpecificDetails: next.details as unknown as Record<string, unknown>,
-              action: next.label,
-            })
-          }
+        <KabaddiScorerConsole
+          stream={stream}
+          score={score}
+          history={history}
+          players={players}
+          playerStats={playerStats}
+          onScoreChange={onScoreChange}
+          onRefreshHistory={onRefreshHistory}
+          onRefreshStats={onRefreshStats}
+          onError={setError}
+          onSuccess={setSuccessMsg}
         />
       )}
 
@@ -937,279 +926,6 @@ export function ScoreControlPanel({
   );
 }
 
-function KabaddiControls({
-  teamA,
-  teamB,
-  scoreA,
-  scoreB,
-  details,
-  saving,
-  onApply,
-}: {
-  teamA: string;
-  teamB: string;
-  scoreA: number;
-  scoreB: number;
-  details: KabaddiDetails;
-  saving: boolean;
-  onApply: (res: ReturnType<typeof applyKabaddiAction>) => void;
-}) {
-  const [half, setHalf] = useState<KabaddiDetails['half']>(details.half);
-  const [mins, setMins] = useState(String(details.timerMinutes));
-  const [secs, setSecs] = useState(String(details.timerSeconds));
-  const [superRaidNote, setSuperRaidNote] = useState(details.superRaidNote || '');
-  const [isTieBreaker, setIsTieBreaker] = useState(Boolean(details.isTieBreaker));
-  const [tbA, setTbA] = useState(String(details.tieBreakerScoreA || 0));
-  const [tbB, setTbB] = useState(String(details.tieBreakerScoreB || 0));
-
-  useEffect(() => {
-    setHalf(details.half);
-    setMins(String(details.timerMinutes));
-    setSecs(String(details.timerSeconds));
-    setSuperRaidNote(details.superRaidNote || '');
-    setIsTieBreaker(Boolean(details.isTieBreaker));
-    setTbA(String(details.tieBreakerScoreA || 0));
-    setTbB(String(details.tieBreakerScoreB || 0));
-  }, [
-    details.half,
-    details.timerMinutes,
-    details.timerSeconds,
-    details.superRaidNote,
-    details.isTieBreaker,
-    details.tieBreakerScoreA,
-    details.tieBreakerScoreB,
-  ]);
-
-  const renderTeamButtons = (team: 'A' | 'B', name: string) => (
-    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-semibold text-slate-900">{name}</h4>
-        <span className="font-mono text-lg font-bold tabular-nums">
-          {team === 'A' ? scoreA : scoreB}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'raidPoints',
-                points: 1,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
-        >
-          +1 Raid
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'tacklePoints',
-                points: 1,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
-        >
-          +1 Tackle
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'bonusPoints',
-                points: 1,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-        >
-          +1 Bonus
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'superTackles',
-                points: 2,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-        >
-          Super Tackle (+2)
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'superRaids',
-                points: 3,
-                note: `${name} Super Raid (+3)!`,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-sky-600 text-white text-xs font-semibold hover:bg-sky-700"
-        >
-          Super Raid (+3)
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyKabaddiAction(details, scoreA, scoreB, {
-                type: 'ADD_POINTS',
-                team,
-                category: 'allOutPoints',
-                points: 2,
-              })
-            )
-          }
-          className="min-h-[44px] px-3 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700"
-        >
-          All-Out (+2)
-        </button>
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {renderTeamButtons('A', teamA)}
-        {renderTeamButtons('B', teamB)}
-      </div>
-
-      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Half / Stage</label>
-            <select
-              value={half}
-              onChange={(e) => setHalf(e.target.value as KabaddiDetails['half'])}
-              className="min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-            >
-              <option value="1st Half">1st Half</option>
-              <option value="Half Time">Half Time</option>
-              <option value="2nd Half">2nd Half</option>
-              <option value="Extra Time">Extra Time</option>
-              <option value="Tie-Breaker">Tie-Breaker</option>
-              <option value="Full Time">Full Time</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Timer (MM:SS)</label>
-            <div className="flex items-center gap-1.5">
-              <input
-                type="number"
-                min={0}
-                max={99}
-                value={mins}
-                onChange={(e) => setMins(e.target.value)}
-                className="w-16 min-h-[40px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg"
-              />
-              <span>:</span>
-              <input
-                type="number"
-                min={0}
-                max={59}
-                value={secs}
-                onChange={(e) => setSecs(e.target.value)}
-                className="w-16 min-h-[40px] px-2.5 text-sm font-mono border border-slate-300 rounded-lg"
-              />
-            </div>
-          </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Super Raid Callout</label>
-            <input
-              type="text"
-              value={superRaidNote}
-              onChange={(e) => setSuperRaidNote(e.target.value)}
-              placeholder="Optional Super Raid info (clear to hide)"
-              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-            />
-          </div>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() =>
-              onApply(
-                applyKabaddiAction(details, scoreA, scoreB, {
-                  type: 'SET_META',
-                  half,
-                  timerMinutes: Number(mins) || 0,
-                  timerSeconds: Number(secs) || 0,
-                  superRaidNote: superRaidNote.trim(),
-                  isTieBreaker,
-                  tieBreakerScoreA: Number(tbA) || 0,
-                  tieBreakerScoreB: Number(tbB) || 0,
-                })
-              )
-            }
-            className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
-          >
-            Update Clock &amp; Details
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100">
-          <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isTieBreaker}
-              onChange={(e) => setIsTieBreaker(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-            />
-            <span>Tie-Breaker Active</span>
-          </label>
-          {isTieBreaker && (
-            <div className="flex items-center gap-2 text-xs">
-              <span>{teamA}:</span>
-              <input
-                type="number"
-                min={0}
-                value={tbA}
-                onChange={(e) => setTbA(e.target.value)}
-                className="w-16 min-h-[36px] px-2 font-mono border border-slate-300 rounded-lg"
-              />
-              <span>{teamB}:</span>
-              <input
-                type="number"
-                min={0}
-                value={tbB}
-                onChange={(e) => setTbB(e.target.value)}
-                className="w-16 min-h-[36px] px-2 font-mono border border-slate-300 rounded-lg"
-              />
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function FootballControls({
   teamA,

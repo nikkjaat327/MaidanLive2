@@ -31,6 +31,7 @@ import {
   normalizeOrientationMode,
   normalizePreviewFit,
   parseOrientationDegrees,
+  resolveCameraLiveWebUrl,
   resolveCameraOrientationSummary,
 } from '../../utils/obsTransformGeometry.ts';
 import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
@@ -126,23 +127,6 @@ function resolveAutoGridColsClass(count: number, overrideCols: 'auto' | 2 | 3 | 
   return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4';
 }
 
-function buildVdoPreviewUrl(rawUrl?: string, options: { noAudio?: boolean } = {}): string {
-  if (!rawUrl) return '';
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.hostname.includes('vdo.ninja') || parsed.searchParams.has('view')) {
-      parsed.searchParams.set('muted', '1');
-      parsed.searchParams.set('autoplay', '1');
-      if (options.noAudio) {
-        parsed.searchParams.set('noaudio', '1');
-      }
-    }
-    return parsed.toString();
-  } catch {
-    return rawUrl;
-  }
-}
-
 export function CameraPreviewGrid({
   cameras,
   profile,
@@ -193,15 +177,13 @@ export function CameraPreviewGrid({
   );
 
   const hasLiveVdoCameras = useMemo(
-    () => enabledCameras.some((c) => c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl)),
+    () => enabledCameras.some((c) => Boolean(resolveCameraLiveWebUrl(c))),
     [enabledCameras]
   );
 
-  // Show all enabled cameras by default so configured OBS capture sources are immediately visible
+  // Show all enabled cameras by default and default to Live Web Preview
   const [filterMode, setFilterMode] = useState<GridFilterMode>('all');
-  const [previewMode, setPreviewMode] = useState<GridPreviewMode>(() =>
-    hasLiveVdoCameras ? 'live_vdo' : 'snapshots'
-  );
+  const [previewMode, setPreviewMode] = useState<GridPreviewMode>('live_vdo');
   const userSelectedPreviewModeRef = useRef(false);
   const [columnMode, setColumnMode] = useState<'auto' | 2 | 3 | 4>('auto');
   const [pollSeconds, setPollSeconds] = useState<0 | 1 | 2 | 3 | 5 | 10>(2);
@@ -239,9 +221,7 @@ export function CameraPreviewGrid({
     () =>
       previewMode === 'snapshots'
         ? displayedCameras
-        : displayedCameras.filter(
-            (c) => !(c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl))
-          ),
+        : displayedCameras.filter((c) => !resolveCameraLiveWebUrl(c)),
     [previewMode, displayedCameras]
   );
 
@@ -352,6 +332,20 @@ export function CameraPreviewGrid({
               type="button"
               onClick={() => {
                 userSelectedPreviewModeRef.current = true;
+                setPreviewMode('live_vdo');
+              }}
+              className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                previewMode === 'live_vdo'
+                  ? 'bg-[#EA580C] text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Live Web Preview
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                userSelectedPreviewModeRef.current = true;
                 setPreviewMode('snapshots');
               }}
               className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
@@ -361,20 +355,6 @@ export function CameraPreviewGrid({
               }`}
             >
               OBS Snapshots
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                userSelectedPreviewModeRef.current = true;
-                setPreviewMode('live_vdo');
-              }}
-              className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                previewMode === 'live_vdo'
-                  ? 'bg-slate-700 text-white'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Live WebRTC
             </button>
           </div>
 
@@ -521,10 +501,7 @@ export function CameraPreviewGrid({
                 const isMuted = Boolean(
                   cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted
                 );
-                const tileVdoUrl =
-                  cam.sourceType === 'vdoninja' && cam.obsBrowserSourceUrl
-                    ? buildVdoPreviewUrl(cam.obsBrowserSourceUrl, { noAudio: true })
-                    : '';
+                const tileVdoUrl = resolveCameraLiveWebUrl(cam);
                 const showLiveVdo = previewMode === 'live_vdo' && Boolean(tileVdoUrl);
                 const obsTransform =
                   obsTransformLookup.get(cam.obsInputName || '') ||

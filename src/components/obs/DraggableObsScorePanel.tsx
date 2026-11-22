@@ -14,9 +14,20 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import type { LiveScoreData, LiveStreamData } from '../../types/index.ts';
+import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import type { SportOption } from '../../constants/sports.ts';
-import type { OverlayPosition } from '../../utils/overlayConfig.ts';
+import {
+  OVERLAY_MODES,
+  OVERLAY_POSITIONS,
+  OVERLAY_SCALES,
+  OVERLAY_SLIDER_BOUNDS,
+  OverlayMode,
+  OverlayPosition,
+  OverlayScale,
+  PRESET_SCALE_MULTIPLIERS,
+  normalizeOverlayConfig,
+} from '../../utils/overlayConfig.ts';
+import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -35,6 +46,8 @@ interface DraggableObsScorePanelProps {
   stream: LiveStreamData;
   score: LiveScoreData | null;
   overlayPosition?: OverlayPosition;
+  overlayConfig?: BroadcastOverlayConfig;
+  onOverlayConfigChange?: (config: BroadcastOverlayConfig) => void;
   onScoreChange: (score: LiveScoreData) => void;
   onRefresh?: () => void;
   onClose?: () => void;
@@ -86,6 +99,8 @@ export function DraggableObsScorePanel({
   stream,
   score,
   overlayPosition,
+  overlayConfig,
+  onOverlayConfigChange,
   onScoreChange,
   onRefresh,
   onClose,
@@ -111,9 +126,11 @@ export function DraggableObsScorePanel({
   const [hasCustomPos, setHasCustomPos] = useState(false);
   const [pos, setPos] = useState<Point>(() => computeDefaultPosition(overlayPosition, null));
 
-  const [activeTab, setActiveTab] = useState<'manual' | 'events'>('manual');
+  const [activeTab, setActiveTab] = useState<'manual' | 'events' | 'size'>('manual');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const overlaySliderDebounceRef = useRef<number | null>(null);
+  const pendingOverlaySliderRef = useRef<Partial<BroadcastOverlayConfig>>({});
 
   const sport: SportOption = score?.sportType || (stream.gameName as SportOption) || 'Other';
   const nameA = stream.teamAName || 'Team A';
@@ -388,6 +405,70 @@ export function DraggableObsScorePanel({
     });
   }
 
+  useEffect(() => {
+    return () => {
+      if (overlaySliderDebounceRef.current !== null) {
+        window.clearTimeout(overlaySliderDebounceRef.current);
+      }
+    };
+  }, []);
+
+  async function applyOverlayPatch(patch: Partial<BroadcastOverlayConfig>, label?: string) {
+    if (!overlayConfig || !onOverlayConfigChange) return;
+    const prev = overlayConfig;
+    const apiPatch: Partial<BroadcastOverlayConfig> = { ...patch };
+    if (patch.mode === 'hidden') apiPatch.visible = false;
+    else if (patch.mode && patch.visible === undefined) apiPatch.visible = true;
+    if (patch.visible === true && (patch.mode ?? prev.mode) === 'hidden') {
+      apiPatch.mode = 'full';
+    }
+    const next = normalizeOverlayConfig({ ...prev, ...apiPatch });
+    pendingOverlaySliderRef.current = {};
+    onOverlayConfigChange(next);
+    try {
+      setBusy(true);
+      setFeedback(null);
+      const res = await liveStreamService.updateOverlayConfig(stream.id, apiPatch);
+      if (res?.overlayConfig) {
+        onOverlayConfigChange(normalizeOverlayConfig(res.overlayConfig));
+      }
+      setFeedback({ type: 'success', text: label || 'Overlay updated live' });
+    } catch (err) {
+      onOverlayConfigChange(prev);
+      setFeedback({ type: 'error', text: extractApiError(err, 'Failed to update overlay.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleOverlayScaleSlider(val: number) {
+    if (!overlayConfig || !onOverlayConfigChange) return;
+    const next = normalizeOverlayConfig({ ...overlayConfig, customScale: val });
+    pendingOverlaySliderRef.current = { ...pendingOverlaySliderRef.current, customScale: val };
+    onOverlayConfigChange(next);
+    if (overlaySliderDebounceRef.current !== null) {
+      window.clearTimeout(overlaySliderDebounceRef.current);
+    }
+    overlaySliderDebounceRef.current = window.setTimeout(async () => {
+      overlaySliderDebounceRef.current = null;
+      const patchToSend = { ...pendingOverlaySliderRef.current };
+      pendingOverlaySliderRef.current = {};
+      if (Object.keys(patchToSend).length === 0) return;
+      try {
+        setBusy(true);
+        const res = await liveStreamService.updateOverlayConfig(stream.id, patchToSend);
+        if (res?.overlayConfig) {
+          onOverlayConfigChange(normalizeOverlayConfig(res.overlayConfig));
+        }
+        setFeedback({ type: 'success', text: `OBS size ${Math.round(val * 100)}%` });
+      } catch (err) {
+        setFeedback({ type: 'error', text: extractApiError(err, 'Failed to sync OBS size.') });
+      } finally {
+        setBusy(false);
+      }
+    }, 160);
+  }
+
   return (
     <aside
       ref={panelRef}
@@ -465,25 +546,38 @@ export function DraggableObsScorePanel({
             <button
               type="button"
               onClick={() => setActiveTab('manual')}
-              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+              className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
                 activeTab === 'manual'
                   ? 'bg-[#EA580C] text-white'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              Manual Adjust
+              Manual
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('events')}
-              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+              className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
                 activeTab === 'events'
                   ? 'bg-[#EA580C] text-white'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              Quick Events
+              Events
             </button>
+            {overlayConfig && onOverlayConfigChange && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('size')}
+                className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                  activeTab === 'size'
+                    ? 'bg-[#EA580C] text-white'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Size &amp; Pos
+              </button>
+            )}
           </div>
 
           <select
@@ -1149,6 +1243,104 @@ export function DraggableObsScorePanel({
             >
               +1 {shortB}
             </button>
+          </div>
+        )}
+
+        {activeTab === 'size' && overlayConfig && onOverlayConfigChange && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-slate-300">Size Preset</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => applyOverlayPatch({ scale: 'medium', customScale: 1 }, 'Reset OBS size')}
+                  className="text-[10px] font-semibold text-orange-400 hover:text-orange-300"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {OVERLAY_SCALES.map((sc: OverlayScale) => {
+                  const active = overlayConfig.scale === sc;
+                  return (
+                    <button
+                      key={sc}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => applyOverlayPatch({ scale: sc }, `Size: ${sc}`)}
+                      className={`min-h-[32px] rounded-md text-[11px] font-semibold border capitalize ${
+                        active
+                          ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                          : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc} ({Math.round(PRESET_SCALE_MULTIPLIERS[sc] * 100)}%)
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-slate-300">Custom Bar Scale</span>
+                <span className="font-mono font-bold text-[#FB923C]">
+                  {Math.round(overlayConfig.customScale * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={OVERLAY_SLIDER_BOUNDS.customScale.min}
+                max={OVERLAY_SLIDER_BOUNDS.customScale.max}
+                step={OVERLAY_SLIDER_BOUNDS.customScale.step}
+                value={overlayConfig.customScale}
+                aria-label="Custom Bar Scale"
+                onChange={(e) => handleOverlayScaleSlider(Number(e.target.value))}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-[#EA580C]"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <span className="block text-[11px] font-semibold text-slate-300">Position</span>
+                <select
+                  value={overlayConfig.position}
+                  disabled={busy}
+                  onChange={(e) =>
+                    applyOverlayPatch(
+                      { position: e.target.value as OverlayPosition },
+                      `Pos: ${e.target.value}`
+                    )
+                  }
+                  className="w-full min-h-[32px] px-2 text-[11px] font-semibold rounded-md border border-slate-700 bg-slate-900 text-slate-200"
+                >
+                  {OVERLAY_POSITIONS.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <span className="block text-[11px] font-semibold text-slate-300">Mode</span>
+                <select
+                  value={overlayConfig.visible ? overlayConfig.mode : 'hidden'}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const m = e.target.value as OverlayMode;
+                    applyOverlayPatch({ mode: m, visible: m !== 'hidden' }, `Mode: ${m}`);
+                  }}
+                  className="w-full min-h-[32px] px-2 text-[11px] font-semibold rounded-md border border-slate-700 bg-slate-900 text-slate-200"
+                >
+                  {OVERLAY_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {m.replace('_', ' ').toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
         )}
 

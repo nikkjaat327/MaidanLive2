@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
-import type { OverlayPosition } from '../../utils/overlayConfig.ts';
+import { computeOverlayMetrics, type OverlayPosition } from '../../utils/overlayConfig.ts';
 import { resolveObsTheme } from './obsTheme.ts';
 import { CricketObsOverlay } from './CricketObsOverlay.tsx';
 import { FootballObsOverlay } from './FootballObsOverlay.tsx';
@@ -93,18 +93,19 @@ export function HotstarBroadcastOverlay({
     }
   };
 
+  const metrics = computeOverlayMetrics(config, isPortrait);
   const slideOffsetY = position.startsWith('top') ? -14 : 14;
-  const containerPaddingClass = isPortrait
-    ? isFullWidthBar
-      ? 'px-0 py-3'
-      : 'p-3'
-    : 'px-4 py-7';
+  const isPortraitEdgeToEdge = isPortrait && isFullWidthBar && metrics.barWidthPct >= 98;
+  const containerPaddingClass = isPortraitEdgeToEdge
+    ? 'px-0 py-3'
+    : isPortrait
+      ? 'p-3'
+      : 'px-4 py-7';
 
-  const wrapperWidthClass = isFullWidthBar
-    ? isPortrait
-      ? 'w-full max-w-full'
-      : 'w-[90%] max-w-[90%]'
-    : 'w-auto max-w-[92%]';
+  const wrapperWidthClass = isFullWidthBar ? 'w-full' : 'w-auto max-w-[95%]';
+  const wrapperStyle = isFullWidthBar
+    ? { width: `${metrics.barWidthPct}%`, maxWidth: `${metrics.barWidthPct}%` }
+    : undefined;
 
   return (
     <div
@@ -118,7 +119,8 @@ export function HotstarBroadcastOverlay({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: slideOffsetY }}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-            className={`pointer-events-auto min-w-0 ${wrapperWidthClass}`}
+            style={wrapperStyle}
+            className={`pointer-events-auto min-w-0 transition-[width,max-width] duration-200 ease-out ${wrapperWidthClass}`}
           >
             {renderSportGraphic()}
           </motion.div>

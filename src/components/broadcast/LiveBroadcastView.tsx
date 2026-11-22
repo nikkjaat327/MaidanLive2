@@ -59,6 +59,11 @@ import { ShareButton } from '../common/ShareButton.tsx';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { formatTimestamp } from '../scoreboard/MatchHighlightsManager.tsx';
 import { buildMatchUrl } from '../../utils/shareUrl.ts';
+import {
+  KabaddiDetails,
+  normalizeKabaddiDetails,
+} from '../../utils/kabaddiScoring.ts';
+import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -104,7 +109,16 @@ function buildGoogleMapsUrl(venue: VenueData | null, fallbackLocation?: string):
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
-type DetailTab = 'commentary' | 'scorecard' | 'stats' | 'lineups' | 'chat' | 'highlights' | 'fixtures' | 'info';
+type DetailTab =
+  | 'commentary'
+  | 'scorecard'
+  | 'raids'
+  | 'stats'
+  | 'lineups'
+  | 'chat'
+  | 'highlights'
+  | 'fixtures'
+  | 'info';
 
 export function LiveBroadcastView({
   stream,
@@ -130,7 +144,41 @@ export function LiveBroadcastView({
   const canPlayVideo = resolvedAuth && !stream.playbackLocked;
   const returnPath = `${location.pathname}${location.search}`;
 
-  const broadcast = useMemo(() => normalizeBroadcast(stream, score), [stream, score]);
+  const kabaddiDetails = useMemo<KabaddiDetails | null>(() => {
+    const sport = score?.sportType || stream.gameName;
+    if (sport !== 'Kabaddi') return null;
+    return normalizeKabaddiDetails(score?.sportSpecificDetails);
+  }, [score?.sportType, score?.sportSpecificDetails, stream.gameName]);
+
+  const [kabaddiNowMs, setKabaddiNowMs] = useState<number>(() => Date.now());
+  const kabaddiClockRunning = Boolean(
+    kabaddiDetails &&
+      !kabaddiDetails.matchCompleted &&
+      (kabaddiDetails.clock.status === 'RUNNING' ||
+        kabaddiDetails.clock.status === 'EXTRA_TIME' ||
+        kabaddiDetails.clock.status === 'BREAK' ||
+        kabaddiDetails.clock.timeoutActive ||
+        kabaddiDetails.clock.raidRunning ||
+        kabaddiDetails.doOrDie.active)
+  );
+
+  useEffect(() => {
+    if (!kabaddiClockRunning) return;
+    setKabaddiNowMs(Date.now());
+    const id = window.setInterval(() => setKabaddiNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [kabaddiClockRunning]);
+
+  const broadcast = useMemo(
+    () => normalizeBroadcast(stream, score, kabaddiNowMs),
+    [stream, score, kabaddiNowMs]
+  );
+
+  const kabaddiActiveRaids = useMemo(
+    () => (kabaddiDetails ? kabaddiDetails.raidTimeline.filter((r) => !r.reverted) : []),
+    [kabaddiDetails]
+  );
+
   const storageKey = `maidanlive_sb_vis_${broadcast.id || broadcast.youtubeVideoId}`;
 
   const [scoreboardVisible, setScoreboardVisible] = useState<boolean>(() => {
@@ -155,6 +203,98 @@ export function LiveBroadcastView({
   const [activeTab, setActiveTab] = useState<DetailTab>('commentary');
   const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>([]);
   const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>([]);
+
+  const kabaddiStatRows = useMemo(() => {
+    if (!kabaddiDetails) return [];
+    const byPlayerId = new Map<string, PlayerMatchStatRecord>();
+    for (const st of matchStats) {
+      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
+      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
+      if (pId) byPlayerId.set(pId, st);
+    }
+    const rows: Array<{
+      id: string;
+      playerId: string;
+      name: string;
+      jersey?: number | string;
+      teamName: string;
+      isMvp: boolean;
+      raidPoints: number;
+      tacklePoints: number;
+      bonusPoints: number;
+      superRaids: number;
+      superTackles: number;
+      outCount: number;
+      revivals: number;
+    }> = [];
+    const seenIds = new Set<string>();
+    const appendSide = (players: KabaddiDetails['courtPlayersA'], teamName: string) => {
+      for (const cp of players) {
+        const db = byPlayerId.get(cp.playerId);
+        if (cp.playerId) seenIds.add(cp.playerId);
+        const raidPoints = Math.max(cp.stats.raidPoints || 0, db?.raidPoints || 0);
+        const tacklePoints = Math.max(cp.stats.tacklePoints || 0, db?.tacklePoints || 0);
+        const bonusPoints = Math.max(cp.stats.bonusPoints || 0, db?.bonusPoints || 0);
+        const superRaids = cp.stats.superRaids || 0;
+        const superTackles = cp.stats.superTackles || 0;
+        const outCount = cp.stats.outCount || 0;
+        const revivals = cp.stats.revivals || 0;
+        const hasActivity =
+          raidPoints > 0 ||
+          tacklePoints > 0 ||
+          bonusPoints > 0 ||
+          superRaids > 0 ||
+          superTackles > 0 ||
+          outCount > 0 ||
+          revivals > 0 ||
+          (cp.stats.raidsAttempted || 0) > 0 ||
+          Boolean(db);
+        if (!hasActivity) continue;
+        rows.push({
+          id: cp.playerId || `${teamName}-${cp.name}`,
+          playerId: cp.playerId,
+          name: cp.name,
+          jersey: cp.jerseyNumber,
+          teamName,
+          isMvp: Boolean(db?.isMvp),
+          raidPoints,
+          tacklePoints,
+          bonusPoints,
+          superRaids,
+          superTackles,
+          outCount,
+          revivals,
+        });
+      }
+    };
+    appendSide(kabaddiDetails.courtPlayersA, stream.teamAName || 'Team A');
+    appendSide(kabaddiDetails.courtPlayersB, stream.teamBName || 'Team B');
+    for (const st of matchStats) {
+      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
+      const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
+      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
+      if (pId && seenIds.has(pId)) continue;
+      rows.push({
+        id: st.id || pId || `stat_${rows.length}`,
+        playerId: pId,
+        name: pObj?.name || 'Player',
+        teamName: tObj?.shortName || tObj?.name || '—',
+        isMvp: Boolean(st.isMvp),
+        raidPoints: st.raidPoints || 0,
+        tacklePoints: st.tacklePoints || 0,
+        bonusPoints: st.bonusPoints || 0,
+        superRaids: 0,
+        superTackles: 0,
+        outCount: 0,
+        revivals: 0,
+      });
+    }
+    return rows.sort(
+      (a, b) =>
+        b.raidPoints + b.tacklePoints + b.bonusPoints - (a.raidPoints + a.tacklePoints + a.bonusPoints)
+    );
+  }, [kabaddiDetails, matchStats, stream.teamAName, stream.teamBName]);
+
   const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>({
     teamA: [],
     teamB: [],
@@ -686,6 +826,11 @@ export function LiveBroadcastView({
         <BroadcastSportStrip broadcast={broadcast} />
         <ScoreboardSummary stream={stream} score={score} variant="detail" />
         <BroadcastResultBar broadcast={broadcast} />
+        {broadcast.sport === 'Kabaddi' && kabaddiDetails?.matchCompleted && (
+          <div className="flex justify-center">
+            <KabaddiWinnerScreen inline stream={stream} score={score} details={kabaddiDetails} />
+          </div>
+        )}
 
         {/* Match Header & Quick Actions */}
         <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
@@ -846,7 +991,16 @@ export function LiveBroadcastView({
             ...(broadcast.sport === 'Cricket'
               ? [{ id: 'scorecard' as const, label: 'Scorecard' }]
               : []),
-            { id: 'stats' as const, label: `Player Stats (${matchStats.length})` },
+            ...(broadcast.sport === 'Kabaddi' &&
+            kabaddiDetails?.viewerDisplaySettings.showRaidHistory !== false
+              ? [{ id: 'raids' as const, label: `Raid History (${kabaddiActiveRaids.length})` }]
+              : []),
+            {
+              id: 'stats' as const,
+              label: `Player Stats (${
+                broadcast.sport === 'Kabaddi' ? kabaddiStatRows.length : matchStats.length
+              })`,
+            },
             {
               id: 'lineups' as const,
               label: `Lineups (${lineupPlayers.teamA.length + lineupPlayers.teamB.length})`,
@@ -886,12 +1040,153 @@ export function LiveBroadcastView({
           <CricketScorecardPanel stream={stream} score={score} />
         )}
 
+        {activeTab === 'raids' && broadcast.sport === 'Kabaddi' && kabaddiDetails && (
+          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-display text-sm font-bold text-slate-900">
+                Kabaddi Raid & Action Timeline
+              </h2>
+              <span className="font-mono text-xs text-slate-500">
+                {kabaddiActiveRaids.length} events
+              </span>
+            </div>
+            {kabaddiActiveRaids.length === 0 ? (
+              <p className="text-sm text-slate-500 py-4 text-center">
+                No raids or match events logged yet.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {kabaddiActiveRaids.map((raid) => {
+                  const sideName =
+                    raid.team === 'A'
+                      ? stream.teamAName || 'Team A'
+                      : stream.teamBName || 'Team B';
+                  return (
+                    <div
+                      key={raid.id}
+                      className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-bold text-slate-500">
+                            {raid.half}
+                            {raid.clockText ? ` · ${raid.clockText}` : ''}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-semibold">
+                            {sideName}
+                          </span>
+                          <span className="font-bold text-slate-900">
+                            {raid.eventType.replace(/_/g, ' ')}
+                          </span>
+                          {raid.isDoOrDie && (
+                            <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-bold text-[10px]">
+                              DO OR DIE
+                            </span>
+                          )}
+                          {raid.isSuperRaid && (
+                            <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-bold text-[10px]">
+                              SUPER RAID
+                            </span>
+                          )}
+                          {raid.isSuperTackle && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold text-[10px]">
+                              SUPER TACKLE
+                            </span>
+                          )}
+                          {raid.isAllOut && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">
+                              ALL OUT
+                            </span>
+                          )}
+                        </div>
+                        {raid.description && (
+                          <p className="text-slate-600">{raid.description}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 font-mono tabular-nums">
+                        {raid.points !== 0 && (
+                          <span className="px-2 py-0.5 rounded bg-orange-50 text-[#EA580C] font-bold">
+                            +{raid.points}
+                          </span>
+                        )}
+                        <span className="text-slate-700 font-bold">{raid.scoreSnapshot}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'stats' && (
           <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
             <h2 className="font-display text-sm font-bold text-slate-900">
               Match Player Statistics
             </h2>
-            {matchStats.length === 0 ? (
+            {broadcast.sport === 'Kabaddi' && kabaddiDetails ? (
+              !kabaddiDetails.viewerDisplaySettings.showPlayerStats ? (
+                <p className="text-sm text-slate-500 py-4 text-center">
+                  Player statistics are disabled by the match organizer.
+                </p>
+              ) : kabaddiStatRows.length === 0 ? (
+                <p className="text-sm text-slate-500 py-4 text-center">
+                  No player statistics recorded for this Kabaddi match yet.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                        <th className="py-2.5 px-3">Player</th>
+                        <th className="py-2.5 px-3">Team</th>
+                        <th className="py-2.5 px-3 font-mono">Raid</th>
+                        <th className="py-2.5 px-3 font-mono">Tackle</th>
+                        <th className="py-2.5 px-3 font-mono">Bonus</th>
+                        <th className="py-2.5 px-3 font-mono">SR/ST</th>
+                        <th className="py-2.5 px-3 font-mono">Out/Rev</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {kabaddiStatRows.map((row) => (
+                        <tr key={row.id} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3 font-semibold text-slate-900">
+                            {row.playerId && !row.playerId.startsWith('kab_') ? (
+                              <Link to={`/players/${row.playerId}`} className="hover:text-[#EA580C]">
+                                {row.jersey ? `#${row.jersey} ` : ''}
+                                {row.name}
+                              </Link>
+                            ) : (
+                              <span>
+                                {row.jersey ? `#${row.jersey} ` : ''}
+                                {row.name}
+                              </span>
+                            )}
+                            {row.isMvp && (
+                              <span className="ml-1.5 text-[10px] font-bold text-amber-700">
+                                POTM
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">{row.teamName}</td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums font-bold">
+                            {row.raidPoints}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums">{row.tacklePoints}</td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums">{row.bonusPoints}</td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums">
+                            {row.superRaids}/{row.superTackles}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums">
+                            {row.outCount}/{row.revivals}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : matchStats.length === 0 ? (
               <p className="text-sm text-slate-500 py-4 text-center">
                 No verified player statistics recorded for this match yet.
               </p>

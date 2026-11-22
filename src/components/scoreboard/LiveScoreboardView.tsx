@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Clock, Trophy } from 'lucide-react';
 import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
@@ -8,7 +9,13 @@ import {
   getTotalExtras,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
-import { KabaddiDetails, createInitialKabaddiDetails } from '../../utils/kabaddiScoring.ts';
+import {
+  KabaddiDetails,
+  computeEffectiveKabaddiClock,
+  normalizeKabaddiDetails,
+} from '../../utils/kabaddiScoring.ts';
+import { KabaddiCourtDots } from './kabaddi/KabaddiCourtDots.tsx';
+import { KabaddiAnimations } from './kabaddi/KabaddiAnimations.tsx';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
 import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
 
@@ -104,13 +111,14 @@ export function LiveScoreboardView({
           />
         ) : sport === 'Kabaddi' ? (
           <KabaddiBoard
+            streamId={stream.id}
             teamA={teamA}
             teamB={teamB}
             logoA={stream.teamALogo}
             logoB={stream.teamBLogo}
             scoreA={score?.teamAScore ?? 0}
             scoreB={score?.teamBScore ?? 0}
-            details={{ ...createInitialKabaddiDetails(), ...(details as Partial<KabaddiDetails>) }}
+            details={normalizeKabaddiDetails(details as Partial<KabaddiDetails>)}
           />
         ) : sport === 'Football' ? (
           <FootballBoard
@@ -326,6 +334,7 @@ function CricketBoard({
 }
 
 function KabaddiBoard({
+  streamId,
   teamA,
   teamB,
   logoA,
@@ -334,6 +343,7 @@ function KabaddiBoard({
   scoreB,
   details,
 }: {
+  streamId: string;
   teamA: string;
   teamB: string;
   logoA: string;
@@ -342,30 +352,98 @@ function KabaddiBoard({
   scoreB: number;
   details: KabaddiDetails;
 }) {
-  const timer = `${String(details.timerMinutes).padStart(2, '0')}:${String(
-    details.timerSeconds
-  ).padStart(2, '0')}`;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const eff = computeEffectiveKabaddiClock(details, nowMs);
+  const vis = details.viewerDisplaySettings;
 
   return (
     <div className="space-y-4">
+      <KabaddiAnimations
+        streamId={streamId}
+        teamAName={teamA}
+        teamBName={teamB}
+        doOrDie={details.doOrDie}
+        doOrDieVisible={eff.doOrDieVisible}
+        doOrDieRemainingSec={eff.doOrDieRemainingSec}
+        lastAllOut={details.lastAllOut}
+        allOutDurationSec={details.rules.allOutBannerDurationSec}
+        timeoutActive={details.clock.timeoutActive}
+        timeoutTeam={details.clock.timeoutTeam}
+        timeoutRemainingSec={eff.timeoutRemainingSec}
+        displaySettings={vis}
+        compact
+      />
+
       <div className="grid grid-cols-3 items-center gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
-          <TeamAvatar name={teamA} logoUrl={logoA} />
-          <span className="text-sm sm:text-base font-semibold truncate">{teamA}</span>
+          {vis.showTeamLogos && <TeamAvatar name={teamA} logoUrl={logoA} />}
+          <div className="min-w-0">
+            {vis.showTeamNames && <p className="text-sm sm:text-base font-semibold truncate">{teamA}</p>}
+            {details.activeRaidingTeam === 'A' && !details.matchCompleted && (
+              <p className="text-[10px] font-bold uppercase tracking-wider text-orange-400">
+                Raiding
+              </p>
+            )}
+          </div>
         </div>
         <div className="text-center font-mono tabular-nums">
-          <div className="text-3xl sm:text-4xl font-bold tracking-tight">
-            {scoreA} <span className="text-slate-600">-</span> {scoreB}
-          </div>
-          <div className="text-xs text-emerald-400 mt-1">
-            {details.half} · {timer}
+          {vis.showScores && (
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+              {scoreA} <span className="text-slate-600">-</span> {scoreB}
+            </div>
+          )}
+          <div className="text-xs text-emerald-400 mt-1 flex items-center justify-center gap-1.5 flex-wrap">
+            {vis.showHalf && <span>{details.clock.halfLabel || details.half}</span>}
+            {vis.showMatchTimer && <span>· {eff.formattedClock}</span>}
+            {vis.showRaidTimer && details.clock.raidTimerEnabled && !details.matchCompleted && (
+              <span className="text-orange-300 font-bold">
+                · Raid {String(eff.raidRemainingSec).padStart(2, '0')}s
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center justify-end gap-2.5 min-w-0">
-          <span className="text-sm sm:text-base font-semibold truncate text-right">{teamB}</span>
-          <TeamAvatar name={teamB} logoUrl={logoB} />
+          <div className="min-w-0 text-right">
+            {vis.showTeamNames && <p className="text-sm sm:text-base font-semibold truncate">{teamB}</p>}
+            {details.activeRaidingTeam === 'B' && !details.matchCompleted && (
+              <p className="text-[10px] font-bold uppercase tracking-wider text-orange-400">
+                Raiding
+              </p>
+            )}
+          </div>
+          {vis.showTeamLogos && <TeamAvatar name={teamB} logoUrl={logoB} />}
         </div>
       </div>
+
+      {vis.showPlayersOnCourtDots && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+          <KabaddiCourtDots
+            players={details.courtPlayersA}
+            maxPlayers={details.rules.playersPerSide}
+            teamName={teamA}
+            side="A"
+            compact
+            showNames={vis.showPlayerNames}
+            showNumbers={vis.showJerseyNumbers}
+          />
+          <div className="sm:flex sm:justify-end">
+            <KabaddiCourtDots
+              players={details.courtPlayersB}
+              maxPlayers={details.rules.playersPerSide}
+              teamName={teamB}
+              side="B"
+              compact
+              showNames={vis.showPlayerNames}
+              showNumbers={vis.showJerseyNumbers}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-300">
         <div className="space-y-1">

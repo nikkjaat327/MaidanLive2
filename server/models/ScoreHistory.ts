@@ -2,7 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
 
-export type ScoreHistoryEntryType = 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION';
+export type ScoreHistoryEntryType = 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION' | 'UNDO';
 
 export interface IScoreHistory extends Document {
   liveStreamId: mongoose.Types.ObjectId;
@@ -41,7 +41,7 @@ const scoreHistorySchema = new Schema<IScoreHistory>(
     },
     entryType: {
       type: String,
-      enum: ['SCORE_UPDATE', 'COMMENTARY', 'RESULT', 'CORRECTION'],
+      enum: ['SCORE_UPDATE', 'COMMENTARY', 'RESULT', 'CORRECTION', 'UNDO'],
       default: 'SCORE_UPDATE',
     },
     sportType: { type: String, trim: true, default: '' },

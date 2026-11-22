@@ -540,7 +540,7 @@ export async function canManageStream(
   }
   if (user.role === 'SCORER') {
     if (!user.permissions?.manageScores) return false;
-    const stream = await LiveStream.findById(streamId);
+    const stream = await findDocByAnyId(LiveStream, streamId);
     if (
       stream &&
       (stream.authorizedScorerId?.toString() === user._id.toString() ||

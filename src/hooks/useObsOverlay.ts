@@ -15,6 +15,7 @@ export function useObsOverlay(matchId?: string) {
 
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const lastSequenceRef = useRef<number>(0);
+  const lastBootIdRef = useRef<string | null>(null);
 
   const fetchOverlay = useCallback(async () => {
     if (!matchId) return;
@@ -34,6 +35,7 @@ export function useObsOverlay(matchId?: string) {
   useEffect(() => {
     seenEventIdsRef.current.clear();
     lastSequenceRef.current = 0;
+    lastBootIdRef.current = null;
     if (!matchId) {
       setStream(null);
       setScore(null);
@@ -57,6 +59,10 @@ export function useObsOverlay(matchId?: string) {
           if (first) seenEventIdsRef.current.delete(first);
         }
       }
+      if (payload?.serverBootId && payload.serverBootId !== lastBootIdRef.current) {
+        lastBootIdRef.current = payload.serverBootId;
+        lastSequenceRef.current = 0;
+      }
       if (enforceOrder && typeof payload?.sequence === 'number') {
         if (payload.sequence < lastSequenceRef.current) return false;
         lastSequenceRef.current = payload.sequence;
@@ -64,15 +70,11 @@ export function useObsOverlay(matchId?: string) {
       return true;
     };
 
-    let hasConnectedBefore = socket.connected;
-
     const handleConnect = () => {
       setConnected(true);
+      lastSequenceRef.current = 0;
       socket.emit('match:join', matchId);
-      if (hasConnectedBefore) {
-        fetchOverlay();
-      }
-      hasConnectedBefore = true;
+      fetchOverlay();
     };
 
     const handleDisconnect = () => {
@@ -135,6 +137,10 @@ export function useObsOverlay(matchId?: string) {
     socket.on('score:updated', handleScorePayload);
     socket.on('score:event:created', handleScorePayload);
     socket.on('score:event:corrected', handleScorePayload);
+    socket.on('kabaddi:state', handleScorePayload);
+    socket.on('kabaddi:timer', handleScorePayload);
+    socket.on('kabaddi:settings_updated', handleScorePayload);
+    socket.on('kabaddi:match_completed', handleScorePayload);
     socket.on('cricket:innings_completed', handleScorePayload);
     socket.on('cricket:second_innings_started', handleScorePayload);
     socket.on('cricket:match_completed', handleScorePayload);
@@ -153,6 +159,10 @@ export function useObsOverlay(matchId?: string) {
       socket.off('score:updated', handleScorePayload);
       socket.off('score:event:created', handleScorePayload);
       socket.off('score:event:corrected', handleScorePayload);
+      socket.off('kabaddi:state', handleScorePayload);
+      socket.off('kabaddi:timer', handleScorePayload);
+      socket.off('kabaddi:settings_updated', handleScorePayload);
+      socket.off('kabaddi:match_completed', handleScorePayload);
       socket.off('cricket:innings_completed', handleScorePayload);
       socket.off('cricket:second_innings_started', handleScorePayload);
       socket.off('cricket:match_completed', handleScorePayload);
@@ -168,12 +178,13 @@ export function useObsOverlay(matchId?: string) {
     };
   }, [matchId, fetchOverlay]);
 
-  // Fallback polling only if socket is disconnected
+  // Reliable background reconciliation polling so OBS Browser Sources never drift even if WebSocket is blocked
   useEffect(() => {
-    if (!matchId || connected) return;
+    if (!matchId) return;
+    const intervalMs = connected ? 4000 : 2500;
     const timer = window.setInterval(() => {
       fetchOverlay();
-    }, 6000);
+    }, intervalMs);
     return () => window.clearInterval(timer);
   }, [matchId, connected, fetchOverlay]);
 

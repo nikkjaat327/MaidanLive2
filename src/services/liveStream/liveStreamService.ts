@@ -163,7 +163,13 @@ export const liveStreamService = {
       stream: LiveStreamData;
       score: LiveScoreData | null;
       overlayConfig: BroadcastOverlayConfig;
-    }>(`/live/${id}/overlay`);
+    }>(`/live/${id}/overlay`, {
+      params: { _t: Date.now() },
+      headers: {
+        'Cache-Control': 'no-cache, no-store',
+        Pragma: 'no-cache',
+      },
+    });
     return data;
   },
 

@@ -201,4 +201,84 @@ export const scoreboardService = {
     }>(`/live/${streamId}/result`, payload);
     return data;
   },
+
+  async recordKabaddiEvent(
+    streamId: string,
+    payload: {
+      clientEventId?: string;
+      action: Record<string, unknown>;
+      allowPostCompletionOverride?: boolean;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+    duplicatePrevented?: boolean;
+    triggeredDoOrDie?: Record<string, unknown> | null;
+    triggeredAllOut?: Record<string, unknown> | null;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/kabaddi/event`, payload);
+    return data;
+  },
+
+  async controlKabaddiClock(
+    streamId: string,
+    command: Record<string, unknown>
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+    serverNowIso?: string;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/kabaddi/clock`, { command });
+    return data;
+  },
+
+  async saveKabaddiSettings(
+    streamId: string,
+    payload: {
+      rules?: Record<string, unknown>;
+      scorerSettings?: Record<string, unknown>;
+      viewerDisplaySettings?: Record<string, unknown>;
+      resetRulesDefaults?: boolean;
+      resetScorerDefaults?: boolean;
+      resetViewerDefaults?: boolean;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+  }> {
+    const { data } = await adminApi.patch(`/live/${streamId}/kabaddi/settings`, payload);
+    return data;
+  },
+
+  async completeKabaddiMatch(
+    streamId: string,
+    payload?: {
+      forfeitTeam?: 'A' | 'B' | '';
+      forfeitReason?: string;
+      goldenRaidWinner?: 'A' | 'B' | '';
+      allowDraw?: boolean;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/kabaddi/complete`, payload || {});
+    return data;
+  },
+
+  async reopenKabaddiMatch(
+    streamId: string,
+    reason?: string
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/kabaddi/reopen`, { reason });
+    return data;
+  },
 };
+
