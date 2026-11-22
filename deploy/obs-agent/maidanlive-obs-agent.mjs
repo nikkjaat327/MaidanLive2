@@ -29,6 +29,7 @@ const APPROVED_COMMANDS = new Set([
   'reconnect_input',
   'get_scene_items',
   'set_scene_item_enabled',
+  'get_input_list',
   'reconnect_obs',
 ]);
 
@@ -210,6 +211,7 @@ async function emitObsSnapshot() {
       connectionStatus: obsConnecting ? 'CONNECTING' : lastError ? 'ERROR' : 'DISCONNECTED',
       lastError,
       obsScenes: [],
+      obsInputs: [],
       activeObsScene: '',
       obsStreamActive: false,
     });
@@ -217,15 +219,26 @@ async function emitObsSnapshot() {
   }
 
   try {
-    const [ver, sceneRes, streamRes, recordRes, statsRes] = await Promise.all([
+    const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
       obs.call('GetVersion'),
       obs.call('GetSceneList'),
+      obs.call('GetInputList').catch(() => ({ inputs: [] })),
       obs
         .call('GetStreamStatus')
         .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
       obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
       obs.call('GetStats').catch(() => null),
     ]);
+
+    const obsInputs = Array.isArray(inputRes?.inputs)
+      ? inputRes.inputs
+          .map((inp) => ({
+            inputName: String(inp.inputName || '').trim(),
+            inputKind: String(inp.inputKind || '').trim(),
+            unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+          }))
+          .filter((inp) => Boolean(inp.inputName))
+      : [];
 
     socket.emit('agent:obs_state', {
       connectionStatus: 'CONNECTED',
@@ -236,6 +249,7 @@ async function emitObsSnapshot() {
       obsScenes: Array.isArray(sceneRes.scenes)
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
         : [],
+      obsInputs,
       obsStreamActive: Boolean(streamRes.outputActive),
       obsStreamTimecode: String(streamRes.outputTimecode || ''),
       obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
@@ -425,6 +439,7 @@ async function handleCommand(command, payload) {
       }
     }
 
+    const appliedBoxItems = [];
     for (const box of boxes) {
       if (!box.inputName) continue;
       const itemId = await ensureSceneAndInput(
@@ -448,7 +463,19 @@ async function handleCommand(command, payload) {
             boundsHeight: Math.max(64, Number(box.height) || 360),
           },
         });
+        appliedBoxItems.push({ itemId, slotIndex: Number(box.slotIndex) || 0 });
       }
+    }
+
+    appliedBoxItems.sort((a, b) => a.slotIndex - b.slotIndex);
+    for (let idx = 0; idx < appliedBoxItems.length; idx += 1) {
+      await obs
+        .call('SetSceneItemIndex', {
+          sceneName,
+          sceneItemId: appliedBoxItems[idx].itemId,
+          sceneItemIndex: idx,
+        })
+        .catch(() => {});
     }
 
     if (payload.scoreboardOverlay?.sourceName) {
@@ -503,17 +530,43 @@ async function handleCommand(command, payload) {
     };
   }
 
+  if (command === 'get_input_list') {
+    const inputsRes = await obs.call('GetInputList').catch(() => ({ inputs: [] }));
+    const inputs = Array.isArray(inputsRes?.inputs)
+      ? inputsRes.inputs
+          .map((inp) => ({
+            inputName: String(inp.inputName || '').trim(),
+            inputKind: String(inp.inputKind || '').trim(),
+            unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+          }))
+          .filter((inp) => Boolean(inp.inputName))
+      : [];
+    return { inputs };
+  }
+
   if (command === 'screenshot') {
     const sourceName = String(payload.sourceName || '').trim();
     if (!sourceName) throw new Error('sourceName is required.');
-    const res = await obs.call('GetSourceScreenshot', {
-      sourceName,
-      imageFormat: 'jpeg',
-      imageWidth: 640,
-      imageHeight: 360,
-      imageCompressionQuality: 70,
-    });
-    return { imageData: res.imageData };
+    const fallbacks = Array.isArray(payload.fallbackSourceNames)
+      ? payload.fallbackSourceNames.map((n) => String(n || '').trim()).filter(Boolean)
+      : [];
+    const candidates = Array.from(new Set([sourceName, ...fallbacks]));
+    let lastErr = null;
+    for (const candidate of candidates) {
+      try {
+        const res = await obs.call('GetSourceScreenshot', {
+          sourceName: candidate,
+          imageFormat: 'jpeg',
+          imageWidth: 640,
+          imageHeight: 360,
+          imageCompressionQuality: 70,
+        });
+        return { imageData: res.imageData };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error(`Unable to capture screenshot for "${sourceName}".`);
   }
 
   if (command === 'start_stream') {
@@ -683,6 +736,9 @@ obs.on('SceneListChanged', () => {
   logInfo('OBS scene list updated — syncing scenes to MaidanLive...');
   emitObsSnapshot().catch(() => {});
 });
+obs.on('InputCreated', () => emitObsSnapshot().catch(() => {}));
+obs.on('InputRemoved', () => emitObsSnapshot().catch(() => {}));
+obs.on('InputNameChanged', () => emitObsSnapshot().catch(() => {}));
 obs.on('StreamStateChanged', (ev) => {
   logInfo(`OBS stream output state: ${ev?.outputActive ? 'LIVE STREAMING' : 'STOPPED'}`);
   emitObsSnapshot().catch(() => {});

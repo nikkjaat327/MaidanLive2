@@ -12,10 +12,11 @@ import type {
   ObsBridgePairingResponse,
   ObsBridgeTokenResponse,
   ObsControllerProfileData,
+  ObsDiscoveredInput,
   ObsSceneItemData,
   ObsStudioPayload,
 } from '../../types/obs.ts';
-import type { ObsLayoutType } from '../../utils/obsLayoutGeometry.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../../utils/obsLayoutGeometry.ts';
 import type { StreamingProvider } from '../../types/index.ts';
 
 export const obsStudioService = {
@@ -403,12 +404,34 @@ export const obsStudioService = {
       layoutType: ObsLayoutType;
       cameraIds: string[];
       mainCameraId?: string;
+      pipPosition?: PipPosition;
+      pipSize?: PipSize;
       sceneName?: string;
       includeScoreboardOverlay?: boolean;
       override?: boolean;
     }
   ) {
     const { data } = await adminApi.post(`/obs/matches/${matchId}/layouts/apply`, payload);
+    return data;
+  },
+
+  async listObsInputs(matchId: string): Promise<{ ok: boolean; inputs: ObsDiscoveredInput[] }> {
+    const { data } = await adminApi.get(`/obs/matches/${matchId}/obs-inputs`);
+    return data;
+  },
+
+  async mapCameraSources(
+    matchId: string,
+    mappings: Array<{
+      cameraId?: string;
+      obsInputName: string;
+      displayName: string;
+      obsSceneName?: string;
+      inputKind?: string;
+      isCamera: boolean;
+    }>
+  ) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/map-sources`, { mappings });
     return data;
   },
 
@@ -421,6 +444,8 @@ export const obsStudioService = {
       layoutType: ObsLayoutType;
       cameraIds: string[];
       mainCameraId?: string;
+      pipPosition?: PipPosition;
+      pipSize?: PipSize;
       includeScoreboardOverlay?: boolean;
       overlayMode?: string;
     }
@@ -496,9 +521,13 @@ export const obsStudioService = {
 
   async capturePreview(
     matchId: string,
-    sourceName: string
+    sourceName: string,
+    fallbackSourceNames: string[] = []
   ): Promise<{ ok: boolean; sourceName: string; imageData: string }> {
-    const { data } = await adminApi.post(`/obs/matches/${matchId}/preview`, { sourceName });
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/preview`, {
+      sourceName,
+      ...(fallbackSourceNames.length > 0 ? { fallbackSourceNames } : {}),
+    });
     return data;
   },
 

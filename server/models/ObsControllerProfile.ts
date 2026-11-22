@@ -10,9 +10,16 @@ export type MultiCameraLayoutType =
   | 'SPLIT_2_V'
   | 'SPLIT_3'
   | 'GRID_4'
+  | 'PIP'
   | 'MAIN_PLUS_SECONDARY'
   | 'DYNAMIC_GRID'
   | 'SPORT_BROADCAST';
+
+export interface IObsDiscoveredInput {
+  inputName: string;
+  inputKind: string;
+  unversionedInputKind?: string;
+}
 
 export interface IObsLiveStats {
   cpuUsage: number;
@@ -43,9 +50,13 @@ export interface IObsControllerProfile extends Document {
   obsWebSocketVersion: string;
   activeObsScene: string;
   activeCameraId: string;
+  activeCameraIds?: string[];
   activeLayoutType: MultiCameraLayoutType;
+  activePipPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  activePipSize?: 'small' | 'medium' | 'large';
   activeSceneId: string;
   obsScenes: string[];
+  obsInputs?: IObsDiscoveredInput[];
   sceneLabels?: Map<string, string> | Record<string, string>;
   obsStreamActive: boolean;
   obsStreamTimecode: string;
@@ -111,6 +122,7 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     obsWebSocketVersion: { type: String, default: '' },
     activeObsScene: { type: String, default: '' },
     activeCameraId: { type: String, default: '' },
+    activeCameraIds: [{ type: String }],
     activeLayoutType: {
       type: String,
       enum: [
@@ -119,14 +131,32 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
         'SPLIT_2_V',
         'SPLIT_3',
         'GRID_4',
+        'PIP',
         'MAIN_PLUS_SECONDARY',
         'DYNAMIC_GRID',
         'SPORT_BROADCAST',
       ],
       default: 'SINGLE',
     },
+    activePipPosition: {
+      type: String,
+      enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+      default: 'bottom-right',
+    },
+    activePipSize: {
+      type: String,
+      enum: ['small', 'medium', 'large'],
+      default: 'medium',
+    },
     activeSceneId: { type: String, default: '' },
     obsScenes: [{ type: String }],
+    obsInputs: [
+      {
+        inputName: { type: String, default: '' },
+        inputKind: { type: String, default: '' },
+        unversionedInputKind: { type: String, default: '' },
+      },
+    ],
     sceneLabels: { type: Map, of: String, default: {} },
     obsStreamActive: { type: Boolean, default: false },
     obsStreamTimecode: { type: String, default: '' },

@@ -4,9 +4,18 @@ export type ObsLayoutType =
   | 'SPLIT_2_V'
   | 'SPLIT_3'
   | 'GRID_4'
+  | 'PIP'
   | 'MAIN_PLUS_SECONDARY'
   | 'DYNAMIC_GRID'
   | 'SPORT_BROADCAST';
+
+export type PipPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export type PipSize = 'small' | 'medium' | 'large';
+
+export interface ObsLayoutComputeOptions {
+  pipPosition?: PipPosition;
+  pipSize?: PipSize;
+}
 
 export interface ObsLayoutBox {
   cameraId: string;
@@ -69,6 +78,14 @@ export const LAYOUT_METADATA: Record<
     description: 'Symmetric 2×2 quad wall across the 1920×1080 broadcast frame.',
     defaultSceneName: 'GRID 4 QUAD',
   },
+  PIP: {
+    label: 'Picture-in-Picture (PIP)',
+    shortLabel: 'PIP Inset',
+    minCameras: 2,
+    recommendedCameras: '2 cameras',
+    description: 'Fullscreen primary camera with an adjustable corner inset camera.',
+    defaultSceneName: 'PIP OVERLAY',
+  },
   MAIN_PLUS_SECONDARY: {
     label: 'Main Camera + Secondary Strip',
     shortLabel: 'Main + N',
@@ -100,7 +117,8 @@ export function computeObsLayoutBoxes(
   cameraIds: string[],
   mainCameraId = '',
   canvasWidth = 1920,
-  canvasHeight = 1080
+  canvasHeight = 1080,
+  options: ObsLayoutComputeOptions = {}
 ): ObsLayoutBox[] {
   const uniqueIds = Array.from(new Set(cameraIds.filter(Boolean)));
   if (uniqueIds.length === 0) return [];
@@ -116,6 +134,62 @@ export function computeObsLayoutBoxes(
         y: 0,
         width: canvasWidth,
         height: canvasHeight,
+      },
+    ];
+  }
+
+  if (layoutType === 'PIP') {
+    const primary = mainCameraId && uniqueIds.includes(mainCameraId) ? mainCameraId : uniqueIds[0];
+    const secondary = uniqueIds.find((id) => id !== primary);
+    if (!secondary) {
+      return [
+        {
+          cameraId: primary,
+          slotIndex: 0,
+          role: 'main',
+          x: 0,
+          y: 0,
+          width: canvasWidth,
+          height: canvasHeight,
+        },
+      ];
+    }
+
+    const sizeRatioMap: Record<PipSize, number> = {
+      small: 0.22,
+      medium: 0.28,
+      large: 0.34,
+    };
+    const pipSize: PipSize = options.pipSize || 'medium';
+    const pipPosition: PipPosition = options.pipPosition || 'bottom-right';
+    const widthRatio = sizeRatioMap[pipSize] ?? 0.28;
+    const insetW = Math.round(canvasWidth * widthRatio);
+    const insetH = Math.round((insetW * 9) / 16);
+    const marginX = Math.round(canvasWidth * 0.025); // ~48px on 1920
+    const topMargin = Math.round(canvasHeight * 0.044); // ~48px on 1080
+    const bottomMargin = Math.round(canvasHeight * 0.125); // ~135px clears bottom scoreboard bar
+
+    const x = pipPosition.endsWith('right') ? canvasWidth - insetW - marginX : marginX;
+    const y = pipPosition.startsWith('bottom') ? canvasHeight - insetH - bottomMargin : topMargin;
+
+    return [
+      {
+        cameraId: primary,
+        slotIndex: 0,
+        role: 'main',
+        x: 0,
+        y: 0,
+        width: canvasWidth,
+        height: canvasHeight,
+      },
+      {
+        cameraId: secondary,
+        slotIndex: 1,
+        role: 'secondary',
+        x,
+        y,
+        width: insetW,
+        height: insetH,
       },
     ];
   }

@@ -19,6 +19,7 @@ const APPROVED_COMMANDS = new Set([
   'reconnect_input',
   'get_scene_items',
   'set_scene_item_enabled',
+  'get_input_list',
   'reconnect_obs',
 ]);
 
@@ -52,6 +53,7 @@ class BridgeEngine extends EventEmitter {
       obsWebSocketVersion: '',
       activeObsScene: '',
       obsScenes: [],
+      obsInputs: [],
       obsStreamActive: false,
       obsRecordActive: false,
       hasObsPassword: false,
@@ -463,6 +465,16 @@ class BridgeEngine extends EventEmitter {
       this.emitObsSnapshot().catch(() => {});
     });
 
+    this.obs.on('InputCreated', () => {
+      this.emitObsSnapshot().catch(() => {});
+    });
+    this.obs.on('InputRemoved', () => {
+      this.emitObsSnapshot().catch(() => {});
+    });
+    this.obs.on('InputNameChanged', () => {
+      this.emitObsSnapshot().catch(() => {});
+    });
+
     this.obs.on('StreamStateChanged', (ev) => {
       const active = Boolean(ev?.outputActive);
       this._setState({ obsStreamActive: active });
@@ -576,6 +588,7 @@ class BridgeEngine extends EventEmitter {
               : 'DISCONNECTED',
           lastError: this.state.obsError || '',
           obsScenes: [],
+          obsInputs: [],
           activeObsScene: '',
           obsStreamActive: false,
         });
@@ -584,9 +597,10 @@ class BridgeEngine extends EventEmitter {
     }
 
     try {
-      const [ver, sceneRes, streamRes, recordRes, statsRes] = await Promise.all([
+      const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
         this.obs.call('GetVersion'),
         this.obs.call('GetSceneList'),
+        this.obs.call('GetInputList').catch(() => ({ inputs: [] })),
         this.obs
           .call('GetStreamStatus')
           .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
@@ -597,6 +611,15 @@ class BridgeEngine extends EventEmitter {
       const scenes = Array.isArray(sceneRes.scenes)
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
         : [];
+      const obsInputs = Array.isArray(inputRes?.inputs)
+        ? inputRes.inputs
+            .map((inp) => ({
+              inputName: String(inp.inputName || '').trim(),
+              inputKind: String(inp.inputKind || '').trim(),
+              unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+            }))
+            .filter((inp) => Boolean(inp.inputName))
+        : [];
       const activeScene = String(sceneRes.currentProgramSceneName || '');
 
       this._setState({
@@ -604,6 +627,7 @@ class BridgeEngine extends EventEmitter {
         obsWebSocketVersion: String(ver.obsWebSocketVersion || ''),
         activeObsScene: activeScene,
         obsScenes: scenes,
+        obsInputs,
         obsStreamActive: Boolean(streamRes.outputActive),
         obsRecordActive: Boolean(recordRes.outputActive),
         obsError: '',
@@ -617,6 +641,7 @@ class BridgeEngine extends EventEmitter {
           obsWebSocketVersion: ver.obsWebSocketVersion,
           activeObsScene: activeScene,
           obsScenes: scenes,
+          obsInputs,
           obsStreamActive: Boolean(streamRes.outputActive),
           obsStreamTimecode: String(streamRes.outputTimecode || ''),
           obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
@@ -808,6 +833,7 @@ class BridgeEngine extends EventEmitter {
         }
       }
 
+      const appliedBoxItems = [];
       for (const box of boxes) {
         if (!box.inputName) continue;
         const itemId = await this._ensureSceneAndInput(
@@ -831,7 +857,20 @@ class BridgeEngine extends EventEmitter {
               boundsHeight: Math.max(64, Number(box.height) || 360),
             },
           });
+          appliedBoxItems.push({ itemId, slotIndex: Number(box.slotIndex) || 0 });
         }
+      }
+
+      // Enforce ascending layer order by slotIndex so PIP inset sits above Main feed
+      appliedBoxItems.sort((a, b) => a.slotIndex - b.slotIndex);
+      for (let idx = 0; idx < appliedBoxItems.length; idx += 1) {
+        await this.obs
+          .call('SetSceneItemIndex', {
+            sceneName,
+            sceneItemId: appliedBoxItems[idx].itemId,
+            sceneItemIndex: idx,
+          })
+          .catch(() => {});
       }
 
       if (payload.scoreboardOverlay?.sourceName && payload.scoreboardOverlay.enabled && payload.scoreboardOverlay.url) {
@@ -884,17 +923,43 @@ class BridgeEngine extends EventEmitter {
       };
     }
 
+    if (command === 'get_input_list') {
+      const inputsRes = await this.obs.call('GetInputList').catch(() => ({ inputs: [] }));
+      const inputs = Array.isArray(inputsRes?.inputs)
+        ? inputsRes.inputs
+            .map((inp) => ({
+              inputName: String(inp.inputName || '').trim(),
+              inputKind: String(inp.inputKind || '').trim(),
+              unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+            }))
+            .filter((inp) => Boolean(inp.inputName))
+        : [];
+      return { inputs };
+    }
+
     if (command === 'screenshot') {
       const sourceName = String(payload.sourceName || '').trim();
       if (!sourceName) throw new Error('sourceName is required.');
-      const res = await this.obs.call('GetSourceScreenshot', {
-        sourceName,
-        imageFormat: 'jpeg',
-        imageWidth: 640,
-        imageHeight: 360,
-        imageCompressionQuality: 70,
-      });
-      return { imageData: res.imageData };
+      const fallbacks = Array.isArray(payload.fallbackSourceNames)
+        ? payload.fallbackSourceNames.map((n) => String(n || '').trim()).filter(Boolean)
+        : [];
+      const candidates = Array.from(new Set([sourceName, ...fallbacks]));
+      let lastErr = null;
+      for (const candidate of candidates) {
+        try {
+          const res = await this.obs.call('GetSourceScreenshot', {
+            sourceName: candidate,
+            imageFormat: 'jpeg',
+            imageWidth: 640,
+            imageHeight: 360,
+            imageCompressionQuality: 70,
+          });
+          return { imageData: res.imageData };
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr || new Error(`Unable to capture screenshot for "${sourceName}".`);
     }
 
     if (command === 'start_stream') {

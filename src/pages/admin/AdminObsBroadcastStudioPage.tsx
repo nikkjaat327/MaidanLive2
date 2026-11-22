@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity,
@@ -6,9 +6,12 @@ import {
   ArrowDown,
   ArrowUp,
   Ban,
+  BookOpen,
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Circle,
   ClipboardList,
   Copy,
@@ -31,6 +34,7 @@ import {
   Server,
   Shield,
   ShieldAlert,
+  Sliders,
   SlidersHorizontal,
   Smartphone,
   Square,
@@ -60,6 +64,7 @@ import type {
   ObsBridgePairingResponse,
   ObsBridgeTokenResponse,
   ObsConnectionStatus,
+  ObsDiscoveredInput,
   ObsSceneItemData,
 } from '../../types/obs.ts';
 import {
@@ -72,13 +77,13 @@ import {
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
-import type { ObsLayoutType } from '../../utils/obsLayoutGeometry.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../../utils/obsLayoutGeometry.ts';
 import { CameraFormModal, SmartphoneWizardModal } from '../../components/obsStudio/CameraSetupModal.tsx';
-import {
-  CameraPreviewGrid,
-  GridPromoteAction,
-} from '../../components/obsStudio/CameraPreviewGrid.tsx';
-import { DynamicLayoutBuilder } from '../../components/obsStudio/DynamicLayoutBuilder.tsx';
+import { CameraPreviewGrid } from '../../components/obsStudio/CameraPreviewGrid.tsx';
+import { ProgramAndCompositionWorkspace } from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
+import { BroadcastSetupChecklist } from '../../components/obsStudio/BroadcastSetupChecklist.tsx';
+import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
+import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
@@ -158,7 +163,27 @@ export function AdminObsBroadcastStudioPage() {
   const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
   const [capturingPreviewFor, setCapturingPreviewFor] = useState<string | null>(null);
   const [refreshingAllPreviews, setRefreshingAllPreviews] = useState(false);
-  const [preferredMainCameraId, setPreferredMainCameraId] = useState<string>('');
+  const [capturingProgramPreview, setCapturingProgramPreview] = useState(false);
+  const [programSnapshotError, setProgramSnapshotError] = useState<string | null>(null);
+  const pollingInFlightRef = useRef(false);
+  const programPollingInFlightRef = useRef(false);
+
+  // Staged Multi-Cam Composition & Production Desk state (explicit Preview vs Program separation)
+  const [stagedCameraIds, setStagedCameraIds] = useState<string[]>([]);
+  const [stagedMainCameraId, setStagedMainCameraId] = useState<string>('');
+  const [stagedLayoutType, setStagedLayoutType] = useState<ObsLayoutType>('SINGLE');
+  const [stagedPipPosition, setStagedPipPosition] = useState<PipPosition>('bottom-right');
+  const [stagedPipSize, setStagedPipSize] = useState<PipSize>('medium');
+  const [stagedSceneName, setStagedSceneName] = useState<string>('');
+  const [stagedIncludeScoreboard, setStagedIncludeScoreboard] = useState<boolean>(true);
+  const [quickSwitchMode, setQuickSwitchMode] = useState<boolean>(false);
+  const stagedInitMatchRef = useRef<string | null>(null);
+
+  // Guide Drawer, Source Mapping Modal & Collapsible Advanced OBS Controls
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [mapSourcesModalOpen, setMapSourcesModalOpen] = useState(false);
+  const [discoveredObsInputs, setDiscoveredObsInputs] = useState<ObsDiscoveredInput[]>([]);
+  const [showAdvancedObsControls, setShowAdvancedObsControls] = useState(false);
 
   // Camera modals
   const [cameraModalOpen, setCameraModalOpen] = useState(false);
@@ -329,10 +354,52 @@ export function AdminObsBroadcastStudioPage() {
     setScoreboardSourceName(p.scoreboardSourceName || 'MaidanLive Scoreboard');
     setAutoSyncScoreboard(p.autoSyncScoreboardSource !== false);
     setSceneLabelDrafts(p.sceneLabels || {});
-    if (p.activeCameraId) {
-      setPreferredMainCameraId(p.activeCameraId);
+    if (Array.isArray(p.obsInputs)) {
+      setDiscoveredObsInputs(p.obsInputs);
     }
   }, [studio?.profile]);
+
+  // Reset staged initializer when switching matches
+  useEffect(() => {
+    stagedInitMatchRef.current = null;
+    setPreviewSnapshots({});
+    setPreviewErrors({});
+    setProgramSnapshotError(null);
+  }, [matchId]);
+
+  // Seed staged composition once per match without clobbering user edits during background ticks
+  useEffect(() => {
+    if (!matchId || !studio?.profile) return;
+    if (stagedInitMatchRef.current === matchId) return;
+    const p = studio.profile;
+    const enabled = (studio.cameras || []).filter((c) => c.enabled);
+    if (
+      enabled.length === 0 &&
+      !p.activeCameraId &&
+      (!p.activeCameraIds || p.activeCameraIds.length === 0)
+    ) {
+      return;
+    }
+    const rawIds =
+      p.activeCameraIds && p.activeCameraIds.length > 0
+        ? p.activeCameraIds
+        : p.activeCameraId
+          ? [p.activeCameraId]
+          : enabled[0]
+            ? [enabled[0].cameraId]
+            : [];
+    const validIds = rawIds.filter((id) => enabled.some((c) => c.cameraId === id));
+    const seedIds = validIds.length > 0 ? validIds : enabled[0] ? [enabled[0].cameraId] : [];
+    setStagedCameraIds(seedIds);
+    setStagedMainCameraId(
+      p.activeCameraId && seedIds.includes(p.activeCameraId) ? p.activeCameraId : seedIds[0] || ''
+    );
+    setStagedLayoutType(p.activeLayoutType || 'SINGLE');
+    setStagedPipPosition(p.activePipPosition || 'bottom-right');
+    setStagedPipSize(p.activePipSize || 'medium');
+    setStagedIncludeScoreboard(p.autoSyncScoreboardSource !== false);
+    stagedInitMatchRef.current = matchId;
+  }, [matchId, studio?.profile, studio?.cameras]);
 
   useEffect(() => {
     if (!studio?.match) return;
@@ -599,6 +666,7 @@ export function AdminObsBroadcastStudioPage() {
       await obsStudioService.switchCamera(matchId, cam.cameraId, Boolean(profile?.adminOverrideLocked));
       notifySuccess(`OBS switched live program to ${cam.name} (${cam.label}).`);
       await refetch();
+      void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, `OBS refused camera switch for ${cam.name}.`));
     } finally {
@@ -614,6 +682,7 @@ export function AdminObsBroadcastStudioPage() {
       await obsStudioService.switchScene(matchId, sceneName, Boolean(profile?.adminOverrideLocked));
       notifySuccess(`OBS Program scene set to "${sceneName}".`);
       await refetch();
+      void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, `Failed to switch OBS scene to "${sceneName}".`));
     } finally {
@@ -625,6 +694,8 @@ export function AdminObsBroadcastStudioPage() {
     layoutType: ObsLayoutType;
     cameraIds: string[];
     mainCameraId?: string;
+    pipPosition?: PipPosition;
+    pipSize?: PipSize;
     sceneName?: string;
     includeScoreboardOverlay: boolean;
   }) {
@@ -636,8 +707,11 @@ export function AdminObsBroadcastStudioPage() {
         ...payload,
         override: Boolean(profile?.adminOverrideLocked),
       });
-      notifySuccess(`Applied ${payload.layoutType} across ${payload.cameraIds.length} cameras in OBS (${res.sceneName || payload.sceneName || ''}).`);
+      notifySuccess(
+        `Applied ${payload.layoutType} across ${payload.cameraIds.length} cameras in OBS (${res.sceneName || payload.sceneName || ''}).`
+      );
       await refetch();
+      void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to apply multi-camera layout in OBS.'));
     } finally {
@@ -651,6 +725,8 @@ export function AdminObsBroadcastStudioPage() {
     layoutType: ObsLayoutType;
     cameraIds: string[];
     mainCameraId?: string;
+    pipPosition?: PipPosition;
+    pipSize?: PipSize;
     includeScoreboardOverlay: boolean;
   }) {
     if (!matchId) return;
@@ -666,14 +742,30 @@ export function AdminObsBroadcastStudioPage() {
 
   async function handleCaptureSourcePreview(
     cam: BroadcastCameraData,
-    options: { silent?: boolean } = {}
+    options: { silent?: boolean; background?: boolean } = {}
   ) {
     if (!matchId) return;
-    const sourceName = cam.obsInputName || cam.obsSceneName || cam.name;
+    const isPrimary =
+      profile?.activeCameraId === cam.cameraId ||
+      Boolean(cam.obsSceneName && profile?.activeObsScene === cam.obsSceneName);
+    const candidates = Array.from(
+      new Set(
+        [
+          cam.obsInputName,
+          cam.obsSceneName,
+          cam.name,
+          isPrimary ? profile?.activeObsScene : '',
+        ]
+          .map((s) => String(s || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const sourceName = candidates[0] || cam.name;
+    const fallbackSourceNames = candidates.slice(1);
     try {
-      setCapturingPreviewFor(cam.cameraId);
+      if (!options.background) setCapturingPreviewFor(cam.cameraId);
       if (!options.silent) setActionError(null);
-      const res = await obsStudioService.capturePreview(matchId, sourceName);
+      const res = await obsStudioService.capturePreview(matchId, sourceName, fallbackSourceNames);
       setPreviewSnapshots((prev) => ({
         ...prev,
         [cam.cameraId]: {
@@ -692,59 +784,140 @@ export function AdminObsBroadcastStudioPage() {
       setPreviewErrors((prev) => ({ ...prev, [cam.cameraId]: msg }));
       if (!options.silent) setActionError(msg);
     } finally {
-      setCapturingPreviewFor(null);
+      if (!options.background) setCapturingPreviewFor(null);
     }
   }
 
-  async function handleRefreshAllPreviews(targetCameras: BroadcastCameraData[]) {
-    if (!matchId || !obsConnected || targetCameras.length === 0) return;
+  async function handleCaptureActiveScenePreview(options: { background?: boolean } = {}) {
+    if (!matchId || !obsConnected || !profile?.activeObsScene) return;
+    if (options.background && (programPollingInFlightRef.current || document.visibilityState === 'hidden')) {
+      return;
+    }
+    programPollingInFlightRef.current = true;
     try {
-      setRefreshingAllPreviews(true);
-      for (const cam of targetCameras) {
-        await handleCaptureSourcePreview(cam, { silent: true });
-      }
+      if (!options.background) setCapturingProgramPreview(true);
+      const res = await obsStudioService.capturePreview(matchId, profile.activeObsScene);
+      setPreviewSnapshots((prev) => ({
+        ...prev,
+        __active_scene__: {
+          imageData: res.imageData,
+          capturedAt: new Date().toLocaleTimeString(),
+        },
+      }));
+      setProgramSnapshotError(null);
+    } catch (err) {
+      setProgramSnapshotError(
+        extractApiError(err, `Could not capture program preview for "${profile.activeObsScene}".`)
+      );
     } finally {
-      setRefreshingAllPreviews(false);
+      programPollingInFlightRef.current = false;
+      if (!options.background) setCapturingProgramPreview(false);
     }
   }
 
-  async function handlePromotePrimary(cam: BroadcastCameraData, action: GridPromoteAction) {
-    if (!matchId || !profile) return;
-    setPreferredMainCameraId(cam.cameraId);
-
-    if (!obsConnected) {
-      setActionError(
-        `OBS Studio is not connected. Connect OBS first to promote ${cam.label || cam.name} as the live primary feed.`
-      );
+  async function handleRefreshAllPreviews(
+    targetCameras: BroadcastCameraData[],
+    options: { background?: boolean } = {}
+  ) {
+    if (!matchId || !obsConnected || targetCameras.length === 0) return;
+    if (options.background && (pollingInFlightRef.current || document.visibilityState === 'hidden')) {
       return;
     }
-
-    if (
-      action === 'swap_layout_main' &&
-      (profile.activeLayoutType === 'MAIN_PLUS_SECONDARY' ||
-        profile.activeLayoutType === 'SPLIT_3' ||
-        profile.activeLayoutType === 'SPORT_BROADCAST')
-    ) {
-      const activeScenePreset = scenes.find(
-        (s) => s.obsSceneName === profile.activeObsScene && s.layoutType === profile.activeLayoutType
-      );
-      const layoutCameraIds =
-        activeScenePreset && activeScenePreset.cameraIds.length > 0
-          ? Array.from(new Set([cam.cameraId, ...activeScenePreset.cameraIds]))
-          : Array.from(
-              new Set([cam.cameraId, ...enabledCameras.slice(0, 4).map((c) => c.cameraId)])
-            );
-      await handleApplyLayout({
-        layoutType: profile.activeLayoutType,
-        cameraIds: layoutCameraIds,
-        mainCameraId: cam.cameraId,
-        sceneName: profile.activeObsScene || undefined,
-        includeScoreboardOverlay: profile.autoSyncScoreboardSource !== false,
+    pollingInFlightRef.current = true;
+    try {
+      if (!options.background) setRefreshingAllPreviews(true);
+      const queue = [...targetCameras];
+      const concurrency = Math.min(2, queue.length);
+      const workers = Array.from({ length: concurrency }, async () => {
+        while (queue.length > 0) {
+          if (options.background && document.visibilityState === 'hidden') break;
+          const cam = queue.shift();
+          if (!cam) break;
+          await handleCaptureSourcePreview(cam, { silent: true, background: options.background });
+        }
       });
+      await Promise.all(workers);
+    } finally {
+      pollingInFlightRef.current = false;
+      if (!options.background) setRefreshingAllPreviews(false);
+    }
+  }
+
+  function handleToggleSelectCamera(cam: BroadcastCameraData) {
+    setStagedCameraIds((prev) => {
+      const exists = prev.includes(cam.cameraId);
+      const next = exists ? prev.filter((id) => id !== cam.cameraId) : [...prev, cam.cameraId];
+      setStagedMainCameraId((currMain) => {
+        if (!exists && !currMain) return cam.cameraId;
+        if (exists && currMain === cam.cameraId) return next[0] || '';
+        return currMain;
+      });
+      if (!exists && next.length === 2 && stagedLayoutType === 'SINGLE') {
+        setStagedLayoutType('SPLIT_2_H');
+      } else if (next.length <= 1 && stagedLayoutType !== 'SINGLE' && stagedLayoutType !== 'SPORT_BROADCAST') {
+        setStagedLayoutType('SINGLE');
+      }
+      return next;
+    });
+  }
+
+  async function handleApplyStagedComposition() {
+    if (stagedCameraIds.length === 0) return;
+    await handleApplyLayout({
+      layoutType: stagedLayoutType,
+      cameraIds: stagedCameraIds,
+      mainCameraId: stagedMainCameraId || stagedCameraIds[0],
+      pipPosition: stagedLayoutType === 'PIP' ? stagedPipPosition : undefined,
+      pipSize: stagedLayoutType === 'PIP' ? stagedPipSize : undefined,
+      sceneName: stagedSceneName.trim() || undefined,
+      includeScoreboardOverlay: stagedIncludeScoreboard,
+    });
+  }
+
+  async function handleRefreshObsInputs(): Promise<ObsDiscoveredInput[]> {
+    if (!matchId) return [];
+    try {
+      const res = await obsStudioService.listObsInputs(matchId);
+      const list = res.inputs || [];
+      setDiscoveredObsInputs(list);
+      return list;
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to discover OBS inputs.'));
+      return discoveredObsInputs;
+    }
+  }
+
+  async function handleSaveCameraMappings(
+    mappings: Array<{
+      cameraId?: string;
+      obsInputName: string;
+      displayName: string;
+      obsSceneName?: string;
+      inputKind?: string;
+      isCamera: boolean;
+    }>
+  ) {
+    if (!matchId) return;
+    try {
+      setActionError(null);
+      const res = await obsStudioService.mapCameraSources(matchId, mappings);
+      notifySuccess(
+        `Saved camera mappings (${res.mappedCount} mapped, ${res.createdCount} created).`
+      );
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to save OBS camera source mappings.'));
+      throw err;
+    }
+  }
+
+  function handleGuideJump(target: GuideJumpTarget) {
+    if (target === 'map_sources') {
+      setActiveTab('live');
+      setMapSourcesModalOpen(true);
       return;
     }
-
-    await handleSwitchCamera(cam);
+    setActiveTab(target);
   }
 
   async function handleSyncObsState() {
@@ -1273,6 +1446,27 @@ export function AdminObsBroadcastStudioPage() {
                           ? 'OBS ERROR'
                           : 'OBS DISCONNECTED'}
                   </span>
+                  {studio?.match && (
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${
+                        obsConnected && profile.obsStreamActive
+                          ? 'bg-red-600 text-white border-red-600'
+                          : studio.match.youtubeVideoId ||
+                              studio.match.activeStreamingProvider === 'mediamtx'
+                            ? 'bg-sky-50 text-sky-700 border-sky-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}
+                    >
+                      <Radio className="w-3 h-3" />
+                      {obsConnected && profile.obsStreamActive
+                        ? `STREAM LIVE${profile.obsStreamTimecode ? ` · ${profile.obsStreamTimecode}` : ''}`
+                        : studio.match.activeStreamingProvider === 'mediamtx'
+                          ? 'MEDIAMTX READY'
+                          : studio.match.youtubeVideoId
+                            ? 'YOUTUBE READY'
+                            : 'STREAM OFFLINE'}
+                    </span>
+                  )}
                 </>
               )}
               <span
@@ -1286,13 +1480,13 @@ export function AdminObsBroadcastStudioPage() {
                 {socketConnected ? 'Sync Live' : 'Reconnecting...'}
               </span>
               {profile?.lastSyncedAt && (
-                <span className="text-[11px] font-mono text-slate-400 whitespace-nowrap">
+                <span className="text-[11px] font-mono text-slate-400 whitespace-nowrap tabular-nums">
                   Synced {new Date(profile.lastSyncedAt).toLocaleTimeString()}
                 </span>
               )}
             </div>
             <p className="text-xs text-slate-500">
-              Switch field smartphones &amp; studio cameras in OBS Studio — changes apply seamlessly into one continuous YouTube Live stream without restart.
+              Visual Multi-Camera Production Desk — select cameras, preview Split / Grid / PIP compositions, and switch OBS scenes cleanly without interrupting live viewers.
             </p>
           </div>
 
@@ -1304,7 +1498,7 @@ export function AdminObsBroadcastStudioPage() {
                 if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
               }}
               aria-label="Select broadcast match"
-              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[260px]"
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[240px]"
             >
               {matches.length === 0 && <option value="">No matches available</option>}
               {matches.map((m) => (
@@ -1313,6 +1507,15 @@ export function AdminObsBroadcastStudioPage() {
                 </option>
               ))}
             </select>
+
+            <button
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#EA580C] bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 whitespace-nowrap shrink-0"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Control Room Guide</span>
+            </button>
 
             {matchId && (
               <>
@@ -1370,7 +1573,7 @@ export function AdminObsBroadcastStudioPage() {
 
         {/* Match Context Strip */}
         {studio?.match && (
-          <div className="pt-3 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+          <div className="pt-3 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
             <div className="min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tournament</p>
               <p className="font-semibold text-slate-900 truncate">
@@ -1378,11 +1581,27 @@ export function AdminObsBroadcastStudioPage() {
               </p>
             </div>
             <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teams</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match</p>
               <p className="font-semibold text-slate-900 truncate">
-                {[studio.match.teamAName, studio.match.teamBName].filter(Boolean).join(' vs ') ||
-                  studio.match.matchTitle}
+                {studio.match.matchTitle ||
+                  [studio.match.teamAName, studio.match.teamBName].filter(Boolean).join(' vs ')}
               </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match ID</p>
+              <button
+                type="button"
+                onClick={() => copyText('matchId', studio.match.id)}
+                title="Copy Match ID"
+                className="inline-flex items-center gap-1 font-mono font-semibold text-slate-700 hover:text-[#EA580C] max-w-full"
+              >
+                <span className="truncate">{studio.match.id.slice(-8)}</span>
+                {copiedKey === 'matchId' ? (
+                  <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                ) : (
+                  <Copy className="w-3 h-3 shrink-0" />
+                )}
+              </button>
             </div>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match Status</p>
@@ -1390,20 +1609,24 @@ export function AdminObsBroadcastStudioPage() {
                 {studio.match.status} · {studio.match.gameName || 'Sport'}
               </p>
             </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Broadcast Mode</p>
-              <p className="font-mono font-semibold text-slate-900">
-                {studio.match.activeStreamingProvider === 'mediamtx' ? 'MediaMTX Direct' : 'YouTube Live'}
-              </p>
-            </div>
             <div className="min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">YouTube Output</p>
               <p className="font-mono font-semibold text-slate-900 truncate">
-                {profile?.obsStreamActive
+                {obsConnected && profile?.obsStreamActive
                   ? 'STREAMING LIVE'
-                  : studio.match.youtubeVideoId
-                    ? `Linked (${studio.match.youtubeVideoId})`
-                    : 'No YouTube ID linked'}
+                  : studio.match.activeStreamingProvider === 'mediamtx'
+                    ? 'MediaMTX Direct'
+                    : studio.match.youtubeVideoId
+                      ? `Linked (${studio.match.youtubeVideoId})`
+                      : 'Not Linked'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Duration</p>
+              <p className="font-mono tabular-nums font-semibold text-slate-900 truncate">
+                {obsConnected && profile?.obsStreamActive
+                  ? profile.obsStreamTimecode || '00:00:00'
+                  : 'Offline'}
               </p>
             </div>
             <div className="min-w-0">
@@ -1494,6 +1717,19 @@ export function AdminObsBroadcastStudioPage() {
         <TableSkeleton rows={5} />
       ) : (
         <>
+          {/* Contextual Next-Step Banner & Collapsible 4-Step Setup Checklist */}
+          <BroadcastSetupChecklist
+            match={studio.match}
+            profile={profile}
+            cameras={cameras}
+            selectedCount={stagedCameraIds.length}
+            onOpenConnection={() => setActiveTab('connection')}
+            onOpenMapSources={() => setMapSourcesModalOpen(true)}
+            onOpenCamerasTab={() => setActiveTab('cameras')}
+            onOpenOverlayTab={() => setActiveTab('overlay')}
+            onOpenGuide={() => setGuideOpen(true)}
+          />
+
           {/* Active Session & Controller Presence Bar */}
           <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex flex-wrap items-center gap-3">
@@ -1686,11 +1922,40 @@ export function AdminObsBroadcastStudioPage() {
           </div>
 
           {/* ============================================================== */}
-          {/* TAB 1: LIVE CAMERA SWITCHING & MULTI-CAMERA LAYOUT BUILDER      */}
+          {/* TAB 1: LIVE CAMERA PRODUCTION DESK (PROGRAM + COMPOSITION)     */}
           {/* ============================================================== */}
           {activeTab === 'live' && (
-            <div className="space-y-6">
-              {/* Dynamic Multiview Camera Grid with Click-to-Promote Primary Feed */}
+            <div className="space-y-5">
+              {/* Dual-Pane Program Output (Live) vs Camera Composition (Preview / Staged) */}
+              <ProgramAndCompositionWorkspace
+                cameras={cameras}
+                profile={profile}
+                obsConnected={obsConnected}
+                previewSnapshots={previewSnapshots}
+                programSnapshotError={programSnapshotError}
+                capturingProgramPreview={capturingProgramPreview}
+                selectedCameraIds={stagedCameraIds}
+                mainCameraId={stagedMainCameraId}
+                layoutType={stagedLayoutType}
+                pipPosition={stagedPipPosition}
+                pipSize={stagedPipSize}
+                customSceneName={stagedSceneName}
+                includeScoreboardOverlay={stagedIncludeScoreboard}
+                applying={applyingLayout}
+                onChangeSelectedCameraIds={setStagedCameraIds}
+                onChangeMainCameraId={setStagedMainCameraId}
+                onChangeLayoutType={setStagedLayoutType}
+                onChangePipPosition={setStagedPipPosition}
+                onChangePipSize={setStagedPipSize}
+                onChangeCustomSceneName={setStagedSceneName}
+                onChangeIncludeScoreboardOverlay={setStagedIncludeScoreboard}
+                onRefreshProgramPreview={() => handleCaptureActiveScenePreview()}
+                onApplyLive={handleApplyStagedComposition}
+                onSavePreset={handleSaveScenePreset}
+                onOpenConnectionTab={() => setActiveTab('connection')}
+              />
+
+              {/* Visual Connected Camera Panel */}
               <CameraPreviewGrid
                 cameras={cameras}
                 profile={profile}
@@ -1704,34 +1969,57 @@ export function AdminObsBroadcastStudioPage() {
                 mutingCamId={mutingCamId}
                 reconnectingCamId={reconnectingCamId}
                 scaffoldingCount={scaffoldingCount}
-                onPromotePrimary={handlePromotePrimary}
+                selectedCameraIds={stagedCameraIds}
+                mainCameraId={stagedMainCameraId}
+                quickSwitchMode={quickSwitchMode}
+                onToggleQuickSwitchMode={setQuickSwitchMode}
+                onToggleSelectCamera={handleToggleSelectCamera}
+                onCutCameraLive={handleSwitchCamera}
                 onCapturePreview={(cam) => handleCaptureSourcePreview(cam)}
                 onRefreshAllPreviews={handleRefreshAllPreviews}
+                onCaptureActiveScenePreview={handleCaptureActiveScenePreview}
                 onToggleAudio={handleToggleCameraAudio}
                 onReconnectCamera={handleReconnectCamera}
                 onOpenQrWizard={(cam) => {
                   setWizardCamera(cam);
                   setWizardConnectUrl(null);
                 }}
+                onOpenMapSourcesModal={() => setMapSourcesModalOpen(true)}
                 onScaffoldCameras={handleScaffoldCameras}
                 onSyncObsState={handleSyncObsState}
                 onOpenCamerasTab={() => setActiveTab('cameras')}
-                onOpenConnectionTab={() => setActiveTab('connection')}
               />
 
-              {/* Dynamic N-Camera Layout Builder */}
-              <DynamicLayoutBuilder
-                cameras={cameras}
-                obsConnected={obsConnected}
-                activeLayoutType={profile.activeLayoutType}
-                activeObsScene={profile.activeObsScene}
-                preferredMainCameraId={preferredMainCameraId}
-                applying={applyingLayout}
-                onApplyLayout={handleApplyLayout}
-                onSaveAsScene={handleSaveScenePreset}
-              />
+              {/* Collapsible Advanced OBS Scenes, Scene Sources Visibility, Saved Presets & YouTube Output */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedObsControls((v) => !v)}
+                  className="w-full px-4 sm:px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 flex flex-wrap items-center justify-between gap-2 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Layers className="w-4 h-4 text-[#EA580C] shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-display text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide">
+                        Advanced OBS Controls, Native Scenes &amp; Saved Presets
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {profile.obsScenes.length} OBS scenes · {sceneItems.length} active sources · {scenes.length} saved presets · YouTube Live monitor
+                      </p>
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 shrink-0">
+                    <span>{showAdvancedObsControls ? 'Hide Panel' : 'Expand Panel'}</span>
+                    {showAdvancedObsControls ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </span>
+                </button>
 
-              {/* OBS Native Scenes (with Friendly Labels), Scene Sources Toggle, Saved Presets & YouTube Output */}
+                {showAdvancedObsControls && (
+                  <div className="p-4 sm:p-5 border-t border-slate-200">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                 <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1964,6 +2252,8 @@ export function AdminObsBroadcastStudioPage() {
                                       layoutType: sc.layoutType,
                                       cameraIds: sc.cameraIds,
                                       mainCameraId: sc.mainCameraId || undefined,
+                                      pipPosition: sc.pipPosition || undefined,
+                                      pipSize: sc.pipSize || undefined,
                                       sceneName: sc.obsSceneName,
                                       includeScoreboardOverlay: sc.includeScoreboardOverlay,
                                     })
@@ -2064,6 +2354,9 @@ export function AdminObsBroadcastStudioPage() {
                   </section>
                 </div>
               </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -2084,6 +2377,14 @@ export function AdminObsBroadcastStudioPage() {
 
                 {canManageCameras && (
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMapSourcesModalOpen(true)}
+                      className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100"
+                    >
+                      <Sliders className="w-3.5 h-3.5 text-[#EA580C]" />
+                      <span>Map OBS Sources</span>
+                    </button>
                     {[2, 4, 6].map((cnt) => (
                       <button
                         key={cnt}
@@ -3638,6 +3939,25 @@ export function AdminObsBroadcastStudioPage() {
           </div>
         </div>
       </Modal>
+      {/* Bilingual Broadcast Control Room Guide Drawer (Hinglish + English) */}
+      <BroadcastGuideDrawer
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        onJumpTo={handleGuideJump}
+      />
+
+      {/* Dynamic OBS Camera Source Mapping Modal */}
+      <CameraSourceMappingModal
+        open={mapSourcesModalOpen}
+        onClose={() => setMapSourcesModalOpen(false)}
+        obsConnected={obsConnected}
+        obsInputs={discoveredObsInputs}
+        obsScenes={profile?.obsScenes || []}
+        existingCameras={cameras}
+        scoreboardSourceName={profile?.scoreboardSourceName || 'MaidanLive Scoreboard'}
+        onRefreshObsInputs={handleRefreshObsInputs}
+        onSaveMappings={handleSaveCameraMappings}
+      />
     </div>
   );
 }

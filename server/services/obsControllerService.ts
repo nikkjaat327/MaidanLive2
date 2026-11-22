@@ -25,7 +25,7 @@ import {
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import { computeObsLayoutBoxes, LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
-import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
 import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/index.ts';
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
@@ -437,6 +437,16 @@ export function initObsControllerBridge(): void {
           updateFields.activeObsScene = status === 'CONNECTED' ? activeObsScene : '';
         }
         if (obsScenes) updateFields.obsScenes = obsScenes;
+        if (Array.isArray(payload.obsInputs)) {
+          updateFields.obsInputs = payload.obsInputs
+            .filter((inp: any) => inp && typeof inp.inputName === 'string' && inp.inputName.trim())
+            .slice(0, 100)
+            .map((inp: any) => ({
+              inputName: String(inp.inputName).trim().slice(0, 140),
+              inputKind: String(inp.inputKind || '').trim().slice(0, 80),
+              unversionedInputKind: String(inp.unversionedInputKind || '').trim().slice(0, 80),
+            }));
+        }
         if (typeof payload.obsStreamActive === 'boolean') {
           updateFields.obsStreamActive = payload.obsStreamActive;
         }
@@ -630,11 +640,13 @@ export function computeEffectiveCameraStatus(
   camera: any,
   activeCameraId: string,
   activeObsScene: string,
-  obsConnected: boolean
+  obsConnected: boolean,
+  activeCameraIds: string[] = []
 ): CameraConnectionStatus {
   const isSelectedLive =
     obsConnected &&
     ((activeCameraId && camera.cameraId === activeCameraId) ||
+      (Array.isArray(activeCameraIds) && activeCameraIds.includes(camera.cameraId)) ||
       (activeObsScene && camera.obsSceneName && camera.obsSceneName === activeObsScene));
 
   if (!camera.enabled) return 'DISCONNECTED';
@@ -702,9 +714,17 @@ export function formatSafeProfile(profile: any) {
     obsWebSocketVersion: profile.obsWebSocketVersion || '',
     activeObsScene: profile.activeObsScene || '',
     activeCameraId: profile.activeCameraId || '',
+    activeCameraIds: Array.isArray(profile.activeCameraIds)
+      ? profile.activeCameraIds
+      : profile.activeCameraId
+        ? [profile.activeCameraId]
+        : [],
     activeLayoutType: profile.activeLayoutType || 'SINGLE',
+    activePipPosition: profile.activePipPosition || 'bottom-right',
+    activePipSize: profile.activePipSize || 'medium',
     activeSceneId: profile.activeSceneId || '',
     obsScenes: Array.isArray(profile.obsScenes) ? profile.obsScenes : [],
+    obsInputs: Array.isArray(profile.obsInputs) ? profile.obsInputs : [],
     sceneLabels:
       profile.sceneLabels instanceof Map
         ? Object.fromEntries(profile.sceneLabels.entries())
@@ -756,7 +776,8 @@ export function formatSafeCamera(
     camera,
     safeProfile?.activeCameraId || '',
     safeProfile?.activeObsScene || '',
-    obsConnected
+    obsConnected,
+    safeProfile?.activeCameraIds || []
   );
 
   let vdoLinks: { pushUrl: string; obsViewUrl: string; directorUrl: string } | null = null;
@@ -830,6 +851,8 @@ export function formatSafeScene(scene: any) {
     layoutType: scene.layoutType || 'SINGLE',
     cameraIds: Array.isArray(scene.cameraIds) ? scene.cameraIds : [],
     mainCameraId: scene.mainCameraId || '',
+    pipPosition: scene.pipPosition || 'bottom-right',
+    pipSize: scene.pipSize || 'medium',
     includeScoreboardOverlay: scene.includeScoreboardOverlay !== false,
     overlayMode: scene.overlayMode || 'full',
     overlayPosition: scene.overlayPosition || 'bottom-left',
@@ -899,7 +922,8 @@ async function reconcileCameraActiveStates(matchId: string, activeObsScene: stri
       cam,
       profile?.activeCameraId || '',
       activeObsScene,
-      obsConnected
+      obsConnected,
+      Array.isArray(profile?.activeCameraIds) ? profile.activeCameraIds : []
     );
     if (cam.status !== nextStatus && cam.status !== 'ERROR') {
       cam.status = nextStatus;
@@ -1139,16 +1163,29 @@ export async function connectDirectObs(
 }
 
 async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
-  const [versionRes, sceneListRes, streamStatusRes, recordStatusRes, statsRes] = await Promise.all([
-    obs.call('GetVersion'),
-    obs.call('GetSceneList'),
-    obs.call('GetStreamStatus').catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
-    obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
-    obs.call('GetStats').catch(() => null),
-  ]);
+  const [versionRes, sceneListRes, inputListRes, streamStatusRes, recordStatusRes, statsRes] =
+    await Promise.all([
+      obs.call('GetVersion'),
+      obs.call('GetSceneList'),
+      obs.call('GetInputList').catch(() => ({ inputs: [] })),
+      obs
+        .call('GetStreamStatus')
+        .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
+      obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+      obs.call('GetStats').catch(() => null),
+    ]);
 
   const obsScenes = Array.isArray(sceneListRes?.scenes)
     ? sceneListRes.scenes.map((s: any) => String(s.sceneName || '')).filter(Boolean)
+    : [];
+  const obsInputs = Array.isArray((inputListRes as any)?.inputs)
+    ? (inputListRes as any).inputs
+        .map((inp: any) => ({
+          inputName: String(inp.inputName || '').trim(),
+          inputKind: String(inp.inputKind || '').trim(),
+          unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+        }))
+        .filter((inp: any) => Boolean(inp.inputName))
     : [];
   const activeObsScene = String(sceneListRes?.currentProgramSceneName || '');
 
@@ -1161,6 +1198,7 @@ async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
         obsVersion: String(versionRes?.obsVersion || ''),
         obsWebSocketVersion: String(versionRes?.obsWebSocketVersion || ''),
         obsScenes,
+        obsInputs,
         activeObsScene,
         obsStreamActive: Boolean((streamStatusRes as any)?.outputActive),
         obsStreamTimecode: String((streamStatusRes as any)?.outputTimecode || ''),
@@ -1191,7 +1229,7 @@ async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
   );
 
   await reconcileCameraActiveStates(matchId, activeObsScene);
-  return { profile: updated, activeObsScene, obsScenes };
+  return { profile: updated, activeObsScene, obsScenes, obsInputs };
 }
 
 export async function disconnectObs(matchId: string, actor?: IUser | null) {
@@ -1441,6 +1479,7 @@ export async function executeDirectObsCommand(
     }
 
     // Position and enable each selected camera box on the 1920x1080 canvas
+    const appliedBoxItems: Array<{ itemId: number; slotIndex: number }> = [];
     for (const box of boxes) {
       if (!box.inputName) continue;
       const itemId = await ensureSceneAndInputDirect(
@@ -1469,7 +1508,19 @@ export async function executeDirectObsCommand(
             boundsHeight: Math.max(64, Number(box.height) || 360),
           },
         });
+        appliedBoxItems.push({ itemId, slotIndex: Number(box.slotIndex) || 0 });
       }
+    }
+
+    appliedBoxItems.sort((a, b) => a.slotIndex - b.slotIndex);
+    for (let idx = 0; idx < appliedBoxItems.length; idx += 1) {
+      await obs
+        .call('SetSceneItemIndex', {
+          sceneName,
+          sceneItemId: appliedBoxItems[idx].itemId,
+          sceneItemIndex: idx,
+        })
+        .catch(() => {});
     }
 
     // Scoreboard Browser Source overlay on top of camera boxes
@@ -1546,14 +1597,26 @@ export async function executeDirectObsCommand(
   if (command === 'screenshot') {
     const sourceName = String(payload.sourceName || '');
     if (!sourceName) throw new Error('Source name is required for preview screenshot.');
-    const res = await obs.call('GetSourceScreenshot', {
-      sourceName,
-      imageFormat: 'jpeg',
-      imageWidth: 640,
-      imageHeight: 360,
-      imageCompressionQuality: 70,
-    });
-    return { imageData: res.imageData };
+    const fallbacks = Array.isArray(payload.fallbackSourceNames)
+      ? payload.fallbackSourceNames.map((n: unknown) => String(n || '').trim()).filter(Boolean)
+      : [];
+    const candidates = Array.from(new Set([sourceName, ...fallbacks]));
+    let lastErr: any = null;
+    for (const candidate of candidates) {
+      try {
+        const res = await obs.call('GetSourceScreenshot', {
+          sourceName: candidate,
+          imageFormat: 'jpeg',
+          imageWidth: 640,
+          imageHeight: 360,
+          imageCompressionQuality: 70,
+        });
+        return { imageData: res.imageData };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error(`Unable to capture screenshot for "${sourceName}".`);
   }
 
   if (command === 'start_stream') {
@@ -1668,6 +1731,20 @@ export async function executeDirectObsCommand(
     };
   }
 
+  if (command === 'get_input_list') {
+    const inputsRes = await obs.call('GetInputList').catch(() => ({ inputs: [] }));
+    const inputs = Array.isArray((inputsRes as any)?.inputs)
+      ? (inputsRes as any).inputs
+          .map((inp: any) => ({
+            inputName: String(inp.inputName || '').trim(),
+            inputKind: String(inp.inputKind || '').trim(),
+            unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+          }))
+          .filter((inp: any) => Boolean(inp.inputName))
+      : [];
+    return { inputs };
+  }
+
   throw new Error(`Unsupported OBS command: ${command}`);
 }
 
@@ -1685,6 +1762,16 @@ export async function refreshObsState(matchId: string) {
     lastSyncedAt: new Date(),
   };
   if (obsScenes) updateFields.obsScenes = obsScenes;
+  if (Array.isArray(data?.obsInputs)) {
+    updateFields.obsInputs = data.obsInputs
+      .filter((inp: any) => inp && typeof inp.inputName === 'string' && inp.inputName.trim())
+      .slice(0, 100)
+      .map((inp: any) => ({
+        inputName: String(inp.inputName).trim().slice(0, 140),
+        inputKind: String(inp.inputKind || '').trim().slice(0, 80),
+        unversionedInputKind: String(inp.unversionedInputKind || '').trim().slice(0, 80),
+      }));
+  }
   if (activeObsScene !== undefined) updateFields.activeObsScene = activeObsScene;
   if (typeof data?.obsVersion === 'string') updateFields.obsVersion = data.obsVersion;
   if (typeof data?.obsWebSocketVersion === 'string') {
@@ -1931,6 +2018,7 @@ export async function switchCameraLive(
     const verifiedScene = String(rpcRes?.verifiedScene || targetSceneName);
     profile.activeObsScene = verifiedScene;
     profile.activeCameraId = camera.cameraId;
+    profile.activeCameraIds = [camera.cameraId];
     profile.activeLayoutType = 'SINGLE';
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
@@ -2034,6 +2122,8 @@ export async function applyDynamicLayoutToObs(
     layoutType: ObsLayoutType;
     cameraIds: string[];
     mainCameraId?: string;
+    pipPosition?: PipPosition;
+    pipSize?: PipSize;
     sceneName?: string;
     includeScoreboardOverlay?: boolean;
     override?: boolean;
@@ -2078,7 +2168,11 @@ export async function applyDynamicLayoutToObs(
     selectedIds,
     params.mainCameraId || selectedIds[0],
     1920,
-    1080
+    1080,
+    {
+      pipPosition: params.pipPosition,
+      pipSize: params.pipSize,
+    }
   );
 
   const meta = LAYOUT_METADATA[params.layoutType] || LAYOUT_METADATA.DYNAMIC_GRID;
@@ -2156,6 +2250,9 @@ export async function applyDynamicLayoutToObs(
     profile.activeObsScene = verifiedScene;
     profile.activeLayoutType = params.layoutType as MultiCameraLayoutType;
     profile.activeCameraId = boxes.length === 1 ? leadCameraId : '';
+    profile.activeCameraIds = boxes.map((b) => b.cameraId);
+    if (params.pipPosition) profile.activePipPosition = params.pipPosition;
+    if (params.pipSize) profile.activePipSize = params.pipSize;
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
     profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
@@ -2288,6 +2385,11 @@ export async function switchObsSceneByName(
     profile.activeSceneId = mappedScene?._id ? String(mappedScene._id) : '';
     profile.activeLayoutType = (mappedScene?.layoutType || 'SINGLE') as MultiCameraLayoutType;
     profile.activeCameraId = mappedCam?.cameraId || '';
+    profile.activeCameraIds = mappedScene?.cameraIds?.length
+      ? mappedScene.cameraIds
+      : mappedCam?.cameraId
+        ? [mappedCam.cameraId]
+        : [];
     profile.lastSyncedAt = new Date();
     profile.updatedBy = actor._id as mongoose.Types.ObjectId;
     profile.activeControllerUserId = actor._id as mongoose.Types.ObjectId;
@@ -2359,6 +2461,19 @@ export async function switchObsSceneByName(
   }
 }
 
+export async function listObsInputs(matchId: string) {
+  const res = await callObsRpc<{
+    inputs: Array<{ inputName: string; inputKind: string; unversionedInputKind?: string }>;
+  }>(matchId, 'get_input_list', {});
+  const inputs = Array.isArray(res?.inputs) ? res.inputs : [];
+  await ObsControllerProfile.findOneAndUpdate(
+    { matchId },
+    { $set: { obsInputs: inputs, lastSyncedAt: new Date() } }
+  );
+  await emitFullStudioState(matchId);
+  return inputs;
+}
+
 export async function listObsSceneItems(matchId: string, sceneName = '') {
   const res = await callObsRpc<{
     sceneName: string;
@@ -2417,8 +2532,15 @@ export async function toggleObsSceneItem(
   return res;
 }
 
-export async function captureObsPreviewImage(matchId: string, sourceName: string): Promise<string> {
-  const res = await callObsRpc<{ imageData: string }>(matchId, 'screenshot', { sourceName });
+export async function captureObsPreviewImage(
+  matchId: string,
+  sourceName: string,
+  fallbackSourceNames: string[] = []
+): Promise<string> {
+  const res = await callObsRpc<{ imageData: string }>(matchId, 'screenshot', {
+    sourceName,
+    fallbackSourceNames,
+  });
   return String(res?.imageData || '');
 }
 

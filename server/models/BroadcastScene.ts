@@ -12,6 +12,8 @@ export interface IBroadcastScene extends Document {
   layoutType: MultiCameraLayoutType;
   cameraIds: string[];
   mainCameraId: string;
+  pipPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  pipSize?: 'small' | 'medium' | 'large';
   includeScoreboardOverlay: boolean;
   overlayMode: OverlayMode;
   overlayPosition: OverlayPosition;
@@ -38,6 +40,7 @@ const broadcastSceneSchema = new Schema<IBroadcastScene>(
         'SPLIT_2_V',
         'SPLIT_3',
         'GRID_4',
+        'PIP',
         'MAIN_PLUS_SECONDARY',
         'DYNAMIC_GRID',
         'SPORT_BROADCAST',
@@ -46,6 +49,16 @@ const broadcastSceneSchema = new Schema<IBroadcastScene>(
     },
     cameraIds: [{ type: String, trim: true }],
     mainCameraId: { type: String, trim: true, default: '' },
+    pipPosition: {
+      type: String,
+      enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+      default: 'bottom-right',
+    },
+    pipSize: {
+      type: String,
+      enum: ['small', 'medium', 'large'],
+      default: 'medium',
+    },
     includeScoreboardOverlay: { type: Boolean, default: true },
     overlayMode: {
       type: String,

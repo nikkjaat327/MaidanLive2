@@ -66,10 +66,27 @@ export function useObsStudio(matchId?: string) {
       if (payload?.matchId !== matchIdRef.current) return;
       setStudio((prev) => {
         if (!prev) return prev;
+        let nextCameras = prev.cameras;
+        if (Array.isArray(payload.cameras)) {
+          const prevByKey = new Map(
+            prev.cameras.map((c) => [c.cameraId || c.id, c])
+          );
+          nextCameras = payload.cameras.map((incoming: any) => {
+            const existing = prevByKey.get(incoming.cameraId || incoming.id);
+            if (!existing) return incoming;
+            return {
+              ...incoming,
+              obsBrowserSourceUrl:
+                incoming.obsBrowserSourceUrl || existing.obsBrowserSourceUrl || '',
+              vdoPushUrl: incoming.vdoPushUrl || existing.vdoPushUrl || '',
+              connectionUrl: incoming.connectionUrl || existing.connectionUrl || '',
+            };
+          });
+        }
         return {
           ...prev,
           profile: payload.profile || prev.profile,
-          cameras: Array.isArray(payload.cameras) ? payload.cameras : prev.cameras,
+          cameras: nextCameras,
           scenes: Array.isArray(payload.scenes) ? payload.scenes : prev.scenes,
         };
       });

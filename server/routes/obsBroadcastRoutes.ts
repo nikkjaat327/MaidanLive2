@@ -44,6 +44,7 @@ import {
   formatSafeScene,
   getStudioSnapshot,
   listBridgesForActor,
+  listObsInputs,
   listObsSceneItems,
   manageBroadcastSession,
   pairBridgeViaUserAccount,
@@ -72,7 +73,7 @@ import {
 } from '../utils/obsCrypto.ts';
 import { verifyTotpCode } from '../services/totpService.ts';
 import { LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
-import type { ObsLayoutType } from '../../src/utils/obsLayoutGeometry.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { emitBroadcastStudioEvent, emitStreamEvent } from '../socket/index.ts';
@@ -89,6 +90,14 @@ const broadcastCommandLimiter = rateLimit({
   message: { message: 'Too many broadcast control commands. Please slow down.' },
 });
 
+const previewRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Preview polling rate limit reached. Increase refresh interval.' },
+});
+
 const pairingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -96,6 +105,9 @@ const pairingLimiter = rateLimit({
   legacyHeaders: false,
   message: { message: 'Too many pairing or download attempts. Please wait a few minutes and try again.' },
 });
+
+const VALID_PIP_POSITIONS: PipPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const VALID_PIP_SIZES: PipSize[] = ['small', 'medium', 'large'];
 
 const INSTALLER_FILE_NAME = 'MaidanLive OBS Bridge Setup.exe';
 
@@ -2339,6 +2351,12 @@ router.post(
       const cameraIds = Array.isArray(req.body.cameraIds)
         ? req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string')
         : [];
+      const pipPosition: PipPosition | undefined = VALID_PIP_POSITIONS.includes(req.body.pipPosition)
+        ? req.body.pipPosition
+        : undefined;
+      const pipSize: PipSize | undefined = VALID_PIP_SIZES.includes(req.body.pipSize)
+        ? req.body.pipSize
+        : undefined;
 
       const result = await applyDynamicLayoutToObs(
         matchId,
@@ -2346,6 +2364,8 @@ router.post(
           layoutType,
           cameraIds,
           mainCameraId: typeof req.body.mainCameraId === 'string' ? req.body.mainCameraId : undefined,
+          pipPosition,
+          pipSize,
           sceneName: typeof req.body.sceneName === 'string' ? sanitizeText(req.body.sceneName, 120) : undefined,
           includeScoreboardOverlay: req.body.includeScoreboardOverlay !== false,
           override: Boolean(req.body.override),
@@ -2362,6 +2382,131 @@ router.post(
         ok: false,
         message: err?.message || 'Failed to apply multi-camera layout in OBS Studio.',
       });
+    }
+  }
+);
+
+// GET /api/obs/matches/:matchId/obs-inputs - Dynamically discover OBS inputs/sources
+router.get(
+  '/matches/:matchId/obs-inputs',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const inputs = await listObsInputs(matchId);
+      res.json({ ok: true, inputs });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'OBS Studio is not connected to list inputs.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/map-sources - Map discovered OBS sources to BroadcastCamera tiles
+router.post(
+  '/matches/:matchId/cameras/map-sources',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const stream = await LiveStream.findById(matchId).lean();
+      if (!stream) {
+        res.status(404).json({ message: 'Match stream not found.' });
+        return;
+      }
+
+      const rawMappings = Array.isArray(req.body.mappings) ? req.body.mappings.slice(0, 40) : [];
+      if (rawMappings.length === 0) {
+        res.status(400).json({ message: 'Provide at least one source mapping.' });
+        return;
+      }
+
+      const profile = await ensureObsProfileForMatch(matchId, req.user!._id as any);
+      const existing = await BroadcastCamera.find({ matchId }).sort({ cameraNumber: 1 });
+      let maxNum = existing.reduce((acc, c) => Math.max(acc, Number(c.cameraNumber) || 0), 0);
+      let mappedCount = 0;
+      let createdCount = 0;
+
+      for (const item of rawMappings) {
+        if (!item || typeof item !== 'object') continue;
+        const obsInputName = sanitizeText(item.obsInputName, 140);
+        if (!obsInputName) continue;
+        const displayName = sanitizeText(item.displayName || item.label || obsInputName, 100) || obsInputName;
+        const obsSceneName = sanitizeText(item.obsSceneName, 120);
+        const inputKind = sanitizeText(item.inputKind, 80).toLowerCase();
+        const isCamera = item.isCamera !== false;
+
+        let inferredType: CameraType = 'usb_capture';
+        if (inputKind.includes('browser')) inferredType = 'browser_source';
+        else if (inputKind.includes('ffmpeg') || inputKind.includes('vlc') || inputKind.includes('media'))
+          inferredType = 'ip_camera';
+
+        const matchedCam =
+          (typeof item.cameraId === 'string' &&
+            existing.find((c) => c.cameraId === item.cameraId)) ||
+          existing.find((c) => c.obsInputName === obsInputName);
+
+        if (matchedCam) {
+          matchedCam.name = displayName;
+          matchedCam.label = displayName;
+          matchedCam.obsInputName = obsInputName;
+          if (obsSceneName) matchedCam.obsSceneName = obsSceneName;
+          matchedCam.enabled = isCamera;
+          await matchedCam.save();
+          mappedCount += 1;
+        } else if (isCamera) {
+          maxNum += 1;
+          const pad = String(maxNum).padStart(2, '0');
+          const camId = `obs_src_${pad}_${Date.now().toString(36).slice(-3)}${maxNum}`;
+          const created = await BroadcastCamera.create({
+            matchId,
+            tournamentId: stream.tournamentId || null,
+            cameraId: camId,
+            name: displayName,
+            label: displayName,
+            cameraNumber: maxNum,
+            position: obsInputName,
+            cameraType: inferredType,
+            sourceType: 'obs_input',
+            obsSceneName: obsSceneName || profile.activeObsScene || `CAM ${maxNum} FULL`,
+            obsInputName,
+            resolution: '1280x720',
+            fps: 30,
+            bitrateKbps: 2500,
+            status: 'CONNECTED',
+            priority: maxNum * 10,
+            isDefault: existing.length === 0 && maxNum === 1,
+            enabled: true,
+            sortOrder: maxNum,
+            createdBy: req.user!._id,
+          });
+          existing.push(created);
+          createdCount += 1;
+        }
+      }
+
+      await writeBroadcastAudit({
+        matchId,
+        tournamentId: stream.tournamentId ? String(stream.tournamentId) : null,
+        actionType: 'CAMERA_UPDATED',
+        cameraName: `Mapped ${mappedCount + createdCount} OBS Sources`,
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
+      });
+      await emitFullStudioState(matchId);
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, mappedCount, createdCount, ...snapshot });
+    } catch (err: any) {
+      console.error('[OBS Source Map] Error:', err);
+      res.status(500).json({ message: err?.message || 'Failed to save OBS source mapping.' });
     }
   }
 );
@@ -2394,6 +2539,8 @@ router.post(
           ? req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string')
           : [],
         mainCameraId: sanitizeText(req.body.mainCameraId, 80),
+        pipPosition: VALID_PIP_POSITIONS.includes(req.body.pipPosition) ? req.body.pipPosition : 'bottom-right',
+        pipSize: VALID_PIP_SIZES.includes(req.body.pipSize) ? req.body.pipSize : 'medium',
         includeScoreboardOverlay: req.body.includeScoreboardOverlay !== false,
         overlayMode: ['full', 'compact', 'score_only', 'hidden'].includes(req.body.overlayMode)
           ? req.body.overlayMode
@@ -2665,6 +2812,7 @@ router.post(
   '/matches/:matchId/preview',
   authenticate,
   requireAdminPortal,
+  previewRateLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { matchId } = req.params;
@@ -2675,8 +2823,14 @@ router.post(
         res.status(400).json({ message: 'sourceName is required for OBS preview snapshot.' });
         return;
       }
+      const fallbackSourceNames: string[] = Array.isArray(req.body.fallbackSourceNames)
+        ? req.body.fallbackSourceNames
+            .slice(0, 6)
+            .map((name: unknown) => sanitizeText(name, 140))
+            .filter(Boolean)
+        : [];
 
-      const imageData = await captureObsPreviewImage(matchId, sourceName);
+      const imageData = await captureObsPreviewImage(matchId, sourceName, fallbackSourceNames);
       res.json({ ok: true, sourceName, imageData });
     } catch (err: any) {
       res.status(503).json({

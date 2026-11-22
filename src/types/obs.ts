@@ -1,9 +1,15 @@
-import type { ObsLayoutType } from '../utils/obsLayoutGeometry.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../utils/obsLayoutGeometry.ts';
 import type { BroadcastOverlayConfig, StreamingProvider, StreamStatus } from './index.ts';
 import type { OverlayMode, OverlayPosition } from '../utils/overlayConfig.ts';
 
 export type ObsConnectionMode = 'direct_ws' | 'local_agent';
 export type ObsConnectionStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
+
+export interface ObsDiscoveredInput {
+  inputName: string;
+  inputKind: string;
+  unversionedInputKind?: string;
+}
 
 export type CameraType =
   | 'smartphone_vdo'
@@ -57,9 +63,13 @@ export interface ObsControllerProfileData {
   obsWebSocketVersion: string;
   activeObsScene: string;
   activeCameraId: string;
+  activeCameraIds?: string[];
   activeLayoutType: ObsLayoutType;
+  activePipPosition?: PipPosition;
+  activePipSize?: PipSize;
   activeSceneId: string;
   obsScenes: string[];
+  obsInputs?: ObsDiscoveredInput[];
   sceneLabels?: Record<string, string>;
   obsStreamActive: boolean;
   obsStreamTimecode: string;
@@ -158,6 +168,8 @@ export interface BroadcastSceneData {
   layoutType: ObsLayoutType;
   cameraIds: string[];
   mainCameraId: string;
+  pipPosition?: PipPosition;
+  pipSize?: PipSize;
   includeScoreboardOverlay: boolean;
   overlayMode: OverlayMode;
   overlayPosition: OverlayPosition;
