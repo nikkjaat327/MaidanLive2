@@ -13,7 +13,13 @@ import {
   Wifi,
 } from 'lucide-react';
 import { Modal } from '../common/Modal.tsx';
-import type { BroadcastCameraData, CameraSourceType, CameraType } from '../../types/obs.ts';
+import type {
+  BroadcastCameraData,
+  CameraOrientationMode,
+  CameraPreviewFit,
+  CameraSourceType,
+  CameraType,
+} from '../../types/obs.ts';
 
 interface CameraFormModalProps {
   open: boolean;
@@ -44,6 +50,9 @@ export function CameraFormModal({
   const [bitrateKbps, setBitrateKbps] = useState('2000');
   const [lowBandwidthMode, setLowBandwidthMode] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [orientationMode, setOrientationMode] = useState<CameraOrientationMode>('auto');
+  const [previewFit, setPreviewFit] = useState<CameraPreviewFit>('contain');
+  const [portraitBackdropFill, setPortraitBackdropFill] = useState(true);
   const [obsSceneName, setObsSceneName] = useState('');
   const [obsInputName, setObsInputName] = useState('');
   const [operatorUserId, setOperatorUserId] = useState('');
@@ -70,6 +79,9 @@ export function CameraFormModal({
       setBitrateKbps(String(editingCamera.bitrateKbps || 2000));
       setLowBandwidthMode(Boolean(editingCamera.lowBandwidthMode));
       setFacingMode(editingCamera.facingMode || 'environment');
+      setOrientationMode(editingCamera.orientationMode || 'auto');
+      setPreviewFit(editingCamera.previewFit || 'contain');
+      setPortraitBackdropFill(editingCamera.portraitBackdropFill !== false);
       setObsSceneName(editingCamera.obsSceneName || '');
       setObsInputName(editingCamera.obsInputName || '');
       setOperatorUserId(editingCamera.operatorUserId || '');
@@ -91,6 +103,9 @@ export function CameraFormModal({
       setBitrateKbps('2000');
       setLowBandwidthMode(false);
       setFacingMode('environment');
+      setOrientationMode('auto');
+      setPreviewFit('contain');
+      setPortraitBackdropFill(true);
       setObsSceneName('');
       setObsInputName('');
       setOperatorUserId('');
@@ -120,6 +135,9 @@ export function CameraFormModal({
         bitrateKbps: Number(bitrateKbps) || 2000,
         lowBandwidthMode,
         facingMode,
+        orientationMode,
+        previewFit,
+        portraitBackdropFill,
         obsSceneName: obsSceneName.trim(),
         obsInputName: obsInputName.trim(),
         operatorUserId: operatorUserId || null,
@@ -280,6 +298,46 @@ export function CameraFormModal({
               <option value="environment">Rear (Main)</option>
               <option value="user">Front (Selfie)</option>
             </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Orientation / Rotation</label>
+            <select
+              value={orientationMode}
+              onChange={(e) => setOrientationMode(e.target.value as CameraOrientationMode)}
+              className="w-full min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
+            >
+              <option value="auto">Auto (Preserve Natural)</option>
+              <option value="0">0° (Standard)</option>
+              <option value="90">90° Clockwise</option>
+              <option value="180">180° Upside-Down</option>
+              <option value="270">270° Counter-CW</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">16:9 Frame Fit Mode</label>
+            <select
+              value={previewFit}
+              onChange={(e) => setPreviewFit(e.target.value as CameraPreviewFit)}
+              className="w-full min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
+            >
+              <option value="contain">Contain (Full Frame, Zero Crop)</option>
+              <option value="cover">Cover (Crop to Fill 16:9)</option>
+              <option value="fill">Fill (Stretch to 16:9)</option>
+            </select>
+          </div>
+          <div className="flex items-end pb-2">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={portraitBackdropFill}
+                onChange={(e) => setPortraitBackdropFill(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+              />
+              <span>Blur Backdrop for Portrait</span>
+            </label>
           </div>
         </div>
 

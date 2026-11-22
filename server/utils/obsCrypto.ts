@@ -108,6 +108,8 @@ export interface VdoNinjaLinksInput {
   bitrateKbps?: number;
   lowBandwidthMode?: boolean;
   facingMode?: 'environment' | 'user';
+  cover?: boolean;
+  rotationDeg?: number;
 }
 
 export function parseResolutionDimensions(resolution?: string): { width: number; height: number } {
@@ -158,7 +160,14 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
     .filter(Boolean)
     .join('&');
 
-  const obsViewUrl = `${baseUrl}/?view=${stream}&room=${room}${pwd}&scene&cleanoutput&noheader&nofooter&transparent`;
+  const viewExtras = [
+    input.cover ? '&cover' : '',
+    input.rotationDeg && [90, 180, 270].includes(Number(input.rotationDeg))
+      ? `&rotate=${Number(input.rotationDeg)}`
+      : '',
+  ].join('');
+
+  const obsViewUrl = `${baseUrl}/?view=${stream}&room=${room}${pwd}&scene&cleanoutput&noheader&nofooter&transparent${viewExtras}`;
   const directorUrl = `${baseUrl}/?director=${room}${pwd}${label}`;
 
   return {

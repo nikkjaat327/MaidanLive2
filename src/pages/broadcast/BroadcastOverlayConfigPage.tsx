@@ -15,6 +15,7 @@ import {
   Radio,
   RotateCcw,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Tv,
   Video,
@@ -30,11 +31,13 @@ import {
   OVERLAY_MODES,
   OVERLAY_POSITIONS,
   OVERLAY_SCALES,
+  OVERLAY_SLIDER_BOUNDS,
   OVERLAY_THEMES,
   OverlayMode,
   OverlayPosition,
   OverlayScale,
   OverlayTheme,
+  PRESET_SCALE_MULTIPLIERS,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails } from '../../utils/cricketScoring.ts';
@@ -67,10 +70,25 @@ const POSITION_LABELS: Record<OverlayPosition, string> = {
 };
 
 const SCALE_LABELS: Record<OverlayScale, string> = {
-  small: 'Small',
-  medium: 'Medium',
-  large: 'Large',
+  small: `Small (${Math.round(PRESET_SCALE_MULTIPLIERS.small * 100)}%)`,
+  medium: `Medium (${Math.round(PRESET_SCALE_MULTIPLIERS.medium * 100)}%)`,
+  large: `Large (${Math.round(PRESET_SCALE_MULTIPLIERS.large * 100)}%)`,
 };
+
+type SliderFieldKey = keyof typeof OVERLAY_SLIDER_BOUNDS;
+
+const SLIDER_FIELDS: Array<{
+  key: SliderFieldKey;
+  label: string;
+  hint: string;
+}> = [
+  { key: 'customScale', label: 'Overall Bar Size', hint: 'Master multiplier on top of preset' },
+  { key: 'textScale', label: 'Global Text Size', hint: 'Scales all names, stats & labels' },
+  { key: 'scoreScale', label: 'Score Numbers', hint: 'Main runs/wickets or goals pill size' },
+  { key: 'logoScale', label: 'Team Logos & Crest', hint: 'Team badges & MaidanLive shield' },
+  { key: 'teamNameScale', label: 'Team Names', hint: 'Short & full team titles' },
+  { key: 'metaScale', label: 'Stats & Sub-Strip Text', hint: 'CRR, batters, bowler & live pills' },
+];
 
 const TOGGLE_FIELDS: Array<{
   key: keyof Pick<
@@ -115,12 +133,17 @@ export function BroadcastOverlayConfigPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const [backdrop, setBackdrop] = useState<PreviewBackdrop>('stadium');
+  const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait'>('landscape');
   const [customBackdropUrl, setCustomBackdropUrl] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Responsive 16:9 canvas scaling inside preview box
+  // Responsive canvas scaling inside preview box (supports Landscape 16:9 & Portrait 9:16)
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const [previewWidth, setPreviewWidth] = useState(960);
+  const sliderDebounceRef = useRef<number | null>(null);
+  const sliderClearDraftRef = useRef<number | null>(null);
+  const lastSliderEditAtRef = useRef<number>(0);
+  const [sliderDraft, setSliderDraft] = useState<Partial<BroadcastOverlayConfig> | null>(null);
 
   const {
     stream,
@@ -157,7 +180,12 @@ export function BroadcastOverlayConfigPage() {
 
   useEffect(() => {
     const el = previewContainerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
+    if (!el) return;
+    const initialW = el.getBoundingClientRect().width;
+    if (initialW > 0) {
+      setPreviewWidth(initialW);
+    }
+    if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.contentRect.width > 0) {
@@ -167,7 +195,18 @@ export function BroadcastOverlayConfigPage() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [stream?.id]);
+  }, [stream?.id, previewOrientation]);
+
+  useEffect(() => {
+    return () => {
+      if (sliderDebounceRef.current !== null) {
+        window.clearTimeout(sliderDebounceRef.current);
+      }
+      if (sliderClearDraftRef.current !== null) {
+        window.clearTimeout(sliderClearDraftRef.current);
+      }
+    };
+  }, []);
 
   // Clean up object URL if uploaded
   useEffect(() => {
@@ -178,20 +217,28 @@ export function BroadcastOverlayConfigPage() {
     };
   }, [customBackdropUrl]);
 
+  const effectiveOverlayConfig = useMemo(
+    () => (sliderDraft ? normalizeOverlayConfig({ ...overlayConfig, ...sliderDraft }) : overlayConfig),
+    [overlayConfig, sliderDraft]
+  );
+
   async function persistOverlayPatch(partial: Partial<BroadcastOverlayConfig>) {
     if (!matchId) return;
     const prev = overlayConfig;
-    const next = normalizeOverlayConfig({ ...prev, ...partial });
+    const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...partial });
     if (partial.mode === 'hidden') next.visible = false;
     else if (partial.mode && partial.visible === undefined) next.visible = true;
     if (partial.visible === true && next.mode === 'hidden') next.mode = 'full';
 
+    setSliderDraft(null);
     setOverlayConfig(next);
     setSaving(true);
     setActionError(null);
     try {
       const res = await liveStreamService.updateOverlayConfig(matchId, next);
-      setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+      if (Date.now() - lastSliderEditAtRef.current >= 400) {
+        setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+      }
       setSaveNotice('Synced to live OBS sources');
       window.setTimeout(() => setSaveNotice(null), 2000);
     } catch (err) {
@@ -200,6 +247,63 @@ export function BroadcastOverlayConfigPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleSliderChange(key: SliderFieldKey, val: number) {
+    if (!matchId) return;
+    lastSliderEditAtRef.current = Date.now();
+    const nextDraft = { ...(sliderDraft || {}), [key]: val };
+    setSliderDraft(nextDraft);
+    const next = normalizeOverlayConfig({ ...overlayConfig, ...nextDraft });
+    setOverlayConfig(next);
+
+    if (sliderDebounceRef.current !== null) {
+      window.clearTimeout(sliderDebounceRef.current);
+    }
+    if (sliderClearDraftRef.current !== null) {
+      window.clearTimeout(sliderClearDraftRef.current);
+    }
+
+    sliderDebounceRef.current = window.setTimeout(async () => {
+      sliderDebounceRef.current = null;
+      setSaving(true);
+      setActionError(null);
+      try {
+        await liveStreamService.updateOverlayConfig(matchId, next);
+        setSaveNotice('Synced slider sizes to live OBS');
+        window.setTimeout(() => setSaveNotice(null), 1800);
+      } catch (err) {
+        setActionError(extractApiError(err, 'Failed to sync slider scale.'));
+      } finally {
+        setSaving(false);
+        sliderClearDraftRef.current = window.setTimeout(() => {
+          if (Date.now() - lastSliderEditAtRef.current >= 350) {
+            setSliderDraft(null);
+          }
+        }, 400);
+      }
+    }, 220);
+  }
+
+  function handleResetSliders() {
+    lastSliderEditAtRef.current = 0;
+    if (sliderDebounceRef.current !== null) {
+      window.clearTimeout(sliderDebounceRef.current);
+      sliderDebounceRef.current = null;
+    }
+    if (sliderClearDraftRef.current !== null) {
+      window.clearTimeout(sliderClearDraftRef.current);
+      sliderClearDraftRef.current = null;
+    }
+    setSliderDraft(null);
+    void persistOverlayPatch({
+      customScale: 1,
+      textScale: 1,
+      scoreScale: 1,
+      logoScale: 1,
+      teamNameScale: 1,
+      metaScale: 1,
+    });
   }
 
   function handleUploadFrame(e: ChangeEvent<HTMLInputElement>) {
@@ -224,7 +328,10 @@ export function BroadcastOverlayConfigPage() {
   const primaryObsPath = matchId ? `/broadcast/overlay/view/${matchId}` : '';
   const primaryObsUrl = `${origin}${primaryObsPath}`;
   const compactObsUrl = `${primaryObsUrl}?mode=compact`;
-  const previewScale = Math.max(0.2, previewWidth / 1920);
+  const isPreviewPortrait = previewOrientation === 'portrait';
+  const stageCanvasW = isPreviewPortrait ? 1080 : 1920;
+  const stageCanvasH = isPreviewPortrait ? 1920 : 1080;
+  const previewScale = Math.max(0.15, previewWidth / stageCanvasW);
 
   // Match summary helpers
   const sport = score?.sportType || stream?.gameName || 'Other';
@@ -486,11 +593,40 @@ export function BroadcastOverlayConfigPage() {
                     <div className="flex items-center gap-2">
                       <Monitor className="w-4 h-4 text-[#EA580C]" />
                       <h2 className="font-display text-sm font-bold uppercase tracking-wide text-white">
-                        Live 16:9 OBS Stage Preview (1920 x 1080)
+                        {isPreviewPortrait
+                          ? 'Live 9:16 Portrait Stage Preview (1080 x 1920)'
+                          : 'Live 16:9 OBS Stage Preview (1920 x 1080)'}
                       </h2>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="inline-flex rounded border border-slate-700 bg-slate-950 p-0.5 mr-1">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewOrientation('landscape')}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
+                            !isPreviewPortrait
+                              ? 'bg-[#EA580C] text-white'
+                              : 'text-slate-300 hover:text-white'
+                          }`}
+                        >
+                          <Monitor className="w-3 h-3" />
+                          <span>16:9</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewOrientation('portrait')}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
+                            isPreviewPortrait
+                              ? 'bg-[#EA580C] text-white'
+                              : 'text-slate-300 hover:text-white'
+                          }`}
+                        >
+                          <Smartphone className="w-3 h-3" />
+                          <span>9:16</span>
+                        </button>
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => setFloatingControlsOpen((prev) => !prev)}
@@ -546,50 +682,55 @@ export function BroadcastOverlayConfigPage() {
                     </div>
                   </div>
 
-                  {/* 16:9 Simulated Video Container */}
-                  <div
-                    ref={previewContainerRef}
-                    className={`relative w-full aspect-video overflow-hidden ${
-                      backdrop === 'checker' ? 'obs-checkerboard' : 'bg-slate-950'
-                    }`}
-                  >
-                    {backdrop === 'stadium' && (
-                      <img
-                        src={stadiumHeroImg}
-                        alt="Simulated stadium broadcast camera"
-                        className="absolute inset-0 w-full h-full object-cover brightness-75"
-                      />
-                    )}
-                    {backdrop === 'turf' && (
-                      <img
-                        src={arenaTurfImg}
-                        alt="Simulated sports turf broadcast camera"
-                        className="absolute inset-0 w-full h-full object-cover brightness-75"
-                      />
-                    )}
-                    {backdrop === 'custom' && customBackdropUrl && (
-                      <img
-                        src={customBackdropUrl}
-                        alt="Uploaded broadcast frame preview"
-                        className="absolute inset-0 w-full h-full object-cover"
-                      />
-                    )}
-
-                    {/* Exact 1920x1080 Scaled Reference Canvas */}
+                  {/* Simulated 16:9 Landscape or 9:16 Portrait Stage Container */}
+                  <div className={isPreviewPortrait ? 'py-4 bg-slate-950/90 flex justify-center' : ''}>
                     <div
-                      style={{
-                        width: 1920,
-                        height: 1080,
-                        transform: `scale(${previewScale})`,
-                        transformOrigin: 'top left',
-                      }}
-                      className="absolute top-0 left-0 pointer-events-none"
+                      ref={previewContainerRef}
+                      className={`relative overflow-hidden ${
+                        isPreviewPortrait
+                          ? 'w-full max-w-[320px] aspect-[9/16] rounded-lg border border-slate-700'
+                          : 'w-full aspect-video'
+                      } ${backdrop === 'checker' ? 'obs-checkerboard' : 'bg-slate-950'}`}
                     >
-                      <HotstarBroadcastOverlay
-                        stream={stream}
-                        score={score}
-                        config={overlayConfig}
-                      />
+                      {backdrop === 'stadium' && (
+                        <img
+                          src={stadiumHeroImg}
+                          alt="Simulated stadium broadcast camera"
+                          className="absolute inset-0 w-full h-full object-cover brightness-75"
+                        />
+                      )}
+                      {backdrop === 'turf' && (
+                        <img
+                          src={arenaTurfImg}
+                          alt="Simulated sports turf broadcast camera"
+                          className="absolute inset-0 w-full h-full object-cover brightness-75"
+                        />
+                      )}
+                      {backdrop === 'custom' && customBackdropUrl && (
+                        <img
+                          src={customBackdropUrl}
+                          alt="Uploaded broadcast frame preview"
+                          className="absolute inset-0 w-full h-full object-cover"
+                        />
+                      )}
+
+                      {/* Exact Scaled Reference Canvas (1920x1080 or 1080x1920) */}
+                      <div
+                        style={{
+                          width: stageCanvasW,
+                          height: stageCanvasH,
+                          transform: `scale(${previewScale})`,
+                          transformOrigin: 'top left',
+                        }}
+                        className="absolute top-0 left-0 pointer-events-none"
+                      >
+                        <HotstarBroadcastOverlay
+                          stream={stream}
+                          score={score}
+                          config={effectiveOverlayConfig}
+                          isPortrait={isPreviewPortrait}
+                        />
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -825,9 +966,14 @@ export function BroadcastOverlayConfigPage() {
 
                 {/* Scale Selector */}
                 <div className="space-y-2">
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Graphic Scale
-                  </label>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Graphic Scale Preset
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      90% Landscape · 100% Portrait
+                    </span>
+                  </div>
                   <div className="grid grid-cols-3 gap-2">
                     {OVERLAY_SCALES.map((sc) => {
                       const active = overlayConfig.scale === sc;
@@ -837,7 +983,7 @@ export function BroadcastOverlayConfigPage() {
                           type="button"
                           disabled={saving}
                           onClick={() => persistOverlayPatch({ scale: sc })}
-                          className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+                          className={`min-h-[38px] px-2 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
                             active
                               ? 'bg-[#EA580C] text-white border-[#EA580C]'
                               : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -845,6 +991,65 @@ export function BroadcastOverlayConfigPage() {
                         >
                           {SCALE_LABELS[sc]}
                         </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Granular Scrollable Size & Element Sliders */}
+                <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        Size &amp; Element Sliders
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={handleResetSliders}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold text-slate-300 bg-slate-950 border border-slate-700 rounded hover:bg-slate-800"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                      <span>Reset Sliders</span>
+                    </button>
+                  </div>
+
+                  <div className="max-h-[340px] overflow-y-auto pr-1.5 space-y-3">
+                    {SLIDER_FIELDS.map((field) => {
+                      const bounds = OVERLAY_SLIDER_BOUNDS[field.key];
+                      const currentVal = effectiveOverlayConfig[field.key];
+                      const pct = Math.round(currentVal * 100);
+                      return (
+                        <div
+                          key={field.key}
+                          className="p-2.5 rounded-lg bg-slate-950 border border-slate-800/90 space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="text-xs font-semibold text-slate-100 block truncate">
+                                {field.label}
+                              </span>
+                              <span className="text-[10px] text-slate-400 block truncate">
+                                {field.hint}
+                              </span>
+                            </div>
+                            <span className="font-mono text-xs font-bold text-[#FB923C] bg-[#EA580C]/15 border border-[#EA580C]/30 px-2 py-0.5 rounded shrink-0">
+                              {pct}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={bounds.min}
+                            max={bounds.max}
+                            step={bounds.step}
+                            value={currentVal}
+                            aria-label={field.label}
+                            onChange={(e) => handleSliderChange(field.key, Number(e.target.value))}
+                            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-[#EA580C]"
+                          />
+                        </div>
                       );
                     })}
                   </div>

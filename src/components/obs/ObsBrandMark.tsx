@@ -5,9 +5,26 @@ interface ObsBrandMarkProps {
   theme: ObsThemeTokens;
   compact?: boolean;
   accentColor?: string;
+  iconPx?: number;
+  fontPx?: number;
+  padX?: number;
+  padY?: number;
 }
 
-export function ObsBrandMark({ theme, compact = false, accentColor }: ObsBrandMarkProps) {
+export function ObsBrandMark({
+  theme,
+  compact = false,
+  accentColor,
+  iconPx,
+  fontPx,
+  padX,
+  padY,
+}: ObsBrandMarkProps) {
+  const resolvedIcon = iconPx ?? (compact ? 14 : 16);
+  const resolvedFont = fontPx ?? (compact ? 10 : 11);
+  const resolvedPadX = padX ?? (compact ? 10 : 12);
+  const resolvedPadY = padY ?? (compact ? 6 : 8);
+
   return (
     <div
       style={{
@@ -15,16 +32,19 @@ export function ObsBrandMark({ theme, compact = false, accentColor }: ObsBrandMa
           ? `linear-gradient(135deg, ${accentColor} 0%, #0F172A 150%)`
           : theme.brandBg,
         color: theme.brandText,
+        paddingLeft: resolvedPadX,
+        paddingRight: resolvedPadX,
+        paddingTop: resolvedPadY,
+        paddingBottom: resolvedPadY,
       }}
-      className={`flex items-center gap-1.5 shrink-0 select-none ${
-        compact ? 'px-2.5 py-1.5' : 'px-3 py-2'
-      }`}
+      className="flex items-center gap-1.5 shrink-0 select-none"
     >
       <svg
         viewBox="0 0 24 24"
         fill="none"
         aria-hidden="true"
-        className={`${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} shrink-0`}
+        style={{ width: resolvedIcon, height: resolvedIcon }}
+        className="shrink-0"
       >
         <path
           d="M12 2L20 5.5V11.8C20 16.9 16.6 20.8 12 22.5C7.4 20.8 4 16.9 4 11.8V5.5L12 2Z"
@@ -43,9 +63,8 @@ export function ObsBrandMark({ theme, compact = false, accentColor }: ObsBrandMa
         />
       </svg>
       <span
-        className={`font-display font-extrabold tracking-wider uppercase leading-none ${
-          compact ? 'text-[10px]' : 'text-[11px]'
-        }`}
+        style={{ fontSize: resolvedFont }}
+        className="font-display font-extrabold tracking-wider uppercase leading-none whitespace-nowrap"
       >
         MAIDAN<span className="opacity-80">LIVE</span>
       </span>
@@ -58,6 +77,7 @@ interface ObsTeamBadgeProps {
   shortName: string;
   accentColor?: string;
   size?: 'sm' | 'md';
+  sizePx?: number;
   showLogo?: boolean;
 }
 
@@ -66,6 +86,7 @@ export function ObsTeamBadge({
   shortName,
   accentColor = '#EA580C',
   size = 'md',
+  sizePx,
   showLogo = true,
 }: ObsTeamBadgeProps) {
   const [failed, setFailed] = useState(false);
@@ -74,12 +95,14 @@ export function ObsTeamBadge({
     setFailed(false);
   }, [logoUrl]);
 
-  const dim = size === 'sm' ? 'w-6 h-6 text-[9px]' : 'w-8 h-8 text-[10px]';
+  const resolvedPx = sizePx ?? (size === 'sm' ? 24 : 32);
+  const textPx = Math.max(8, Math.round(resolvedPx * 0.34));
 
   if (showLogo && logoUrl && logoUrl.trim() && !failed) {
     return (
       <div
-        className={`${dim} rounded-md overflow-hidden shrink-0 border border-white/20 bg-white/10 flex items-center justify-center shadow-inner`}
+        style={{ width: resolvedPx, height: resolvedPx }}
+        className="rounded-md overflow-hidden shrink-0 border border-white/20 bg-white/10 flex items-center justify-center shadow-inner"
       >
         <img
           src={logoUrl}
@@ -95,9 +118,12 @@ export function ObsTeamBadge({
   return (
     <div
       style={{
+        width: resolvedPx,
+        height: resolvedPx,
+        fontSize: textPx,
         background: `linear-gradient(135deg, ${accentColor} 0%, rgba(15,23,42,0.92) 125%)`,
       }}
-      className={`${dim} rounded-md shrink-0 border border-white/20 text-white font-display font-extrabold tracking-wider uppercase flex items-center justify-center shadow-inner`}
+      className="rounded-md shrink-0 border border-white/20 text-white font-display font-extrabold tracking-wider uppercase flex items-center justify-center shadow-inner"
     >
       {shortName.slice(0, 3)}
     </div>
@@ -109,6 +135,9 @@ interface ObsLiveStatusPillProps {
   isLive: boolean;
   variant?: 'live' | 'break' | 'warning' | 'final' | 'upcoming';
   compact?: boolean;
+  fontPx?: number;
+  padX?: number;
+  padY?: number;
 }
 
 export function ObsLiveStatusPill({
@@ -116,6 +145,9 @@ export function ObsLiveStatusPill({
   isLive,
   variant = 'live',
   compact = false,
+  fontPx,
+  padX,
+  padY,
 }: ObsLiveStatusPillProps) {
   const palette =
     variant === 'live'
@@ -128,14 +160,27 @@ export function ObsLiveStatusPill({
             ? 'bg-emerald-600 text-white border-emerald-300/40'
             : 'bg-slate-700 text-slate-100 border-slate-500/40';
 
+  const resolvedFont = fontPx ?? (compact ? 9 : 10);
+  const resolvedPadX = padX ?? (compact ? 8 : 10);
+  const resolvedPadY = padY ?? 4;
+  const dotSize = Math.max(5, Math.round(resolvedFont * 0.6));
+
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded border font-display font-extrabold uppercase tracking-wider shrink-0 leading-none ${palette} ${
-        compact ? 'px-2 py-1 text-[9px]' : 'px-2.5 py-1 text-[10px]'
-      }`}
+      style={{
+        fontSize: resolvedFont,
+        paddingLeft: resolvedPadX,
+        paddingRight: resolvedPadX,
+        paddingTop: resolvedPadY,
+        paddingBottom: resolvedPadY,
+      }}
+      className={`inline-flex items-center gap-1.5 rounded border font-display font-extrabold uppercase tracking-wider shrink-0 leading-none whitespace-nowrap ${palette}`}
     >
       {isLive && (
-        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse shrink-0" />
+        <span
+          style={{ width: dotSize, height: dotSize }}
+          className="rounded-full bg-white animate-pulse shrink-0"
+        />
       )}
       <span>{label}</span>
     </span>

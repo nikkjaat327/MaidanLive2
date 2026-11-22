@@ -7,11 +7,13 @@ import {
   Camera,
   ExternalLink,
   FlipHorizontal,
+  Lock,
   Mic,
   MicOff,
   Power,
   Radio,
   RefreshCw,
+  RotateCw,
   ShieldCheck,
   Smartphone,
   Wifi,
@@ -58,6 +60,39 @@ function readNetworkType(): string {
   return conn?.effectiveType || conn?.type || '';
 }
 
+function readViewportOrientation(): {
+  deviceOrientation: string;
+  orientationAngle: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  isLandscape: boolean;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      deviceOrientation: 'landscape-primary',
+      orientationAngle: 0,
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      isLandscape: true,
+    };
+  }
+  const vw = Math.round(window.innerWidth || 0);
+  const vh = Math.round(window.innerHeight || 0);
+  const rawType = window.screen?.orientation?.type || '';
+  const angle = Number(window.screen?.orientation?.angle ?? (vw >= vh ? 90 : 0));
+  const isLandscape = rawType
+    ? rawType.toLowerCase().includes('landscape')
+    : vw >= vh;
+  const deviceOrientation = rawType || (isLandscape ? 'landscape-primary' : 'portrait-primary');
+  return {
+    deviceOrientation,
+    orientationAngle: Number.isFinite(angle) ? angle : 0,
+    viewportWidth: vw,
+    viewportHeight: vh,
+    isLandscape,
+  };
+}
+
 export function CameraCompanionPage() {
   const { cameraDocId } = useParams<{ cameraDocId: string }>();
   const [searchParams] = useSearchParams();
@@ -74,6 +109,8 @@ export function CameraCompanionPage() {
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [batteryCharging, setBatteryCharging] = useState<boolean | null>(null);
   const [networkType, setNetworkType] = useState<string>(readNetworkType());
+  const [orientationState, setOrientationState] = useState(() => readViewportOrientation());
+  const [orientationLockMsg, setOrientationLockMsg] = useState<string | null>(null);
 
   const loadConfig = useCallback(async () => {
     if (!cameraDocId || !token) {
@@ -125,13 +162,32 @@ export function CameraCompanionPage() {
         .catch(() => {});
     }
 
+    const syncOrientation = () => {
+      setOrientationState(readViewportOrientation());
+    };
+    window.addEventListener('resize', syncOrientation);
+    window.addEventListener('orientationchange', syncOrientation);
+    try {
+      window.screen?.orientation?.addEventListener?.('change', syncOrientation);
+    } catch {
+      // Ignore unsupported orientation event listener
+    }
+
     const interval = window.setInterval(() => {
       setNetworkType(readNetworkType());
+      setOrientationState(readViewportOrientation());
     }, 5000);
 
     return () => {
       mounted = false;
       window.clearInterval(interval);
+      window.removeEventListener('resize', syncOrientation);
+      window.removeEventListener('orientationchange', syncOrientation);
+      try {
+        window.screen?.orientation?.removeEventListener?.('change', syncOrientation);
+      } catch {
+        // Ignore cleanup failure
+      }
     };
   }, []);
 
@@ -154,6 +210,10 @@ export function CameraCompanionPage() {
             resolutionActual: data?.camera.resolution || '',
             fpsActual: data?.camera.fps || null,
             audioMuted: overrideMuted !== undefined ? overrideMuted : audioMuted,
+            deviceOrientation: orientationState.deviceOrientation,
+            orientationAngle: orientationState.orientationAngle,
+            viewportWidth: orientationState.viewportWidth,
+            viewportHeight: orientationState.viewportHeight,
           },
         });
         setLastHeartbeatAt(res.lastHeartbeatAt || new Date().toISOString());
@@ -169,6 +229,10 @@ export function CameraCompanionPage() {
       batteryLevel,
       batteryCharging,
       audioMuted,
+      orientationState.deviceOrientation,
+      orientationState.orientationAngle,
+      orientationState.viewportWidth,
+      orientationState.viewportHeight,
       data?.camera.resolution,
       data?.camera.fps,
     ]
@@ -223,6 +287,28 @@ export function CameraCompanionPage() {
       return raw;
     }
   }, [data?.camera.vdoPushUrl, data?.camera.connectionUrl, facingMode, audioMuted]);
+
+  async function handleLockLandscape() {
+    setOrientationLockMsg(null);
+    try {
+      const orientationApi = window.screen?.orientation as unknown as {
+        lock?: (mode: string) => Promise<void>;
+      };
+      if (orientationApi && typeof orientationApi.lock === 'function') {
+        await orientationApi.lock('landscape');
+        setOrientationState(readViewportOrientation());
+        setOrientationLockMsg('Landscape orientation locked.');
+        return;
+      }
+      setOrientationLockMsg(
+        'Browser orientation lock is unavailable here (common on iOS Safari). Rotate your phone sideways and enable Landscape in Control Center.'
+      );
+    } catch {
+      setOrientationLockMsg(
+        'Could not auto-lock orientation in this mobile browser. Turn phone sideways and ensure Portrait Orientation Lock is OFF.'
+      );
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 safe-pt safe-pb">
@@ -372,8 +458,43 @@ export function CameraCompanionPage() {
                     <FlipHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
                     <span>Lens: {facingMode === 'environment' ? 'Rear Main' : 'Front Selfie'}</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLockLandscape}
+                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-700 rounded-lg hover:bg-slate-800"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Lock Landscape</span>
+                  </button>
                 </div>
               </div>
+
+              <div
+                className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg border text-xs ${
+                  orientationState.isLandscape
+                    ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200'
+                    : 'bg-amber-500/15 border-amber-500/40 text-amber-200'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5 font-semibold">
+                  <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {orientationState.isLandscape
+                      ? 'Landscape Ready (16:9)'
+                      : 'Portrait Detected — Rotate Phone Sideways for Fullscreen 16:9'}
+                  </span>
+                </span>
+                <span className="font-mono text-[11px] opacity-85">
+                  {orientationState.viewportWidth}×{orientationState.viewportHeight} · {orientationState.orientationAngle}°
+                </span>
+              </div>
+
+              {orientationLockMsg && (
+                <p className="text-[11px] text-amber-300 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                  {orientationLockMsg}
+                </p>
+              )}
 
               {!data.camera.enabled && (
                 <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs text-amber-300">

@@ -19,6 +19,8 @@ const APPROVED_COMMANDS = new Set([
   'get_snapshot',
   'switch_scene',
   'apply_layout',
+  'update_camera_transform',
+  'get_scene_transforms',
   'screenshot',
   'start_stream',
   'stop_stream',
@@ -32,6 +34,55 @@ const APPROVED_COMMANDS = new Set([
   'get_input_list',
   'reconnect_obs',
 ]);
+
+function buildCenterBoxTransform(box) {
+  const x = Number.isFinite(Number(box.x)) ? Number(box.x) : 0;
+  const y = Number.isFinite(Number(box.y)) ? Number(box.y) : 0;
+  const width = Math.max(64, Math.round(Number(box.width) || 1920));
+  const height = Math.max(64, Math.round(Number(box.height) || 1080));
+  const rawDeg = Number(box.rotation) || 0;
+  const rotation = (((Math.round(rawDeg / 90) * 90) % 360) + 360) % 360;
+  const isQuarter = rotation === 90 || rotation === 270;
+  const fit = String(box.previewFit || 'contain');
+  const boundsType =
+    fit === 'cover'
+      ? 'OBS_BOUNDS_SCALE_OUTER'
+      : fit === 'fill'
+        ? 'OBS_BOUNDS_STRETCH'
+        : 'OBS_BOUNDS_SCALE_INNER';
+
+  return {
+    positionX: Math.round(x + width / 2),
+    positionY: Math.round(y + height / 2),
+    alignment: 0,
+    rotation,
+    boundsType,
+    boundsAlignment: 0,
+    boundsWidth: isQuarter ? height : width,
+    boundsHeight: isQuarter ? width : height,
+    cropToBounds: fit === 'cover',
+  };
+}
+
+async function applySceneItemTransformSafe(sceneName, sceneItemId, box) {
+  const transform = buildCenterBoxTransform(box);
+  try {
+    await obs.call('SetSceneItemTransform', {
+      sceneName,
+      sceneItemId,
+      sceneItemTransform: transform,
+    });
+    return transform;
+  } catch {
+    const { cropToBounds: _omit, ...fallbackTransform } = transform;
+    await obs.call('SetSceneItemTransform', {
+      sceneName,
+      sceneItemId,
+      sceneItemTransform: fallbackTransform,
+    });
+    return fallbackTransform;
+  }
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -372,12 +423,15 @@ async function handleCommand(command, payload) {
     if (!sceneName) throw new Error('sceneName is required.');
 
     if (payload.ensureInput && payload.ensureInput.inputName) {
-      await ensureSceneAndInput(
+      const ensuredItemId = await ensureSceneAndInput(
         sceneName,
         String(payload.ensureInput.inputName),
         String(payload.ensureInput.inputKind || 'browser_source'),
         payload.ensureInput.inputSettings || {}
       );
+      if (ensuredItemId !== null && payload.ensureTransform) {
+        await applySceneItemTransformSafe(sceneName, ensuredItemId, payload.ensureTransform);
+      }
     }
 
     if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
@@ -450,19 +504,7 @@ async function handleCommand(command, payload) {
       );
       if (itemId !== null) {
         await obs.call('SetSceneItemEnabled', { sceneName, sceneItemId: itemId, sceneItemEnabled: true });
-        await obs.call('SetSceneItemTransform', {
-          sceneName,
-          sceneItemId: itemId,
-          sceneItemTransform: {
-            positionX: Number(box.x) || 0,
-            positionY: Number(box.y) || 0,
-            alignment: 5,
-            boundsType: 'OBS_BOUNDS_SCALE_INNER',
-            boundsAlignment: 0,
-            boundsWidth: Math.max(64, Number(box.width) || 640),
-            boundsHeight: Math.max(64, Number(box.height) || 360),
-          },
-        });
+        await applySceneItemTransformSafe(sceneName, itemId, box);
         appliedBoxItems.push({ itemId, slotIndex: Number(box.slotIndex) || 0 });
       }
     }
@@ -675,6 +717,82 @@ async function handleCommand(command, payload) {
       sceneItemId,
       sceneItemEnabled: Boolean(verify.sceneItemEnabled),
     };
+  }
+
+  if (command === 'update_camera_transform') {
+    const inputName = String(payload.inputName || '').trim();
+    let sceneName = String(payload.sceneName || '').trim();
+    if (!inputName) throw new Error('inputName is required.');
+    if (!sceneName) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      sceneName = String(cur?.currentProgramSceneName || '');
+    }
+    if (!sceneName) throw new Error('No target OBS scene found.');
+
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName });
+    const items = Array.isArray(itemsRes?.sceneItems) ? itemsRes.sceneItems : [];
+    const found = items.find((it) => it.sourceName === inputName);
+    let sceneItemId = found ? Number(found.sceneItemId) : null;
+    if (sceneItemId === null && payload.ensureInput) {
+      sceneItemId = await ensureSceneAndInput(
+        sceneName,
+        inputName,
+        String(payload.ensureInput.inputKind || 'browser_source'),
+        payload.ensureInput.inputSettings || {}
+      );
+    }
+    if (sceneItemId === null) {
+      throw new Error(`Source "${inputName}" is not inside OBS scene "${sceneName}".`);
+    }
+
+    const appliedTransform = await applySceneItemTransformSafe(sceneName, sceneItemId, {
+      x: Number(payload.x ?? 0),
+      y: Number(payload.y ?? 0),
+      width: Number(payload.width ?? 1920),
+      height: Number(payload.height ?? 1080),
+      rotation: Number(payload.rotation ?? 0),
+      previewFit: String(payload.previewFit || 'contain'),
+    });
+    await emitObsSnapshot();
+    return { sceneName, sceneItemId, inputName, transform: appliedTransform };
+  }
+
+  if (command === 'get_scene_transforms') {
+    let targetScene = String(payload.sceneName || '').trim();
+    if (!targetScene) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      targetScene = String(cur?.currentProgramSceneName || '');
+    }
+    if (!targetScene) throw new Error('No active OBS scene selected.');
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName: targetScene });
+    const items = Array.isArray(itemsRes?.sceneItems) ? itemsRes.sceneItems : [];
+    const transforms = [];
+    for (const it of items) {
+      try {
+        const tRes = await obs.call('GetSceneItemTransform', {
+          sceneName: targetScene,
+          sceneItemId: Number(it.sceneItemId),
+        });
+        const t = tRes?.sceneItemTransform || {};
+        transforms.push({
+          sceneItemId: Number(it.sceneItemId),
+          sourceName: String(it.sourceName || ''),
+          sourceWidth: Number(t.sourceWidth || 0),
+          sourceHeight: Number(t.sourceHeight || 0),
+          width: Number(t.width || 0),
+          height: Number(t.height || 0),
+          rotation: Number(t.rotation || 0),
+          boundsType: String(t.boundsType || ''),
+          boundsWidth: Number(t.boundsWidth || 0),
+          boundsHeight: Number(t.boundsHeight || 0),
+          positionX: Number(t.positionX || 0),
+          positionY: Number(t.positionY || 0),
+        });
+      } catch {
+        // Ignore items without transform
+      }
+    }
+    return { sceneName: targetScene, transforms };
   }
 
   throw new Error(`Unsupported command: ${command}`);

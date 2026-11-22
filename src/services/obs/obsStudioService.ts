@@ -6,6 +6,8 @@ import type {
   BroadcasterDashboardPayload,
   BroadcastersManagementPayload,
   BroadcastSceneData,
+  CameraOrientationMode,
+  CameraPreviewFit,
   LocalBridgeProbeStatus,
   ObsBridgeData,
   ObsBridgeInstallerStatus,
@@ -14,6 +16,7 @@ import type {
   ObsControllerProfileData,
   ObsDiscoveredInput,
   ObsSceneItemData,
+  ObsSceneTransformItem,
   ObsStudioPayload,
 } from '../../types/obs.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../../utils/obsLayoutGeometry.ts';
@@ -490,6 +493,39 @@ export const obsStudioService = {
     return data;
   },
 
+  async getSceneTransforms(
+    matchId: string,
+    sceneName = ''
+  ): Promise<{ ok: boolean; sceneName: string; transforms: ObsSceneTransformItem[] }> {
+    const { data } = await adminApi.get(`/obs/matches/${matchId}/scene-transforms`, {
+      params: sceneName ? { sceneName } : undefined,
+    });
+    return data;
+  },
+
+  async updateCameraTransform(
+    matchId: string,
+    cameraId: string,
+    payload: {
+      orientationMode?: CameraOrientationMode;
+      previewFit?: CameraPreviewFit;
+      portraitBackdropFill?: boolean;
+      override?: boolean;
+    }
+  ): Promise<{
+    ok: boolean;
+    obsSynced: boolean;
+    obsNote: string;
+    updatedScenes: string[];
+    camera: BroadcastCameraData;
+  }> {
+    const { data } = await adminApi.post(
+      `/obs/matches/${matchId}/cameras/${cameraId}/transform`,
+      payload
+    );
+    return data;
+  },
+
   async updateYouTubeOutput(
     matchId: string,
     payload: {
@@ -561,6 +597,9 @@ export const obsStudioService = {
         bitrateKbps: number;
         lowBandwidthMode: boolean;
         facingMode: 'environment' | 'user';
+        orientationMode?: CameraOrientationMode;
+        previewFit?: CameraPreviewFit;
+        portraitBackdropFill?: boolean;
         enabled: boolean;
         status: string;
         operatorName: string;

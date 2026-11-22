@@ -26,6 +26,17 @@ import {
 } from '../utils/obsCrypto.ts';
 import { computeObsLayoutBoxes, LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
+import {
+  buildObsSceneItemTransform,
+  normalizeOrientationMode,
+  normalizePreviewFit,
+  parseOrientationDegrees,
+} from '../../src/utils/obsTransformGeometry.ts';
+import type {
+  CameraOrientationMode,
+  CameraPreviewFit,
+  ObsSceneTransformItem,
+} from '../../src/utils/obsTransformGeometry.ts';
 import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/index.ts';
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
@@ -822,6 +833,9 @@ export function formatSafeCamera(
     bitrateKbps: Number(camera.bitrateKbps) || 2000,
     lowBandwidthMode: Boolean(camera.lowBandwidthMode),
     facingMode: camera.facingMode || 'environment',
+    orientationMode: normalizeOrientationMode(camera.orientationMode),
+    previewFit: normalizePreviewFit(camera.previewFit),
+    portraitBackdropFill: camera.portraitBackdropFill !== false,
     obsSceneName: camera.obsSceneName || '',
     obsInputName: camera.obsInputName || '',
     description: camera.description || '',
@@ -1384,6 +1398,45 @@ async function ensureSceneAndInputDirect(
   return Number(created.sceneItemId);
 }
 
+async function applyDirectSceneItemTransformSafe(
+  obs: OBSWebSocket,
+  sceneName: string,
+  sceneItemId: number,
+  box: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    rotation?: number;
+    previewFit?: string;
+  }
+) {
+  const transform = buildObsSceneItemTransform({
+    x: Number(box.x ?? 0),
+    y: Number(box.y ?? 0),
+    width: Number(box.width ?? 1920),
+    height: Number(box.height ?? 1080),
+    rotationDeg: Number(box.rotation ?? 0),
+    previewFit: box.previewFit,
+  });
+  try {
+    await obs.call('SetSceneItemTransform', {
+      sceneName,
+      sceneItemId,
+      sceneItemTransform: transform,
+    });
+    return transform;
+  } catch {
+    const { cropToBounds: _omit, ...fallbackTransform } = transform;
+    await obs.call('SetSceneItemTransform', {
+      sceneName,
+      sceneItemId,
+      sceneItemTransform: fallbackTransform,
+    });
+    return fallbackTransform;
+  }
+}
+
 export async function executeDirectObsCommand(
   matchId: string,
   obs: OBSWebSocket,
@@ -1399,13 +1452,21 @@ export async function executeDirectObsCommand(
     if (!sceneName) throw new Error('Scene name is required.');
 
     if (payload.ensureInput) {
-      await ensureSceneAndInputDirect(
+      const ensuredItemId = await ensureSceneAndInputDirect(
         obs,
         sceneName,
         payload.ensureInput.inputName,
         payload.ensureInput.inputKind || 'browser_source',
         payload.ensureInput.inputSettings || {}
       );
+      if (ensuredItemId !== null && payload.ensureTransform) {
+        await applyDirectSceneItemTransformSafe(
+          obs,
+          sceneName,
+          ensuredItemId,
+          payload.ensureTransform
+        );
+      }
     }
 
     if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
@@ -1495,19 +1556,7 @@ export async function executeDirectObsCommand(
           sceneItemId: itemId,
           sceneItemEnabled: true,
         });
-        await obs.call('SetSceneItemTransform', {
-          sceneName,
-          sceneItemId: itemId,
-          sceneItemTransform: {
-            positionX: Number(box.x) || 0,
-            positionY: Number(box.y) || 0,
-            alignment: 5,
-            boundsType: 'OBS_BOUNDS_SCALE_INNER',
-            boundsAlignment: 0,
-            boundsWidth: Math.max(64, Number(box.width) || 640),
-            boundsHeight: Math.max(64, Number(box.height) || 360),
-          },
-        });
+        await applyDirectSceneItemTransformSafe(obs, sceneName, itemId, box);
         appliedBoxItems.push({ itemId, slotIndex: Number(box.slotIndex) || 0 });
       }
     }
@@ -1743,6 +1792,83 @@ export async function executeDirectObsCommand(
           .filter((inp: any) => Boolean(inp.inputName))
       : [];
     return { inputs };
+  }
+
+  if (command === 'update_camera_transform') {
+    const inputName = String(payload.inputName || '').trim();
+    let sceneName = String(payload.sceneName || '').trim();
+    if (!inputName) throw new Error('inputName is required.');
+    if (!sceneName) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      sceneName = String((cur as any)?.currentProgramSceneName || '');
+    }
+    if (!sceneName) throw new Error('No target OBS scene found.');
+
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName });
+    const items = Array.isArray(itemsRes?.sceneItems) ? itemsRes.sceneItems : [];
+    const found = items.find((it: any) => it.sourceName === inputName);
+    let sceneItemId = found ? Number(found.sceneItemId) : null;
+    if (sceneItemId === null && payload.ensureInput) {
+      sceneItemId = await ensureSceneAndInputDirect(
+        obs,
+        sceneName,
+        inputName,
+        String(payload.ensureInput.inputKind || 'browser_source'),
+        payload.ensureInput.inputSettings || {}
+      );
+    }
+    if (sceneItemId === null) {
+      throw new Error(`Source "${inputName}" is not inside OBS scene "${sceneName}".`);
+    }
+
+    const appliedTransform = await applyDirectSceneItemTransformSafe(obs, sceneName, sceneItemId, {
+      x: Number(payload.x ?? 0),
+      y: Number(payload.y ?? 0),
+      width: Number(payload.width ?? 1920),
+      height: Number(payload.height ?? 1080),
+      rotation: Number(payload.rotation ?? 0),
+      previewFit: String(payload.previewFit || 'contain'),
+    });
+    await pullDirectObsSnapshot(matchId, obs);
+    return { sceneName, sceneItemId, inputName, transform: appliedTransform };
+  }
+
+  if (command === 'get_scene_transforms') {
+    let targetScene = String(payload.sceneName || '').trim();
+    if (!targetScene) {
+      const cur = await obs.call('GetCurrentProgramScene');
+      targetScene = String((cur as any)?.currentProgramSceneName || '');
+    }
+    if (!targetScene) throw new Error('No active OBS scene selected.');
+    const itemsRes = await obs.call('GetSceneItemList', { sceneName: targetScene });
+    const items = Array.isArray(itemsRes?.sceneItems) ? itemsRes.sceneItems : [];
+    const transforms: ObsSceneTransformItem[] = [];
+    for (const it of items) {
+      try {
+        const tRes = await obs.call('GetSceneItemTransform', {
+          sceneName: targetScene,
+          sceneItemId: Number(it.sceneItemId),
+        });
+        const t: any = (tRes as any)?.sceneItemTransform || {};
+        transforms.push({
+          sceneItemId: Number(it.sceneItemId),
+          sourceName: String(it.sourceName || ''),
+          sourceWidth: Number(t.sourceWidth || 0),
+          sourceHeight: Number(t.sourceHeight || 0),
+          width: Number(t.width || 0),
+          height: Number(t.height || 0),
+          rotation: Number(t.rotation || 0),
+          boundsType: String(t.boundsType || ''),
+          boundsWidth: Number(t.boundsWidth || 0),
+          boundsHeight: Number(t.boundsHeight || 0),
+          positionX: Number(t.positionX || 0),
+          positionY: Number(t.positionY || 0),
+        });
+      } catch {
+        // Skip non-transformable audio/filter items cleanly
+      }
+    }
+    return { sceneName: targetScene, transforms };
   }
 
   throw new Error(`Unsupported OBS command: ${command}`);
@@ -1994,6 +2120,19 @@ export async function switchCameraLive(
     };
   }
 
+  const rotationDeg = parseOrientationDegrees(camera.orientationMode);
+  const previewFit = normalizePreviewFit(camera.previewFit);
+  const ensureTransform = ensureInput
+    ? {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        rotation: rotationDeg,
+        previewFit,
+      }
+    : undefined;
+
   acquireSceneSwitchGuard(matchId);
   emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_REQUESTED', {
     matchId,
@@ -2005,6 +2144,7 @@ export async function switchCameraLive(
     const rpcRes = await callObsRpc(matchId, 'switch_scene', {
       sceneName: targetSceneName,
       ensureInput,
+      ensureTransform,
       scoreboardOverlay:
         profile.autoSyncScoreboardSource && baseAppUrl
           ? {
@@ -2210,6 +2350,8 @@ export async function applyDynamicLayoutToObs(
 
     return {
       ...box,
+      rotation: parseOrientationDegrees(cam.orientationMode),
+      previewFit: normalizePreviewFit(cam.previewFit),
       inputName,
       inputKind,
       inputSettings,
@@ -2530,6 +2672,188 @@ export async function toggleObsSceneItem(
   });
   await emitFullStudioState(matchId);
   return res;
+}
+
+export async function getSceneTransforms(matchId: string, sceneName = '') {
+  const res = await callObsRpc<{
+    sceneName: string;
+    transforms: ObsSceneTransformItem[];
+  }>(matchId, 'get_scene_transforms', { sceneName });
+  return res;
+}
+
+export async function updateCameraTransformInObs(
+  matchId: string,
+  cameraId: string,
+  params: {
+    orientationMode?: CameraOrientationMode | string;
+    previewFit?: CameraPreviewFit | string;
+    portraitBackdropFill?: boolean;
+  },
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (params.orientationMode !== undefined) {
+    cam.orientationMode = normalizeOrientationMode(params.orientationMode);
+  }
+  if (params.previewFit !== undefined) {
+    cam.previewFit = normalizePreviewFit(params.previewFit);
+  }
+  if (typeof params.portraitBackdropFill === 'boolean') {
+    cam.portraitBackdropFill = params.portraitBackdropFill;
+  }
+  await cam.save();
+
+  const rotationDeg = parseOrientationDegrees(cam.orientationMode);
+  const previewFit = normalizePreviewFit(cam.previewFit);
+  const targetInputName = cam.obsInputName?.trim() || `ML_CAM_${cam.cameraNumber}`;
+  const soloSceneName = cam.obsSceneName?.trim() || `CAM ${cam.cameraNumber} FULL`;
+
+  const isObsConnected =
+    profile.connectionMode === 'local_agent'
+      ? Boolean((await isMatchBridgeOnline(matchId)) && profile.connectionStatus === 'CONNECTED')
+      : Boolean(directSessions.get(matchId)?.connected);
+
+  let obsSynced = false;
+  let obsNote = '';
+  const updatedScenes: string[] = [];
+
+  if (isObsConnected && targetInputName) {
+    const roomPassword = await getRoomPasswordForProfile(profile);
+    let ensureInput: Record<string, any> | undefined;
+    if (cam.sourceType === 'vdoninja' && cam.vdoStreamId) {
+      const links = buildVdoNinjaLinks({
+        roomName: cam.vdoRoomName || profile.vdoRoomName,
+        streamId: cam.vdoStreamId,
+        password: roomPassword,
+        label: cam.label || cam.name,
+        resolution: cam.resolution,
+        fps: cam.fps,
+        bitrateKbps: cam.bitrateKbps,
+        lowBandwidthMode: cam.lowBandwidthMode,
+        facingMode: cam.facingMode,
+      });
+      ensureInput = {
+        inputName: targetInputName,
+        inputKind: 'browser_source',
+        inputSettings: { url: links.obsViewUrl, width: 1920, height: 1080 },
+      };
+    } else if (cam.sourceType === 'browser_source' && cam.connectionUrl) {
+      ensureInput = {
+        inputName: targetInputName,
+        inputKind: 'browser_source',
+        inputSettings: { url: cam.connectionUrl, width: 1920, height: 1080 },
+      };
+    }
+
+    // 1. Update active multi-cam box transform if this camera is currently in an active multi-cam scene
+    const activeScene = String(profile.activeObsScene || '').trim();
+    const activeCamIds = Array.isArray(profile.activeCameraIds) ? profile.activeCameraIds : [];
+    const activeLayout = (profile.activeLayoutType || 'SINGLE') as ObsLayoutType;
+
+    if (activeScene && activeScene !== soloSceneName && activeCamIds.includes(cam.cameraId)) {
+      try {
+        const boxes = computeObsLayoutBoxes(
+          activeLayout,
+          activeCamIds,
+          profile.activeCameraId || activeCamIds[0],
+          1920,
+          1080,
+          {
+            pipPosition: (profile.activePipPosition as PipPosition) || 'bottom-right',
+            pipSize: (profile.activePipSize as PipSize) || 'medium',
+          }
+        );
+        const matchBox = boxes.find((b) => b.cameraId === cam.cameraId);
+        if (matchBox) {
+          await callObsRpc(matchId, 'update_camera_transform', {
+            sceneName: activeScene,
+            inputName: targetInputName,
+            x: matchBox.x,
+            y: matchBox.y,
+            width: matchBox.width,
+            height: matchBox.height,
+            rotation: rotationDeg,
+            previewFit,
+            ensureInput,
+          });
+          obsSynced = true;
+          updatedScenes.push(activeScene);
+        }
+      } catch (err: any) {
+        obsNote = err?.message || 'Unable to update transform in active scene.';
+      }
+    }
+
+    // 2. Update solo camera scene transform (if active solo scene OR scene already exists in OBS)
+    const shouldUpdateSolo =
+      activeScene === soloSceneName ||
+      (Array.isArray(profile.obsScenes) && profile.obsScenes.includes(soloSceneName)) ||
+      Boolean(ensureInput);
+    if (shouldUpdateSolo) {
+      try {
+        await callObsRpc(matchId, 'update_camera_transform', {
+          sceneName: soloSceneName,
+          inputName: targetInputName,
+          x: 0,
+          y: 0,
+          width: 1920,
+          height: 1080,
+          rotation: rotationDeg,
+          previewFit,
+          ensureInput,
+        });
+        obsSynced = true;
+        updatedScenes.push(soloSceneName);
+      } catch (err: any) {
+        if (!obsSynced) {
+          obsNote = err?.message || `Source "${targetInputName}" not found in "${soloSceneName}".`;
+        }
+      }
+    }
+  } else {
+    obsNote = 'OBS is not currently connected; framing saved for next OBS sync.';
+  }
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_UPDATED',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    newScene: updatedScenes[0] || soloSceneName,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: 'SUCCESS',
+    metadata: {
+      orientationMode: cam.orientationMode,
+      previewFit: cam.previewFit,
+      portraitBackdropFill: cam.portraitBackdropFill,
+      rotationDeg,
+      obsSynced,
+      updatedScenes,
+      obsNote,
+    },
+  });
+  await emitFullStudioState(matchId);
+
+  return {
+    ok: true,
+    obsSynced,
+    obsNote,
+    updatedScenes,
+    camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+  };
 }
 
 export async function captureObsPreviewImage(

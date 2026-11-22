@@ -52,11 +52,27 @@ export function ObsOverlayViewerPage() {
     [overlayConfig, location.search]
   );
 
-  const scale = useMemo(() => {
+  const isPortrait = viewport.h > viewport.w;
+
+  const { canvasWidth, canvasHeight, scale } = useMemo(() => {
+    if (isPortrait) {
+      const w = 1080;
+      const aspect = viewport.h / Math.max(1, viewport.w);
+      const h = Math.max(1200, Math.round(w * aspect));
+      return {
+        canvasWidth: w,
+        canvasHeight: h,
+        scale: Math.max(0.2, viewport.w / w),
+      };
+    }
     const sw = viewport.w / 1920;
     const sh = viewport.h / 1080;
-    return Math.max(0.2, Math.min(sw, sh));
-  }, [viewport]);
+    return {
+      canvasWidth: 1920,
+      canvasHeight: 1080,
+      scale: Math.max(0.2, Math.min(sw, sh)),
+    };
+  }, [viewport, isPortrait]);
 
   if (loading || !stream) {
     return <div className="w-screen h-screen bg-transparent overflow-hidden" />;
@@ -69,14 +85,19 @@ export function ObsOverlayViewerPage() {
     <div className="w-screen h-screen bg-transparent overflow-hidden relative flex items-center justify-center">
       <div
         style={{
-          width: 1920,
-          height: 1080,
+          width: canvasWidth,
+          height: canvasHeight,
           transform: `scale(${scale})`,
           transformOrigin: 'center center',
         }}
         className="shrink-0 relative bg-transparent overflow-hidden"
       >
-        <HotstarBroadcastOverlay stream={stream} score={score} config={effectiveConfig} />
+        <HotstarBroadcastOverlay
+          stream={stream}
+          score={score}
+          config={effectiveConfig}
+          isPortrait={isPortrait}
+        />
       </div>
 
       {canShowAdminControls && (

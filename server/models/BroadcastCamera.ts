@@ -25,6 +25,9 @@ export type CameraConnectionStatus =
   | 'ERROR'
   | 'NOT_CONFIGURED';
 
+export type CameraOrientationMode = 'auto' | '0' | '90' | '180' | '270';
+export type CameraPreviewFit = 'contain' | 'cover' | 'fill';
+
 export interface ICameraTelemetry {
   networkType?: string;
   batteryLevel?: number | null;
@@ -33,6 +36,12 @@ export interface ICameraTelemetry {
   fpsActual?: number | null;
   audioMuted?: boolean;
   userAgent?: string;
+  videoWidth?: number | null;
+  videoHeight?: number | null;
+  deviceOrientation?: string;
+  orientationAngle?: number | null;
+  viewportWidth?: number | null;
+  viewportHeight?: number | null;
 }
 
 export interface IBroadcastCamera extends Document {
@@ -60,6 +69,9 @@ export interface IBroadcastCamera extends Document {
   bitrateKbps: number;
   lowBandwidthMode: boolean;
   facingMode: 'environment' | 'user';
+  orientationMode: CameraOrientationMode;
+  previewFit: CameraPreviewFit;
+  portraitBackdropFill: boolean;
   obsSceneName: string;
   obsInputName: string;
   description: string;
@@ -123,6 +135,17 @@ const broadcastCameraSchema = new Schema<IBroadcastCamera>(
     bitrateKbps: { type: Number, default: 2000, min: 300, max: 12000 },
     lowBandwidthMode: { type: Boolean, default: false },
     facingMode: { type: String, enum: ['environment', 'user'], default: 'environment' },
+    orientationMode: {
+      type: String,
+      enum: ['auto', '0', '90', '180', '270'],
+      default: 'auto',
+    },
+    previewFit: {
+      type: String,
+      enum: ['contain', 'cover', 'fill'],
+      default: 'contain',
+    },
+    portraitBackdropFill: { type: Boolean, default: true },
     obsSceneName: { type: String, trim: true, default: '', maxlength: 120 },
     obsInputName: { type: String, trim: true, default: '', maxlength: 120 },
     description: { type: String, trim: true, default: '', maxlength: 400 },

@@ -58,6 +58,8 @@ import type { LiveStreamData, StreamingProvider } from '../../types/index.ts';
 import type {
   BroadcastCameraData,
   CameraConnectionStatus,
+  CameraOrientationMode,
+  CameraPreviewFit,
   LocalBridgeProbeStatus,
   ObsBridgeData,
   ObsBridgeInstallerStatus,
@@ -66,6 +68,7 @@ import type {
   ObsConnectionStatus,
   ObsDiscoveredInput,
   ObsSceneItemData,
+  ObsSceneTransformItem,
 } from '../../types/obs.ts';
 import {
   OVERLAY_MODES,
@@ -78,9 +81,13 @@ import {
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../../utils/obsLayoutGeometry.ts';
+import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
 import { CameraFormModal, SmartphoneWizardModal } from '../../components/obsStudio/CameraSetupModal.tsx';
 import { CameraPreviewGrid } from '../../components/obsStudio/CameraPreviewGrid.tsx';
-import { ProgramAndCompositionWorkspace } from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
+import {
+  ProgramAndCompositionWorkspace,
+  ProgramMonitorMode,
+} from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
 import { BroadcastSetupChecklist } from '../../components/obsStudio/BroadcastSetupChecklist.tsx';
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
@@ -177,6 +184,7 @@ export function AdminObsBroadcastStudioPage() {
   const [stagedSceneName, setStagedSceneName] = useState<string>('');
   const [stagedIncludeScoreboard, setStagedIncludeScoreboard] = useState<boolean>(true);
   const [quickSwitchMode, setQuickSwitchMode] = useState<boolean>(false);
+  const [programMonitorMode, setProgramMonitorMode] = useState<ProgramMonitorMode>('live_video');
   const stagedInitMatchRef = useRef<string | null>(null);
 
   // Guide Drawer, Source Mapping Modal & Collapsible Advanced OBS Controls
@@ -251,6 +259,11 @@ export function AdminObsBroadcastStudioPage() {
   const [editingSceneLabels, setEditingSceneLabels] = useState(false);
   const [sceneLabelDrafts, setSceneLabelDrafts] = useState<Record<string, string>>({});
   const [savingSceneLabels, setSavingSceneLabels] = useState(false);
+
+  // Camera Orientation, Preview Fit & OBS SceneItemTransform telemetry
+  const [obsTransforms, setObsTransforms] = useState<ObsSceneTransformItem[]>([]);
+  const [detectedContentMap, setDetectedContentMap] = useState<Record<string, DetectedFrameContentInfo>>({});
+  const [updatingTransformCamId, setUpdatingTransformCamId] = useState<string | null>(null);
 
   // YouTube Live Output Association & Preview in Control Room
   const [ytInputDraft, setYtInputDraft] = useState('');
@@ -365,6 +378,8 @@ export function AdminObsBroadcastStudioPage() {
     setPreviewSnapshots({});
     setPreviewErrors({});
     setProgramSnapshotError(null);
+    setObsTransforms([]);
+    setDetectedContentMap({});
   }, [matchId]);
 
   // Seed staged composition once per match without clobbering user edits during background ticks
@@ -373,23 +388,21 @@ export function AdminObsBroadcastStudioPage() {
     if (stagedInitMatchRef.current === matchId) return;
     const p = studio.profile;
     const enabled = (studio.cameras || []).filter((c) => c.enabled);
-    if (
-      enabled.length === 0 &&
-      !p.activeCameraId &&
-      (!p.activeCameraIds || p.activeCameraIds.length === 0)
-    ) {
-      return;
-    }
+    if (enabled.length === 0) return;
+
+    const matchedByScene = p.activeObsScene
+      ? enabled.filter((c) => c.obsSceneName === p.activeObsScene).map((c) => c.cameraId)
+      : [];
     const rawIds =
       p.activeCameraIds && p.activeCameraIds.length > 0
         ? p.activeCameraIds
         : p.activeCameraId
           ? [p.activeCameraId]
-          : enabled[0]
-            ? [enabled[0].cameraId]
-            : [];
+          : matchedByScene.length > 0
+            ? matchedByScene
+            : [enabled[0].cameraId];
     const validIds = rawIds.filter((id) => enabled.some((c) => c.cameraId === id));
-    const seedIds = validIds.length > 0 ? validIds : enabled[0] ? [enabled[0].cameraId] : [];
+    const seedIds = validIds.length > 0 ? validIds : [enabled[0].cameraId];
     setStagedCameraIds(seedIds);
     setStagedMainCameraId(
       p.activeCameraId && seedIds.includes(p.activeCameraId) ? p.activeCameraId : seedIds[0] || ''
@@ -666,6 +679,7 @@ export function AdminObsBroadcastStudioPage() {
       await obsStudioService.switchCamera(matchId, cam.cameraId, Boolean(profile?.adminOverrideLocked));
       notifySuccess(`OBS switched live program to ${cam.name} (${cam.label}).`);
       await refetch();
+      void loadSceneTransforms(cam.obsSceneName || '');
       void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, `OBS refused camera switch for ${cam.name}.`));
@@ -682,6 +696,7 @@ export function AdminObsBroadcastStudioPage() {
       await obsStudioService.switchScene(matchId, sceneName, Boolean(profile?.adminOverrideLocked));
       notifySuccess(`OBS Program scene set to "${sceneName}".`);
       await refetch();
+      void loadSceneTransforms(sceneName);
       void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, `Failed to switch OBS scene to "${sceneName}".`));
@@ -711,6 +726,7 @@ export function AdminObsBroadcastStudioPage() {
         `Applied ${payload.layoutType} across ${payload.cameraIds.length} cameras in OBS (${res.sceneName || payload.sceneName || ''}).`
       );
       await refetch();
+      void loadSceneTransforms(res.sceneName || payload.sceneName || '');
       void handleCaptureActiveScenePreview({ background: true });
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to apply multi-camera layout in OBS.'));
@@ -814,6 +830,56 @@ export function AdminObsBroadcastStudioPage() {
       if (!options.background) setCapturingProgramPreview(false);
     }
   }
+
+  const captureProgramPreviewRef = useRef(handleCaptureActiveScenePreview);
+  captureProgramPreviewRef.current = handleCaptureActiveScenePreview;
+
+  const programUsesLiveWebRtc = useMemo(() => {
+    if (!obsConnected || !profile || programMonitorMode !== 'live_video') return false;
+    const activeIds = new Set<string>(profile.activeCameraIds || []);
+    if (profile.activeCameraId) activeIds.add(profile.activeCameraId);
+    const activeCams = enabledCameras.filter(
+      (c) =>
+        activeIds.has(c.cameraId) ||
+        (c.obsSceneName && profile.activeObsScene && c.obsSceneName === profile.activeObsScene)
+    );
+    return (
+      activeCams.length > 0 &&
+      activeCams.every((c) => c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl))
+    );
+  }, [obsConnected, profile, enabledCameras, programMonitorMode]);
+
+  // Independent continuous auto-polling for PROGRAM OUTPUT (never disabled by grid preview mode)
+  useEffect(() => {
+    if (!matchId || !obsConnected || !profile?.activeObsScene || activeTab !== 'live') return;
+
+    let timerId: number | null = null;
+    const intervalMs = programUsesLiveWebRtc ? 4500 : 1000;
+
+    const triggerCapture = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void captureProgramPreviewRef.current({ background: true });
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        triggerCapture();
+      }
+    };
+
+    triggerCapture();
+    timerId = window.setInterval(triggerCapture, intervalMs);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
+    return () => {
+      if (timerId !== null) window.clearInterval(timerId);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    };
+  }, [matchId, obsConnected, profile?.activeObsScene, activeTab, programUsesLiveWebRtc]);
 
   async function handleRefreshAllPreviews(
     targetCameras: BroadcastCameraData[],
@@ -920,6 +986,76 @@ export function AdminObsBroadcastStudioPage() {
     setActiveTab(target);
   }
 
+  const loadSceneTransforms = useCallback(
+    async (targetScene = '') => {
+      if (!matchId || !obsConnected) {
+        setObsTransforms([]);
+        return;
+      }
+      try {
+        const res = await obsStudioService.getSceneTransforms(matchId, targetScene);
+        setObsTransforms(res.transforms || []);
+      } catch {
+        // Keep last known transforms silently if bridge temporarily skips
+      }
+    },
+    [matchId, obsConnected]
+  );
+
+  const handleFrameContentDetected = useCallback(
+    (cameraKey: string, info: DetectedFrameContentInfo) => {
+      setDetectedContentMap((prev) => {
+        const existing = prev[cameraKey];
+        if (
+          existing &&
+          existing.orientation === info.orientation &&
+          Math.abs(existing.activeWidth - info.activeWidth) < 8 &&
+          Math.abs(existing.activeHeight - info.activeHeight) < 8 &&
+          existing.frameWidth === info.frameWidth &&
+          existing.frameHeight === info.frameHeight
+        ) {
+          return prev;
+        }
+        return { ...prev, [cameraKey]: info };
+      });
+    },
+    []
+  );
+
+  async function handleUpdateCameraFraming(
+    cam: BroadcastCameraData,
+    patch: {
+      orientationMode?: CameraOrientationMode;
+      previewFit?: CameraPreviewFit;
+      portraitBackdropFill?: boolean;
+    }
+  ) {
+    if (!matchId) return;
+    try {
+      setUpdatingTransformCamId(cam.cameraId);
+      setActionError(null);
+      const res = await obsStudioService.updateCameraTransform(matchId, cam.cameraId, {
+        ...patch,
+        override: Boolean(profile?.adminOverrideLocked),
+      });
+      notifySuccess(
+        res.obsSynced
+          ? `Updated ${cam.name} framing & synced OBS scene transform (${res.updatedScenes?.join(', ') || 'active scene'}).`
+          : `Saved ${cam.name} framing preference (syncs to OBS when connected).`
+      );
+      await refetch();
+      void loadSceneTransforms(profile?.activeObsScene || '');
+      void handleCaptureActiveScenePreview({ background: true });
+      if (obsConnected) {
+        void handleCaptureSourcePreview(cam, { silent: true, background: true });
+      }
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to update camera framing for ${cam.name}.`));
+    } finally {
+      setUpdatingTransformCamId(null);
+    }
+  }
+
   async function handleSyncObsState() {
     if (!matchId) return;
     try {
@@ -929,6 +1065,7 @@ export function AdminObsBroadcastStudioPage() {
       notifySuccess('Refreshed live OBS scenes and telemetry.');
       await refetch();
       await loadSceneItems(profile?.activeObsScene || '');
+      void loadSceneTransforms(profile?.activeObsScene || '');
     } catch (err) {
       setActionError(extractApiError(err, 'OBS Studio is not connected.'));
     } finally {
@@ -959,10 +1096,12 @@ export function AdminObsBroadcastStudioPage() {
   useEffect(() => {
     if (obsConnected && activeTab === 'live') {
       loadSceneItems(profile?.activeObsScene || '');
+      loadSceneTransforms(profile?.activeObsScene || '');
     } else if (!obsConnected) {
       setSceneItems([]);
+      setObsTransforms([]);
     }
-  }, [obsConnected, activeTab, profile?.activeObsScene, loadSceneItems]);
+  }, [obsConnected, activeTab, profile?.activeObsScene, loadSceneItems, loadSceneTransforms]);
 
   async function handleToggleSceneItem(item: ObsSceneItemData) {
     if (!matchId || !sceneItemsSceneName) return;
@@ -1934,6 +2073,8 @@ export function AdminObsBroadcastStudioPage() {
                 previewSnapshots={previewSnapshots}
                 programSnapshotError={programSnapshotError}
                 capturingProgramPreview={capturingProgramPreview}
+                programMonitorMode={programMonitorMode}
+                onChangeProgramMonitorMode={setProgramMonitorMode}
                 selectedCameraIds={stagedCameraIds}
                 mainCameraId={stagedMainCameraId}
                 layoutType={stagedLayoutType}
@@ -1953,6 +2094,11 @@ export function AdminObsBroadcastStudioPage() {
                 onApplyLive={handleApplyStagedComposition}
                 onSavePreset={handleSaveScenePreset}
                 onOpenConnectionTab={() => setActiveTab('connection')}
+                obsTransforms={obsTransforms}
+                detectedContentMap={detectedContentMap}
+                onFrameContentDetected={handleFrameContentDetected}
+                updatingTransformCamId={updatingTransformCamId}
+                onUpdateCameraFraming={handleUpdateCameraFraming}
               />
 
               {/* Visual Connected Camera Panel */}
@@ -1988,6 +2134,11 @@ export function AdminObsBroadcastStudioPage() {
                 onScaffoldCameras={handleScaffoldCameras}
                 onSyncObsState={handleSyncObsState}
                 onOpenCamerasTab={() => setActiveTab('cameras')}
+                obsTransforms={obsTransforms}
+                detectedContentMap={detectedContentMap}
+                onFrameContentDetected={handleFrameContentDetected}
+                updatingTransformCamId={updatingTransformCamId}
+                onUpdateCameraFraming={handleUpdateCameraFraming}
               />
 
               {/* Collapsible Advanced OBS Scenes, Scene Sources Visibility, Saved Presets & YouTube Output */}

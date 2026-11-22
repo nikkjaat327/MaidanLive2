@@ -42,6 +42,7 @@ import {
   formatSafeCamera,
   formatSafeProfile,
   formatSafeScene,
+  getSceneTransforms,
   getStudioSnapshot,
   listBridgesForActor,
   listObsInputs,
@@ -60,10 +61,15 @@ import {
   switchObsSceneByName,
   testObsConnection,
   toggleObsSceneItem,
+  updateCameraTransformInObs,
   updateObsBridge,
   verifyBridgeCredentials,
   writeBroadcastAudit,
 } from '../services/obsControllerService.ts';
+import {
+  normalizeOrientationMode,
+  normalizePreviewFit,
+} from '../../src/utils/obsTransformGeometry.ts';
 import {
   buildVdoNinjaLinks,
   decryptObsSecret,
@@ -261,6 +267,9 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
         bitrateKbps: cam.bitrateKbps,
         lowBandwidthMode: cam.lowBandwidthMode,
         facingMode: cam.facingMode,
+        orientationMode: normalizeOrientationMode(cam.orientationMode),
+        previewFit: normalizePreviewFit(cam.previewFit),
+        portraitBackdropFill: cam.portraitBackdropFill !== false,
         enabled: cam.enabled,
         status: cam.status,
         operatorName: cam.operatorName,
@@ -339,6 +348,12 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
           ? req.body.telemetry.audioMuted
           : cam.audioMuted;
       cam.audioMuted = Boolean(audioMuted);
+      const clampInt = (v: unknown, min: number, max: number): number | null => {
+        if (v === undefined || v === null || v === '') return null;
+        const n = Number(v);
+        if (!Number.isFinite(n)) return null;
+        return Math.max(min, Math.min(max, Math.round(n)));
+      };
       cam.telemetry = {
         networkType: sanitizeText(req.body.telemetry.networkType, 40),
         batteryLevel:
@@ -353,6 +368,16 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
         fpsActual:
           req.body.telemetry.fpsActual !== undefined ? Number(req.body.telemetry.fpsActual) : null,
         audioMuted: Boolean(audioMuted),
+        videoWidth: clampInt(req.body.telemetry.videoWidth, 64, 7680) ?? cam.telemetry?.videoWidth ?? null,
+        videoHeight: clampInt(req.body.telemetry.videoHeight, 64, 7680) ?? cam.telemetry?.videoHeight ?? null,
+        deviceOrientation:
+          typeof req.body.telemetry.deviceOrientation === 'string'
+            ? sanitizeText(req.body.telemetry.deviceOrientation, 40)
+            : cam.telemetry?.deviceOrientation || '',
+        orientationAngle:
+          clampInt(req.body.telemetry.orientationAngle, -360, 360) ?? cam.telemetry?.orientationAngle ?? null,
+        viewportWidth: clampInt(req.body.telemetry.viewportWidth, 64, 7680) ?? cam.telemetry?.viewportWidth ?? null,
+        viewportHeight: clampInt(req.body.telemetry.viewportHeight, 64, 7680) ?? cam.telemetry?.viewportHeight ?? null,
       };
     }
     await cam.save();
@@ -1925,6 +1950,9 @@ router.post(
         bitrateKbps: Math.max(300, Math.min(12000, Number(req.body.bitrateKbps) || 2000)),
         lowBandwidthMode: Boolean(req.body.lowBandwidthMode),
         facingMode: req.body.facingMode === 'user' ? 'user' : 'environment',
+        orientationMode: normalizeOrientationMode(req.body.orientationMode),
+        previewFit: normalizePreviewFit(req.body.previewFit),
+        portraitBackdropFill: req.body.portraitBackdropFill !== false,
         obsSceneName: sanitizeText(req.body.obsSceneName, 120) || `CAM ${nextNum} FULL`,
         obsInputName: sanitizeText(req.body.obsInputName, 120) || `ML_CAM_${nextNum}`,
         description: sanitizeText(req.body.description, 400),
@@ -2116,6 +2144,9 @@ router.patch(
       if (req.body.bitrateKbps !== undefined) cam.bitrateKbps = Math.max(300, Math.min(12000, Number(req.body.bitrateKbps) || 2000));
       if (typeof req.body.lowBandwidthMode === 'boolean') cam.lowBandwidthMode = req.body.lowBandwidthMode;
       if (req.body.facingMode === 'user' || req.body.facingMode === 'environment') cam.facingMode = req.body.facingMode;
+      if (req.body.orientationMode !== undefined) cam.orientationMode = normalizeOrientationMode(req.body.orientationMode);
+      if (req.body.previewFit !== undefined) cam.previewFit = normalizePreviewFit(req.body.previewFit);
+      if (typeof req.body.portraitBackdropFill === 'boolean') cam.portraitBackdropFill = req.body.portraitBackdropFill;
       if (typeof req.body.obsSceneName === 'string') cam.obsSceneName = sanitizeText(req.body.obsSceneName, 120);
       if (typeof req.body.obsInputName === 'string') cam.obsInputName = sanitizeText(req.body.obsInputName, 120);
       if (typeof req.body.description === 'string') cam.description = sanitizeText(req.body.description, 400);
@@ -2330,6 +2361,43 @@ router.post(
     } catch (err: any) {
       const code = Number(err?.statusCode) || 503;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to switch OBS camera.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/transform - Update orientation, fit mode & apply OBS transform
+router.post(
+  '/matches/:matchId/cameras/:cameraId/transform',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const result = await updateCameraTransformInObs(
+        matchId,
+        cameraId,
+        {
+          orientationMode: req.body.orientationMode,
+          previewFit: req.body.previewFit,
+          portraitBackdropFill:
+            typeof req.body.portraitBackdropFill === 'boolean'
+              ? req.body.portraitBackdropFill
+              : undefined,
+        },
+        req.user!,
+        Boolean(req.body.override)
+      );
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ...result, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to update camera transform.',
+      });
     }
   }
 );
@@ -2627,6 +2695,29 @@ router.get(
       res.status(code).json({
         ok: false,
         message: err?.message || 'OBS Studio is not connected to inspect scene sources.',
+      });
+    }
+  }
+);
+
+// GET /api/obs/matches/:matchId/scene-transforms?sceneName=...
+router.get(
+  '/matches/:matchId/scene-transforms',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const sceneName =
+        typeof req.query.sceneName === 'string' ? sanitizeText(req.query.sceneName, 120) : '';
+      const result = await getSceneTransforms(matchId, sceneName);
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'OBS Studio is not connected to inspect scene transforms.',
       });
     }
   }

@@ -18,7 +18,22 @@ import {
   Video,
   Zap,
 } from 'lucide-react';
-import type { BroadcastCameraData, ObsControllerProfileData } from '../../types/obs.ts';
+import type {
+  BroadcastCameraData,
+  CameraOrientationMode,
+  CameraPreviewFit,
+  ObsControllerProfileData,
+  ObsSceneTransformItem,
+} from '../../types/obs.ts';
+import {
+  detectFrameActiveContentOrientation,
+  getPreviewMediaStyles,
+  normalizeOrientationMode,
+  normalizePreviewFit,
+  parseOrientationDegrees,
+  resolveCameraOrientationSummary,
+} from '../../utils/obsTransformGeometry.ts';
+import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
 import { EmptyState } from '../common/EmptyState.tsx';
 
 export type GridPreviewMode = 'snapshots' | 'live_vdo';
@@ -63,6 +78,18 @@ interface CameraPreviewGridProps {
   onScaffoldCameras: (count: number) => Promise<void> | void;
   onSyncObsState: () => Promise<void> | void;
   onOpenCamerasTab: () => void;
+  obsTransforms?: ObsSceneTransformItem[];
+  detectedContentMap?: Record<string, DetectedFrameContentInfo>;
+  onFrameContentDetected?: (cameraKey: string, info: DetectedFrameContentInfo) => void;
+  updatingTransformCamId?: string | null;
+  onUpdateCameraFraming?: (
+    cam: BroadcastCameraData,
+    patch: {
+      orientationMode?: CameraOrientationMode;
+      previewFit?: CameraPreviewFit;
+      portraitBackdropFill?: boolean;
+    }
+  ) => Promise<void> | void;
 }
 
 function isCameraInProgram(
@@ -145,8 +172,20 @@ export function CameraPreviewGrid({
   onScaffoldCameras,
   onSyncObsState,
   onOpenCamerasTab,
+  obsTransforms = [],
+  detectedContentMap = {},
+  onFrameContentDetected,
+  updatingTransformCamId = null,
+  onUpdateCameraFraming,
 }: CameraPreviewGridProps) {
   const enabledCameras = useMemo(() => cameras.filter((c) => c.enabled), [cameras]);
+  const obsTransformLookup = useMemo(() => {
+    const map = new Map<string, ObsSceneTransformItem>();
+    for (const t of obsTransforms) {
+      if (t.sourceName) map.set(t.sourceName, t);
+    }
+    return map;
+  }, [obsTransforms]);
 
   const activeCameras = useMemo(
     () => enabledCameras.filter((cam) => isCameraActiveOrOnline(cam, profile, obsConnected)),
@@ -196,31 +235,34 @@ export function CameraPreviewGrid({
     });
   }, [filterMode, activeCameras, enabledCameras, profile, obsConnected]);
 
-  const displayedCamerasRef = useRef(displayedCameras);
-  displayedCamerasRef.current = displayedCameras;
+  const snapshotPollTargets = useMemo(
+    () =>
+      previewMode === 'snapshots'
+        ? displayedCameras
+        : displayedCameras.filter(
+            (c) => !(c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl))
+          ),
+    [previewMode, displayedCameras]
+  );
+
+  const snapshotPollTargetsRef = useRef(snapshotPollTargets);
+  snapshotPollTargetsRef.current = snapshotPollTargets;
   const refreshingAllPreviewsRef = useRef(refreshingAllPreviews);
   refreshingAllPreviewsRef.current = refreshingAllPreviews;
   const onRefreshAllPreviewsRef = useRef(onRefreshAllPreviews);
   onRefreshAllPreviewsRef.current = onRefreshAllPreviews;
-  const onCaptureActiveScenePreviewRef = useRef(onCaptureActiveScenePreview);
-  onCaptureActiveScenePreviewRef.current = onCaptureActiveScenePreview;
-  const hasDisplayedCameras = displayedCameras.length > 0;
-  const hasActiveScene = Boolean(obsConnected && profile.activeObsScene);
+  const hasSnapshotTargets = snapshotPollTargets.length > 0;
 
-  // Automatic rate-limited snapshot polling; pauses cleanly when tab is hidden
+  // Automatic rate-limited snapshot polling for OBS source tiles; pauses cleanly when tab is hidden
   useEffect(() => {
-    if (!obsConnected || previewMode !== 'snapshots' || !tabVisible) return;
-    if (!hasDisplayedCameras && !hasActiveScene) return;
+    if (!obsConnected || !tabVisible || !hasSnapshotTargets) return;
 
     const runCapture = () => {
       if (document.visibilityState !== 'visible') return;
       if (refreshingAllPreviewsRef.current) return;
-      const targets = [...displayedCamerasRef.current];
+      const targets = [...snapshotPollTargetsRef.current];
       if (targets.length > 0) {
         void onRefreshAllPreviewsRef.current(targets, { background: true });
-      }
-      if (onCaptureActiveScenePreviewRef.current) {
-        void onCaptureActiveScenePreviewRef.current({ background: true });
       }
     };
 
@@ -229,7 +271,7 @@ export function CameraPreviewGrid({
 
     const id = window.setInterval(runCapture, pollSeconds * 1000);
     return () => window.clearInterval(id);
-  }, [obsConnected, previewMode, pollSeconds, tabVisible, hasDisplayedCameras, hasActiveScene]);
+  }, [obsConnected, pollSeconds, tabVisible, hasSnapshotTargets]);
 
   return (
     <section className="rounded-xl border border-slate-800 bg-slate-950 text-slate-100 p-4 sm:p-5 space-y-4">
@@ -484,6 +526,31 @@ export function CameraPreviewGrid({
                     ? buildVdoPreviewUrl(cam.obsBrowserSourceUrl, { noAudio: true })
                     : '';
                 const showLiveVdo = previewMode === 'live_vdo' && Boolean(tileVdoUrl);
+                const obsTransform =
+                  obsTransformLookup.get(cam.obsInputName || '') ||
+                  obsTransformLookup.get(cam.obsSceneName || '') ||
+                  obsTransformLookup.get(cam.name || '') ||
+                  null;
+                const frameInfo = detectedContentMap[cam.cameraId] || null;
+                const oriSummary = resolveCameraOrientationSummary({
+                  telemetry: cam.telemetry,
+                  obsTransform,
+                  frameContent: frameInfo,
+                });
+                const tileFit = normalizePreviewFit(cam.previewFit);
+                const tileOrientationMode = normalizeOrientationMode(cam.orientationMode);
+                const tileRotationDeg = parseOrientationDegrees(tileOrientationMode);
+                const mediaStyles = getPreviewMediaStyles({
+                  rotationDeg: tileRotationDeg,
+                  previewFit: tileFit,
+                  isPortraitContent: oriSummary.isPortraitFeed,
+                  contentAspectRatio: frameInfo?.aspectRatio,
+                  skipRotation: !showLiveVdo,
+                });
+                const showPortraitBlurBackdrop =
+                  cam.portraitBackdropFill !== false &&
+                  tileFit === 'contain' &&
+                  oriSummary.isPortraitFeed;
 
                 return (
                   <motion.div
@@ -525,19 +592,41 @@ export function CameraPreviewGrid({
                       }
                       className="relative block w-full aspect-video bg-black overflow-hidden border-b border-slate-800 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C] cursor-pointer"
                     >
+                      {showPortraitBlurBackdrop && snap && (
+                        <img
+                          src={snap.imageData}
+                          alt=""
+                          aria-hidden="true"
+                          className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-45 pointer-events-none"
+                        />
+                      )}
                       {showLiveVdo ? (
                         <iframe
                           key={`tile:${cam.cameraId}:${tileVdoUrl}`}
                           title={`Live monitor ${cam.name}`}
                           src={tileVdoUrl}
                           allow="autoplay; fullscreen; encrypted-media"
-                          className="w-full h-full border-0 pointer-events-none bg-black"
+                          style={
+                            mediaStyles.transform !== 'none'
+                              ? { transform: mediaStyles.transform, transformOrigin: 'center center' }
+                              : undefined
+                          }
+                          className="relative z-[1] w-full h-full border-0 pointer-events-none bg-transparent transition-transform duration-150"
                         />
                       ) : snap ? (
                         <img
                           src={snap.imageData}
                           alt={`OBS preview for ${cam.label || cam.name}`}
-                          className="w-full h-full object-contain bg-black"
+                          onLoad={(e) => {
+                            if (!onFrameContentDetected) return;
+                            const detected = detectFrameActiveContentOrientation(e.currentTarget);
+                            if (detected) {
+                              onFrameContentDetected(cam.cameraId, detected);
+                            }
+                          }}
+                          className={`relative z-[1] w-full h-full ${mediaStyles.objectClass} ${
+                            showPortraitBlurBackdrop ? 'bg-transparent' : 'bg-black'
+                          }`}
                         />
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center space-y-1.5">
@@ -591,11 +680,30 @@ export function CameraPreviewGrid({
                       </div>
 
                       {/* Bottom Scrim Metadata */}
-                      <div className="absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-gradient-to-t from-black/85 via-black/40 to-transparent flex items-center justify-between gap-2 text-[10px] font-mono text-slate-200 tabular-nums">
+                      <div className="relative z-10 absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-gradient-to-t from-black/85 via-black/40 to-transparent flex items-center justify-between gap-2 text-[10px] font-mono text-slate-200 tabular-nums">
                         <span className="truncate">
                           {cam.obsInputName || cam.obsSceneName || cam.sourceType}
                         </span>
-                        {snap && <span className="shrink-0">{snap.capturedAt}</span>}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {oriSummary.orientation !== 'UNKNOWN' && (
+                            <span
+                              title={
+                                oriSummary.sourceLabel
+                                  ? `Detected via ${oriSummary.sourceLabel}${oriSummary.dimensionText ? ` (${oriSummary.dimensionText})` : ''}`
+                                  : undefined
+                              }
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                oriSummary.isPortraitFeed
+                                  ? 'bg-amber-500/25 text-amber-200 border border-amber-400/40'
+                                  : 'bg-slate-900/80 text-slate-200 border border-white/10'
+                              }`}
+                            >
+                              {oriSummary.isPortraitFeed ? 'PORTRAIT' : oriSummary.orientation}
+                              {oriSummary.dimensionText ? ` · ${oriSummary.dimensionText}` : ''}
+                            </span>
+                          )}
+                          {snap && <span className="shrink-0">{snap.capturedAt}</span>}
+                        </div>
                       </div>
                     </button>
 
@@ -707,6 +815,49 @@ export function CameraPreviewGrid({
                           </button>
                         </div>
                       </div>
+
+                      {onUpdateCameraFraming && (
+                        <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80 text-[10px]">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="text-slate-500 font-semibold uppercase">Fit:</span>
+                            <select
+                              aria-label={`Preview fit mode for ${cam.label || cam.name}`}
+                              value={tileFit}
+                              disabled={updatingTransformCamId === cam.cameraId}
+                              onChange={(e) =>
+                                onUpdateCameraFraming(cam, {
+                                  previewFit: e.target.value as CameraPreviewFit,
+                                })
+                              }
+                              className="min-h-[24px] px-1.5 rounded bg-slate-950 border border-slate-800 text-slate-200 font-mono text-[10px] disabled:opacity-50"
+                            >
+                              <option value="contain">Contain</option>
+                              <option value="cover">Cover</option>
+                              <option value="fill">Fill</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="text-slate-500 font-semibold uppercase">Rot:</span>
+                            <select
+                              aria-label={`Rotation correction for ${cam.label || cam.name}`}
+                              value={tileOrientationMode}
+                              disabled={updatingTransformCamId === cam.cameraId}
+                              onChange={(e) =>
+                                onUpdateCameraFraming(cam, {
+                                  orientationMode: e.target.value as CameraOrientationMode,
+                                })
+                              }
+                              className="min-h-[24px] px-1.5 rounded bg-slate-950 border border-slate-800 text-slate-200 font-mono text-[10px] disabled:opacity-50"
+                            >
+                              <option value="auto">Auto</option>
+                              <option value="0">0°</option>
+                              <option value="90">90°</option>
+                              <option value="180">180°</option>
+                              <option value="270">270°</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 );

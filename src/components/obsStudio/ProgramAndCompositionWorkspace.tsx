@@ -20,8 +20,25 @@ import {
   PipPosition,
   PipSize,
 } from '../../utils/obsLayoutGeometry.ts';
-import type { BroadcastCameraData, ObsControllerProfileData } from '../../types/obs.ts';
+import type {
+  BroadcastCameraData,
+  CameraOrientationMode,
+  CameraPreviewFit,
+  ObsControllerProfileData,
+  ObsSceneTransformItem,
+} from '../../types/obs.ts';
+import {
+  detectFrameActiveContentOrientation,
+  getPreviewMediaStyles,
+  normalizeOrientationMode,
+  normalizePreviewFit,
+  parseOrientationDegrees,
+  resolveCameraOrientationSummary,
+} from '../../utils/obsTransformGeometry.ts';
+import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
+
+export type ProgramMonitorMode = 'live_video' | 'obs_frame';
 
 interface ProgramAndCompositionWorkspaceProps {
   cameras: BroadcastCameraData[];
@@ -30,6 +47,8 @@ interface ProgramAndCompositionWorkspaceProps {
   previewSnapshots: Record<string, CameraPreviewSnapshot>;
   programSnapshotError?: string | null;
   capturingProgramPreview?: boolean;
+  programMonitorMode: ProgramMonitorMode;
+  onChangeProgramMonitorMode: (mode: ProgramMonitorMode) => void;
   // Staged / Preview composition state lifted to parent so Camera Grid & Composition stay 100% synced
   selectedCameraIds: string[];
   mainCameraId: string;
@@ -59,6 +78,33 @@ interface ProgramAndCompositionWorkspaceProps {
     includeScoreboardOverlay: boolean;
   }) => Promise<void>;
   onOpenConnectionTab: () => void;
+  obsTransforms?: ObsSceneTransformItem[];
+  detectedContentMap?: Record<string, DetectedFrameContentInfo>;
+  onFrameContentDetected?: (cameraKey: string, info: DetectedFrameContentInfo) => void;
+  updatingTransformCamId?: string | null;
+  onUpdateCameraFraming?: (
+    cam: BroadcastCameraData,
+    patch: {
+      orientationMode?: CameraOrientationMode;
+      previewFit?: CameraPreviewFit;
+      portraitBackdropFill?: boolean;
+    }
+  ) => Promise<void> | void;
+}
+
+function buildVdoProgramMonitorUrl(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname.includes('vdo.ninja') || parsed.searchParams.has('view')) {
+      parsed.searchParams.set('muted', '1');
+      parsed.searchParams.set('autoplay', '1');
+      parsed.searchParams.set('noaudio', '1');
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
 }
 
 const LAYOUT_TYPES: ObsLayoutType[] = [
@@ -169,6 +215,8 @@ export function ProgramAndCompositionWorkspace({
   previewSnapshots,
   programSnapshotError,
   capturingProgramPreview = false,
+  programMonitorMode,
+  onChangeProgramMonitorMode,
   selectedCameraIds,
   mainCameraId,
   layoutType,
@@ -188,11 +236,23 @@ export function ProgramAndCompositionWorkspace({
   onApplyLive,
   onSavePreset,
   onOpenConnectionTab,
+  obsTransforms = [],
+  detectedContentMap = {},
+  onFrameContentDetected,
+  updatingTransformCamId = null,
+  onUpdateCameraFraming,
 }: ProgramAndCompositionWorkspaceProps) {
   const [savingPreset, setSavingPreset] = useState(false);
 
   const enabledCameras = useMemo(() => cameras.filter((c) => c.enabled), [cameras]);
   const cameraLookup = useMemo(() => new Map(cameras.map((c) => [c.cameraId, c])), [cameras]);
+  const obsTransformLookup = useMemo(() => {
+    const map = new Map<string, ObsSceneTransformItem>();
+    for (const t of obsTransforms) {
+      if (t.sourceName) map.set(t.sourceName, t);
+    }
+    return map;
+  }, [obsTransforms]);
 
   // Determine actual live cameras currently on OBS Program
   const programCameras = useMemo(() => {
@@ -207,7 +267,86 @@ export function ProgramAndCompositionWorkspace({
     return matched;
   }, [obsConnected, profile.activeCameraIds, profile.activeCameraId, profile.activeObsScene, enabledCameras]);
 
+  const canUseLiveVideoMonitor = useMemo(
+    () =>
+      obsConnected &&
+      programCameras.length > 0 &&
+      programCameras.every((c) => c.sourceType === 'vdoninja' && Boolean(c.obsBrowserSourceUrl)),
+    [obsConnected, programCameras]
+  );
+
+  const effectiveProgramMode: ProgramMonitorMode =
+    canUseLiveVideoMonitor && programMonitorMode === 'live_video' ? 'live_video' : 'obs_frame';
+
+  const programBoxes = useMemo(() => {
+    if (effectiveProgramMode !== 'live_video' || programCameras.length === 0) return [];
+    const programIds = programCameras.map((c) => c.cameraId);
+    const primaryId =
+      profile.activeCameraId && programIds.includes(profile.activeCameraId)
+        ? profile.activeCameraId
+        : programIds[0];
+    return computeObsLayoutBoxes(
+      profile.activeLayoutType || 'SINGLE',
+      programIds,
+      primaryId,
+      1920,
+      1080,
+      {
+        pipPosition: profile.activePipPosition,
+        pipSize: profile.activePipSize,
+      }
+    );
+  }, [
+    effectiveProgramMode,
+    programCameras,
+    profile.activeLayoutType,
+    profile.activeCameraId,
+    profile.activePipPosition,
+    profile.activePipSize,
+  ]);
+
   const programSnapshot = previewSnapshots['__active_scene__'];
+
+  const framingTargetCam = useMemo(() => {
+    if (programCameras.length > 0) {
+      return (
+        programCameras.find((c) => c.cameraId === profile.activeCameraId) || programCameras[0]
+      );
+    }
+    if (mainCameraId && cameraLookup.has(mainCameraId)) {
+      return cameraLookup.get(mainCameraId) || null;
+    }
+    if (selectedCameraIds[0] && cameraLookup.has(selectedCameraIds[0])) {
+      return cameraLookup.get(selectedCameraIds[0]) || null;
+    }
+    return enabledCameras[0] || null;
+  }, [programCameras, profile.activeCameraId, mainCameraId, selectedCameraIds, cameraLookup, enabledCameras]);
+
+  const framingObsTransform = useMemo(() => {
+    if (!framingTargetCam) return null;
+    return (
+      obsTransformLookup.get(framingTargetCam.obsInputName || '') ||
+      obsTransformLookup.get(framingTargetCam.obsSceneName || '') ||
+      obsTransformLookup.get(framingTargetCam.name || '') ||
+      null
+    );
+  }, [framingTargetCam, obsTransformLookup]);
+
+  const framingOrientationSummary = useMemo(() => {
+    if (!framingTargetCam) {
+      return resolveCameraOrientationSummary({
+        frameContent: detectedContentMap['__active_scene__'] || null,
+      });
+    }
+    return resolveCameraOrientationSummary({
+      telemetry: framingTargetCam.telemetry,
+      obsTransform: framingObsTransform,
+      frameContent:
+        detectedContentMap['__active_scene__'] ||
+        detectedContentMap[framingTargetCam.cameraId] ||
+        null,
+    });
+  }, [framingTargetCam, framingObsTransform, detectedContentMap]);
 
   const boxes = useMemo(
     () =>
@@ -227,9 +366,12 @@ export function ProgramAndCompositionWorkspace({
   const hasUnappliedChanges = useMemo(() => {
     if (!obsConnected) return selectedCameraIds.length > 0;
     if (profile.activeLayoutType !== layoutType) return true;
-    const liveIds = new Set(
-      (profile.activeCameraIds?.length ? profile.activeCameraIds : profile.activeCameraId ? [profile.activeCameraId] : [])
-    );
+    const rawLiveIds = profile.activeCameraIds?.length
+      ? profile.activeCameraIds
+      : profile.activeCameraId
+        ? [profile.activeCameraId]
+        : programCameras.map((c) => c.cameraId);
+    const liveIds = new Set(rawLiveIds);
     if (liveIds.size !== selectedCameraIds.length) return true;
     for (const id of selectedCameraIds) {
       if (!liveIds.has(id)) return true;
@@ -248,6 +390,7 @@ export function ProgramAndCompositionWorkspace({
     profile.activeCameraId,
     profile.activePipPosition,
     profile.activePipSize,
+    programCameras,
     layoutType,
     selectedCameraIds,
     pipPosition,
@@ -295,15 +438,48 @@ export function ProgramAndCompositionWorkspace({
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={!obsConnected || capturingProgramPreview}
-            onClick={() => onRefreshProgramPreview()}
-            className="min-h-[32px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${capturingProgramPreview ? 'animate-spin text-[#EA580C]' : ''}`} />
-            <span>{capturingProgramPreview ? 'Capturing...' : 'Refresh Program'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            {canUseLiveVideoMonitor && (
+              <div
+                className="inline-flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800"
+                role="group"
+                aria-label="Program preview feed mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => onChangeProgramMonitorMode('live_video')}
+                  className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                    effectiveProgramMode === 'live_video'
+                      ? 'bg-[#EA580C] text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Live Video
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeProgramMonitorMode('obs_frame')}
+                  className={`min-h-[28px] px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                    effectiveProgramMode === 'obs_frame'
+                      ? 'bg-slate-700 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  OBS Frame
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={!obsConnected || capturingProgramPreview}
+              onClick={() => onRefreshProgramPreview()}
+              className="min-h-[32px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${capturingProgramPreview ? 'animate-spin text-[#EA580C]' : ''}`} />
+              <span>{capturingProgramPreview ? 'Capturing...' : 'Refresh Program'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Genuine 16:9 Program Preview Stage */}
@@ -323,12 +499,123 @@ export function ProgramAndCompositionWorkspace({
                 Connect OBS Studio
               </button>
             </div>
+          ) : effectiveProgramMode === 'live_video' && programBoxes.length > 0 ? (
+            <div className="relative w-full h-full bg-black">
+              {programBoxes.map((box) => {
+                const cam = cameraLookup.get(box.cameraId);
+                const vdoUrl = buildVdoProgramMonitorUrl(cam?.obsBrowserSourceUrl);
+                if (!cam || !vdoUrl) return null;
+                const boxTransform =
+                  obsTransformLookup.get(cam.obsInputName || '') ||
+                  obsTransformLookup.get(cam.obsSceneName || '') ||
+                  obsTransformLookup.get(cam.name || '') ||
+                  null;
+                const boxFrameInfo =
+                  detectedContentMap[cam.cameraId] ||
+                  (programBoxes.length === 1 ? detectedContentMap['__active_scene__'] : undefined) ||
+                  null;
+                const boxOri = resolveCameraOrientationSummary({
+                  telemetry: cam.telemetry,
+                  obsTransform: boxTransform,
+                  frameContent: boxFrameInfo,
+                });
+                const boxFit = normalizePreviewFit(cam.previewFit);
+                const boxRot = parseOrientationDegrees(cam.orientationMode);
+                const boxMediaStyles = getPreviewMediaStyles({
+                  rotationDeg: boxRot,
+                  previewFit: boxFit,
+                  isPortraitContent: boxOri.isPortraitFeed,
+                  contentAspectRatio: boxFrameInfo?.aspectRatio,
+                });
+                const boxBackdropSnap = previewSnapshots[cam.cameraId] || (programBoxes.length === 1 ? programSnapshot : undefined);
+                const showBoxBlur =
+                  cam.portraitBackdropFill !== false &&
+                  boxFit === 'contain' &&
+                  boxOri.isPortraitFeed;
+
+                return (
+                  <div
+                    key={`prog-live-${box.cameraId}-${box.slotIndex}`}
+                    style={{
+                      left: `${(box.x / 1920) * 100}%`,
+                      top: `${(box.y / 1080) * 100}%`,
+                      width: `${(box.width / 1920) * 100}%`,
+                      height: `${(box.height / 1080) * 100}%`,
+                      zIndex: box.slotIndex + 1,
+                    }}
+                    className="absolute overflow-hidden bg-black"
+                  >
+                    {showBoxBlur && (
+                      boxBackdropSnap ? (
+                        <img
+                          src={boxBackdropSnap.imageData}
+                          alt=""
+                          aria-hidden="true"
+                          className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-45 pointer-events-none"
+                        />
+                      ) : (
+                        <div
+                          aria-hidden="true"
+                          className="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-800/40 to-slate-900 pointer-events-none"
+                        />
+                      )
+                    )}
+                    <iframe
+                      key={`prog-iframe-${cam.cameraId}:${vdoUrl}`}
+                      title={`Live program feed ${cam.label || cam.name}`}
+                      src={vdoUrl}
+                      allow="autoplay; fullscreen; encrypted-media"
+                      style={
+                        boxMediaStyles.transform !== 'none'
+                          ? {
+                              transform: boxMediaStyles.transform,
+                              transformOrigin: 'center center',
+                            }
+                          : undefined
+                      }
+                      className="relative z-[1] w-full h-full border-0 pointer-events-none bg-transparent transition-transform duration-150"
+                    />
+                    {programBoxes.length > 1 && (
+                      <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/75 border border-white/15 font-mono text-[10px] font-bold text-white">
+                        CAM {cam.cameraNumber} · {cam.label || cam.name}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : programSnapshot ? (
-            <img
-              src={programSnapshot.imageData}
-              alt={`OBS Program Output: ${profile.activeObsScene || 'Active Scene'}`}
-              className="w-full h-full object-contain bg-black"
-            />
+            <div className="relative w-full h-full bg-black">
+              {framingTargetCam?.portraitBackdropFill !== false &&
+                normalizePreviewFit(framingTargetCam?.previewFit) === 'contain' &&
+                framingOrientationSummary.isPortraitFeed && (
+                  <img
+                    src={programSnapshot.imageData}
+                    alt=""
+                    aria-hidden="true"
+                    className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-45 pointer-events-none"
+                  />
+                )}
+              <img
+                src={programSnapshot.imageData}
+                alt={`OBS Program Output: ${profile.activeObsScene || 'Active Scene'}`}
+                onLoad={(e) => {
+                  if (!onFrameContentDetected) return;
+                  const detected = detectFrameActiveContentOrientation(e.currentTarget);
+                  if (detected) {
+                    onFrameContentDetected('__active_scene__', detected);
+                  }
+                }}
+                className={`relative z-[1] w-full h-full ${
+                  getPreviewMediaStyles({
+                    rotationDeg: parseOrientationDegrees(framingTargetCam?.orientationMode),
+                    previewFit: normalizePreviewFit(framingTargetCam?.previewFit),
+                    isPortraitContent: framingOrientationSummary.isPortraitFeed,
+                    skipRotation: true,
+                  }).objectClass
+                } bg-transparent`}
+              />
+            </div>
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
               {programSnapshotError ? (
@@ -356,17 +643,44 @@ export function ProgramAndCompositionWorkspace({
           )}
 
           {/* Top Scrim Metadata */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 p-2.5 bg-gradient-to-b from-black/85 via-black/40 to-transparent flex items-center justify-between gap-2 text-[11px] font-mono">
+          <div
+            style={{ zIndex: 30 }}
+            className="pointer-events-none absolute inset-x-0 top-0 p-2.5 bg-gradient-to-b from-black/85 via-black/40 to-transparent flex items-center justify-between gap-2 text-[11px] font-mono"
+          >
             <span className="px-2 py-0.5 rounded bg-black/75 border border-white/10 text-white font-bold truncate">
               SCENE: {obsConnected ? profile.activeObsScene || 'Idle' : 'Offline'}
             </span>
             <div className="flex items-center gap-2 shrink-0 text-slate-200 tabular-nums">
+              {obsConnected && framingOrientationSummary.orientation !== 'UNKNOWN' && (
+                <span
+                  className={`px-2 py-0.5 rounded font-bold ${
+                    framingOrientationSummary.isPortraitFeed
+                      ? 'bg-amber-500/85 text-slate-950'
+                      : 'bg-slate-900/90 border border-white/15 text-emerald-300'
+                  }`}
+                >
+                  {framingOrientationSummary.orientation}
+                  {framingOrientationSummary.dimensionText
+                    ? ` · ${framingOrientationSummary.dimensionText}`
+                    : ''}
+                </span>
+              )}
+              {obsConnected && effectiveProgramMode === 'live_video' && (
+                <span className="px-2 py-0.5 rounded bg-emerald-600/90 text-white font-bold">
+                  LIVE WEBRTC
+                </span>
+              )}
+              {obsConnected && effectiveProgramMode === 'obs_frame' && (
+                <span className="px-2 py-0.5 rounded bg-slate-900/90 border border-white/15 text-orange-300 font-bold">
+                  OBS LIVE (AUTO 1s)
+                </span>
+              )}
               {profile.obsStreamTimecode && profile.obsStreamActive && (
                 <span className="px-2 py-0.5 rounded bg-red-600/90 text-white font-bold">
                   {profile.obsStreamTimecode}
                 </span>
               )}
-              {programSnapshot && (
+              {effectiveProgramMode === 'obs_frame' && programSnapshot && (
                 <span className="px-2 py-0.5 rounded bg-black/70 text-slate-200">
                   {programSnapshot.capturedAt}
                 </span>
@@ -433,6 +747,99 @@ export function ProgramAndCompositionWorkspace({
               ))
             )}
           </div>
+
+          {framingTargetCam && onUpdateCameraFraming && (
+            <div className="pt-2.5 border-t border-slate-800 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Camera Framing &amp; Orientation ·{' '}
+                  <span className="text-white">
+                    CAM {framingTargetCam.cameraNumber} ({framingTargetCam.label || framingTargetCam.name})
+                  </span>
+                </span>
+                {framingOrientationSummary.sourceLabel && (
+                  <span className="font-mono text-[10px] text-slate-400">
+                    {framingOrientationSummary.sourceLabel}: {framingOrientationSummary.dimensionText || framingOrientationSummary.orientation}
+                  </span>
+                )}
+              </div>
+
+              {framingOrientationSummary.isPortraitFeed &&
+                parseOrientationDegrees(framingTargetCam.orientationMode) === 0 && (
+                  <div className="px-2.5 py-1.5 rounded bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200">
+                    Portrait phone feed detected inside 16:9 canvas. Rotate phone sideways to landscape, or apply 90°/270° rotation, Cover fit, or Backdrop Blur below.
+                  </div>
+                )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Preview & OBS Fit Mode */}
+                <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="px-1.5 text-[10px] font-bold uppercase text-slate-500">Fit</span>
+                  {(['contain', 'cover', 'fill'] as const).map((fitOpt) => {
+                    const active = normalizePreviewFit(framingTargetCam.previewFit) === fitOpt;
+                    return (
+                      <button
+                        key={fitOpt}
+                        type="button"
+                        disabled={updatingTransformCamId === framingTargetCam.cameraId}
+                        onClick={() => onUpdateCameraFraming(framingTargetCam, { previewFit: fitOpt })}
+                        className={`min-h-[26px] px-2 py-0.5 rounded text-[10px] font-semibold uppercase transition-colors ${
+                          active
+                            ? 'bg-[#EA580C] text-white'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        } disabled:opacity-50`}
+                      >
+                        {fitOpt}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Orientation / Rotation Correction */}
+                <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                  <span className="px-1.5 text-[10px] font-bold uppercase text-slate-500">Rot</span>
+                  {(['auto', '0', '90', '180', '270'] as const).map((rotOpt) => {
+                    const active = normalizeOrientationMode(framingTargetCam.orientationMode) === rotOpt;
+                    return (
+                      <button
+                        key={rotOpt}
+                        type="button"
+                        disabled={updatingTransformCamId === framingTargetCam.cameraId}
+                        onClick={() =>
+                          onUpdateCameraFraming(framingTargetCam, { orientationMode: rotOpt })
+                        }
+                        className={`min-h-[26px] px-2 py-0.5 rounded font-mono text-[10px] font-semibold transition-colors ${
+                          active
+                            ? 'bg-amber-500 text-slate-950'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        } disabled:opacity-50`}
+                      >
+                        {rotOpt === 'auto' ? 'Auto' : `${rotOpt}°`}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Portrait Backdrop Blur Toggle */}
+                <button
+                  type="button"
+                  disabled={updatingTransformCamId === framingTargetCam.cameraId}
+                  onClick={() =>
+                    onUpdateCameraFraming(framingTargetCam, {
+                      portraitBackdropFill: framingTargetCam.portraitBackdropFill === false,
+                    })
+                  }
+                  className={`min-h-[28px] px-2.5 py-0.5 rounded-lg border text-[10px] font-semibold transition-colors ${
+                    framingTargetCam.portraitBackdropFill !== false
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                  } disabled:opacity-50`}
+                >
+                  Blur Backdrop: {framingTargetCam.portraitBackdropFill !== false ? 'ON' : 'OFF'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -770,7 +1177,13 @@ export function ProgramAndCompositionWorkspace({
                         <img
                           src={snap.imageData}
                           alt={cam?.label || cam?.name || box.cameraId}
-                          className="absolute inset-0 w-full h-full object-cover opacity-55"
+                          className={`absolute inset-0 w-full h-full opacity-55 ${
+                            normalizePreviewFit(cam?.previewFit) === 'cover'
+                              ? 'object-cover'
+                              : normalizePreviewFit(cam?.previewFit) === 'fill'
+                                ? 'object-fill'
+                                : 'object-contain'
+                          }`}
                         />
                       )}
                       <div className="relative z-10 flex items-center justify-between gap-1">

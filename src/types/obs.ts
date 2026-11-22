@@ -1,6 +1,13 @@
 import type { ObsLayoutType, PipPosition, PipSize } from '../utils/obsLayoutGeometry.ts';
 import type { BroadcastOverlayConfig, StreamingProvider, StreamStatus } from './index.ts';
 import type { OverlayMode, OverlayPosition } from '../utils/overlayConfig.ts';
+import type {
+  CameraOrientationMode,
+  CameraPreviewFit,
+  ObsSceneTransformItem,
+} from '../utils/obsTransformGeometry.ts';
+
+export type { CameraOrientationMode, CameraPreviewFit, ObsSceneTransformItem };
 
 export type ObsConnectionMode = 'direct_ws' | 'local_agent';
 export type ObsConnectionStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
@@ -113,6 +120,12 @@ export interface CameraTelemetry {
   resolutionActual?: string;
   fpsActual?: number | null;
   audioMuted?: boolean;
+  videoWidth?: number | null;
+  videoHeight?: number | null;
+  deviceOrientation?: string;
+  orientationAngle?: number | null;
+  viewportWidth?: number | null;
+  viewportHeight?: number | null;
 }
 
 export interface BroadcastCameraData {
@@ -141,6 +154,9 @@ export interface BroadcastCameraData {
   bitrateKbps: number;
   lowBandwidthMode: boolean;
   facingMode: 'environment' | 'user';
+  orientationMode?: CameraOrientationMode;
+  previewFit?: CameraPreviewFit;
+  portraitBackdropFill?: boolean;
   obsSceneName: string;
   obsInputName: string;
   description: string;
