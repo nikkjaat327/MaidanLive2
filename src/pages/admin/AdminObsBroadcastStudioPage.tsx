@@ -51,10 +51,17 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
-import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import {
+  liveStreamService,
+  type YouTubeVerification,
+} from '../../services/liveStream/liveStreamService.ts';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
+import { useScoreboard } from '../../hooks/useScoreboard.ts';
+import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
+import { isMatchPreparedDraft } from '../../utils/broadcastWorkflow.ts';
+import { offlineScoreQueue } from '../../utils/offlineScoreQueue.ts';
 import type { LiveStreamData, StreamingProvider } from '../../types/index.ts';
 import type {
   BroadcastCameraData,
@@ -94,9 +101,10 @@ import {
   ProgramAndCompositionWorkspace,
   ProgramMonitorMode,
 } from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
-import { BroadcastSetupChecklist } from '../../components/obsStudio/BroadcastSetupChecklist.tsx';
+import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoomWorkflowPanel.tsx';
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
+import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
@@ -144,7 +152,17 @@ export function AdminObsBroadcastStudioPage() {
   const isBroadcasterRole = adminUser?.role === 'BROADCASTER';
   const studioBaseRoute = isBroadcasterPortal ? '/broadcaster/control-room' : '/admin/broadcast-studio';
 
-  const [matches, setMatches] = useState<Array<Pick<LiveStreamData, 'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status'>>>([]);
+  const { refreshStreams } = useLiveMonitor();
+  const { score: liveMatchScore } = useScoreboard(matchId);
+
+  const [matches, setMatches] = useState<
+    Array<
+      Pick<
+        LiveStreamData,
+        'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status' | 'broadcastPublished'
+      >
+    >
+  >([]);
   const [loadingMatches, setLoadingMatches] = useState(true);
   const [activeTab, setActiveTab] = useState<StudioTab>('live');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -273,17 +291,30 @@ export function AdminObsBroadcastStudioPage() {
   const [detectedContentMap, setDetectedContentMap] = useState<Record<string, DetectedFrameContentInfo>>({});
   const [updatingTransformCamId, setUpdatingTransformCamId] = useState<string | null>(null);
 
-  // YouTube Live Output Association & Preview in Control Room
+  // YouTube Live Output Association, Activation & Match Lifecycle in Control Room
   const [ytInputDraft, setYtInputDraft] = useState('');
   const [ytProviderDraft, setYtProviderDraft] = useState<StreamingProvider>('youtube');
   const [savingYtOutput, setSavingYtOutput] = useState(false);
+  const [verifyingYtOutput, setVerifyingYtOutput] = useState(false);
+  const [ytVerification, setYtVerification] = useState<YouTubeVerification | null>(null);
   const [showInlineYtPreview, setShowInlineYtPreview] = useState(false);
+
+  const [activatingBroadcast, setActivatingBroadcast] = useState(false);
+  const [endingBroadcast, setEndingBroadcast] = useState(false);
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  const [setupModalMode, setSetupModalMode] = useState<'create' | 'edit' | null>(null);
+  const [setupEditStream, setSetupEditStream] = useState<LiveStreamData | null>(null);
 
   // Load match selector list (strictly scoped for Broadcasters)
   const loadMatches = useCallback(async () => {
     try {
       setLoadingMatches(true);
-      let list: Array<Pick<LiveStreamData, 'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status'>> = [];
+      let list: Array<
+        Pick<
+          LiveStreamData,
+          'id' | 'matchTitle' | 'teamAName' | 'teamBName' | 'status' | 'broadcastPublished'
+        >
+      > = [];
       if (isBroadcasterRole || isBroadcasterPortal) {
         const dash = await obsStudioService.getBroadcasterDashboard();
         list = (dash.matches || []).map((m) => ({
@@ -292,13 +323,18 @@ export function AdminObsBroadcastStudioPage() {
           teamAName: m.teamAName,
           teamBName: m.teamBName,
           status: m.status,
+          broadcastPublished: m.broadcastPublished,
         }));
       } else {
         list = await liveStreamService.listStreams();
       }
       setMatches(list);
       if (!matchId && list.length > 0) {
-        const preferred = list.find((s) => s.status === 'LIVE') || list.find((s) => s.status === 'UPCOMING') || list[0];
+        const preferred =
+          list.find((s) => s.status === 'LIVE') ||
+          list.find((s) => isMatchPreparedDraft(s)) ||
+          list.find((s) => s.status === 'UPCOMING') ||
+          list[0];
         navigate(`${studioBaseRoute}/${preferred.id}`, { replace: true });
       }
     } catch (err) {
@@ -426,6 +462,7 @@ export function AdminObsBroadcastStudioPage() {
     if (!studio?.match) return;
     setYtInputDraft(studio.match.youtubeVideoId || '');
     setYtProviderDraft(studio.match.activeStreamingProvider || 'youtube');
+    setYtVerification(null);
   }, [studio?.match?.id, studio?.match?.youtubeVideoId, studio?.match?.activeStreamingProvider]);
 
   function notifySuccess(msg: string) {
@@ -1153,25 +1190,83 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  async function handleSaveYouTubeOutput(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSaveYouTubeOutput(e?: React.FormEvent, verifyAfterSave = true) {
+    e?.preventDefault();
     if (!matchId) return;
     try {
       setSavingYtOutput(true);
+      setVerifyingYtOutput(verifyAfterSave && ytProviderDraft === 'youtube');
       setActionError(null);
-      const res = await obsStudioService.updateYouTubeOutput(matchId, {
-        ...(ytInputDraft.trim() ? { youtubeInput: ytInputDraft.trim() } : {}),
+      const res = await liveStreamService.connectYouTube(matchId, {
+        ...(ytInputDraft.trim() ? { youtubeInput: ytInputDraft.trim() } : { youtubeInput: '' }),
         activeStreamingProvider: ytProviderDraft,
+        verify: verifyAfterSave && ytProviderDraft === 'youtube' && Boolean(ytInputDraft.trim()),
       });
+      setYtVerification(res.verification || null);
       notifySuccess(
-        `Broadcast output updated (${res.match.activeStreamingProvider === 'youtube' ? 'YouTube Live' : 'MediaMTX Direct'}${res.match.youtubeVideoId ? ` · ID: ${res.match.youtubeVideoId}` : ''}).`
+        `Broadcast output updated (${res.stream.activeStreamingProvider === 'youtube' ? 'YouTube Live' : 'MediaMTX Direct'}${res.stream.youtubeVideoId ? ` · ID: ${res.stream.youtubeVideoId}` : ''}).`
       );
-      await refetch();
+      await Promise.all([refetch(), loadMatches()]);
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to save YouTube Live output settings.'));
     } finally {
       setSavingYtOutput(false);
+      setVerifyingYtOutput(false);
     }
+  }
+
+  async function handleActivateBroadcast() {
+    if (!matchId) return;
+    try {
+      setActivatingBroadcast(true);
+      setActionError(null);
+      await liveStreamService.activateBroadcast(matchId, {
+        activeStreamingProvider: ytProviderDraft,
+        ...(ytInputDraft.trim() ? { youtubeInput: ytInputDraft.trim() } : {}),
+      });
+      notifySuccess('MaidanLive Broadcast activated and published to the Player Portal!');
+      await Promise.all([refetch(), loadMatches(), refreshStreams()]);
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to activate broadcast.'));
+    } finally {
+      setActivatingBroadcast(false);
+    }
+  }
+
+  async function handleConfirmEndBroadcast() {
+    if (!matchId) return;
+    try {
+      setEndingBroadcast(true);
+      setActionError(null);
+      const res = await liveStreamService.endStream(matchId);
+      await offlineScoreQueue.clearStream(matchId).catch(() => {});
+      setEndConfirmOpen(false);
+      notifySuccess(
+        res.note ||
+          'MaidanLive broadcast ended cleanly. Final scores preserved — click Initialize Next Match to start a new match.'
+      );
+      await Promise.all([refetch(), loadMatches(), refreshStreams()]);
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to end broadcast.'));
+    } finally {
+      setEndingBroadcast(false);
+    }
+  }
+
+  async function openEditMatchSetupModal() {
+    if (!matchId) return;
+    try {
+      const full = await liveStreamService.getStreamById(matchId);
+      setSetupEditStream(full);
+      setSetupModalMode('edit');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to load match metadata for editing.'));
+    }
+  }
+
+  function openNewMatchSetupModal() {
+    setSetupEditStream(null);
+    setSetupModalMode('create');
   }
 
   // Connection handlers
@@ -1701,10 +1796,22 @@ export function AdminObsBroadcastStudioPage() {
               {matches.length === 0 && <option value="">No matches available</option>}
               {matches.map((m) => (
                 <option key={m.id} value={m.id}>
-                  [{m.status}] {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
+                  [{isMatchPreparedDraft(m) ? 'PREPARED' : m.status}]{' '}
+                  {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
                 </option>
               ))}
             </select>
+
+            {!isBroadcasterRole && (
+              <button
+                type="button"
+                onClick={openNewMatchSetupModal}
+                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>New Match Setup</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1900,27 +2007,54 @@ export function AdminObsBroadcastStudioPage() {
         <EmptyState
           icon={<Video className="w-6 h-6" />}
           title="No match broadcasts found"
-          description="Create a match stream in Broadcasts first, then attach multi-camera OBS controls here."
+          description="Initialize a match first (no YouTube link required yet), prepare OBS cameras & overlays, then connect YouTube and activate."
           action={
-            <Link
-              to="/admin/live-streams"
-              className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
-            >
-              <Radio className="w-4 h-4" />
-              <span>Go to Broadcasts</span>
-            </Link>
+            !isBroadcasterRole ? (
+              <button
+                type="button"
+                onClick={openNewMatchSetupModal}
+                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
+              >
+                <Plus className="w-4 h-4" />
+                <span>New Match Setup</span>
+              </button>
+            ) : (
+              <Link
+                to="/admin/live-streams"
+                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
+              >
+                <Radio className="w-4 h-4" />
+                <span>Go to Broadcasts</span>
+              </Link>
+            )
           }
         />
       ) : loading || !studio || !profile ? (
         <TableSkeleton rows={5} />
       ) : (
         <>
-          {/* Contextual Next-Step Banner & Collapsible 4-Step Setup Checklist */}
-          <BroadcastSetupChecklist
+          {/* Separated Status Matrix + 7-Step Control Room Workflow */}
+          <ControlRoomWorkflowPanel
             match={studio.match}
             profile={profile}
             cameras={cameras}
-            selectedCount={stagedCameraIds.length}
+            score={liveMatchScore}
+            scoreboardOverlayUrl={studio.scoreboardOverlayUrl}
+            isBroadcasterRole={isBroadcasterRole}
+            ytInputDraft={ytInputDraft}
+            ytProviderDraft={ytProviderDraft}
+            onChangeYtInputDraft={setYtInputDraft}
+            onChangeYtProviderDraft={setYtProviderDraft}
+            savingYtOutput={savingYtOutput}
+            verifyingYtOutput={verifyingYtOutput}
+            ytVerification={ytVerification}
+            onSaveYouTubeOutput={handleSaveYouTubeOutput}
+            activatingBroadcast={activatingBroadcast}
+            endingBroadcast={endingBroadcast}
+            onActivateBroadcast={handleActivateBroadcast}
+            onRequestEndBroadcast={() => setEndConfirmOpen(true)}
+            onOpenNextMatchSetup={openNewMatchSetupModal}
+            onEditMatchSetup={openEditMatchSetupModal}
             onOpenConnection={() => setActiveTab('connection')}
             onOpenMapSources={() => setMapSourcesModalOpen(true)}
             onOpenCamerasTab={() => setActiveTab('cameras')}
@@ -4233,6 +4367,40 @@ export function AdminObsBroadcastStudioPage() {
         scoreboardSourceName={profile?.scoreboardSourceName || 'MaidanLive Scoreboard'}
         onRefreshObsInputs={handleRefreshObsInputs}
         onSaveMappings={handleSaveCameraMappings}
+      />
+
+      {/* Step 1 / Next Match Setup Modal */}
+      <MatchSetupFormModal
+        open={setupModalMode !== null}
+        onClose={() => {
+          setSetupModalMode(null);
+          setSetupEditStream(null);
+        }}
+        mode={setupModalMode === 'edit' ? 'edit' : 'create'}
+        initialStream={setupEditStream}
+        onInitialized={async (created) => {
+          setYtVerification(null);
+          notifySuccess(
+            `Match "${created.matchTitle || created.teamAName || 'New Match'}" initialized cleanly (Unpublished Draft).`
+          );
+          await Promise.all([loadMatches(), refreshStreams()]);
+          navigate(`${studioBaseRoute}/${created.id}`);
+        }}
+        onUpdated={async () => {
+          notifySuccess('Match setup metadata updated.');
+          await Promise.all([refetch(), loadMatches()]);
+        }}
+      />
+
+      {/* Step 7 Confirm End Broadcast */}
+      <ConfirmDialog
+        open={endConfirmOpen}
+        onClose={() => setEndConfirmOpen(false)}
+        onConfirm={handleConfirmEndBroadcast}
+        loading={endingBroadcast}
+        title="End MaidanLive Broadcast"
+        message="This will end the broadcast on MaidanLive, preserve all final scores and match history, unpublish the active live stage, and allow initializing the next match cleanly."
+        confirmLabel="End Broadcast"
       />
     </div>
   );

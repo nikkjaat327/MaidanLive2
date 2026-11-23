@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import { LiveStream } from '../models/LiveStream.ts';
 import type {
+  BroadcastPhase,
   ScoreboardPosition,
   SportType,
   StreamStatus,
@@ -10,10 +11,19 @@ import type {
   ViewerCountVisibility,
 } from '../models/LiveStream.ts';
 import { LiveScore } from '../models/LiveScore.ts';
+import { Fixture } from '../models/Fixture.ts';
 import { Team } from '../models/Team.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Venue } from '../models/Venue.ts';
 import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
+import {
+  buildPublicStreamVisibilityQuery,
+  isStreamVisibleToPublic,
+} from '../utils/streamVisibility.ts';
+import {
+  emitFullStudioState,
+  ensureObsProfileForMatch,
+} from '../services/obsControllerService.ts';
 import {
   authenticate,
   canManageStream,
@@ -87,6 +97,15 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
   const rawActive = getActiveRoomViewerCount(id);
   const activeViewers =
     vis === 'public' || (vis === 'admin_only' && isAdminViewer) ? rawActive : null;
+  const broadcastPublished = clean.broadcastPublished !== false;
+  const wasPublished = clean.wasPublished !== false;
+  const broadcastPhase: BroadcastPhase =
+    clean.broadcastPhase ||
+    (clean.status === 'ENDED'
+      ? 'BROADCAST_ENDED'
+      : clean.status === 'LIVE' && broadcastPublished
+        ? 'BROADCAST_ACTIVE'
+        : 'MATCH_PREPARED');
 
   return {
     ...clean,
@@ -95,6 +114,11 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
     activeStreamingProvider: clean.activeStreamingProvider || clean.streamingProvider || 'youtube',
     viewerCountVisibility: vis,
     activeViewers,
+    broadcastPublished,
+    wasPublished,
+    broadcastPhase,
+    preparedAt: clean.preparedAt || clean.createdAt || null,
+    activatedAt: clean.activatedAt || clean.startedAt || null,
     overlayConfig: normalizeOverlayConfig(clean.overlayConfig),
     ...extra,
   };
@@ -151,219 +175,254 @@ router.post(
   }
 );
 
-// POST /api/live - Start or schedule a LiveStream (supports YouTube and/or MediaMTX)
-router.post(
-  '/',
-  authenticate,
-  requireAdminPortal,
-  requirePermission('manageStreams'),
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const streamingProvider = normalizeProvider(
-        req.body.streamingProvider ?? req.body.activeStreamingProvider
-      );
+async function createMatchOrStreamSession(
+  req: AuthenticatedRequest,
+  res: Response,
+  options: { initializeOnly: boolean }
+) {
+  try {
+    const initializeOnly = options.initializeOnly || req.body.initializeOnly === true;
+    const streamingProvider = normalizeProvider(
+      req.body.streamingProvider ?? req.body.activeStreamingProvider
+    );
 
-      const rawYoutube =
-        typeof req.body.youtubeInput === 'string'
-          ? req.body.youtubeInput
-          : typeof req.body.youtubeVideoId === 'string'
-            ? req.body.youtubeVideoId
-            : '';
+    const rawYoutube =
+      typeof req.body.youtubeInput === 'string'
+        ? req.body.youtubeInput
+        : typeof req.body.youtubeVideoId === 'string'
+          ? req.body.youtubeVideoId
+          : '';
 
-      let parsedYtId = '';
-      if (rawYoutube.trim()) {
-        const parsedYt = extractYouTubeVideoId(rawYoutube);
-        if (!parsedYt.valid || !parsedYt.videoId) {
-          res.status(400).json({
-            message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
-          });
-          return;
-        }
-        parsedYtId = parsedYt.videoId;
-      } else if (streamingProvider === 'youtube') {
+    let parsedYtId = '';
+    if (rawYoutube.trim()) {
+      const parsedYt = extractYouTubeVideoId(rawYoutube);
+      if (!parsedYt.valid || !parsedYt.videoId) {
         res.status(400).json({
-          message: 'A valid YouTube Video ID or URL is required when YouTube is the active provider.',
+          message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
         });
         return;
       }
+      parsedYtId = parsedYt.videoId;
+    } else if (!initializeOnly && streamingProvider === 'youtube') {
+      res.status(400).json({
+        message: 'A valid YouTube Video ID or URL is required when YouTube is the active provider.',
+      });
+      return;
+    }
 
-      const requestedStatus: StreamStatus =
-        req.body.status === 'UPCOMING' ? 'UPCOMING' : 'LIVE';
+    const requestedStatus: StreamStatus = initializeOnly
+      ? 'UPCOMING'
+      : req.body.status === 'UPCOMING'
+        ? 'UPCOMING'
+        : 'LIVE';
 
-      if (requestedStatus === 'LIVE' && parsedYtId && streamingProvider === 'youtube') {
-        const duplicate = await LiveStream.findOne({
-          youtubeVideoId: parsedYtId,
-          status: 'LIVE',
-          activeStreamingProvider: 'youtube',
-        });
-        if (duplicate) {
-          res.status(409).json({
-            message: `An active LIVE stream already exists for YouTube Video ID "${parsedYtId}".`,
-            existingStreamId: duplicate._id.toString(),
-          });
-          return;
-        }
-      }
-
-      let teamAName = sanitizeText(req.body.teamAName, 100);
-      let teamBName = sanitizeText(req.body.teamBName, 100);
-      let teamALogo = sanitizeImageUrl(req.body.teamALogo);
-      let teamBLogo = sanitizeImageUrl(req.body.teamBLogo);
-      let teamAId: mongoose.Types.ObjectId | null = null;
-      let teamBId: mongoose.Types.ObjectId | null = null;
-
-      if (req.body.teamAId && mongoose.Types.ObjectId.isValid(req.body.teamAId)) {
-        const tA = await Team.findById(req.body.teamAId);
-        if (tA) {
-          teamAId = tA._id as mongoose.Types.ObjectId;
-          if (!teamAName) teamAName = tA.name;
-          if (!teamALogo) teamALogo = tA.logoUrl || '';
-        }
-      }
-
-      if (req.body.teamBId && mongoose.Types.ObjectId.isValid(req.body.teamBId)) {
-        const tB = await Team.findById(req.body.teamBId);
-        if (tB) {
-          teamBId = tB._id as mongoose.Types.ObjectId;
-          if (!teamBName) teamBName = tB.name;
-          if (!teamBLogo) teamBLogo = tB.logoUrl || '';
-        }
-      }
-
-      let tournamentId: mongoose.Types.ObjectId | null = null;
-      let tournamentName = sanitizeText(req.body.tournamentName, 160);
-      if (req.body.tournamentId && mongoose.Types.ObjectId.isValid(req.body.tournamentId)) {
-        const tour = await Tournament.findById(req.body.tournamentId);
-        if (tour) {
-          tournamentId = tour._id as mongoose.Types.ObjectId;
-          if (!tournamentName) tournamentName = tour.name;
-        }
-      }
-
-      let venueId: mongoose.Types.ObjectId | null = null;
-      let location = sanitizeText(req.body.location, 160);
-      if (req.body.venueId && mongoose.Types.ObjectId.isValid(req.body.venueId)) {
-        const venue = await Venue.findById(req.body.venueId);
-        if (venue) {
-          venueId = venue._id as mongoose.Types.ObjectId;
-          if (!location) {
-            location = [venue.name, venue.city].filter(Boolean).join(', ');
-          }
-        }
-      }
-
-      const gameName = normalizeSport(req.body.gameName);
-      const scoreSport: SportType = gameName || 'Other';
-      const parsedOversLimit =
-        req.body.oversLimit !== undefined && req.body.oversLimit !== ''
-          ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
-          : undefined;
-      const parsedPlayersPerSide =
-        req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
-          ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
-          : undefined;
-
-      const matchDate = req.body.matchDate ? new Date(req.body.matchDate) : null;
-      const validMatchDate = matchDate && !isNaN(matchDate.getTime()) ? matchDate : null;
-
-      const tempObjectId = new mongoose.Types.ObjectId();
-      const customPath = sanitizeText(req.body.mediamtxStreamPath, 140);
-      const mtxCfg = buildMediaMTXConfig(tempObjectId.toString(), customPath);
-      const mediamtxPlaybackUrl =
-        sanitizeText(req.body.mediamtxPlaybackUrl, 500) || mtxCfg.hlsPlaybackUrl;
-      const mediamtxWebrtcUrl =
-        sanitizeText(req.body.mediamtxWebrtcUrl, 500) || mtxCfg.webrtcPlaybackUrl;
-
-      const stream = await LiveStream.create({
-        _id: tempObjectId,
-        streamingProvider,
-        activeStreamingProvider: streamingProvider,
+    if (requestedStatus === 'LIVE' && parsedYtId && streamingProvider === 'youtube') {
+      const duplicate = await LiveStream.findOne({
         youtubeVideoId: parsedYtId,
-        youtubeInput: sanitizeText(rawYoutube, 300),
-        youtubeStreamStatus: parsedYtId ? 'READY' : 'UNKNOWN',
-        mediamtxStreamPath: mtxCfg.streamPath,
-        mediamtxPublishStatus: 'IDLE',
-        mediamtxPlaybackUrl,
-        mediamtxWebrtcUrl,
-        mediamtxStreamKey: mtxCfg.streamKey,
-        viewerCountVisibility: normalizeVisibility(req.body.viewerCountVisibility),
-        teamAName,
-        teamBName,
-        teamAId,
-        teamBId,
-        teamALogo,
-        teamBLogo,
-        location,
-        venueId,
-        gameName,
-        matchTitle: sanitizeText(req.body.matchTitle, 180),
-        tournamentName,
-        tournamentId,
-        fixtureId:
-          req.body.fixtureId && mongoose.Types.ObjectId.isValid(req.body.fixtureId)
-            ? req.body.fixtureId
-            : null,
-        roundName: sanitizeText(req.body.roundName, 100),
-        matchDate: validMatchDate,
-        matchDescription: sanitizeText(req.body.matchDescription, 1000),
-        status: requestedStatus,
-        startedAt: requestedStatus === 'LIVE' ? new Date() : null,
-        authorizedScorerId:
-          req.body.authorizedScorerId && mongoose.Types.ObjectId.isValid(req.body.authorizedScorerId)
-            ? req.body.authorizedScorerId
-            : null,
-        backupScorerId:
-          req.body.backupScorerId && mongoose.Types.ObjectId.isValid(req.body.backupScorerId)
-            ? req.body.backupScorerId
-            : null,
-        scoreboardVisibleByDefault:
-          req.body.scoreboardVisibleByDefault === false ? false : true,
-        scoreboardPosition: normalizePosition(req.body.scoreboardPosition),
-        chatEnabled: req.body.chatEnabled === false ? false : true,
-        highlightsEnabled: req.body.highlightsEnabled === false ? false : true,
-        replayDescription: sanitizeText(req.body.replayDescription, 500),
-        createdBy: req.user!._id,
-        updatedBy: req.user!._id,
+        status: 'LIVE',
+        activeStreamingProvider: 'youtube',
       });
+      if (duplicate) {
+        res.status(409).json({
+          message: `An active LIVE stream already exists for YouTube Video ID "${parsedYtId}".`,
+          existingStreamId: duplicate._id.toString(),
+        });
+        return;
+      }
+    }
 
-      const initialScore = await LiveScore.create({
-        liveStreamId: stream._id,
-        sportType: scoreSport,
-        teamAScore: 0,
-        teamBScore: 0,
-        sportSpecificDetails: getInitialSportDetails(scoreSport, {
-          oversLimit: parsedOversLimit,
-          playersPerSide: parsedPlayersPerSide,
-        }),
-        matchStatus: requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
-        lastUpdatedBy: req.user!._id,
-        lastUpdatedAt: new Date(),
-      });
+    let teamAName = sanitizeText(req.body.teamAName, 100);
+    let teamBName = sanitizeText(req.body.teamBName, 100);
+    let teamALogo = sanitizeImageUrl(req.body.teamALogo);
+    let teamBLogo = sanitizeImageUrl(req.body.teamBLogo);
+    let teamAId: mongoose.Types.ObjectId | null = null;
+    let teamBId: mongoose.Types.ObjectId | null = null;
 
-      await recordActivity(
-        req.user!,
-        requestedStatus === 'LIVE' ? 'START_STREAM' : 'SCHEDULE_STREAM',
-        'LiveStream',
-        stream._id.toString(),
-        `${stream.matchTitle || parsedYtId || mtxCfg.streamPath} (${scoreSport} · ${streamingProvider})`,
-        {
-          newValue: {
-            status: requestedStatus,
-            streamingProvider,
-            youtubeVideoId: parsedYtId,
-            mediamtxStreamPath: mtxCfg.streamPath,
-            gameName: scoreSport,
-            scoreboardPosition: stream.scoreboardPosition,
-          },
+    if (req.body.teamAId && mongoose.Types.ObjectId.isValid(req.body.teamAId)) {
+      const tA = await Team.findById(req.body.teamAId);
+      if (tA) {
+        teamAId = tA._id as mongoose.Types.ObjectId;
+        if (!teamAName) teamAName = tA.name;
+        if (!teamALogo) teamALogo = tA.logoUrl || '';
+      }
+    }
+
+    if (req.body.teamBId && mongoose.Types.ObjectId.isValid(req.body.teamBId)) {
+      const tB = await Team.findById(req.body.teamBId);
+      if (tB) {
+        teamBId = tB._id as mongoose.Types.ObjectId;
+        if (!teamBName) teamBName = tB.name;
+        if (!teamBLogo) teamBLogo = tB.logoUrl || '';
+      }
+    }
+
+    let tournamentId: mongoose.Types.ObjectId | null = null;
+    let tournamentName = sanitizeText(req.body.tournamentName, 160);
+    if (req.body.tournamentId && mongoose.Types.ObjectId.isValid(req.body.tournamentId)) {
+      const tour = await Tournament.findById(req.body.tournamentId);
+      if (tour) {
+        tournamentId = tour._id as mongoose.Types.ObjectId;
+        if (!tournamentName) tournamentName = tour.name;
+      }
+    }
+
+    let venueId: mongoose.Types.ObjectId | null = null;
+    let location = sanitizeText(req.body.location, 160);
+    if (req.body.venueId && mongoose.Types.ObjectId.isValid(req.body.venueId)) {
+      const venue = await Venue.findById(req.body.venueId);
+      if (venue) {
+        venueId = venue._id as mongoose.Types.ObjectId;
+        if (!location) {
+          location = [venue.name, venue.city].filter(Boolean).join(', ');
         }
-      );
+      }
+    }
 
-      const publicPayload = formatPublicStream(
-        stream.toObject(),
-        { score: initialScore.toObject() },
-        true
-      );
+    const gameName = normalizeSport(req.body.gameName);
+    const scoreSport: SportType = gameName || 'Other';
+    const parsedOversLimit =
+      req.body.oversLimit !== undefined && req.body.oversLimit !== ''
+        ? Math.max(1, Math.min(90, Math.floor(Number(req.body.oversLimit) || 20)))
+        : undefined;
+    const parsedPlayersPerSide =
+      req.body.playersPerSide !== undefined && req.body.playersPerSide !== ''
+        ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
+        : undefined;
 
+    const matchDate = req.body.matchDate ? new Date(req.body.matchDate) : null;
+    const validMatchDate = matchDate && !isNaN(matchDate.getTime()) ? matchDate : null;
+
+    const tempObjectId = new mongoose.Types.ObjectId();
+    const customPath = sanitizeText(req.body.mediamtxStreamPath, 140);
+    const mtxCfg = buildMediaMTXConfig(tempObjectId.toString(), customPath);
+    const mediamtxPlaybackUrl =
+      sanitizeText(req.body.mediamtxPlaybackUrl, 500) || mtxCfg.hlsPlaybackUrl;
+    const mediamtxWebrtcUrl =
+      sanitizeText(req.body.mediamtxWebrtcUrl, 500) || mtxCfg.webrtcPlaybackUrl;
+
+    const now = new Date();
+    const isPublished = initializeOnly ? false : requestedStatus === 'LIVE' ? true : req.body.broadcastPublished !== false;
+    const broadcastPhase: BroadcastPhase = initializeOnly
+      ? 'MATCH_PREPARED'
+      : requestedStatus === 'LIVE'
+        ? 'BROADCAST_ACTIVE'
+        : 'MATCH_PREPARED';
+
+    const resolvedFixtureId =
+      req.body.fixtureId && mongoose.Types.ObjectId.isValid(req.body.fixtureId)
+        ? req.body.fixtureId
+        : null;
+
+    const stream = await LiveStream.create({
+      _id: tempObjectId,
+      streamingProvider,
+      activeStreamingProvider: streamingProvider,
+      youtubeVideoId: parsedYtId,
+      youtubeInput: sanitizeText(rawYoutube, 300),
+      youtubeStreamStatus: parsedYtId ? 'READY' : 'UNKNOWN',
+      mediamtxStreamPath: mtxCfg.streamPath,
+      mediamtxPublishStatus: 'IDLE',
+      mediamtxPlaybackUrl,
+      mediamtxWebrtcUrl,
+      mediamtxStreamKey: mtxCfg.streamKey,
+      viewerCountVisibility: normalizeVisibility(req.body.viewerCountVisibility),
+      teamAName,
+      teamBName,
+      teamAId,
+      teamBId,
+      teamALogo,
+      teamBLogo,
+      location,
+      venueId,
+      gameName,
+      matchTitle: sanitizeText(req.body.matchTitle, 180),
+      tournamentName,
+      tournamentId,
+      fixtureId: resolvedFixtureId,
+      roundName: sanitizeText(req.body.roundName, 100),
+      matchDate: validMatchDate,
+      matchDescription: sanitizeText(req.body.matchDescription, 1000),
+      status: requestedStatus,
+      broadcastPublished: isPublished,
+      wasPublished: isPublished,
+      broadcastPhase,
+      preparedAt: now,
+      activatedAt: isPublished && requestedStatus === 'LIVE' ? now : null,
+      startedAt: requestedStatus === 'LIVE' ? now : null,
+      authorizedScorerId:
+        req.body.authorizedScorerId && mongoose.Types.ObjectId.isValid(req.body.authorizedScorerId)
+          ? req.body.authorizedScorerId
+          : null,
+      backupScorerId:
+        req.body.backupScorerId && mongoose.Types.ObjectId.isValid(req.body.backupScorerId)
+          ? req.body.backupScorerId
+          : null,
+      scoreboardVisibleByDefault:
+        req.body.scoreboardVisibleByDefault === false ? false : true,
+      scoreboardPosition: normalizePosition(req.body.scoreboardPosition),
+      chatEnabled: req.body.chatEnabled === false ? false : true,
+      highlightsEnabled: req.body.highlightsEnabled === false ? false : true,
+      replayDescription: sanitizeText(req.body.replayDescription, 500),
+      createdBy: req.user!._id,
+      updatedBy: req.user!._id,
+    });
+
+    const initialScore = await LiveScore.create({
+      liveStreamId: stream._id,
+      sportType: scoreSport,
+      teamAScore: 0,
+      teamBScore: 0,
+      sportSpecificDetails: getInitialSportDetails(scoreSport, {
+        oversLimit: parsedOversLimit,
+        playersPerSide: parsedPlayersPerSide,
+      }),
+      matchStatus: initializeOnly ? 'Prepared' : requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
+      resultStatus: 'NOT_DECLARED',
+      lastUpdatedBy: req.user!._id,
+      lastUpdatedAt: now,
+    });
+
+    // Provision OBS Control Room profile immediately so Control Room, Scorer Console, and Overlay URL work before YouTube is linked
+    await ensureObsProfileForMatch(stream._id.toString(), req.user!._id as any).catch(() => {});
+
+    if (resolvedFixtureId) {
+      await Fixture.findByIdAndUpdate(resolvedFixtureId, {
+        liveStreamId: stream._id,
+        ...(requestedStatus === 'LIVE' && isPublished ? { status: 'LIVE' } : {}),
+      }).catch(() => {});
+    }
+
+    await recordActivity(
+      req.user!,
+      initializeOnly
+        ? 'INITIALIZE_MATCH'
+        : requestedStatus === 'LIVE'
+          ? 'START_STREAM'
+          : 'SCHEDULE_STREAM',
+      'LiveStream',
+      stream._id.toString(),
+      `${stream.matchTitle || [teamAName, teamBName].filter(Boolean).join(' vs ') || parsedYtId || mtxCfg.streamPath} (${scoreSport} · ${initializeOnly ? 'Prepared/Unpublished' : streamingProvider})`,
+      {
+        newValue: {
+          status: requestedStatus,
+          broadcastPublished: isPublished,
+          broadcastPhase,
+          streamingProvider,
+          youtubeVideoId: parsedYtId,
+          mediamtxStreamPath: mtxCfg.streamPath,
+          gameName: scoreSport,
+          scoreboardPosition: stream.scoreboardPosition,
+        },
+      }
+    );
+
+    const publicPayload = formatPublicStream(
+      stream.toObject(),
+      { score: initialScore.toObject() },
+      true
+    );
+
+    if (!initializeOnly && isPublished) {
       if (requestedStatus === 'LIVE') {
         emitStreamEvent(stream._id.toString(), 'live:started', publicPayload);
         await dispatchMatchNotifications({
@@ -398,29 +457,56 @@ router.post(
           });
         }
       }
-
-      // Include RTMP publish credentials in creation response ONLY for admin creator
-      const { rtmpBase } = getMediaMTXEnvConfig();
-      res.status(201).json({
-        stream: publicPayload,
-        adminStreamConfig: {
-          mediamtxStreamPath: mtxCfg.streamPath,
-          mediamtxStreamKey: mtxCfg.streamKey,
-          mediamtxRtmpPublishUrl: `${rtmpBase}/${mtxCfg.streamPath}?key=${mtxCfg.streamKey}`,
-          mediamtxPlaybackUrl,
-          mediamtxWebrtcUrl,
-        },
-      });
-    } catch (err) {
-      console.error('[LiveStream] Create error:', err);
-      res.status(500).json({ message: 'Failed to create live stream.' });
     }
+
+    // Include RTMP publish credentials in creation response ONLY for admin creator
+    const { rtmpBase } = getMediaMTXEnvConfig();
+    res.status(201).json({
+      stream: publicPayload,
+      adminStreamConfig: {
+        mediamtxStreamPath: mtxCfg.streamPath,
+        mediamtxStreamKey: mtxCfg.streamKey,
+        mediamtxRtmpPublishUrl: `${rtmpBase}/${mtxCfg.streamPath}?key=${mtxCfg.streamKey}`,
+        mediamtxPlaybackUrl,
+        mediamtxWebrtcUrl,
+      },
+    });
+  } catch (err) {
+    console.error('[LiveStream] Create/Initialize error:', err);
+    res.status(500).json({ message: 'Failed to initialize match stream.' });
+  }
+}
+
+// POST /api/live/initialize - Step 2: Initialize Match + Scoreboard without requiring YouTube URL (unpublished draft)
+router.post(
+  '/initialize',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('manageStreams'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    await createMatchOrStreamSession(req, res, { initializeOnly: true });
   }
 );
 
-// GET /api/live - List streams (with optional status/gameName/tournamentId/search/pagination)
+// POST /api/live - Start or schedule a LiveStream (supports initializeOnly or legacy direct creation)
+router.post(
+  '/',
+  authenticate,
+  requireAdminPortal,
+  requirePermission('manageStreams'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    await createMatchOrStreamSession(req, res, {
+      initializeOnly: req.body.initializeOnly === true,
+    });
+  }
+);
+
+// GET /api/live - List streams (hides unpublished prepared drafts from public/Player Portal)
 router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const isAdminViewer = Boolean(
+      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
+    );
     const query: Record<string, unknown> = {};
     if (
       typeof req.query.status === 'string' &&
@@ -452,11 +538,21 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
       ];
     }
 
+    if (!isAdminViewer) {
+      const visFilter = buildPublicStreamVisibilityQuery();
+      if (query.$or) {
+        query.$and = [{ $or: query.$or }, visFilter];
+        delete query.$or;
+      } else {
+        query.$or = visFilter.$or;
+      }
+    }
+
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
     const skip = (page - 1) * limit;
 
-    const [streams, total] = await Promise.all([
+    const [rawStreams, total] = await Promise.all([
       LiveStream.find(query)
         .sort({ status: 1, startedAt: -1, createdAt: -1 })
         .skip(skip)
@@ -465,9 +561,7 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
       LiveStream.countDocuments(query),
     ]);
 
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
+    const streams = isAdminViewer ? rawStreams : rawStreams.filter(isStreamVisibleToPublic);
     const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched, total, page, limit });
   } catch (err) {
@@ -476,15 +570,19 @@ router.get('/', optionalAuthenticate, async (req: AuthenticatedRequest, res: Res
   }
 });
 
-// GET /api/live/active - Active LIVE streams
+// GET /api/live/active - Active LIVE published streams
 router.get('/active', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const streams = await LiveStream.find({ status: 'LIVE' })
+    const rawStreams = await LiveStream.find({
+      status: 'LIVE',
+      broadcastPublished: { $ne: false },
+    })
       .sort({ startedAt: -1, createdAt: -1 })
       .lean();
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
+    const streams = rawStreams.filter(isStreamVisibleToPublic);
     const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched });
   } catch (err) {
@@ -493,16 +591,21 @@ router.get('/active', optionalAuthenticate, async (req: AuthenticatedRequest, re
   }
 });
 
-// GET /api/live/history - Ended streams
+// GET /api/live/history - Ended published streams
 router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const streams = await LiveStream.find({ status: 'ENDED' })
-      .sort({ endedAt: -1, updatedAt: -1 })
-      .limit(100)
-      .lean();
     const isAdminViewer = Boolean(
       req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
     );
+    const query: Record<string, unknown> = { status: 'ENDED' };
+    if (!isAdminViewer) {
+      query.wasPublished = { $ne: false };
+    }
+    const rawStreams = await LiveStream.find(query)
+      .sort({ endedAt: -1, updatedAt: -1 })
+      .limit(100)
+      .lean();
+    const streams = isAdminViewer ? rawStreams : rawStreams.filter(isStreamVisibleToPublic);
     const enriched = await attachScoresToStreams(streams, isAdminViewer, Boolean(req.user));
     res.json({ streams: enriched });
   } catch (err) {
@@ -515,9 +618,13 @@ router.get('/history', optionalAuthenticate, async (req: AuthenticatedRequest, r
 router.get('/replays', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const includeAll = req.query.all === 'true';
-    const query: Record<string, unknown> = includeAll
-      ? { status: 'ENDED' }
-      : { replayPublished: true, replayAvailable: true, replayVideoId: { $ne: '' } };
+    const isAdminViewer = Boolean(
+      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
+    );
+    const query: Record<string, unknown> =
+      includeAll && isAdminViewer
+        ? { status: 'ENDED' }
+        : { replayPublished: true, replayAvailable: true, replayVideoId: { $ne: '' } };
 
     if (
       typeof req.query.gameName === 'string' &&
@@ -530,9 +637,6 @@ router.get('/replays', authenticate, async (req: AuthenticatedRequest, res: Resp
       .sort({ endedAt: -1, updatedAt: -1 })
       .limit(100)
       .lean();
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
     const enriched = await attachScoresToStreams(streams, isAdminViewer, true);
     res.json({ replays: enriched });
   } catch (err) {
@@ -541,7 +645,7 @@ router.get('/replays', authenticate, async (req: AuthenticatedRequest, res: Resp
   }
 });
 
-// GET /api/live/:id - Get single stream + score + venue (redacts playback URLs if unauthenticated)
+// GET /api/live/:id - Get single stream + score + venue (blocks unpublished drafts from public portal; redacts playback URLs if unauthenticated)
 router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -556,13 +660,18 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
       return;
     }
 
+    const isAdminViewer = Boolean(
+      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
+    );
+    if (!isAdminViewer && !isStreamVisibleToPublic(stream)) {
+      res.status(404).json({ message: 'Broadcast has not been published yet.' });
+      return;
+    }
+
     const [score, venue] = await Promise.all([
       LiveScore.findOne({ liveStreamId: stream._id }).lean(),
       stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
     ]);
-    const isAdminViewer = Boolean(
-      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
-    );
     const formatted = formatPublicStream(
       stream,
       {
@@ -1334,8 +1443,20 @@ router.patch(
 
       let becameLive = false;
       if (req.body.status === 'LIVE' && stream.status === 'UPCOMING') {
+        const effectiveProvider = stream.activeStreamingProvider || stream.streamingProvider || 'youtube';
+        if (effectiveProvider === 'youtube' && !stream.youtubeVideoId) {
+          res.status(422).json({
+            message:
+              'Connect a valid YouTube Live Video URL or ID in Step 5 before activating the broadcast.',
+          });
+          return;
+        }
         stream.status = 'LIVE';
-        stream.startedAt = new Date();
+        stream.broadcastPublished = true;
+        stream.wasPublished = true;
+        stream.broadcastPhase = 'BROADCAST_ACTIVE';
+        stream.activatedAt = stream.activatedAt || new Date();
+        stream.startedAt = stream.startedAt || new Date();
         becameLive = true;
       }
 
@@ -1456,7 +1577,296 @@ router.patch(
   }
 );
 
-// PATCH /api/live/:id/end - End active stream (preserves scores, sets ENDED)
+// PATCH /api/live/:id/youtube - Step 5: Connect / Verify YouTube Live Video URL or ID on an initialized match
+router.patch(
+  '/:id/youtube',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'stream');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You do not have permission to configure broadcast output.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Stream not found.' });
+        return;
+      }
+      if (stream.status === 'ENDED') {
+        res.status(400).json({ message: 'Cannot modify live broadcast output for an ended match.' });
+        return;
+      }
+
+      const rawYoutube =
+        typeof req.body.youtubeInput === 'string'
+          ? req.body.youtubeInput
+          : typeof req.body.youtubeVideoId === 'string'
+            ? req.body.youtubeVideoId
+            : undefined;
+
+      const requestedProvider =
+        req.body.activeStreamingProvider !== undefined
+          ? normalizeProvider(req.body.activeStreamingProvider)
+          : stream.activeStreamingProvider || stream.streamingProvider || 'youtube';
+
+      let verificationResult = null;
+      if (rawYoutube !== undefined) {
+        if (rawYoutube.trim()) {
+          const parsedYt = extractYouTubeVideoId(rawYoutube);
+          if (!parsedYt.valid || !parsedYt.videoId) {
+            res.status(400).json({
+              message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
+            });
+            return;
+          }
+          if (stream.status === 'LIVE' && requestedProvider === 'youtube') {
+            const duplicate = await LiveStream.findOne({
+              _id: { $ne: stream._id },
+              youtubeVideoId: parsedYt.videoId,
+              status: 'LIVE',
+              activeStreamingProvider: 'youtube',
+            });
+            if (duplicate) {
+              res.status(409).json({
+                message: `Another active LIVE broadcast already uses YouTube Video ID "${parsedYt.videoId}".`,
+              });
+              return;
+            }
+          }
+          stream.youtubeVideoId = parsedYt.videoId;
+          stream.youtubeInput = sanitizeText(parsedYt.watchUrl || rawYoutube.trim(), 300);
+
+          if (req.body.verify === true) {
+            verificationResult = await verifyYouTubeVideoAvailability(parsedYt.videoId);
+            stream.youtubeStreamStatus =
+              verificationResult.liveBroadcastStatus === 'LIVE'
+                ? 'LIVE'
+                : verificationResult.available
+                  ? 'READY'
+                  : 'UNAVAILABLE';
+            stream.streamHealth = {
+              ok: Boolean(verificationResult.available && verificationResult.embeddable),
+              status: verificationResult.liveBroadcastStatus || (verificationResult.available ? 'READY' : 'UNAVAILABLE'),
+              checkedAt: new Date(),
+              latencyMs: 0,
+              detail: verificationResult.message,
+            };
+          } else if (stream.youtubeStreamStatus === 'UNKNOWN' || stream.youtubeStreamStatus === 'UNAVAILABLE') {
+            stream.youtubeStreamStatus = 'READY';
+          }
+        } else {
+          stream.youtubeVideoId = '';
+          stream.youtubeInput = '';
+          stream.youtubeStreamStatus = 'UNKNOWN';
+        }
+      }
+
+      if (req.body.youtubeStreamStatus && ['UNKNOWN', 'READY', 'LIVE', 'UNAVAILABLE'].includes(req.body.youtubeStreamStatus)) {
+        stream.youtubeStreamStatus = req.body.youtubeStreamStatus;
+      }
+
+      stream.streamingProvider = requestedProvider;
+      stream.activeStreamingProvider = requestedProvider;
+      stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await stream.save();
+
+      const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
+      const payload = formatPublicStream(stream.toObject(), { score }, true);
+
+      await recordActivity(
+        req.user!,
+        'CONNECT_YOUTUBE_OUTPUT',
+        'LiveStream',
+        stream._id.toString(),
+        `Updated broadcast output (${requestedProvider}${stream.youtubeVideoId ? ` · ${stream.youtubeVideoId}` : ''})`
+      );
+
+      if (stream.broadcastPublished !== false) {
+        emitStreamEvent(stream._id.toString(), 'streaming_provider_changed', {
+          streamId: stream._id.toString(),
+          activeStreamingProvider: stream.activeStreamingProvider,
+          youtubeVideoId: stream.youtubeVideoId,
+          mediamtxPlaybackUrl: stream.mediamtxPlaybackUrl || '',
+          mediamtxWebrtcUrl: stream.mediamtxWebrtcUrl || '',
+          switchedAt: new Date().toISOString(),
+          switchedByName: req.user!.name,
+        });
+        emitStreamEvent(stream._id.toString(), 'live:updated', payload);
+      }
+      await emitFullStudioState(stream._id.toString());
+
+      res.json({ stream: payload, verification: verificationResult });
+    } catch (err) {
+      console.error('[LiveStream] Connect YouTube error:', err);
+      res.status(500).json({ message: 'Failed to update YouTube broadcast connection.' });
+    }
+  }
+);
+
+// POST /api/live/:id/activate - Step 6: Validate playback details and publish broadcast to Player Portal
+router.post(
+  '/:id/activate',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'stream');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You do not have permission to activate this broadcast.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Match stream not found.' });
+        return;
+      }
+      if (stream.status === 'ENDED') {
+        res.status(400).json({ message: 'This match broadcast has already ended.' });
+        return;
+      }
+
+      // Allow inline provider / YouTube link override on activation if provided
+      if (req.body.activeStreamingProvider === 'youtube' || req.body.activeStreamingProvider === 'mediamtx') {
+        stream.streamingProvider = req.body.activeStreamingProvider;
+        stream.activeStreamingProvider = req.body.activeStreamingProvider;
+      }
+      const rawYt =
+        typeof req.body.youtubeInput === 'string'
+          ? req.body.youtubeInput
+          : typeof req.body.youtubeVideoId === 'string'
+            ? req.body.youtubeVideoId
+            : undefined;
+      if (rawYt !== undefined && rawYt.trim()) {
+        const parsedYt = extractYouTubeVideoId(rawYt);
+        if (!parsedYt.valid || !parsedYt.videoId) {
+          res.status(400).json({
+            message: parsedYt.error || 'Invalid YouTube Video ID or URL.',
+          });
+          return;
+        }
+        stream.youtubeVideoId = parsedYt.videoId;
+        stream.youtubeInput = sanitizeText(parsedYt.watchUrl || rawYt.trim(), 300);
+        if (stream.youtubeStreamStatus === 'UNKNOWN' || stream.youtubeStreamStatus === 'UNAVAILABLE') {
+          stream.youtubeStreamStatus = 'READY';
+        }
+      }
+
+      const activeProvider = stream.activeStreamingProvider || stream.streamingProvider || 'youtube';
+      if (activeProvider === 'youtube') {
+        if (!stream.youtubeVideoId) {
+          res.status(422).json({
+            message:
+              'Cannot activate MaidanLive broadcast: connect a valid YouTube Live Video URL or ID in Step 5 first.',
+          });
+          return;
+        }
+        const duplicate = await LiveStream.findOne({
+          _id: { $ne: stream._id },
+          youtubeVideoId: stream.youtubeVideoId,
+          status: 'LIVE',
+          activeStreamingProvider: 'youtube',
+          broadcastPublished: { $ne: false },
+        });
+        if (duplicate) {
+          res.status(409).json({
+            message: `Another active LIVE broadcast already uses YouTube Video ID "${stream.youtubeVideoId}".`,
+            existingStreamId: duplicate._id.toString(),
+          });
+          return;
+        }
+      } else {
+        if (!stream.mediamtxStreamPath || !stream.mediamtxPlaybackUrl) {
+          const mtxCfg = buildMediaMTXConfig(stream._id.toString(), stream.mediamtxStreamPath);
+          stream.mediamtxStreamPath = stream.mediamtxStreamPath || mtxCfg.streamPath;
+          stream.mediamtxPlaybackUrl = stream.mediamtxPlaybackUrl || mtxCfg.hlsPlaybackUrl;
+          stream.mediamtxWebrtcUrl = stream.mediamtxWebrtcUrl || mtxCfg.webrtcPlaybackUrl;
+        }
+      }
+
+      const now = new Date();
+      stream.status = 'LIVE';
+      stream.broadcastPublished = true;
+      stream.wasPublished = true;
+      stream.broadcastPhase = 'BROADCAST_ACTIVE';
+      stream.activatedAt = stream.activatedAt || now;
+      stream.startedAt = stream.startedAt || now;
+      stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
+      await stream.save();
+
+      let score = await LiveScore.findOne({ liveStreamId: stream._id });
+      if (score && (!score.matchStatus || ['Prepared', 'Upcoming'].includes(score.matchStatus))) {
+        score.matchStatus = 'Live';
+        score.lastUpdatedAt = now;
+        score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+        await score.save();
+      }
+      if (stream.fixtureId) {
+        await Fixture.findByIdAndUpdate(stream.fixtureId, {
+          liveStreamId: stream._id,
+          status: 'LIVE',
+        }).catch(() => {});
+      }
+
+      const payload = formatPublicStream(
+        stream.toObject(),
+        { score: score ? score.toObject() : null },
+        true
+      );
+
+      await recordActivity(
+        req.user!,
+        'ACTIVATE_BROADCAST',
+        'LiveStream',
+        stream._id.toString(),
+        `Activated public broadcast (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`
+      );
+
+      emitStreamEvent(stream._id.toString(), 'live:started', payload);
+      await dispatchMatchNotifications({
+        type: 'MATCH_LIVE',
+        title: 'Match is Live Now',
+        message:
+          stream.matchTitle ||
+          [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
+          'Match broadcast is now live on MaidanLive!',
+        entityType: 'LiveStream',
+        entityId: stream._id.toString(),
+        link: `/live/${stream._id.toString()}`,
+        dedupeKey: `stream-live-${stream._id.toString()}`,
+        teamIds: [stream.teamAId, stream.teamBId],
+        includeAllSpectatorsIfNoFollowers: true,
+      });
+      await emitFullStudioState(stream._id.toString());
+
+      res.json({ stream: payload });
+    } catch (err) {
+      console.error('[LiveStream] Activate error:', err);
+      res.status(500).json({ message: 'Failed to activate broadcast.' });
+    }
+  }
+);
+
+// PATCH /api/live/:id/end - Step 7: End active or prepared stream (preserves scores, sets ENDED & unpublishes active live stage)
 router.patch(
   '/:id/end',
   authenticate,
@@ -1488,7 +1898,10 @@ router.patch(
         return;
       }
 
+      const previousStatus = stream.status;
       stream.status = 'ENDED';
+      stream.broadcastPublished = false;
+      stream.broadcastPhase = 'BROADCAST_ENDED';
       stream.endedAt = new Date();
       stream.endedBy = req.user!._id as mongoose.Types.ObjectId;
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
@@ -1511,17 +1924,22 @@ router.patch(
         stream._id.toString(),
         `Ended MaidanLive stream (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`,
         {
-          previousValue: { status: 'LIVE' },
-          newValue: { status: 'ENDED', endedAt: stream.endedAt },
+          previousValue: { status: previousStatus },
+          newValue: {
+            status: 'ENDED',
+            broadcastPhase: 'BROADCAST_ENDED',
+            endedAt: stream.endedAt,
+          },
         }
       );
 
       const payload = formatPublicStream(stream.toObject(), { score }, true);
       emitStreamEvent(stream._id.toString(), 'live:ended', payload);
+      await emitFullStudioState(stream._id.toString());
 
       res.json({
         stream: payload,
-        note: 'MaidanLive stream ended and moved to history. Stop your encoder/YouTube Studio separately if still broadcasting.',
+        note: 'MaidanLive broadcast ended cleanly. Final scores and match history are preserved; stop OBS/YouTube Studio separately if still streaming.',
       });
     } catch (err) {
       console.error('[LiveStream] End error:', err);

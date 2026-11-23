@@ -9,6 +9,11 @@ export type StreamStatus = 'UPCOMING' | 'LIVE' | 'ENDED';
 export type ScoreboardPosition = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
 export type StreamingProvider = 'youtube' | 'mediamtx';
 export type ViewerCountVisibility = 'public' | 'admin_only' | 'hidden';
+export type BroadcastPhase =
+  | 'MATCH_SETUP'
+  | 'MATCH_PREPARED'
+  | 'BROADCAST_ACTIVE'
+  | 'BROADCAST_ENDED';
 
 export interface IProviderSwitchHistoryItem {
   fromProvider: StreamingProvider;
@@ -63,6 +68,11 @@ export interface ILiveStream extends Document {
   matchDate?: Date | null;
   matchDescription: string;
   status: StreamStatus;
+  broadcastPublished: boolean;
+  wasPublished: boolean;
+  broadcastPhase: BroadcastPhase;
+  preparedAt?: Date | null;
+  activatedAt?: Date | null;
   startedAt?: Date | null;
   endedAt?: Date | null;
   authorizedScorerId?: mongoose.Types.ObjectId | null;
@@ -169,6 +179,15 @@ const liveStreamSchema = new Schema<ILiveStream>(
       default: 'LIVE',
       index: true,
     },
+    broadcastPublished: { type: Boolean, default: true, index: true },
+    wasPublished: { type: Boolean, default: true },
+    broadcastPhase: {
+      type: String,
+      enum: ['MATCH_SETUP', 'MATCH_PREPARED', 'BROADCAST_ACTIVE', 'BROADCAST_ENDED'],
+      default: 'MATCH_PREPARED',
+    },
+    preparedAt: { type: Date, default: null },
+    activatedAt: { type: Date, default: null },
     startedAt: { type: Date, default: null },
     endedAt: { type: Date, default: null },
     authorizedScorerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },

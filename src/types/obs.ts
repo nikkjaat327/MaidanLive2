@@ -1,5 +1,5 @@
 import type { ObsLayoutType, PipPosition, PipSize } from '../utils/obsLayoutGeometry.ts';
-import type { BroadcastOverlayConfig, StreamingProvider, StreamStatus } from './index.ts';
+import type { BroadcastOverlayConfig, BroadcastPhase, StreamingProvider, StreamStatus } from './index.ts';
 import type { OverlayMode, OverlayPosition } from '../utils/overlayConfig.ts';
 import type {
   CameraOrientationMode,
@@ -225,9 +225,17 @@ export interface ObsStudioMatchSummary {
   tournamentName: string;
   tournamentId?: string | null;
   status: StreamStatus;
+  broadcastPublished?: boolean;
+  wasPublished?: boolean;
+  broadcastPhase?: BroadcastPhase;
+  preparedAt?: string | null;
+  activatedAt?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
   activeStreamingProvider: StreamingProvider;
   youtubeVideoId: string;
   youtubeStreamStatus?: string;
+  mediamtxStreamPath?: string;
   mediamtxPublishStatus?: string;
   overlayConfig?: BroadcastOverlayConfig;
 }
@@ -292,6 +300,9 @@ export interface BroadcasterDashboardMatchItem {
   tournamentId?: string | null;
   tournamentName: string;
   status: StreamStatus;
+  broadcastPublished?: boolean;
+  wasPublished?: boolean;
+  broadcastPhase?: BroadcastPhase;
   matchDate?: string | null;
   startedAt?: string | null;
   endedAt?: string | null;

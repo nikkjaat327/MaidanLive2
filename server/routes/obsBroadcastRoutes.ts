@@ -121,7 +121,8 @@ function resolveInstallerPaths() {
   const cwd = process.cwd();
   const exePath = path.resolve(cwd, 'dist-installers', INSTALLER_FILE_NAME);
   const pkgPath = path.resolve(cwd, 'desktop', 'obs-bridge', 'package.json');
-  return { exePath, pkgPath };
+  const externalUrl = (process.env.OBS_BRIDGE_INSTALLER_URL || '').trim();
+  return { exePath, pkgPath, externalUrl };
 }
 
 const VALID_CAMERA_TYPES: CameraType[] = [
@@ -508,6 +509,15 @@ router.get(
           tournamentId: s.tournamentId ? String(s.tournamentId) : null,
           tournamentName: s.tournamentName || '',
           status: s.status,
+          broadcastPublished: s.broadcastPublished !== false,
+          wasPublished: s.wasPublished !== false,
+          broadcastPhase:
+            s.broadcastPhase ||
+            (s.status === 'ENDED'
+              ? 'BROADCAST_ENDED'
+              : s.status === 'LIVE' && s.broadcastPublished !== false
+                ? 'BROADCAST_ACTIVE'
+                : 'MATCH_PREPARED'),
           matchDate: s.matchDate || null,
           startedAt: s.startedAt || null,
           endedAt: s.endedAt || null,
@@ -1079,9 +1089,23 @@ router.get(
           tournamentName: stream.tournamentName,
           tournamentId: stream.tournamentId ? String(stream.tournamentId) : null,
           status: stream.status,
+          broadcastPublished: stream.broadcastPublished !== false,
+          wasPublished: stream.wasPublished !== false,
+          broadcastPhase:
+            stream.broadcastPhase ||
+            (stream.status === 'ENDED'
+              ? 'BROADCAST_ENDED'
+              : stream.status === 'LIVE' && stream.broadcastPublished !== false
+                ? 'BROADCAST_ACTIVE'
+                : 'MATCH_PREPARED'),
+          preparedAt: stream.preparedAt || stream.createdAt || null,
+          activatedAt: stream.activatedAt || null,
+          startedAt: stream.startedAt || null,
+          endedAt: stream.endedAt || null,
           activeStreamingProvider: stream.activeStreamingProvider || stream.streamingProvider || 'youtube',
           youtubeVideoId: stream.youtubeVideoId,
           youtubeStreamStatus: stream.youtubeStreamStatus,
+          mediamtxStreamPath: stream.mediamtxStreamPath || '',
           mediamtxPublishStatus: stream.mediamtxPublishStatus,
           overlayConfig: stream.overlayConfig,
         },
@@ -1803,8 +1827,8 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { exePath, pkgPath } = resolveInstallerPaths();
-      let version = '1.0.0';
+      const { exePath, pkgPath, externalUrl } = resolveInstallerPaths();
+      let version = (process.env.OBS_BRIDGE_INSTALLER_VERSION || '').trim() || '1.0.0';
       if (fs.existsSync(pkgPath)) {
         try {
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -1812,6 +1836,18 @@ router.get(
         } catch {
           // ignore
         }
+      }
+      if (externalUrl) {
+        const sizeEnv = Number(process.env.OBS_BRIDGE_INSTALLER_SIZE_BYTES || 0);
+        res.json({
+          available: true,
+          fileName: INSTALLER_FILE_NAME,
+          version,
+          sizeBytes: Number.isFinite(sizeEnv) && sizeEnv > 0 ? sizeEnv : 0,
+          updatedAt: null,
+          downloadUrl: externalUrl,
+        });
+        return;
       }
       if (!fs.existsSync(exePath)) {
         res.json({
@@ -1842,10 +1878,14 @@ router.get(
 // GET /api/obs/bridge/installer/download
 router.get('/bridge/installer/download', pairingLimiter, (req: Request, res: Response) => {
   try {
-    const { exePath } = resolveInstallerPaths();
+    const { exePath, externalUrl } = resolveInstallerPaths();
+    if (externalUrl) {
+      res.redirect(302, externalUrl);
+      return;
+    }
     if (!fs.existsSync(exePath)) {
       res.status(404).json({
-        message: 'Windows Bridge installer package is not currently available on this server.',
+        message: 'Windows Bridge installer package is not currently hosted on this server.',
       });
       return;
     }
@@ -2777,6 +2817,10 @@ router.patch(
 
       const prevProvider = stream.activeStreamingProvider || stream.streamingProvider || 'youtube';
       const prevYtId = stream.youtubeVideoId || '';
+      const nextProvider =
+        req.body.activeStreamingProvider === 'youtube' || req.body.activeStreamingProvider === 'mediamtx'
+          ? req.body.activeStreamingProvider
+          : prevProvider;
 
       if (typeof req.body.youtubeInput === 'string' && req.body.youtubeInput.trim()) {
         const parsed = extractYouTubeVideoId(req.body.youtubeInput);
@@ -2784,8 +2828,23 @@ router.patch(
           res.status(400).json({ message: parsed.error || 'Invalid YouTube URL or 11-character Video ID.' });
           return;
         }
+        if (stream.status === 'LIVE' && nextProvider === 'youtube') {
+          const duplicate = await LiveStream.findOne({
+            _id: { $ne: stream._id },
+            youtubeVideoId: parsed.videoId,
+            status: 'LIVE',
+            activeStreamingProvider: 'youtube',
+            broadcastPublished: { $ne: false },
+          });
+          if (duplicate) {
+            res.status(409).json({
+              message: `Another active LIVE broadcast already uses YouTube Video ID "${parsed.videoId}".`,
+            });
+            return;
+          }
+        }
         stream.youtubeVideoId = parsed.videoId;
-        stream.youtubeInput = parsed.watchUrl || req.body.youtubeInput.trim();
+        stream.youtubeInput = sanitizeText(parsed.watchUrl || req.body.youtubeInput.trim(), 300);
         if (stream.youtubeStreamStatus === 'UNKNOWN' || stream.youtubeStreamStatus === 'UNAVAILABLE') {
           stream.youtubeStreamStatus = 'READY';
         }
@@ -2806,7 +2865,10 @@ router.patch(
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
 
-      if (prevProvider !== stream.activeStreamingProvider || prevYtId !== stream.youtubeVideoId) {
+      if (
+        stream.broadcastPublished !== false &&
+        (prevProvider !== stream.activeStreamingProvider || prevYtId !== stream.youtubeVideoId)
+      ) {
         emitStreamEvent(matchId, 'streaming_provider_changed', {
           streamId: matchId,
           fromProvider: prevProvider,

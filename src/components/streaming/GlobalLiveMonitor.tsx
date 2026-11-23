@@ -37,7 +37,8 @@ export function GlobalLiveMonitor() {
 
   const liveStreams = useMemo(() => {
     const onlyLive = streams.filter((s) => s.status === 'LIVE');
-    return onlyLive.length > 0 ? onlyLive : streams;
+    if (onlyLive.length > 0) return onlyLive;
+    return streams.filter((s) => s.status !== 'ENDED');
   }, [streams]);
 
   const activeStream = useMemo(() => {

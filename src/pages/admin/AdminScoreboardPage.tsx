@@ -47,6 +47,7 @@ import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
 import { normalizeBroadcast } from '../../utils/normalizeBroadcast.ts';
+import { isMatchPreparedDraft } from '../../utils/broadcastWorkflow.ts';
 import { resolveTeamId } from '../../utils/dedupe.ts';
 import { LiveScoreboardView } from '../../components/scoreboard/LiveScoreboardView.tsx';
 import { ScoreboardSummary } from '../../components/scoreboard/ScoreboardSummary.tsx';
@@ -105,8 +106,12 @@ export function AdminScoreboardPage() {
       .then((data) => {
         setStreams(data);
         if (!id && data.length > 0) {
-          const liveFirst = data.find((s) => s.status === 'LIVE') || data[0];
-          navigate(`/admin/scoreboard/${liveFirst.id}`, { replace: true });
+          const preferred =
+            data.find((s) => s.status === 'LIVE') ||
+            data.find((s) => isMatchPreparedDraft(s)) ||
+            data.find((s) => s.status === 'UPCOMING') ||
+            data[0];
+          navigate(`/admin/scoreboard/${preferred.id}`, { replace: true });
         }
       })
       .catch((err) => setListError(extractApiError(err, 'Failed to load streams.')))
@@ -333,7 +338,10 @@ export function AdminScoreboardPage() {
             >
               {streams.map((s) => (
                 <option key={s.id} value={s.id}>
-                  [{s.status}] {s.matchTitle || `${s.teamAName || 'Team A'} vs ${s.teamBName || 'Team B'}` || s.youtubeVideoId}
+                  [{isMatchPreparedDraft(s) ? 'PREPARED' : s.status}]{' '}
+                  {s.matchTitle ||
+                    `${s.teamAName || 'Team A'} vs ${s.teamBName || 'Team B'}` ||
+                    s.youtubeVideoId}
                 </option>
               ))}
             </select>
@@ -440,6 +448,24 @@ export function AdminScoreboardPage() {
         />
       ) : (
         <div className="space-y-6">
+          {isMatchPreparedDraft(stream) && (
+            <div className="p-3.5 rounded-xl bg-sky-50 border border-sky-200 flex flex-wrap items-center justify-between gap-2 text-xs text-sky-900">
+              <span>
+                <strong>Prepared Draft (Unpublished):</strong> Scoreboard updates sync live to the OBS Browser Source overlay while hidden from Player Portal until activated.
+              </span>
+              <Link
+                to={`/admin/broadcast-studio/${stream.id}`}
+                className="font-bold text-[#EA580C] hover:underline whitespace-nowrap"
+              >
+                Open Control Room →
+              </Link>
+            </div>
+          )}
+          {stream.status === 'ENDED' && (
+            <div className="p-3.5 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700">
+              <strong>Match Ended:</strong> Final score and match history are preserved. Start or switch to an active/prepared match in the selector above.
+            </div>
+          )}
           {showVideoMonitor && normalized && (
             <div className="space-y-3 max-w-2xl">
               <div className="aspect-video rounded-xl overflow-hidden border border-slate-200">

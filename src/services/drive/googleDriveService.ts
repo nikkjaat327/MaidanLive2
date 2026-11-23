@@ -1,12 +1,12 @@
-import { getApp, getApps, initializeApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from '@firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
   signOut,
-} from 'firebase/auth';
-import type { User } from 'firebase/auth';
+} from '@firebase/auth';
+import type { User } from '@firebase/auth';
 import firebaseConfig from '../../../firebase-applet-config.json';
 
 export const GOOGLE_DRIVE_SCOPES = [

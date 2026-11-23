@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
   ArrowLeftRight,
@@ -23,14 +23,12 @@ import {
 } from 'lucide-react';
 import {
   LiveStreamData,
-  ScoreboardPosition,
   StreamingProvider,
   TeamData,
   TournamentData,
   VenueData,
-  ViewerCountVisibility,
 } from '../../types/index.ts';
-import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
+import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import {
   AdminStreamConfigResponse,
   YouTubeVerification,
@@ -40,20 +38,25 @@ import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { extractYouTubeVideoId } from '../../utils/youtube.ts';
+import {
+  hasStreamOutputReady,
+  isMatchPreparedDraft,
+} from '../../utils/broadcastWorkflow.ts';
 import { YouTubePlayer } from '../../components/streaming/YouTubePlayer.tsx';
 import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
+import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
-import { CRICKET_OVER_PRESETS } from '../../utils/cricketScoring.ts';
 import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
 
 type AdminStreamTab = 'ACTIVE' | 'UPCOMING' | 'HISTORY' | 'REPLAYS';
 
 export function AdminLiveStreamsPage() {
-  const { isOpen: monitorOpen, selectedStreamId, toggleMonitor } = useLiveMonitor();
+  const navigate = useNavigate();
+  const { isOpen: monitorOpen, selectedStreamId, toggleMonitor, refreshStreams } = useLiveMonitor();
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [teams, setTeams] = useState<TeamData[]>([]);
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
@@ -65,42 +68,9 @@ export function AdminLiveStreamsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sportFilter, setSportFilter] = useState('');
 
-  // Create / Edit Stream Modal state
+  // Create (Match Setup / Initialize) & Edit Metadata Modal state
   const [formOpen, setFormOpen] = useState(false);
   const [editingStream, setEditingStream] = useState<LiveStreamData | null>(null);
-  const [streamingProvider, setStreamingProvider] = useState<StreamingProvider>('youtube');
-  const [youtubeInput, setYoutubeInput] = useState('');
-  const [ytVerify, setYtVerify] = useState<YouTubeVerification | null>(null);
-  const [verifyingYt, setVerifyingYt] = useState(false);
-  const [mediamtxStreamPath, setMediamtxStreamPath] = useState('');
-  const [mediamtxPlaybackUrl, setMediamtxPlaybackUrl] = useState('');
-  const [mediamtxWebrtcUrl, setMediamtxWebrtcUrl] = useState('');
-  const [viewerCountVisibility, setViewerCountVisibility] =
-    useState<ViewerCountVisibility>('public');
-
-  const [teamAId, setTeamAId] = useState('');
-  const [teamBId, setTeamBId] = useState('');
-  const [teamAName, setTeamAName] = useState('');
-  const [teamBName, setTeamBName] = useState('');
-  const [teamALogo, setTeamALogo] = useState('');
-  const [teamBLogo, setTeamBLogo] = useState('');
-  const [venueId, setVenueId] = useState('');
-  const [location, setLocation] = useState('');
-  const [gameName, setGameName] = useState<SportOption | ''>('');
-  const [matchTitle, setMatchTitle] = useState('');
-  const [tournamentId, setTournamentId] = useState('');
-  const [tournamentName, setTournamentName] = useState('');
-  const [matchDate, setMatchDate] = useState('');
-  const [matchDescription, setMatchDescription] = useState('');
-  const [streamStatus, setStreamStatus] = useState<'LIVE' | 'UPCOMING'>('LIVE');
-  const [scoreboardVisibleByDefault, setScoreboardVisibleByDefault] = useState(true);
-  const [scoreboardPosition, setScoreboardPosition] = useState<ScoreboardPosition>('BOTTOM');
-  const [chatEnabled, setChatEnabled] = useState(true);
-  const [highlightsEnabled, setHighlightsEnabled] = useState(true);
-  const [oversLimit, setOversLimit] = useState('20');
-  const [playersPerSide, setPlayersPerSide] = useState('11');
-  const [submitting, setSubmitting] = useState(false);
-  const [confirmVideoChangeOpen, setConfirmVideoChangeOpen] = useState(false);
 
   // Private RTMP Config & Health Modal
   const [configTarget, setConfigTarget] = useState<LiveStreamData | null>(null);
@@ -159,81 +129,13 @@ export function AdminLiveStreamsPage() {
     loadAll();
   }, [loadAll]);
 
-  const parsedYoutube = youtubeInput.trim()
-    ? extractYouTubeVideoId(youtubeInput)
-    : { valid: false, videoId: null, error: 'YouTube Video ID or URL is required.' };
-
-  const youtubeValidOrOptional =
-    streamingProvider === 'mediamtx' ? !youtubeInput.trim() || parsedYoutube.valid : parsedYoutube.valid;
-
   function openNewStreamModal() {
     setEditingStream(null);
-    setStreamingProvider('youtube');
-    setYoutubeInput('');
-    setYtVerify(null);
-    setMediamtxStreamPath('');
-    setMediamtxPlaybackUrl('');
-    setMediamtxWebrtcUrl('');
-    setViewerCountVisibility('public');
-    setTeamAId('');
-    setTeamBId('');
-    setTeamAName('');
-    setTeamBName('');
-    setTeamALogo('');
-    setTeamBLogo('');
-    setVenueId('');
-    setLocation('');
-    setGameName('');
-    setMatchTitle('');
-    setTournamentId('');
-    setTournamentName('');
-    setMatchDate('');
-    setMatchDescription('');
-    setStreamStatus('LIVE');
-    setScoreboardVisibleByDefault(true);
-    setScoreboardPosition('BOTTOM');
-    setChatEnabled(true);
-    setHighlightsEnabled(true);
-    setOversLimit('20');
-    setPlayersPerSide('11');
     setFormOpen(true);
   }
 
   function openEditStreamModal(stream: LiveStreamData) {
     setEditingStream(stream);
-    setStreamingProvider(stream.activeStreamingProvider || stream.streamingProvider || 'youtube');
-    setYoutubeInput(stream.youtubeInput || stream.youtubeVideoId || '');
-    setYtVerify(null);
-    setMediamtxStreamPath(stream.mediamtxStreamPath || '');
-    setMediamtxPlaybackUrl(stream.mediamtxPlaybackUrl || '');
-    setMediamtxWebrtcUrl(stream.mediamtxWebrtcUrl || '');
-    setViewerCountVisibility(stream.viewerCountVisibility || 'public');
-    setTeamAId(stream.teamAId || '');
-    setTeamBId(stream.teamBId || '');
-    setTeamAName(stream.teamAName || '');
-    setTeamBName(stream.teamBName || '');
-    setTeamALogo(stream.teamALogo || '');
-    setTeamBLogo(stream.teamBLogo || '');
-    setVenueId(
-      typeof stream.venueId === 'object' && stream.venueId
-        ? stream.venueId.id || stream.venueId._id || ''
-        : stream.venueId || ''
-    );
-    setLocation(stream.location || '');
-    setGameName((stream.gameName as SportOption) || '');
-    setMatchTitle(stream.matchTitle || '');
-    setTournamentId(stream.tournamentId || '');
-    setTournamentName(stream.tournamentName || '');
-    setMatchDate(stream.matchDate ? stream.matchDate.slice(0, 10) : '');
-    setMatchDescription(stream.matchDescription || '');
-    setStreamStatus(stream.status === 'UPCOMING' ? 'UPCOMING' : 'LIVE');
-    setScoreboardVisibleByDefault(stream.scoreboardVisibleByDefault ?? true);
-    setScoreboardPosition(stream.scoreboardPosition || 'BOTTOM');
-    setChatEnabled(stream.chatEnabled ?? true);
-    setHighlightsEnabled(stream.highlightsEnabled ?? true);
-    const crkDetails = (stream.score?.sportSpecificDetails || {}) as Record<string, unknown>;
-    setOversLimit(String(crkDetails.oversLimit || 20));
-    setPlayersPerSide(String(crkDetails.playersPerSide || 11));
     setFormOpen(true);
   }
 
@@ -324,100 +226,6 @@ export function AdminLiveStreamsPage() {
     setTimeout(() => setCopiedField(null), 1800);
   }
 
-  async function handleVerifyStreamYoutube() {
-    if (!parsedYoutube.valid) return;
-    try {
-      setVerifyingYt(true);
-      const res = await liveStreamService.verifyYouTubeVideo(youtubeInput);
-      setYtVerify(res);
-    } catch (err) {
-      setError(extractApiError(err, 'Failed to verify YouTube video.'));
-    } finally {
-      setVerifyingYt(false);
-    }
-  }
-
-  async function saveStream(confirmedVideoChange = false) {
-    if (!youtubeValidOrOptional) {
-      setError(parsedYoutube.error || 'Please enter a valid YouTube Video ID or URL.');
-      return;
-    }
-
-    if (
-      editingStream &&
-      parsedYoutube.valid &&
-      parsedYoutube.videoId &&
-      parsedYoutube.videoId !== editingStream.youtubeVideoId &&
-      !confirmedVideoChange
-    ) {
-      setConfirmVideoChangeOpen(true);
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-      setError(null);
-
-      const payload: Record<string, unknown> = {
-        streamingProvider,
-        youtubeInput: youtubeInput.trim(),
-        youtubeVideoId: parsedYoutube.videoId || '',
-        mediamtxStreamPath: mediamtxStreamPath.trim() || undefined,
-        mediamtxPlaybackUrl: mediamtxPlaybackUrl.trim() || undefined,
-        mediamtxWebrtcUrl: mediamtxWebrtcUrl.trim() || undefined,
-        viewerCountVisibility,
-        teamAId: teamAId || null,
-        teamBId: teamBId || null,
-        teamAName: teamAName.trim(),
-        teamBName: teamBName.trim(),
-        teamALogo: teamALogo.trim(),
-        teamBLogo: teamBLogo.trim(),
-        venueId: venueId || null,
-        location: location.trim(),
-        gameName,
-        matchTitle: matchTitle.trim(),
-        tournamentId: tournamentId || null,
-        tournamentName: tournamentName.trim(),
-        matchDate: matchDate || null,
-        matchDescription: matchDescription.trim(),
-        scoreboardVisibleByDefault,
-        scoreboardPosition,
-        chatEnabled,
-        highlightsEnabled,
-        ...(gameName === 'Cricket'
-          ? {
-              oversLimit: Math.max(1, Math.min(90, Math.floor(Number(oversLimit) || 20))),
-              playersPerSide: Math.max(2, Math.min(15, Math.floor(Number(playersPerSide) || 11))),
-            }
-          : {}),
-      };
-
-      if (editingStream) {
-        if (editingStream.status === 'UPCOMING' && streamStatus === 'LIVE') {
-          payload.status = 'LIVE';
-        }
-        await liveStreamService.updateStream(editingStream.id, payload);
-        setSuccess('Stream details updated.');
-      } else {
-        payload.status = streamStatus;
-        await liveStreamService.createStream(payload);
-        setSuccess(
-          streamStatus === 'LIVE'
-            ? `Live stream started on MaidanLive (${streamingProvider.toUpperCase()}).`
-            : 'Upcoming stream scheduled.'
-        );
-      }
-
-      setConfirmVideoChangeOpen(false);
-      setFormOpen(false);
-      await loadAll();
-    } catch (err) {
-      setError(extractApiError(err, 'Failed to save stream.'));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   async function handleEndStream() {
     if (!endTarget) return;
     try {
@@ -429,7 +237,7 @@ export function AdminLiveStreamsPage() {
         res.note ||
           'MaidanLive stream ended and moved to history with final scores preserved.'
       );
-      await loadAll();
+      await Promise.all([loadAll(), refreshStreams()]);
     } catch (err) {
       setError(extractApiError(err, 'Failed to end stream.'));
     } finally {
@@ -521,7 +329,7 @@ export function AdminLiveStreamsPage() {
             Dual Broadcast Studio
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Launch YouTube Live or MediaMTX Direct RTMP/HLS/WebRTC broadcasts and switch feeds mid-match safely.
+            Initialize matches cleanly first, configure OBS &amp; scoreboard overlays, then connect YouTube Live and activate broadcasts inside the Control Room.
           </p>
         </div>
 
@@ -531,7 +339,7 @@ export function AdminLiveStreamsPage() {
           className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap shrink-0"
         >
           <Plus className="w-4 h-4" />
-          <span>Start New Live Stream</span>
+          <span>New Match Setup</span>
         </button>
       </div>
 
@@ -571,7 +379,7 @@ export function AdminLiveStreamsPage() {
         <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg overflow-x-auto max-w-full">
           {[
             { key: 'ACTIVE' as const, label: `Active (${activeStreams.length})` },
-            { key: 'UPCOMING' as const, label: `Upcoming (${upcomingStreams.length})` },
+            { key: 'UPCOMING' as const, label: `Prepared & Upcoming (${upcomingStreams.length})` },
             { key: 'HISTORY' as const, label: `Stream History (${endedStreams.length})` },
             { key: 'REPLAYS' as const, label: `Replays (${endedStreams.length})` },
           ].map((tab) => (
@@ -624,21 +432,21 @@ export function AdminLiveStreamsPage() {
           icon={<Video className="w-6 h-6" />}
           title={
             activeTab === 'ACTIVE'
-              ? 'No active live streams'
+              ? 'No active live broadcasts'
               : activeTab === 'UPCOMING'
-                ? 'No upcoming streams scheduled'
+                ? 'No prepared or upcoming matches'
                 : 'No ended streams yet'
           }
-          description="Click Start New Live Stream with YouTube Live or MediaMTX Direct Feed to begin broadcasting."
+          description="Click New Match Setup to initialize a match without a YouTube link, prepare OBS & overlays, then activate when ready."
           action={
-            activeTab === 'ACTIVE' && (
+            (activeTab === 'ACTIVE' || activeTab === 'UPCOMING') && (
               <button
                 type="button"
                 onClick={openNewStreamModal}
                 className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
               >
                 <Plus className="w-4 h-4" />
-                <span>Start New Live Stream</span>
+                <span>New Match Setup</span>
               </button>
             )
           }
@@ -664,11 +472,19 @@ export function AdminLiveStreamsPage() {
                     {stream.status === 'LIVE' && (
                       <span className="inline-flex items-center gap-1 font-semibold text-red-600">
                         <Radio className="w-3.5 h-3.5" />
-                        LIVE
+                        LIVE · PUBLISHED
                       </span>
                     )}
                     {stream.status === 'UPCOMING' && (
-                      <span className="font-semibold text-amber-600">UPCOMING</span>
+                      <span
+                        className={`px-2 py-0.5 rounded font-semibold ${
+                          isMatchPreparedDraft(stream)
+                            ? 'bg-sky-100 text-sky-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {isMatchPreparedDraft(stream) ? 'PREPARED · UNPUBLISHED' : 'UPCOMING'}
+                      </span>
                     )}
                     {stream.status === 'ENDED' && (
                       <span className="font-semibold text-slate-600">ENDED</span>
@@ -677,7 +493,9 @@ export function AdminLiveStreamsPage() {
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold ${
                         activeProvider === 'mediamtx'
                           ? 'bg-orange-100 text-orange-800'
-                          : 'bg-red-100 text-red-800'
+                          : stream.youtubeVideoId
+                            ? 'bg-red-100 text-red-800'
+                            : 'bg-slate-100 text-slate-600'
                       }`}
                     >
                       {activeProvider === 'mediamtx' ? (
@@ -685,14 +503,19 @@ export function AdminLiveStreamsPage() {
                           <Server className="w-3 h-3" />
                           MediaMTX ({stream.mediamtxPublishStatus || 'IDLE'})
                         </>
+                      ) : stream.youtubeVideoId ? (
+                        <>
+                          <Youtube className="w-3 h-3" />
+                          YouTube Linked
+                        </>
                       ) : (
                         <>
                           <Youtube className="w-3 h-3" />
-                          YouTube
+                          YouTube Not Linked
                         </>
                       )}
                     </span>
-                    {stream.status !== 'ENDED' && (
+                    {stream.status !== 'ENDED' && hasStreamOutputReady(stream) && (
                       <StreamStatusIndicator stream={stream} />
                     )}
                     {stream.youtubeVideoId && (
@@ -840,18 +663,30 @@ export function AdminLiveStreamsPage() {
                     <button
                       type="button"
                       onClick={async () => {
+                        if (!hasStreamOutputReady(stream)) {
+                          navigate(`/admin/broadcast-studio/${stream.id}`);
+                          return;
+                        }
                         try {
-                          await liveStreamService.updateStream(stream.id, { status: 'LIVE' });
-                          setSuccess('Stream is now LIVE on MaidanLive.');
-                          await loadAll();
+                          await liveStreamService.activateBroadcast(stream.id);
+                          setSuccess('Broadcast activated and published on Player Portal.');
+                          await Promise.all([loadAll(), refreshStreams()]);
                         } catch (err) {
-                          setError(extractApiError(err, 'Failed to start stream.'));
+                          setError(extractApiError(err, 'Failed to activate broadcast.'));
                         }
                       }}
-                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 whitespace-nowrap"
+                      className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white rounded-lg whitespace-nowrap ${
+                        hasStreamOutputReady(stream)
+                          ? 'bg-red-600 hover:bg-red-700'
+                          : 'bg-[#EA580C] hover:bg-orange-600'
+                      }`}
                     >
                       <Radio className="w-3.5 h-3.5" />
-                      <span>Go Live Now</span>
+                      <span>
+                        {hasStreamOutputReady(stream)
+                          ? 'Activate Broadcast'
+                          : 'Connect YouTube in Studio'}
+                      </span>
                     </button>
                   )}
 
@@ -872,570 +707,27 @@ export function AdminLiveStreamsPage() {
         </div>
       )}
 
-      {/* Start / Edit Stream Modal */}
-      <Modal
+      {/* Step 1 Match Setup / Edit Metadata Modal (separated from YouTube URL) */}
+      <MatchSetupFormModal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title={editingStream ? 'Edit Stream Details' : 'Start New Live Stream'}
-        subtitle="Choose YouTube Live or MediaMTX Direct Feed (RTMP/HLS/WebRTC). Match details are optional."
-        maxWidthClass="max-w-3xl"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            saveStream(false);
-          }}
-          className="space-y-6"
-        >
-          {/* Provider Selector */}
-          <div className="space-y-2">
-            <label className="block text-sm font-semibold text-slate-900">
-              Primary Streaming Provider
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setStreamingProvider('youtube')}
-                className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-colors ${
-                  streamingProvider === 'youtube'
-                    ? 'border-[#EA580C] bg-orange-50/70 text-slate-900'
-                    : 'border-slate-200 bg-white text-slate-600'
-                }`}
-              >
-                <Youtube className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-bold">YouTube Live</p>
-                  <p className="text-xs text-slate-500">
-                    Instant embed with YouTube Video ID or URL &amp; automatic replay support.
-                  </p>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setStreamingProvider('mediamtx')}
-                className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-colors ${
-                  streamingProvider === 'mediamtx'
-                    ? 'border-[#EA580C] bg-orange-50/70 text-slate-900'
-                    : 'border-slate-200 bg-white text-slate-600'
-                }`}
-              >
-                <Server className="w-5 h-5 text-[#EA580C] shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-bold">MediaMTX Direct Feed</p>
-                  <p className="text-xs text-slate-500">
-                    Low-latency RTMP ingest from OBS/Larix to HLS + WebRTC WHEP playback.
-                  </p>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* YouTube Input (Mandatory when youtube active, optional backup when mediamtx active) */}
-          <div className="space-y-3">
-            <label className="block text-sm font-semibold text-slate-900">
-              YouTube Video ID or URL{' '}
-              {streamingProvider === 'youtube' ? (
-                <span className="text-red-600">*</span>
-              ) : (
-                <span className="text-xs font-normal text-slate-500">(Optional backup / replay)</span>
-              )}
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                required={streamingProvider === 'youtube'}
-                value={youtubeInput}
-                onChange={(e) => {
-                  setYoutubeInput(e.target.value);
-                  setYtVerify(null);
-                }}
-                placeholder="e.g. dQw4w9WgXcQ or https://youtube.com/live/..."
-                className="flex-1 min-h-[44px] px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#EA580C]"
-              />
-              <button
-                type="button"
-                disabled={!parsedYoutube.valid || verifyingYt}
-                onClick={handleVerifyStreamYoutube}
-                className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-800 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 disabled:opacity-50 whitespace-nowrap"
-              >
-                {verifyingYt ? 'Checking...' : 'Check YouTube Embed'}
-              </button>
-            </div>
-
-            {youtubeInput.trim() && !parsedYoutube.valid && (
-              <p className="text-xs text-red-600">{parsedYoutube.error}</p>
-            )}
-
-            {parsedYoutube.valid && parsedYoutube.videoId && (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-                  <span>
-                    Extracted Video ID:{' '}
-                    <strong className="font-mono text-slate-900">{parsedYoutube.videoId}</strong>
-                  </span>
-                </div>
-
-                {ytVerify && (
-                  <div
-                    className={`p-3 rounded-lg text-xs border ${
-                      ytVerify.available
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                        : 'bg-amber-50 border-amber-200 text-amber-900'
-                    }`}
-                  >
-                    {ytVerify.available
-                      ? `Verified available: "${ytVerify.title || ytVerify.videoId}"`
-                      : ytVerify.message}
-                  </div>
-                )}
-
-                <YouTubePlayer videoId={parsedYoutube.videoId} title="Stream Preview" />
-              </div>
-            )}
-          </div>
-
-          {/* MediaMTX Configuration */}
-          {streamingProvider === 'mediamtx' && (
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-              <p className="text-xs font-semibold text-slate-800">
-                MediaMTX Stream Routing (Leave blank to auto-provision RTMP path &amp; stream key)
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Stream Path
-                  </label>
-                  <input
-                    type="text"
-                    value={mediamtxStreamPath}
-                    onChange={(e) => setMediamtxStreamPath(e.target.value)}
-                    placeholder="live/match-1 (auto)"
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    HLS Playback URL (.m3u8)
-                  </label>
-                  <input
-                    type="url"
-                    value={mediamtxPlaybackUrl}
-                    onChange={(e) => setMediamtxPlaybackUrl(e.target.value)}
-                    placeholder="Auto from MEDIAMTX_HLS_BASE_URL"
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    WebRTC WHEP URL (Optional)
-                  </label>
-                  <input
-                    type="url"
-                    value={mediamtxWebrtcUrl}
-                    onChange={(e) => setMediamtxWebrtcUrl(e.target.value)}
-                    placeholder="Auto from MEDIAMTX_WEBRTC_BASE_URL"
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!editingStream && (
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="text-sm font-medium text-slate-700">Initial Stream Status:</label>
-              <div className="flex items-center gap-2">
-                {(['LIVE', 'UPCOMING'] as const).map((st) => (
-                  <button
-                    key={st}
-                    type="button"
-                    onClick={() => setStreamStatus(st)}
-                    className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg border ${
-                      streamStatus === st
-                        ? st === 'LIVE'
-                          ? 'bg-red-600 text-white border-red-600'
-                          : 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-300'
-                    }`}
-                  >
-                    {st === 'LIVE' ? 'Start LIVE Now' : 'Schedule UPCOMING'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Optional Match Information */}
-          <div className="pt-4 border-t border-slate-200 space-y-4">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">
-                Match Metadata &amp; Viewer Privacy
-              </h3>
-              <p className="text-xs text-slate-500">
-                Leave any match field blank to start immediately, or select database teams and tournaments.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Sport / Game Name
-                </label>
-                <select
-                  value={gameName}
-                  onChange={(e) => setGameName(e.target.value as SportOption | '')}
-                  className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-                >
-                  <option value="">Not specified</option>
-                  {SPORT_OPTIONS.map((sp) => (
-                    <option key={sp} value={sp}>
-                      {sp}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Match Title</label>
-                <input
-                  type="text"
-                  value={matchTitle}
-                  onChange={(e) => setMatchTitle(e.target.value)}
-                  placeholder="Optional match title"
-                  className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              {gameName === 'Cricket' && (
-                <div className="sm:col-span-2 p-3.5 rounded-xl bg-orange-50/60 border border-orange-200 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs font-bold text-slate-900">
-                      Cricket Format Configuration (Overs &amp; Squad Size)
-                    </p>
-                    <span className="text-[11px] font-mono text-orange-800 font-semibold">
-                      {Math.max(1, Math.min(90, Number(oversLimit) || 20))} Overs ·{' '}
-                      {Math.max(2, Math.min(15, Number(playersPerSide) || 11))}/side
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {CRICKET_OVER_PRESETS.map((ov) => (
-                      <button
-                        key={ov}
-                        type="button"
-                        onClick={() => setOversLimit(String(ov))}
-                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold border transition-colors ${
-                          Number(oversLimit) === ov
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        {ov} ov
-                      </button>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Match Overs Limit (1–90)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={90}
-                        value={oversLimit}
-                        onChange={(e) => setOversLimit(e.target.value)}
-                        className="w-full min-h-[40px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Players per Side (2–15)
-                      </label>
-                      <input
-                        type="number"
-                        min={2}
-                        max={15}
-                        value={playersPerSide}
-                        onChange={(e) => setPlayersPerSide(e.target.value)}
-                        className="w-full min-h-[40px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Team A */}
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-600">
-                  Team A (Select DB Team or Enter Manually)
-                </label>
-                {teams.length > 0 && (
-                  <select
-                    value={teamAId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setTeamAId(id);
-                      const found = teams.find((t) => t.id === id);
-                      if (found) {
-                        setTeamAName(found.name);
-                        setTeamALogo(found.logoUrl || '');
-                      }
-                    }}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">Manual entry / None</option>
-                    {teams.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} ({t.sportType})
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={teamAName}
-                  onChange={(e) => setTeamAName(e.target.value)}
-                  placeholder="Team A name (optional)"
-                  className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="url"
-                  value={teamALogo}
-                  onChange={(e) => setTeamALogo(e.target.value)}
-                  placeholder="Team A logo URL (optional)"
-                  className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              {/* Team B */}
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-600">
-                  Team B (Select DB Team or Enter Manually)
-                </label>
-                {teams.length > 0 && (
-                  <select
-                    value={teamBId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setTeamBId(id);
-                      const found = teams.find((t) => t.id === id);
-                      if (found) {
-                        setTeamBName(found.name);
-                        setTeamBLogo(found.logoUrl || '');
-                      }
-                    }}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">Manual entry / None</option>
-                    {teams.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} ({t.sportType})
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={teamBName}
-                  onChange={(e) => setTeamBName(e.target.value)}
-                  placeholder="Team B name (optional)"
-                  className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="url"
-                  value={teamBLogo}
-                  onChange={(e) => setTeamBLogo(e.target.value)}
-                  placeholder="Team B logo URL (optional)"
-                  className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Tournament (Optional)
-                </label>
-                {tournaments.length > 0 && (
-                  <select
-                    value={tournamentId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setTournamentId(id);
-                      const found = tournaments.find((t) => t.id === id);
-                      if (found) setTournamentName(found.name);
-                    }}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white mb-2"
-                  >
-                    <option value="">Manual entry / None</option>
-                    {tournaments.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={tournamentName}
-                  onChange={(e) => setTournamentName(e.target.value)}
-                  placeholder="Tournament name (optional)"
-                  className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              <div className="space-y-2">
-                {venues.length > 0 && (
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">
-                      Saved Venue (Optional)
-                    </label>
-                    <select
-                      value={venueId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setVenueId(id);
-                        const v = venues.find((item) => item.id === id);
-                        if (v && !location.trim()) {
-                          setLocation([v.name, v.city].filter(Boolean).join(', '));
-                        }
-                      }}
-                      className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                    >
-                      <option value="">Manual location / None</option>
-                      {venues.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.name} {v.city ? `(${v.city})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Location / Ground
-                  </label>
-                  <input
-                    type="text"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    placeholder="Stadium or ground name"
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Match Date</label>
-                  <input
-                    type="date"
-                    value={matchDate}
-                    onChange={(e) => setMatchDate(e.target.value)}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Match Description
-              </label>
-              <textarea
-                rows={2}
-                value={matchDescription}
-                onChange={(e) => setMatchDescription(e.target.value)}
-                placeholder="Optional match context, pitch notes, or stage details"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200">
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Default Scoreboard Overlay Position
-                  </label>
-                  <select
-                    value={scoreboardPosition}
-                    onChange={(e) => setScoreboardPosition(e.target.value as ScoreboardPosition)}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="BOTTOM">Bottom Strip</option>
-                    <option value="TOP">Top Strip</option>
-                    <option value="LEFT">Left Corner</option>
-                    <option value="RIGHT">Right Corner</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Viewer Count Visibility
-                  </label>
-                  <select
-                    value={viewerCountVisibility}
-                    onChange={(e) =>
-                      setViewerCountVisibility(e.target.value as ViewerCountVisibility)
-                    }
-                    className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="public">Public (Visible on Player Portal)</option>
-                    <option value="admin_only">Admin Only (Hidden from Public)</option>
-                    <option value="hidden">Hidden Everywhere</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex flex-col justify-center gap-2 pt-2">
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={scoreboardVisibleByDefault}
-                    onChange={(e) => setScoreboardVisibleByDefault(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-                  />
-                  <span>Show TV broadcast scoreboard by default</span>
-                </label>
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={chatEnabled}
-                    onChange={(e) => setChatEnabled(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-                  />
-                  <span>Enable Live Match Chat</span>
-                </label>
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={highlightsEnabled}
-                    onChange={(e) => setHighlightsEnabled(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-                  />
-                  <span>Enable Timestamped Highlights</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-3 border-t border-slate-200">
-            <button
-              type="button"
-              onClick={() => setFormOpen(false)}
-              className="min-h-[44px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !youtubeValidOrOptional}
-              className="min-h-[44px] px-5 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
-            >
-              {submitting
-                ? 'Saving...'
-                : editingStream
-                  ? 'Save Stream Changes'
-                  : streamStatus === 'LIVE'
-                    ? 'Start Live Stream'
-                    : 'Schedule Stream'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+        mode={editingStream ? 'edit' : 'create'}
+        initialStream={editingStream}
+        teams={teams}
+        tournaments={tournaments}
+        venues={venues}
+        onInitialized={async (created) => {
+          setSuccess(
+            `Match "${created.matchTitle || created.teamAName || 'Session'}" initialized (Unpublished Draft). Opening Control Room...`
+          );
+          await Promise.all([loadAll(), refreshStreams()]);
+          navigate(`/admin/broadcast-studio/${created.id}`);
+        }}
+        onUpdated={async () => {
+          setSuccess('Match metadata updated.');
+          await Promise.all([loadAll(), refreshStreams()]);
+        }}
+      />
 
       {/* Private RTMP Stream Config & Health Check Modal */}
       <Modal
@@ -1674,18 +966,6 @@ export function AdminLiveStreamsPage() {
           </form>
         )}
       </Modal>
-
-      {/* Confirm YouTube Video ID change */}
-      <ConfirmDialog
-        open={confirmVideoChangeOpen}
-        onClose={() => setConfirmVideoChangeOpen(false)}
-        onConfirm={() => saveStream(true)}
-        loading={submitting}
-        variant="primary"
-        title="Confirm YouTube Video ID Change"
-        message="Changing the YouTube Video ID will reload the video player for active viewers. Scoreboard data will be preserved. Proceed?"
-        confirmLabel="Change Video ID"
-      />
 
       {/* Confirm End Stream */}
       <ConfirmDialog

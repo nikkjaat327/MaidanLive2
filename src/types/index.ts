@@ -60,6 +60,11 @@ export interface AuthUser {
 }
 
 export type StreamStatus = 'UPCOMING' | 'LIVE' | 'ENDED';
+export type BroadcastPhase =
+  | 'MATCH_SETUP'
+  | 'MATCH_PREPARED'
+  | 'BROADCAST_ACTIVE'
+  | 'BROADCAST_ENDED';
 
 export type MatchResultStatus =
   | 'NOT_DECLARED'
@@ -157,6 +162,11 @@ export interface LiveStreamData {
   matchDate?: string | null;
   matchDescription: string;
   status: StreamStatus;
+  broadcastPublished?: boolean;
+  wasPublished?: boolean;
+  broadcastPhase?: BroadcastPhase;
+  preparedAt?: string | null;
+  activatedAt?: string | null;
   startedAt?: string | null;
   endedAt?: string | null;
   authorizedScorerId?: string | null;

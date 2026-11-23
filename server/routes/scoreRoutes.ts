@@ -66,7 +66,9 @@ async function ensureLiveScore(streamId: string, session: any = null) {
             stream.status === 'ENDED'
               ? 'Completed'
               : stream.status === 'UPCOMING'
-                ? 'Upcoming'
+                ? stream.broadcastPublished === false
+                  ? 'Prepared'
+                  : 'Upcoming'
                 : 'Live',
           lastUpdatedAt: new Date(),
         },

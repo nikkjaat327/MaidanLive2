@@ -1,6 +1,8 @@
 node_modules/
 build/
 dist/
+dev-dist/
+dist-installers/
 coverage/
 .data/
 .DS_Store

@@ -86,6 +86,50 @@ export const liveStreamService = {
     return data.stream;
   },
 
+  async initializeMatch(payload: Record<string, unknown>): Promise<{
+    stream: LiveStreamData;
+    adminStreamConfig?: AdminStreamConfigResponse;
+  }> {
+    const { data } = await adminApi.post<{
+      stream: LiveStreamData;
+      adminStreamConfig?: AdminStreamConfigResponse;
+    }>('/live/initialize', payload);
+    return data;
+  },
+
+  async connectYouTube(
+    id: string,
+    payload: {
+      youtubeInput?: string;
+      activeStreamingProvider?: StreamingProvider;
+      youtubeStreamStatus?: 'UNKNOWN' | 'READY' | 'LIVE' | 'UNAVAILABLE';
+      verify?: boolean;
+    }
+  ): Promise<{
+    stream: LiveStreamData;
+    verification?: YouTubeVerification | null;
+  }> {
+    const { data } = await adminApi.patch<{
+      stream: LiveStreamData;
+      verification?: YouTubeVerification | null;
+    }>(`/live/${id}/youtube`, payload);
+    return data;
+  },
+
+  async activateBroadcast(
+    id: string,
+    payload?: {
+      youtubeInput?: string;
+      activeStreamingProvider?: StreamingProvider;
+    }
+  ): Promise<{ stream: LiveStreamData }> {
+    const { data } = await adminApi.post<{ stream: LiveStreamData }>(
+      `/live/${id}/activate`,
+      payload || {}
+    );
+    return data;
+  },
+
   async updateStream(id: string, payload: Record<string, unknown>): Promise<LiveStreamData> {
     const { data } = await adminApi.patch<{ stream: LiveStreamData }>(`/live/${id}`, payload);
     return data.stream;

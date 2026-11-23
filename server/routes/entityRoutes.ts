@@ -35,6 +35,7 @@ import {
   deleteDocByAnyId,
   findDocByAnyId,
 } from '../utils/mongoNormalize.ts';
+import { isStreamVisibleToPublic } from '../utils/streamVisibility.ts';
 
 function dedupeDocsById<T extends { _id?: any; id?: string }>(docs: T[]): T[] {
   const seen = new Set<string>();
@@ -483,7 +484,10 @@ router.get('/tournaments/:id', optionalAuthenticate, async (req: AuthenticatedRe
         .lean(),
     ]);
 
-    const streams = dedupeDocsById(streamsRaw);
+    const isAdminViewer = Boolean(req.user && ADMIN_PORTAL_ROLES.includes(req.user.role));
+    const streams = dedupeDocsById(streamsRaw).filter(
+      (s) => isAdminViewer || isStreamVisibleToPublic(s)
+    );
     const fixtures = dedupeDocsById(fixturesRaw);
     const suspendedTeamIds = new Set(
       nonApprovedRegs.map((r: any) => r.teamId?.toString()).filter(Boolean)
@@ -1059,8 +1063,11 @@ router.get('/teams/:id', optionalAuthenticate, async (req: AuthenticatedRequest,
         .lean(),
     ]);
 
+    const isAdminViewer = Boolean(req.user && ADMIN_PORTAL_ROLES.includes(req.user.role));
     const players = dedupeDocsById(rawPlayers);
-    const streams = dedupeDocsById(rawStreams);
+    const streams = dedupeDocsById(rawStreams).filter(
+      (s) => isAdminViewer || isStreamVisibleToPublic(s)
+    );
     const fixtures = dedupeDocsById(rawFixtures);
 
     const streamIds = streams.map((s) => s._id);
@@ -1966,7 +1973,10 @@ router.get('/search', optionalAuthenticate, async (req: AuthenticatedRequest, re
         : Promise.resolve([]),
     ]);
 
-    const uniqueStreams = dedupeDocsById(streams);
+    const isAdminSearch = Boolean(req.user && ADMIN_PORTAL_ROLES.includes(req.user.role));
+    const uniqueStreams = dedupeDocsById(streams).filter(
+      (s) => isAdminSearch || isStreamVisibleToPublic(s)
+    );
     const uniqueTournaments = dedupeDocsById(tournaments);
     const uniqueTeams = dedupeDocsById(teams);
     const uniquePlayers = dedupeDocsById(players);

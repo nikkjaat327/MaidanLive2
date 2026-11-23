@@ -20,6 +20,7 @@ import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { emitStreamEvent } from '../socket/index.ts';
+import { isStreamVisibleToPublic } from '../utils/streamVisibility.ts';
 
 const router = Router();
 
@@ -976,13 +977,14 @@ router.get('/customer/following', authenticate, async (req: AuthenticatedRequest
       streamOr.push({ tournamentId: { $in: tournamentIds } });
     }
 
-    const streams =
+    const rawStreams =
       streamOr.length > 0
         ? await LiveStream.find({ $or: streamOr })
             .sort({ startedAt: -1, matchDate: 1, createdAt: -1 })
             .limit(50)
             .lean()
         : [];
+    const streams = rawStreams.filter((s) => isStreamVisibleToPublic(s));
 
     const streamIds = streams.map((s) => s._id);
     const scores =

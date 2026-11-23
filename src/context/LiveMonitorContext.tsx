@@ -63,8 +63,13 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
         return liveFirst;
       });
       setSelectedStreamId((prev) => {
-        if (prev && liveFirst.some((s) => (s.id || s._id) === prev)) return prev;
-        const firstLive = liveFirst.find((s) => s.status === 'LIVE') || liveFirst[0];
+        if (prev && liveFirst.some((s) => (s.id || s._id) === prev && s.status !== 'ENDED')) {
+          return prev;
+        }
+        const firstLive =
+          liveFirst.find((s) => s.status === 'LIVE') ||
+          liveFirst.find((s) => s.status !== 'ENDED') ||
+          liveFirst[0];
         return firstLive ? String(firstLive.id || firstLive._id || '') : prev;
       });
     } catch {
