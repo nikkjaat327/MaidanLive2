@@ -112,7 +112,8 @@ function resolvePublicBaseUrl(req: express.Request): string {
     .split(',')[0]
     .trim();
   const proto = forwardedProto || req.protocol || 'http';
-  const host = req.get('host') || 'localhost:3000';
+  const fallbackPort = Number(process.env.PORT) || 4000;
+  const host = req.get('host') || `localhost:${fallbackPort}`;
   return `${proto}://${host}`.replace(/\/+$/, '');
 }
 
@@ -581,7 +582,16 @@ export class ErrorOverlay extends HTMLElement {}
     });
   }
 
-  const PORT = Number(process.env.PORT) || 3000;
+  const cliPortIdx = process.argv.findIndex((a) => a === '--port' || a.startsWith('--port='));
+  let cliPort = 0;
+  if (cliPortIdx !== -1) {
+    const raw = process.argv[cliPortIdx].startsWith('--port=')
+      ? process.argv[cliPortIdx].split('=')[1]
+      : process.argv[cliPortIdx + 1];
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) cliPort = parsed;
+  }
+  const PORT = cliPort || Number(process.env.PORT) || 4000;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(
       `[MaidanLive] Server listening on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'}, db=${dbInfo.mode})`

@@ -162,7 +162,8 @@ function resolveBaseAppUrl(req: Request): string {
       .trim() ||
     req.protocol ||
     'http';
-  const host = req.get('host') || 'localhost:3000';
+  const fallbackPort = Number(process.env.PORT) || 4000;
+  const host = req.get('host') || `localhost:${fallbackPort}`;
   return `${proto}://${host}`.replace(/\/+$/, '');
 }
 

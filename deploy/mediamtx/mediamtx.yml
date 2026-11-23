@@ -11,7 +11,7 @@ apiAddress: 0.0.0.0:9997
 # Webhook authentication against MaidanLive backend (/api/v1/mediamtx/auth)
 # MediaMTX sends POST { user, password, ip, action, path, protocol, id, query }
 authMethod: http
-authHTTPAddress: http://app:3000/api/v1/mediamtx/auth
+authHTTPAddress: http://app:4000/api/v1/mediamtx/auth
 
 # Allow public playback (read/playback) without stream keys;
 # enforce stream-key webhook validation on RTMP/SRT/WHIP publish.

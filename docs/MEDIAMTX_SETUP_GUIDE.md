@@ -24,7 +24,7 @@ Open the following ports on UFW / Cloud Firewall:
 - `1935/tcp` — RTMP encoder ingest from grounds
 - `8189/udp`, `8189/tcp` — WebRTC ICE/RTP media transport
 
-> Keep port `9997` (MediaMTX Control API) and `3000` (Node app) bound to `127.0.0.1` / Docker internal network only.
+> Keep port `9997` (MediaMTX Control API) and `4000` (Node app) bound to `127.0.0.1` / Docker internal network only.
 
 ### Step-by-Step Setup
 
@@ -70,7 +70,7 @@ Open the following ports on UFW / Cloud Firewall:
 1. Download the latest Windows release (`mediamtx_v1.x_windows_amd64.zip`) from the MediaMTX releases page.
 2. Copy `/deploy/mediamtx/mediamtx.yml` beside `mediamtx.exe` and change `authHTTPAddress` for local Windows testing:
    ```yaml
-   authHTTPAddress: http://127.0.0.1:3000/api/v1/mediamtx/auth
+   authHTTPAddress: http://127.0.0.1:4000/api/v1/mediamtx/auth
    ```
 3. Double-click `mediamtx.exe` (or run `.\mediamtx.exe` in PowerShell).
 4. Start MaidanLive (`npm run dev` or production `node server.ts`) with:
