@@ -160,11 +160,60 @@ html[data-obs-overlay-view="true"] #root {
 
 /* Apply to a specific container, or use :root / * for the whole page */
 .scrollable-element {
-  /* First value = thumb (handle) color, Second value = track (background) color */
-  scrollbar-color: #4f46e5 #e5e7eb; 
-  
-  /* Options: auto | thin | none */
-  scrollbar-width: thin; 
+  scrollbar-color: #4f46e5 #e5e7eb;
+  scrollbar-width: thin;
 }
+
+/* GPU-composited Broadcast Ad & Graphics Animations */
+@keyframes mlGfxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes mlGfxFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes mlGfxSlideLeft {
+  from { opacity: 0; transform: translate3d(-48px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes mlGfxSlideRight {
+  from { opacity: 0; transform: translate3d(48px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes mlGfxSlideTop {
+  from { opacity: 0; transform: translate3d(0, -36px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes mlGfxSlideBottom {
+  from { opacity: 0; transform: translate3d(0, 36px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes mlGfxZoomIn {
+  from { opacity: 0; transform: scale3d(0.84, 0.84, 1); }
+  to { opacity: 1; transform: scale3d(1, 1, 1); }
+}
+@keyframes mlGfxZoomOut {
+  from { opacity: 1; transform: scale3d(1, 1, 1); }
+  to { opacity: 0; transform: scale3d(0.86, 0.86, 1); }
+}
+@keyframes mlGfxPopIn {
+  0% { opacity: 0; transform: scale3d(0.7, 0.7, 1); }
+  65% { opacity: 1; transform: scale3d(1.05, 1.05, 1); }
+  100% { opacity: 1; transform: scale3d(1, 1, 1); }
+}
+@keyframes mlGfxBounce {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+}
+@keyframes mlGfxPulse {
+  0%, 100% { transform: scale3d(1, 1, 1); opacity: 1; }
+  50% { transform: scale3d(1.03, 1.03, 1); opacity: 0.92; }
+}
+@keyframes mlGfxMarquee {
+  0% { transform: translate3d(18%, 0, 0); }
+  100% { transform: translate3d(-18%, 0, 0); }
+}
+
 
 

@@ -28,6 +28,7 @@ import { recordActivity } from './audit.ts';
 import { runWithOptionalTransaction } from './dbTransaction.ts';
 import { dispatchMatchNotifications } from './notifications.ts';
 import { buildIdMatchFilter, findDocByAnyId } from './mongoNormalize.ts';
+import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
 
 const PLAYER_STAT_FIELDS = [
   'raidPoints',
@@ -403,6 +404,12 @@ export async function handleKabaddiEventRoute(
       historyItem: populatedHistory,
     });
 
+    if (txResult.triggeredAllOut || txResult.applied.triggeredAllOut) {
+      triggerBroadcastGraphicEvent(id, 'ALL_OUT', `k_allout_${txResult.historyId}`).catch(() => {});
+    } else if (txResult.applied.eventType === 'SUPER_TACKLE') {
+      triggerBroadcastGraphicEvent(id, 'SUPER_TACKLE', `k_st_${txResult.historyId}`).catch(() => {});
+    }
+
     res.json(payload);
   } catch (err: any) {
     console.error('[Kabaddi] Event route error:', err);
@@ -523,6 +530,17 @@ export async function handleKabaddiClockRoute(
       streamId: id,
       historyItem: populatedHistory,
     });
+
+    const clockHistId = String(historyDoc._id);
+    if (command.type === 'HALF_TIME') {
+      triggerBroadcastGraphicEvent(id, 'HALF_TIME', `k_clk_${clockHistId}`).catch(() => {});
+    } else if (command.type === 'START_TIMEOUT') {
+      triggerBroadcastGraphicEvent(id, 'TIMEOUT', `k_clk_${clockHistId}`).catch(() => {});
+    } else if (command.type === 'START_NEXT_HALF') {
+      triggerBroadcastGraphicEvent(id, 'SECOND_HALF', `k_clk_${clockHistId}`).catch(() => {});
+    } else if (command.type === 'START_MATCH') {
+      triggerBroadcastGraphicEvent(id, 'FIRST_HALF', `k_clk_${clockHistId}`).catch(() => {});
+    }
 
     res.json(payload);
   } catch (err: any) {
@@ -896,6 +914,8 @@ export async function handleKabaddiCompleteRoute(
         winnerTeamId: winnerTeamId ? winnerTeamId.toString() : null,
       });
     }
+
+    triggerBroadcastGraphicEvent(id, 'MATCH_COMPLETED', `k_complete_${id}`).catch(() => {});
 
     res.json(payload);
   } catch (err: any) {

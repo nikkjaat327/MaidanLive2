@@ -6,6 +6,7 @@ import {
   StreamingProvider,
 } from '../../types/index.ts';
 import { adminApi, getViewerApi, publicApi } from '../api/httpClient.ts';
+import type { BroadcastGraphicsStateData } from '../../types/broadcastGraphics.ts';
 
 export interface YouTubeVerification {
   validId: boolean;
@@ -203,11 +204,13 @@ export const liveStreamService = {
     stream: LiveStreamData;
     score: LiveScoreData | null;
     overlayConfig: BroadcastOverlayConfig;
+    graphicsState?: BroadcastGraphicsStateData;
   }> {
     const { data } = await publicApi.get<{
       stream: LiveStreamData;
       score: LiveScoreData | null;
       overlayConfig: BroadcastOverlayConfig;
+      graphicsState?: BroadcastGraphicsStateData;
     }>(`/live/${id}/overlay`, {
       params: { _t: Date.now() },
       headers: {

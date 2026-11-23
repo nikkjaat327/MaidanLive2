@@ -41,6 +41,7 @@ import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/in
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { verifyMediaMTXStreamHealth } from './mediamtxService.ts';
+import { clearLiveGraphics, getGraphicsStateForMatch } from './broadcastGraphicsService.ts';
 
 interface DirectObsSession {
   matchId: string;
@@ -891,10 +892,11 @@ async function getRoomPasswordForProfile(profile: any): Promise<string> {
 
 export async function getStudioSnapshot(matchId: string, includePrivateUrls = true) {
   const profile = await ensureObsProfileForMatch(matchId);
-  const [cameras, scenes, auditLogs] = await Promise.all([
+  const [cameras, scenes, auditLogs, graphicsState] = await Promise.all([
     BroadcastCamera.find({ matchId }).sort({ sortOrder: 1, cameraNumber: 1 }).lean(),
     BroadcastScene.find({ matchId }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
     BroadcastAuditLog.find({ matchId }).sort({ timestamp: -1 }).limit(60).lean(),
+    getGraphicsStateForMatch(matchId),
   ]);
 
   const roomPassword = includePrivateUrls ? await getRoomPasswordForProfile(profile) : '';
@@ -906,6 +908,7 @@ export async function getStudioSnapshot(matchId: string, includePrivateUrls = tr
     ),
     scenes: scenes.map(formatSafeScene),
     auditLogs: auditLogs.map(formatAuditLog),
+    graphicsState,
   };
 }
 
@@ -3223,6 +3226,9 @@ export async function manageBroadcastSession(
     obsStatus: 'SUCCESS',
     metadata: { broadcastSessionId: profile.broadcastSessionId },
   });
+  if (mode === 'start') {
+    await clearLiveGraphics(matchId, actor, profile.broadcastSessionId).catch(() => {});
+  }
   await emitFullStudioState(matchId);
   return formatSafeProfile(profile);
 }

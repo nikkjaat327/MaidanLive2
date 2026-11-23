@@ -4,11 +4,13 @@ import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 import { DEFAULT_OVERLAY_CONFIG, normalizeOverlayConfig } from '../utils/overlayConfig.ts';
+import type { BroadcastGraphicsStateData } from '../types/broadcastGraphics.ts';
 
 export function useObsOverlay(matchId?: string) {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [score, setScore] = useState<LiveScoreData | null>(null);
   const [overlayConfig, setOverlayConfig] = useState<BroadcastOverlayConfig>(DEFAULT_OVERLAY_CONFIG);
+  const [graphicsState, setGraphicsState] = useState<BroadcastGraphicsStateData | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(() => getSocketClient().connected);
@@ -25,6 +27,9 @@ export function useObsOverlay(matchId?: string) {
       setStream(res.stream);
       setScore(res.score);
       setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+      if (res.graphicsState) {
+        setGraphicsState(res.graphicsState);
+      }
     } catch (err) {
       setError(extractApiError(err, 'Unable to load match broadcast overlay.'));
     } finally {
@@ -39,6 +44,7 @@ export function useObsOverlay(matchId?: string) {
     if (!matchId) {
       setStream(null);
       setScore(null);
+      setGraphicsState(null);
       setLoading(false);
       return;
     }
@@ -140,6 +146,20 @@ export function useObsOverlay(matchId?: string) {
       }
     };
 
+    const handleGraphicsStateUpdated = (payload: {
+      matchId?: string;
+      streamId?: string;
+      graphicsState?: BroadcastGraphicsStateData;
+      eventId?: string;
+    }) => {
+      const targetId = payload?.matchId || payload?.streamId;
+      if (targetId !== matchId) return;
+      if (!shouldAcceptEvent(payload, false)) return;
+      if (payload.graphicsState) {
+        setGraphicsState(payload.graphicsState);
+      }
+    };
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('score:updated', handleScorePayload);
@@ -160,6 +180,7 @@ export function useObsOverlay(matchId?: string) {
     socket.on('live:started', handleStreamUpdated);
     socket.on('live:ended', handleStreamEnded);
     socket.on('overlay:config_updated', handleOverlayConfigUpdated);
+    socket.on('graphics:state_updated', handleGraphicsStateUpdated);
 
     return () => {
       socket.off('connect', handleConnect);
@@ -182,6 +203,7 @@ export function useObsOverlay(matchId?: string) {
       socket.off('live:started', handleStreamUpdated);
       socket.off('live:ended', handleStreamEnded);
       socket.off('overlay:config_updated', handleOverlayConfigUpdated);
+      socket.off('graphics:state_updated', handleGraphicsStateUpdated);
       socket.emit('match:leave', matchId);
     };
   }, [matchId, fetchOverlay]);
@@ -203,6 +225,8 @@ export function useObsOverlay(matchId?: string) {
     setScore,
     overlayConfig,
     setOverlayConfig,
+    graphicsState,
+    setGraphicsState,
     loading,
     error,
     connected,

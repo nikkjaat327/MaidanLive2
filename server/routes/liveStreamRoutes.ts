@@ -25,6 +25,10 @@ import {
   ensureObsProfileForMatch,
 } from '../services/obsControllerService.ts';
 import {
+  getGraphicsStateForMatch,
+  triggerBroadcastGraphicEvent,
+} from '../services/broadcastGraphicsService.ts';
+import {
   authenticate,
   canManageStream,
   hasBroadcastAccess,
@@ -709,9 +713,10 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
       return;
     }
 
-    const [score, venue] = await Promise.all([
+    const [score, venue, graphicsState] = await Promise.all([
       LiveScore.findOne({ liveStreamId: stream._id }).lean(),
       stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
+      getGraphicsStateForMatch(id),
     ]);
 
     const overlayConfig = normalizeOverlayConfig((stream as any).overlayConfig);
@@ -749,6 +754,7 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
       stream: safeStream,
       score: score || null,
       overlayConfig,
+      graphicsState,
     });
   } catch (err) {
     console.error('[LiveStream] Get overlay error:', err);
@@ -1888,6 +1894,11 @@ router.post(
         includeAllSpectatorsIfNoFollowers: true,
       });
       await emitFullStudioState(stream._id.toString());
+      triggerBroadcastGraphicEvent(
+        stream._id.toString(),
+        'MATCH_STARTING',
+        `match_start_${stream._id.toString()}`
+      ).catch(() => {});
 
       res.json({ stream: payload });
     } catch (err) {

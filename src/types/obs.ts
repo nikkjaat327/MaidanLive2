@@ -6,6 +6,7 @@ import type {
   CameraPreviewFit,
   ObsSceneTransformItem,
 } from '../utils/obsTransformGeometry.ts';
+import type { BroadcastGraphicsStateData } from './broadcastGraphics.ts';
 
 export type { CameraOrientationMode, CameraPreviewFit, ObsSceneTransformItem };
 
@@ -247,6 +248,7 @@ export interface ObsStudioPayload {
   cameras: BroadcastCameraData[];
   scenes: BroadcastSceneData[];
   auditLogs: BroadcastAuditLogData[];
+  graphicsState?: BroadcastGraphicsStateData;
   scoreboardOverlayUrl: string;
   sponsors: Array<{
     id: string;

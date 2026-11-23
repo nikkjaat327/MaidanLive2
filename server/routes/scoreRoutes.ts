@@ -37,6 +37,7 @@ import { emitStreamEvent, emitTournamentEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
+import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
 import {
   applyKabaddiPlayerStatDeltas,
   handleKabaddiClockRoute,
@@ -870,6 +871,41 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           tournamentId: stream.tournamentId,
           includeAllSpectatorsIfNoFollowers: false,
         });
+      }
+
+      // Optional Event-Based Sponsor Graphics (with server-side cooldowns & dedupe)
+      const histId = txResult.historyId ? String(txResult.historyId) : `${Date.now()}`;
+      const rawActType = String(actionPayload?.type || '').toUpperCase();
+      const rawEvType = String(actionPayload?.eventType || txResult.eventType || '').toUpperCase();
+      const batRuns = Number(actionPayload?.batRuns ?? actionPayload?.runs ?? 0);
+      if (txResult.autoCompletedMatch) {
+        triggerBroadcastGraphicEvent(id, 'MATCH_COMPLETED', `score_${histId}`).catch(() => {});
+      } else if (txResult.autoCompletedInnings1 || rawEvType === 'INNINGS_BREAK' || rawEvType === 'MATCH_BREAK') {
+        triggerBroadcastGraphicEvent(id, 'MATCH_BREAK', `score_${histId}`).catch(() => {});
+      } else if (txResult.cricketWicketEvent) {
+        triggerBroadcastGraphicEvent(id, 'WICKET', `score_${histId}`).catch(() => {});
+      } else if (
+        scoreSport === 'Cricket' &&
+        (batRuns === 6 || rawEvType === 'SIX') &&
+        rawActType !== 'WIDE' &&
+        rawActType !== 'NO_BALL'
+      ) {
+        triggerBroadcastGraphicEvent(id, 'SIX', `score_${histId}`).catch(() => {});
+      } else if (
+        scoreSport === 'Cricket' &&
+        (batRuns === 4 || rawEvType === 'FOUR') &&
+        rawActType !== 'WIDE' &&
+        rawActType !== 'NO_BALL'
+      ) {
+        triggerBroadcastGraphicEvent(id, 'FOUR', `score_${histId}`).catch(() => {});
+      } else if (rawEvType === 'HALF_TIME') {
+        triggerBroadcastGraphicEvent(id, 'HALF_TIME', `score_${histId}`).catch(() => {});
+      } else if (rawEvType === 'TIMEOUT') {
+        triggerBroadcastGraphicEvent(id, 'TIMEOUT', `score_${histId}`).catch(() => {});
+      } else if (rawEvType === 'FIRST_HALF') {
+        triggerBroadcastGraphicEvent(id, 'FIRST_HALF', `score_${histId}`).catch(() => {});
+      } else if (rawEvType === 'SECOND_HALF') {
+        triggerBroadcastGraphicEvent(id, 'SECOND_HALF', `score_${histId}`).catch(() => {});
       }
 
       res.status(201).json(payload);

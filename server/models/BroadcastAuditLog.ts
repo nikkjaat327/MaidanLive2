@@ -39,7 +39,15 @@ export type BroadcastAuditAction =
   | 'BRIDGE_PAIRING_CREATED'
   | 'BRIDGE_PAIRED'
   | 'BRIDGE_DISCONNECTED'
-  | 'BRIDGE_RECONNECT_REQUESTED';
+  | 'BRIDGE_RECONNECT_REQUESTED'
+  | 'GRAPHICS_SAVED'
+  | 'GRAPHICS_DELETED'
+  | 'GRAPHICS_SHOWN_LIVE'
+  | 'GRAPHICS_HIDDEN'
+  | 'GRAPHICS_CLEARED'
+  | 'GRAPHICS_QUEUE_UPDATED'
+  | 'GRAPHICS_EVENT_TRIGGERED'
+  | 'GRAPHICS_ASSET_UPLOADED';
 
 export interface IBroadcastAuditLog extends Document {
   matchId?: mongoose.Types.ObjectId | null;
@@ -107,6 +115,14 @@ const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
         'BRIDGE_PAIRED',
         'BRIDGE_DISCONNECTED',
         'BRIDGE_RECONNECT_REQUESTED',
+        'GRAPHICS_SAVED',
+        'GRAPHICS_DELETED',
+        'GRAPHICS_SHOWN_LIVE',
+        'GRAPHICS_HIDDEN',
+        'GRAPHICS_CLEARED',
+        'GRAPHICS_QUEUE_UPDATED',
+        'GRAPHICS_EVENT_TRIGGERED',
+        'GRAPHICS_ASSET_UPLOADED',
       ],
       required: true,
       index: true,
