@@ -119,6 +119,7 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
     broadcastPhase,
     preparedAt: clean.preparedAt || clean.createdAt || null,
     activatedAt: clean.activatedAt || clean.startedAt || null,
+    showScoreboardOnYoutube: clean.showScoreboardOnYoutube !== false,
     overlayConfig: normalizeOverlayConfig(clean.overlayConfig),
     ...extra,
   };
@@ -359,6 +360,8 @@ async function createMatchOrStreamSession(
           : null,
       scoreboardVisibleByDefault:
         req.body.scoreboardVisibleByDefault === false ? false : true,
+      showScoreboardOnYoutube:
+        req.body.showScoreboardOnYoutube === false ? false : true,
       scoreboardPosition: normalizePosition(req.body.scoreboardPosition),
       chatEnabled: req.body.chatEnabled === false ? false : true,
       highlightsEnabled: req.body.highlightsEnabled === false ? false : true,
@@ -412,6 +415,7 @@ async function createMatchOrStreamSession(
           mediamtxStreamPath: mtxCfg.streamPath,
           gameName: scoreSport,
           scoreboardPosition: stream.scoreboardPosition,
+          showScoreboardOnYoutube: stream.showScoreboardOnYoutube,
         },
       }
     );
@@ -1305,6 +1309,7 @@ router.patch(
         matchTitle: stream.matchTitle,
         scoreboardPosition: stream.scoreboardPosition,
         scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
+        showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
         chatEnabled: stream.chatEnabled,
       };
 
@@ -1463,6 +1468,12 @@ router.patch(
       if (typeof req.body.scoreboardVisibleByDefault === 'boolean') {
         stream.scoreboardVisibleByDefault = req.body.scoreboardVisibleByDefault;
       }
+      let showOnYoutubeUpdated = false;
+      if (typeof req.body.showScoreboardOnYoutube === 'boolean') {
+        showOnYoutubeUpdated =
+          (stream.showScoreboardOnYoutube !== false) !== req.body.showScoreboardOnYoutube;
+        stream.showScoreboardOnYoutube = req.body.showScoreboardOnYoutube;
+      }
       if (req.body.scoreboardPosition !== undefined) {
         stream.scoreboardPosition = normalizePosition(req.body.scoreboardPosition);
       }
@@ -1545,12 +1556,26 @@ router.patch(
             matchTitle: stream.matchTitle,
             scoreboardPosition: stream.scoreboardPosition,
             scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
+            showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
             chatEnabled: stream.chatEnabled,
           },
         }
       );
 
       emitStreamEvent(stream._id.toString(), becameLive ? 'live:started' : 'live:updated', payload);
+      if (showOnYoutubeUpdated) {
+        emitRoomOnlyEvent(id, 'overlay:config_updated', {
+          streamId: id,
+          overlayConfig: payload.overlayConfig,
+          showScoreboardOnYoutube: payload.showScoreboardOnYoutube,
+        });
+        emitBroadcastStudioEvent(id, 'overlay:config_updated', {
+          streamId: id,
+          overlayConfig: payload.overlayConfig,
+          showScoreboardOnYoutube: payload.showScoreboardOnYoutube,
+        });
+        await emitFullStudioState(id);
+      }
 
       if (becameLive) {
         await dispatchMatchNotifications({
@@ -1676,6 +1701,9 @@ router.patch(
         stream.youtubeStreamStatus = req.body.youtubeStreamStatus;
       }
 
+      if (typeof req.body.showScoreboardOnYoutube === 'boolean') {
+        stream.showScoreboardOnYoutube = req.body.showScoreboardOnYoutube;
+      }
       stream.streamingProvider = requestedProvider;
       stream.activeStreamingProvider = requestedProvider;
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
@@ -1745,10 +1773,13 @@ router.post(
         return;
       }
 
-      // Allow inline provider / YouTube link override on activation if provided
+      // Allow inline provider / YouTube link / overlay visibility override on activation if provided
       if (req.body.activeStreamingProvider === 'youtube' || req.body.activeStreamingProvider === 'mediamtx') {
         stream.streamingProvider = req.body.activeStreamingProvider;
         stream.activeStreamingProvider = req.body.activeStreamingProvider;
+      }
+      if (typeof req.body.showScoreboardOnYoutube === 'boolean') {
+        stream.showScoreboardOnYoutube = req.body.showScoreboardOnYoutube;
       }
       const rawYt =
         typeof req.body.youtubeInput === 'string'

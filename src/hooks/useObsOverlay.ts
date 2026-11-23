@@ -125,11 +125,19 @@ export function useObsOverlay(matchId?: string) {
     const handleOverlayConfigUpdated = (payload: {
       streamId?: string;
       overlayConfig?: BroadcastOverlayConfig;
+      showScoreboardOnYoutube?: boolean;
       eventId?: string;
     }) => {
-      if (payload?.streamId !== matchId || !payload.overlayConfig) return;
+      if (payload?.streamId !== matchId) return;
       if (!shouldAcceptEvent(payload, false)) return;
-      setOverlayConfig(normalizeOverlayConfig(payload.overlayConfig));
+      if (payload.overlayConfig) {
+        setOverlayConfig(normalizeOverlayConfig(payload.overlayConfig));
+      }
+      if (typeof payload.showScoreboardOnYoutube === 'boolean') {
+        setStream((prev) =>
+          prev ? { ...prev, showScoreboardOnYoutube: payload.showScoreboardOnYoutube } : prev
+        );
+      }
     };
 
     socket.on('connect', handleConnect);

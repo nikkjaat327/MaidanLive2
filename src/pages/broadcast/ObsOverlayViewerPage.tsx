@@ -107,27 +107,36 @@ export function ObsOverlayViewerPage() {
     return <div className="w-screen h-screen bg-transparent overflow-hidden" />;
   }
 
+  const showScoreboardOnYoutube = stream.showScoreboardOnYoutube !== false;
   const launcherCorner =
     effectiveConfig.position === 'bottom-right' ? 'bottom-4 left-4' : 'bottom-4 right-4';
 
   return (
     <div className="w-screen h-screen bg-transparent overflow-hidden relative flex items-center justify-center">
-      <div
-        style={{
-          width: canvasWidth,
-          height: canvasHeight,
-          transform: `scale(${scale})`,
-          transformOrigin: 'center center',
-        }}
-        className="shrink-0 relative bg-transparent overflow-hidden"
-      >
-        <HotstarBroadcastOverlay
-          stream={stream}
-          score={score}
-          config={effectiveConfig}
-          isPortrait={isPortrait}
-        />
-      </div>
+      {showScoreboardOnYoutube && (
+        <div
+          style={{
+            width: canvasWidth,
+            height: canvasHeight,
+            transform: `scale(${scale})`,
+            transformOrigin: 'center center',
+          }}
+          className="shrink-0 relative bg-transparent overflow-hidden"
+        >
+          <HotstarBroadcastOverlay
+            stream={stream}
+            score={score}
+            config={effectiveConfig}
+            isPortrait={isPortrait}
+          />
+        </div>
+      )}
+
+      {canShowAdminControls && !showScoreboardOnYoutube && (
+        <div className="fixed top-4 left-4 z-50 pointer-events-none px-3.5 py-2 rounded-lg border border-amber-500/40 bg-slate-950/90 text-xs font-semibold text-amber-200 shadow-lg backdrop-blur-md">
+          Scoreboard on YouTube is OFF — overlay hidden in OBS; visible only inside MaidanLive video player.
+        </div>
+      )}
 
       {canShowAdminControls && (
         controlsOpen ? (

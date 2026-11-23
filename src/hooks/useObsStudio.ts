@@ -311,14 +311,18 @@ export function useObsStudio(matchId?: string) {
     };
 
     const onOverlayConfigUpdated = (payload: any) => {
-      if (payload?.streamId !== matchIdRef.current || !payload?.overlayConfig) return;
+      if (payload?.streamId !== matchIdRef.current) return;
+      if (!payload?.overlayConfig && typeof payload?.showScoreboardOnYoutube !== 'boolean') return;
       setStudio((prev) =>
         prev
           ? {
               ...prev,
               match: {
                 ...prev.match,
-                overlayConfig: payload.overlayConfig,
+                ...(payload.overlayConfig ? { overlayConfig: payload.overlayConfig } : {}),
+                ...(typeof payload.showScoreboardOnYoutube === 'boolean'
+                  ? { showScoreboardOnYoutube: payload.showScoreboardOnYoutube }
+                  : {}),
               },
             }
           : prev

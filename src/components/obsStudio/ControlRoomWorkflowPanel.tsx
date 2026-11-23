@@ -58,6 +58,8 @@ interface ControlRoomWorkflowPanelProps {
   verifyingYtOutput: boolean;
   ytVerification: YouTubeVerification | null;
   onSaveYouTubeOutput: (e?: React.FormEvent, verifyAfterSave?: boolean) => Promise<void> | void;
+  togglingScoreboardOnYoutube?: boolean;
+  onToggleScoreboardOnYoutube?: (nextVal: boolean) => Promise<void> | void;
 
   // Step 6 & 7 Broadcast Lifecycle controls
   activatingBroadcast: boolean;
@@ -105,6 +107,8 @@ export function ControlRoomWorkflowPanel({
   verifyingYtOutput,
   ytVerification,
   onSaveYouTubeOutput,
+  togglingScoreboardOnYoutube = false,
+  onToggleScoreboardOnYoutube,
   activatingBroadcast,
   endingBroadcast,
   onActivateBroadcast,
@@ -137,6 +141,7 @@ export function ControlRoomWorkflowPanel({
   const isEnded = match.status === 'ENDED';
   const isPublicLive = isMatchPubliclyLive(match);
   const outputReady = hasStreamOutputReady(match);
+  const showScoreboardOnYoutube = match.showScoreboardOnYoutube !== false;
 
   // Default expanded if match is still in preparation / not yet publicly live
   const [workflowExpanded, setWorkflowExpanded] = useState<boolean>(() => !isPublicLive);
@@ -387,8 +392,19 @@ export function ControlRoomWorkflowPanel({
 
               <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold text-slate-900">OBS Browser Source Scoreboard URL</p>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <p className="font-semibold text-slate-900 truncate">OBS Browser Source Scoreboard URL</p>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                        showScoreboardOnYoutube
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {showScoreboardOnYoutube ? 'YouTube + Web' : 'Website Embed Only'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={handleCopyOverlayUrl}
@@ -508,6 +524,26 @@ export function ControlRoomWorkflowPanel({
                     ? `Verified: "${ytVerification.title || ytVerification.videoId}"`
                     : ytVerification.message}
                 </div>
+              )}
+
+              {onToggleScoreboardOnYoutube && (
+                <label className="flex items-start gap-2 p-2 rounded-lg border border-slate-200 bg-slate-50/80 text-[11px] text-slate-700 cursor-pointer hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={showScoreboardOnYoutube}
+                    disabled={togglingScoreboardOnYoutube || isEnded}
+                    onChange={(e) => onToggleScoreboardOnYoutube(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#EA580C] shrink-0"
+                  />
+                  <span className="leading-snug">
+                    <strong className="text-slate-900 block">
+                      Scoreboard on YouTube {togglingScoreboardOnYoutube ? '(Saving...)' : ''}
+                    </strong>
+                    {showScoreboardOnYoutube
+                      ? 'Checked: Shown on YouTube Live (via OBS) and MaidanLive.'
+                      : 'Unchecked: Hidden on YouTube — shown only inside MaidanLive embedded video.'}
+                  </span>
+                </label>
               )}
 
               <div className="flex flex-wrap items-center gap-2">

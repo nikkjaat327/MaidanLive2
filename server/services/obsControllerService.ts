@@ -1469,27 +1469,44 @@ export async function executeDirectObsCommand(
       }
     }
 
-    if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
-      const sbItemId = await ensureSceneAndInputDirect(
-        obs,
-        sceneName,
-        payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay',
-        'browser_source',
-        {
-          url: payload.scoreboardOverlay.url,
-          width: 1920,
-          height: 1080,
-          reroute_audio: false,
+    if (payload.scoreboardOverlay) {
+      const sbName = String(payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay');
+      if (payload.scoreboardOverlay.enabled && payload.scoreboardOverlay.url) {
+        const sbItemId = await ensureSceneAndInputDirect(
+          obs,
+          sceneName,
+          sbName,
+          'browser_source',
+          {
+            url: payload.scoreboardOverlay.url,
+            width: 1920,
+            height: 1080,
+            reroute_audio: false,
+          }
+        );
+        if (sbItemId !== null) {
+          await obs
+            .call('SetSceneItemEnabled', {
+              sceneName,
+              sceneItemId: sbItemId,
+              sceneItemEnabled: true,
+            })
+            .catch(() => {});
         }
-      );
-      if (sbItemId !== null) {
-        await obs
-          .call('SetSceneItemEnabled', {
-            sceneName,
-            sceneItemId: sbItemId,
-            sceneItemEnabled: true,
-          })
-          .catch(() => {});
+      } else if (payload.scoreboardOverlay.enabled === false) {
+        const curList = await obs.call('GetSceneItemList', { sceneName }).catch(() => ({ sceneItems: [] }));
+        const sbExisting = Array.isArray((curList as any)?.sceneItems)
+          ? (curList as any).sceneItems.find((i: any) => i.sourceName === sbName)
+          : null;
+        if (sbExisting) {
+          await obs
+            .call('SetSceneItemEnabled', {
+              sceneName,
+              sceneItemId: Number(sbExisting.sceneItemId),
+              sceneItemEnabled: false,
+            })
+            .catch(() => {});
+        }
       }
     }
 
@@ -2133,6 +2150,9 @@ export async function switchCameraLive(
       }
     : undefined;
 
+  const streamMeta = await LiveStream.findById(matchId).select('showScoreboardOnYoutube').lean();
+  const allowYoutubeScoreboard = streamMeta ? streamMeta.showScoreboardOnYoutube !== false : true;
+
   acquireSceneSwitchGuard(matchId);
   emitBroadcastStudioEvent(matchId, 'SCENE_SWITCH_REQUESTED', {
     matchId,
@@ -2148,7 +2168,7 @@ export async function switchCameraLive(
       scoreboardOverlay:
         profile.autoSyncScoreboardSource && baseAppUrl
           ? {
-              enabled: true,
+              enabled: allowYoutubeScoreboard,
               sourceName: profile.scoreboardSourceName || 'MaidanLive_Scoreboard_Overlay',
               url: `${baseAppUrl}/broadcast/overlay/view/${matchId}?obs=1&controls=0`,
             }
@@ -2360,7 +2380,9 @@ export async function applyDynamicLayoutToObs(
 
   const allCameraInputs = allCameras.map((c) => c.obsInputName || `ML_CAM_${c.cameraNumber}`);
   const baseAppUrl = (params.baseAppUrl || '').replace(/\/+$/, '');
-  const includeScoreboard = params.includeScoreboardOverlay !== false;
+  const streamMeta = await LiveStream.findById(matchId).select('showScoreboardOnYoutube').lean();
+  const allowYoutubeScoreboard = streamMeta ? streamMeta.showScoreboardOnYoutube !== false : true;
+  const includeScoreboard = allowYoutubeScoreboard && params.includeScoreboardOverlay !== false;
   const prevScene = profile.activeObsScene || '';
   const prevCameraId = profile.activeCameraId || '';
 

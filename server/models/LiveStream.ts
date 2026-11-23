@@ -87,6 +87,7 @@ export interface ILiveStream extends Document {
   replayVerifiedAt?: Date | null;
   replayDescription: string;
   scoreboardVisibleByDefault: boolean;
+  showScoreboardOnYoutube: boolean;
   scoreboardPosition: ScoreboardPosition;
   chatEnabled: boolean;
   highlightsEnabled: boolean;
@@ -202,6 +203,7 @@ const liveStreamSchema = new Schema<ILiveStream>(
     replayVerifiedAt: { type: Date, default: null },
     replayDescription: { type: String, trim: true, default: '', maxlength: 500 },
     scoreboardVisibleByDefault: { type: Boolean, default: true },
+    showScoreboardOnYoutube: { type: Boolean, default: true },
     scoreboardPosition: {
       type: String,
       enum: ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'],

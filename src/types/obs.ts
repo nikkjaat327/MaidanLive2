@@ -237,6 +237,7 @@ export interface ObsStudioMatchSummary {
   youtubeStreamStatus?: string;
   mediamtxStreamPath?: string;
   mediamtxPublishStatus?: string;
+  showScoreboardOnYoutube?: boolean;
   overlayConfig?: BroadcastOverlayConfig;
 }
 
@@ -307,6 +308,7 @@ export interface BroadcasterDashboardMatchItem {
   startedAt?: string | null;
   endedAt?: string | null;
   activeStreamingProvider: StreamingProvider;
+  showScoreboardOnYoutube?: boolean;
   obsConnectionStatus: ObsConnectionStatus;
   obsStreamActive: boolean;
   obsRecordActive: boolean;

@@ -46,6 +46,7 @@ import { tournamentWorkflowService } from '../../services/tournaments/tournament
 import { LiveStreamPlayer, type PlayerPlaybackSignal } from './LiveStreamPlayer.tsx';
 import { StreamStatusIndicator } from './StreamStatusIndicator.tsx';
 import { BroadcastScoreboard } from './BroadcastScoreboard.tsx';
+import { BroadcastScoreboardOverlay } from '../scoreboard/broadcast/BroadcastScoreboardOverlay.tsx';
 import { BroadcastSportStrip } from './BroadcastSportStrip.tsx';
 import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
@@ -769,6 +770,34 @@ export function LiveBroadcastView({
             </div>
             )}
 
+            {/* Embedded MaidanLive Video Scoreboard Overlay (when Scoreboard on YouTube is unchecked) */}
+            {!broadcast.showScoreboardOnYoutube &&
+              !isFullscreenActive &&
+              scoreboardVisible &&
+              canPlayVideo &&
+              !videoDisabled &&
+              !(broadcast.status === 'UPCOMING' && !showUpcomingPreview) && (
+                <div
+                  className={`pointer-events-none absolute z-25 flex ${
+                    stream.scoreboardPosition === 'BOTTOM'
+                      ? 'bottom-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
+                      : stream.scoreboardPosition === 'LEFT'
+                        ? 'top-12 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
+                        : stream.scoreboardPosition === 'RIGHT'
+                          ? 'top-12 left-2.5 right-2.5 sm:left-auto sm:right-4 justify-end'
+                          : 'top-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
+                  }`}
+                >
+                  <div className="pointer-events-auto max-w-full">
+                    {score ? (
+                      <BroadcastScoreboardOverlay stream={stream} score={score} compact />
+                    ) : (
+                      <BroadcastScoreboard broadcast={broadcast} compact />
+                    )}
+                  </div>
+                </div>
+              )}
+
             {/* Fullscreen Scoreboard Overlay */}
             {isFullscreenActive && scoreboardVisible && (
               <div className="pointer-events-none absolute top-14 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center">
@@ -793,7 +822,9 @@ export function LiveBroadcastView({
             <span className="truncate">
               {broadcast.activeProvider === 'mediamtx'
                 ? 'Streaming via MaidanLive Direct Feed (Low-Latency HLS / WebRTC).'
-                : 'Adaptive YouTube Live playback · Use Fullscreen for live scoreboard overlay.'}
+                : !broadcast.showScoreboardOnYoutube
+                  ? 'YouTube Live playback · Live scoreboard active inside MaidanLive embedded video.'
+                  : 'Adaptive YouTube Live playback · Use Fullscreen for live scoreboard overlay.'}
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
@@ -822,7 +853,9 @@ export function LiveBroadcastView({
 
       {/* 2. PORTRAIT / DEFAULT HIERARCHY: SCOREBOARD STRIP -> SPORT STRIP -> SUMMARY -> RESULT BAR */}
       <div className="px-3 sm:px-0 space-y-3">
-        {scoreboardVisible && <BroadcastScoreboard broadcast={broadcast} />}
+        {scoreboardVisible && (broadcast.showScoreboardOnYoutube || videoDisabled) && (
+          <BroadcastScoreboard broadcast={broadcast} />
+        )}
         <BroadcastSportStrip broadcast={broadcast} />
         <ScoreboardSummary stream={stream} score={score} variant="detail" />
         <BroadcastResultBar broadcast={broadcast} />

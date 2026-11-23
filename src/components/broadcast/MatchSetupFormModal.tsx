@@ -63,6 +63,7 @@ export function MatchSetupFormModal({
   const [viewerCountVisibility, setViewerCountVisibility] =
     useState<ViewerCountVisibility>('public');
   const [scoreboardVisibleByDefault, setScoreboardVisibleByDefault] = useState(true);
+  const [showScoreboardOnYoutube, setShowScoreboardOnYoutube] = useState(true);
   const [chatEnabled, setChatEnabled] = useState(true);
   const [highlightsEnabled, setHighlightsEnabled] = useState(true);
   const [oversLimit, setOversLimit] = useState('20');
@@ -121,6 +122,7 @@ export function MatchSetupFormModal({
       setScoreboardPosition(initialStream.scoreboardPosition || 'BOTTOM');
       setViewerCountVisibility(initialStream.viewerCountVisibility || 'public');
       setScoreboardVisibleByDefault(initialStream.scoreboardVisibleByDefault ?? true);
+      setShowScoreboardOnYoutube(initialStream.showScoreboardOnYoutube ?? true);
       setChatEnabled(initialStream.chatEnabled ?? true);
       setHighlightsEnabled(initialStream.highlightsEnabled ?? true);
       const crkDetails = (initialStream.score?.sportSpecificDetails || {}) as Record<
@@ -147,6 +149,7 @@ export function MatchSetupFormModal({
       setScoreboardPosition('BOTTOM');
       setViewerCountVisibility('public');
       setScoreboardVisibleByDefault(true);
+      setShowScoreboardOnYoutube(true);
       setChatEnabled(true);
       setHighlightsEnabled(true);
       setOversLimit('20');
@@ -178,6 +181,7 @@ export function MatchSetupFormModal({
         scoreboardPosition,
         viewerCountVisibility,
         scoreboardVisibleByDefault,
+        showScoreboardOnYoutube,
         chatEnabled,
         highlightsEnabled,
         ...(gameName === 'Cricket'
@@ -547,6 +551,22 @@ export function MatchSetupFormModal({
           </div>
 
           <div className="flex flex-col justify-center gap-2.5 pt-2">
+            <label className="flex flex-col gap-1 p-2.5 rounded-lg border border-slate-200 bg-slate-50/70 text-xs font-medium text-slate-800 cursor-pointer hover:bg-slate-50">
+              <span className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={showScoreboardOnYoutube}
+                  onChange={(e) => setShowScoreboardOnYoutube(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+                />
+                <span className="font-semibold">Scoreboard on YouTube (OBS Overlay)</span>
+              </span>
+              <span className="text-[11px] text-slate-500 pl-6 leading-snug">
+                {showScoreboardOnYoutube
+                  ? 'Checked: Scoreboard appears on YouTube Live (via OBS) and MaidanLive.'
+                  : 'Unchecked: Clean YouTube video — scoreboard appears only inside MaidanLive embedded video.'}
+              </span>
+            </label>
             <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
               <input
                 type="checkbox"

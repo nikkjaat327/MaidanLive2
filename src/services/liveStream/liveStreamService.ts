@@ -121,6 +121,7 @@ export const liveStreamService = {
     payload?: {
       youtubeInput?: string;
       activeStreamingProvider?: StreamingProvider;
+      showScoreboardOnYoutube?: boolean;
     }
   ): Promise<{ stream: LiveStreamData }> {
     const { data } = await adminApi.post<{ stream: LiveStreamData }>(

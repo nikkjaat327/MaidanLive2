@@ -301,6 +301,7 @@ export function AdminObsBroadcastStudioPage() {
 
   const [activatingBroadcast, setActivatingBroadcast] = useState(false);
   const [endingBroadcast, setEndingBroadcast] = useState(false);
+  const [togglingScoreboardOnYoutube, setTogglingScoreboardOnYoutube] = useState(false);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [setupModalMode, setSetupModalMode] = useState<'create' | 'edit' | null>(null);
   const [setupEditStream, setSetupEditStream] = useState<LiveStreamData | null>(null);
@@ -1215,6 +1216,32 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
+  async function handleToggleScoreboardOnYoutube(nextVal: boolean) {
+    if (!matchId || !studio?.match) return;
+    const prevVal = studio.match.showScoreboardOnYoutube !== false;
+    setStudio((prev) =>
+      prev ? { ...prev, match: { ...prev.match, showScoreboardOnYoutube: nextVal } } : prev
+    );
+    try {
+      setTogglingScoreboardOnYoutube(true);
+      setActionError(null);
+      await liveStreamService.updateStream(matchId, { showScoreboardOnYoutube: nextVal });
+      notifySuccess(
+        nextVal
+          ? 'Scoreboard on YouTube enabled — visible in OBS/YouTube Live and MaidanLive.'
+          : 'Scoreboard on YouTube disabled — scoreboard now renders only inside MaidanLive embedded video.'
+      );
+      await Promise.all([refetch(), refreshStreams()]);
+    } catch (err) {
+      setStudio((prev) =>
+        prev ? { ...prev, match: { ...prev.match, showScoreboardOnYoutube: prevVal } } : prev
+      );
+      setActionError(extractApiError(err, 'Failed to update Scoreboard on YouTube setting.'));
+    } finally {
+      setTogglingScoreboardOnYoutube(false);
+    }
+  }
+
   async function handleActivateBroadcast() {
     if (!matchId) return;
     try {
@@ -2049,6 +2076,8 @@ export function AdminObsBroadcastStudioPage() {
             verifyingYtOutput={verifyingYtOutput}
             ytVerification={ytVerification}
             onSaveYouTubeOutput={handleSaveYouTubeOutput}
+            togglingScoreboardOnYoutube={togglingScoreboardOnYoutube}
+            onToggleScoreboardOnYoutube={handleToggleScoreboardOnYoutube}
             activatingBroadcast={activatingBroadcast}
             endingBroadcast={endingBroadcast}
             onActivateBroadcast={handleActivateBroadcast}
@@ -3007,6 +3036,25 @@ export function AdminObsBroadcastStudioPage() {
                     </button>
                   </div>
                 </div>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-700 cursor-pointer hover:bg-slate-100/70">
+                  <input
+                    type="checkbox"
+                    checked={studio.match.showScoreboardOnYoutube !== false}
+                    disabled={togglingScoreboardOnYoutube || studio.match.status === 'ENDED'}
+                    onChange={(e) => handleToggleScoreboardOnYoutube(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#EA580C] shrink-0"
+                  />
+                  <span className="leading-snug">
+                    <strong className="text-slate-900 block">
+                      Scoreboard on YouTube (OBS Broadcast Output){' '}
+                      {togglingScoreboardOnYoutube ? '· Saving...' : ''}
+                    </strong>
+                    {studio.match.showScoreboardOnYoutube !== false
+                      ? 'Checked: OBS Browser Source renders the live scoreboard onto YouTube Live and MaidanLive.'
+                      : 'Unchecked: OBS Browser Source stays blank so YouTube stays clean; scoreboard shows only inside MaidanLive embedded video.'}
+                  </span>
+                </label>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                   <div>

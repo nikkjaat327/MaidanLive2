@@ -148,6 +148,7 @@ export function BroadcastOverlayConfigPage() {
 
   const {
     stream,
+    setStream,
     score,
     setScore,
     overlayConfig,
@@ -251,6 +252,33 @@ export function BroadcastOverlayConfigPage() {
     } catch (err) {
       setOverlayConfig(prev);
       setActionError(extractApiError(err, 'Failed to save overlay configuration.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleScoreboardOnYoutube(nextVal: boolean) {
+    if (!matchId || !stream) return;
+    const prevVal = stream.showScoreboardOnYoutube !== false;
+    setStream((prev) => (prev ? { ...prev, showScoreboardOnYoutube: nextVal } : prev));
+    setSaving(true);
+    setActionError(null);
+    try {
+      const updated = await liveStreamService.updateStream(matchId, {
+        showScoreboardOnYoutube: nextVal,
+      });
+      setStream((prev) =>
+        prev ? { ...prev, showScoreboardOnYoutube: updated.showScoreboardOnYoutube } : updated
+      );
+      setSaveNotice(
+        nextVal
+          ? 'Scoreboard enabled on YouTube (OBS Overlay) + MaidanLive'
+          : 'YouTube clean feed: scoreboard active on MaidanLive embedded video only'
+      );
+      window.setTimeout(() => setSaveNotice(null), 2600);
+    } catch (err) {
+      setStream((prev) => (prev ? { ...prev, showScoreboardOnYoutube: prevVal } : prev));
+      setActionError(extractApiError(err, 'Failed to update Scoreboard on YouTube setting.'));
     } finally {
       setSaving(false);
     }
@@ -701,6 +729,11 @@ export function BroadcastOverlayConfigPage() {
                   </div>
 
                   {/* Simulated 16:9 Landscape or 9:16 Portrait Stage Container */}
+                  {stream.showScoreboardOnYoutube === false && (
+                    <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/30 text-[11px] font-medium text-amber-200">
+                      <strong>Scoreboard on YouTube is UNCHECKED:</strong> Live OBS Browser Source stays blank so YouTube video stays clean; viewers see the scoreboard only inside MaidanLive&apos;s embedded video player.
+                    </div>
+                  )}
                   <div className={isPreviewPortrait ? 'py-4 bg-slate-950/90 flex justify-center' : ''}>
                     <div
                       ref={previewContainerRef}
@@ -921,6 +954,27 @@ export function BroadcastOverlayConfigPage() {
                     <span>Reset Defaults</span>
                   </button>
                 </div>
+
+                {/* Scoreboard Destination (YouTube + Website vs Website Embedded Only) */}
+                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 cursor-pointer hover:border-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={stream.showScoreboardOnYoutube !== false}
+                    disabled={saving || stream.status === 'ENDED'}
+                    onChange={(e) => handleToggleScoreboardOnYoutube(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 rounded border-slate-600 text-[#EA580C] shrink-0"
+                  />
+                  <span className="leading-snug">
+                    <strong className="text-white block">
+                      Scoreboard on YouTube (OBS Broadcast Overlay)
+                    </strong>
+                    <span className="text-[11px] text-slate-400">
+                      {stream.showScoreboardOnYoutube !== false
+                        ? 'Checked: Shown on YouTube Live (via OBS Browser Source) & MaidanLive.'
+                        : 'Unchecked: Hidden on YouTube Live — shown only inside MaidanLive embedded video.'}
+                    </span>
+                  </span>
+                </label>
 
                 {/* Display Mode */}
                 <div className="space-y-2">

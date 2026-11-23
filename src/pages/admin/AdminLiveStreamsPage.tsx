@@ -518,6 +518,11 @@ export function AdminLiveStreamsPage() {
                     {stream.status !== 'ENDED' && hasStreamOutputReady(stream) && (
                       <StreamStatusIndicator stream={stream} />
                     )}
+                    {stream.showScoreboardOnYoutube === false && (
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold">
+                        Web Embed Scoreboard Only
+                      </span>
+                    )}
                     {stream.youtubeVideoId && (
                       <span className="font-mono text-slate-600">YT: {stream.youtubeVideoId}</span>
                     )}

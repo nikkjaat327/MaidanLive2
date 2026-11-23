@@ -434,17 +434,34 @@ async function handleCommand(command, payload) {
       }
     }
 
-    if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
-      const sbItemId = await ensureSceneAndInput(
-        sceneName,
-        String(payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay'),
-        'browser_source',
-        { url: String(payload.scoreboardOverlay.url), width: 1920, height: 1080, reroute_audio: false }
-      );
-      if (sbItemId !== null) {
-        await obs
-          .call('SetSceneItemEnabled', { sceneName, sceneItemId: sbItemId, sceneItemEnabled: true })
-          .catch(() => {});
+    if (payload.scoreboardOverlay) {
+      const sbName = String(payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay');
+      if (payload.scoreboardOverlay.enabled && payload.scoreboardOverlay.url) {
+        const sbItemId = await ensureSceneAndInput(
+          sceneName,
+          sbName,
+          'browser_source',
+          { url: String(payload.scoreboardOverlay.url), width: 1920, height: 1080, reroute_audio: false }
+        );
+        if (sbItemId !== null) {
+          await obs
+            .call('SetSceneItemEnabled', { sceneName, sceneItemId: sbItemId, sceneItemEnabled: true })
+            .catch(() => {});
+        }
+      } else if (payload.scoreboardOverlay.enabled === false) {
+        const curList = await obs.call('GetSceneItemList', { sceneName }).catch(() => ({ sceneItems: [] }));
+        const sbExisting = Array.isArray(curList?.sceneItems)
+          ? curList.sceneItems.find((i) => i.sourceName === sbName)
+          : null;
+        if (sbExisting) {
+          await obs
+            .call('SetSceneItemEnabled', {
+              sceneName,
+              sceneItemId: Number(sbExisting.sceneItemId),
+              sceneItemEnabled: false,
+            })
+            .catch(() => {});
+        }
       }
     }
 
@@ -552,6 +569,17 @@ async function handleCommand(command, payload) {
               sceneName,
               sceneItemId: sbId,
               sceneItemIndex: Math.max(0, (updatedList.sceneItems?.length || 1) - 1),
+            })
+            .catch(() => {});
+        }
+      } else {
+        const sbExisting = currentItems.find((i) => i.sourceName === sbName);
+        if (sbExisting) {
+          await obs
+            .call('SetSceneItemEnabled', {
+              sceneName,
+              sceneItemId: Number(sbExisting.sceneItemId),
+              sceneItemEnabled: false,
             })
             .catch(() => {});
         }

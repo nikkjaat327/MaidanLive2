@@ -167,6 +167,7 @@ export function normalizeBroadcast(
       chatEnabled: stream.chatEnabled !== false,
       highlightsEnabled: stream.highlightsEnabled !== false,
       scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault !== false,
+      showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
       teamA: {
         id: stream.teamAId,
         name: teamAName,
@@ -372,6 +373,7 @@ export function normalizeBroadcast(
     chatEnabled: stream.chatEnabled !== false,
     highlightsEnabled: stream.highlightsEnabled !== false,
     scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault !== false,
+    showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
     teamA: {
       id: stream.teamAId,
       name: teamAName,

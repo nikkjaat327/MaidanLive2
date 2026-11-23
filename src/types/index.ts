@@ -178,6 +178,7 @@ export interface LiveStreamData {
   replayVerifiedAt?: string | null;
   replayDescription?: string;
   scoreboardVisibleByDefault?: boolean;
+  showScoreboardOnYoutube?: boolean;
   scoreboardPosition?: ScoreboardPosition;
   chatEnabled?: boolean;
   highlightsEnabled?: boolean;
@@ -214,6 +215,7 @@ export interface NormalizedBroadcast {
   chatEnabled: boolean;
   highlightsEnabled: boolean;
   scoreboardVisibleByDefault: boolean;
+  showScoreboardOnYoutube: boolean;
   teamA: {
     id?: string | null;
     name: string;
