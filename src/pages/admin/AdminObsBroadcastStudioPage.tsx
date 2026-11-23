@@ -323,6 +323,15 @@ export function AdminObsBroadcastStudioPage() {
   const [graphicsStudioView, setGraphicsStudioView] = useState<'library' | 'editor'>('library');
   const [editingAdDesign, setEditingAdDesign] = useState<BroadcastAdDesignData | null>(null);
   const [showLiveQuickAds, setShowLiveQuickAds] = useState(false);
+  const workspaceTabsRef = useRef<HTMLDivElement | null>(null);
+
+  const jumpToAdsAndGraphics = useCallback(() => {
+    setActiveTab('graphics');
+    setGraphicsStudioView('library');
+    window.setTimeout(() => {
+      workspaceTabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }, []);
 
   const loadSavedAdDesigns = useCallback(async () => {
     if (!matchId) return;
@@ -1909,6 +1918,27 @@ export function AdminObsBroadcastStudioPage() {
 
             {matchId && (
               <>
+                <button
+                  type="button"
+                  onClick={jumpToAdsAndGraphics}
+                  className={`min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                    activeTab === 'graphics'
+                      ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                      : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
+                  }`}
+                >
+                  <Sparkles
+                    className={`w-3.5 h-3.5 ${
+                      activeTab === 'graphics' ? 'text-white' : 'text-[#EA580C]'
+                    }`}
+                  />
+                  <span>
+                    Run Ads / Graphics
+                    {(studio?.graphicsState?.activeSlots?.length || 0) > 0
+                      ? ` (${studio!.graphicsState!.activeSlots.length} LIVE)`
+                      : ''}
+                  </span>
+                </button>
                 <Link
                   to={`/broadcast/overlay/${matchId}`}
                   className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
@@ -2312,7 +2342,10 @@ export function AdminObsBroadcastStudioPage() {
           </div>
 
           {/* 6 Workspace Tabs */}
-          <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl overflow-x-auto">
+          <div
+            ref={workspaceTabsRef}
+            className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl overflow-x-auto"
+          >
             {[
               { id: 'live' as const, label: 'Live Switching & Layouts', icon: Monitor },
               {
