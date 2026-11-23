@@ -55,7 +55,7 @@ const broadcastAdDesignSchema = new Schema<IBroadcastAdDesign>(
     canvasWidth: { type: Number, default: 1920, min: 320, max: 3840 },
     canvasHeight: { type: Number, default: 1080, min: 320, max: 3840 },
     layoutPreset: { type: String, trim: true, default: 'custom_position', maxlength: 60 },
-    elements: { type: [Schema.Types.Mixed], default: [] },
+    elements: { type: Schema.Types.Mixed, default: [] },
     entryAnimation: { type: String, trim: true, default: 'slide-bottom', maxlength: 40 },
     exitAnimation: { type: String, trim: true, default: 'fade-out', maxlength: 40 },
     defaultDurationSeconds: { type: Number, default: 10, min: 0, max: 86400 },

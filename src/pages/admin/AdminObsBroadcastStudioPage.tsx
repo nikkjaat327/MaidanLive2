@@ -38,6 +38,7 @@ import {
   Sliders,
   SlidersHorizontal,
   Smartphone,
+  Sparkles,
   Square,
   Star,
   Terminal,
@@ -56,6 +57,7 @@ import {
   type YouTubeVerification,
 } from '../../services/liveStream/liveStreamService.ts';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
+import { broadcastGraphicsService } from '../../services/obs/broadcastGraphicsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
@@ -63,6 +65,10 @@ import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
 import { isMatchPreparedDraft } from '../../utils/broadcastWorkflow.ts';
 import { offlineScoreQueue } from '../../utils/offlineScoreQueue.ts';
 import type { LiveStreamData, StreamingProvider } from '../../types/index.ts';
+import type {
+  BroadcastAdDesignData,
+  BroadcastGraphicsStateData,
+} from '../../types/broadcastGraphics.ts';
 import type {
   BroadcastCameraData,
   CameraConnectionStatus,
@@ -104,6 +110,7 @@ import {
 import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoomWorkflowPanel.tsx';
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
+import { SavedAdsLibraryPanel } from '../../components/obsGraphics/SavedAdsLibraryPanel.tsx';
 import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -112,7 +119,11 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
 
-type StudioTab = 'live' | 'cameras' | 'overlay' | 'connection' | 'audit';
+const LazyGraphicsStudioEditor = React.lazy(
+  () => import('../../components/obsGraphics/GraphicsStudioEditor.tsx')
+);
+
+type StudioTab = 'live' | 'graphics' | 'cameras' | 'overlay' | 'connection' | 'audit';
 
 function obsStatusBadgeClass(status: ObsConnectionStatus) {
   switch (status) {
@@ -305,6 +316,53 @@ export function AdminObsBroadcastStudioPage() {
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [setupModalMode, setSetupModalMode] = useState<'create' | 'edit' | null>(null);
   const [setupEditStream, setSetupEditStream] = useState<LiveStreamData | null>(null);
+
+  // Live Graphics Studio & Saved Advertisement Library state
+  const [savedAdDesigns, setSavedAdDesigns] = useState<BroadcastAdDesignData[]>([]);
+  const [loadingAdDesigns, setLoadingAdDesigns] = useState(false);
+  const [graphicsStudioView, setGraphicsStudioView] = useState<'library' | 'editor'>('library');
+  const [editingAdDesign, setEditingAdDesign] = useState<BroadcastAdDesignData | null>(null);
+  const [showLiveQuickAds, setShowLiveQuickAds] = useState(false);
+
+  const loadSavedAdDesigns = useCallback(async () => {
+    if (!matchId) return;
+    try {
+      setLoadingAdDesigns(true);
+      const designs = await broadcastGraphicsService.listDesigns({
+        matchId,
+        tournamentId: studio?.match?.tournamentId || undefined,
+        scope: 'all',
+      });
+      setSavedAdDesigns(designs);
+    } catch {
+      // Non-blocking initial load
+    } finally {
+      setLoadingAdDesigns(false);
+    }
+  }, [matchId, studio?.match?.tournamentId]);
+
+  useEffect(() => {
+    loadSavedAdDesigns();
+  }, [loadSavedAdDesigns]);
+
+  const handleGraphicsStateChange = useCallback(
+    (next: BroadcastGraphicsStateData) => {
+      setStudio((prev) => (prev ? { ...prev, graphicsState: next } : prev));
+    },
+    [setStudio]
+  );
+
+  const handleOpenGraphicsEditorNew = useCallback(() => {
+    setEditingAdDesign(null);
+    setGraphicsStudioView('editor');
+    setActiveTab('graphics');
+  }, []);
+
+  const handleOpenGraphicsEditorEdit = useCallback((design: BroadcastAdDesignData) => {
+    setEditingAdDesign(design);
+    setGraphicsStudioView('editor');
+    setActiveTab('graphics');
+  }, []);
 
   // Load match selector list (strictly scoped for Broadcasters)
   const loadMatches = useCallback(async () => {
@@ -2253,10 +2311,19 @@ export function AdminObsBroadcastStudioPage() {
             </div>
           </div>
 
-          {/* 5 Workspace Tabs */}
+          {/* 6 Workspace Tabs */}
           <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl overflow-x-auto">
             {[
               { id: 'live' as const, label: 'Live Switching & Layouts', icon: Monitor },
+              {
+                id: 'graphics' as const,
+                label: `Live Graphics Studio${
+                  (studio.graphicsState?.activeSlots?.length || 0) > 0
+                    ? ` (${studio.graphicsState!.activeSlots.length} LIVE)`
+                    : ''
+                }`,
+                icon: Sparkles,
+              },
               { id: 'cameras' as const, label: `Cameras & Smartphones (${cameras.length})`, icon: Camera },
               { id: 'overlay' as const, label: 'Scoreboard & Sponsors', icon: Tv },
               { id: 'connection' as const, label: 'OBS Connection & Agent', icon: Server },
@@ -2730,6 +2797,108 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 )}
               </div>
+
+              {/* Collapsible One-Click Saved Ads & Live Graphics Strip right inside Live Desk */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowLiveQuickAds((v) => !v)}
+                  className="w-full px-4 sm:px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 flex flex-wrap items-center justify-between gap-2 text-left transition-colors"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Sparkles className="w-4 h-4 text-[#EA580C] shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-display text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide">
+                        Saved Broadcast Ads &amp; One-Click Live Sponsor Overlays
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {savedAdDesigns.filter((d) => !d.isTemplate).length} saved ads ·{' '}
+                        {studio.graphicsState?.activeSlots?.length || 0} live on OBS ·{' '}
+                        {studio.graphicsState?.queue?.length || 0} queued
+                      </p>
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 shrink-0">
+                    <span>{showLiveQuickAds ? 'Hide Ads Desk' : 'Open Quick Ads'}</span>
+                    {showLiveQuickAds ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </span>
+                </button>
+
+                {showLiveQuickAds && matchId && (
+                  <div className="p-4 sm:p-5 border-t border-slate-200">
+                    <SavedAdsLibraryPanel
+                      compactMode
+                      matchId={matchId}
+                      tournamentId={studio.match.tournamentId}
+                      graphicsState={studio.graphicsState}
+                      designs={savedAdDesigns}
+                      loadingDesigns={loadingAdDesigns}
+                      onRefreshDesigns={loadSavedAdDesigns}
+                      onGraphicsStateChange={handleGraphicsStateChange}
+                      onOpenStudioNew={handleOpenGraphicsEditorNew}
+                      onOpenStudioEdit={handleOpenGraphicsEditorEdit}
+                      onNotifySuccess={notifySuccess}
+                      onNotifyError={(msg) => setActionError(msg)}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB 1B: LIVE GRAPHICS & ADVERTISING STUDIO (LAZY EDITOR)       */}
+          {/* ============================================================== */}
+          {activeTab === 'graphics' && matchId && (
+            <div className="space-y-4">
+              {graphicsStudioView === 'library' ? (
+                <SavedAdsLibraryPanel
+                  matchId={matchId}
+                  tournamentId={studio.match.tournamentId}
+                  graphicsState={studio.graphicsState}
+                  designs={savedAdDesigns}
+                  loadingDesigns={loadingAdDesigns}
+                  onRefreshDesigns={loadSavedAdDesigns}
+                  onGraphicsStateChange={handleGraphicsStateChange}
+                  onOpenStudioNew={handleOpenGraphicsEditorNew}
+                  onOpenStudioEdit={handleOpenGraphicsEditorEdit}
+                  onNotifySuccess={notifySuccess}
+                  onNotifyError={(msg) => setActionError(msg)}
+                />
+              ) : (
+                <React.Suspense
+                  fallback={
+                    <div className="rounded-xl border border-slate-200 bg-white p-10 text-center space-y-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#EA580C] mx-auto" />
+                      <p className="text-xs font-semibold text-slate-700">
+                        Loading Live Broadcast Graphics Studio...
+                      </p>
+                    </div>
+                  }
+                >
+                  <LazyGraphicsStudioEditor
+                    key={editingAdDesign?.id || 'new'}
+                    matchId={matchId}
+                    tournamentId={studio.match.tournamentId}
+                    initialDesign={editingAdDesign}
+                    graphicsState={studio.graphicsState}
+                    designs={savedAdDesigns}
+                    sponsors={studio.sponsors || []}
+                    obsConnected={obsConnected}
+                    bridgeOnline={Boolean(profile.agentOnline)}
+                    socketConnected={socketConnected}
+                    onBackToLibrary={() => setGraphicsStudioView('library')}
+                    onRefreshDesigns={loadSavedAdDesigns}
+                    onGraphicsStateChange={handleGraphicsStateChange}
+                    onNotifySuccess={notifySuccess}
+                    onNotifyError={(msg) => setActionError(msg)}
+                  />
+                </React.Suspense>
+              )}
             </div>
           )}
 
@@ -4249,6 +4418,14 @@ export function AdminObsBroadcastStudioPage() {
                   <option value="ADMIN_OVERRIDE_OFF">ADMIN_OVERRIDE_OFF</option>
                   <option value="CAMERA_CREATED">CAMERA_CREATED</option>
                   <option value="CAMERA_TEST">CAMERA_TEST</option>
+                  <option value="GRAPHICS_SAVED">GRAPHICS_SAVED</option>
+                  <option value="GRAPHICS_SHOWN_LIVE">GRAPHICS_SHOWN_LIVE</option>
+                  <option value="GRAPHICS_HIDDEN">GRAPHICS_HIDDEN</option>
+                  <option value="GRAPHICS_CLEARED">GRAPHICS_CLEARED</option>
+                  <option value="GRAPHICS_QUEUE_UPDATED">GRAPHICS_QUEUE_UPDATED</option>
+                  <option value="GRAPHICS_EVENT_TRIGGERED">GRAPHICS_EVENT_TRIGGERED</option>
+                  <option value="GRAPHICS_ASSET_UPLOADED">GRAPHICS_ASSET_UPLOADED</option>
+                  <option value="GRAPHICS_DELETED">GRAPHICS_DELETED</option>
                 </select>
               </div>
 

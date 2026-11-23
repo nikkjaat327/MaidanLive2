@@ -602,7 +602,8 @@ export async function showRawGraphicLive(params: {
       matchId,
       actionType:
         params.triggerSource === 'event' ? 'GRAPHICS_EVENT_TRIGGERED' : 'GRAPHICS_SHOWN_LIVE',
-      user: actor,
+      actor,
+      obsStatus: 'SUCCESS',
       metadata: {
         instanceId,
         designId: params.designId || null,
@@ -718,7 +719,8 @@ export async function hideLiveGraphics(
     await writeBroadcastAudit({
       matchId,
       actionType: 'GRAPHICS_HIDDEN',
-      user: actor,
+      actor,
+      obsStatus: 'SUCCESS',
       metadata: { instanceId: instanceId || 'ALL' },
     });
   }
@@ -749,7 +751,8 @@ export async function clearLiveGraphics(
     await writeBroadcastAudit({
       matchId,
       actionType: 'GRAPHICS_CLEARED',
-      user: actor,
+      actor,
+      obsStatus: 'SUCCESS',
       metadata: { broadcastSessionId: state.broadcastSessionId },
     });
   }
@@ -871,7 +874,8 @@ export async function updateGraphicsQueue(
     await writeBroadcastAudit({
       matchId,
       actionType: 'GRAPHICS_QUEUE_UPDATED',
-      user: actor,
+      actor,
+      obsStatus: 'SUCCESS',
       metadata: { queueCount: state.queue.length, queueAutoAdvance: state.queueAutoAdvance },
     });
   }
@@ -1020,7 +1024,7 @@ export async function createOrSaveAdDesign(params: {
   thumbnailDataUrl?: string;
   actor: IUser;
 }): Promise<BroadcastAdDesignData> {
-  const scope =
+  const scope: 'global' | 'tournament' | 'match' =
     params.scope === 'tournament' || params.scope === 'match' ? params.scope : 'global';
   const cleanName = sanitizeText(params.name, 140) || 'Untitled Broadcast Ad';
   const cleanElements = sanitizeGraphicsElements(params.elements);
@@ -1081,7 +1085,8 @@ export async function createOrSaveAdDesign(params: {
   await writeBroadcastAudit({
     matchId: params.matchId || null,
     actionType: 'GRAPHICS_SAVED',
-    user: params.actor,
+    actor: params.actor,
+    obsStatus: 'SUCCESS',
     metadata: {
       designId: String(saved._id),
       name: saved.name,

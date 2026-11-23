@@ -314,7 +314,8 @@ router.post(
       await writeBroadcastAudit({
         matchId: matchId || null,
         actionType: 'GRAPHICS_ASSET_UPLOADED',
-        user: req.user!,
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
         metadata: {
           assetId: created._id.toString(),
           name: cleanName,
@@ -708,7 +709,8 @@ router.delete(
       await writeBroadcastAudit({
         matchId: existing.matchId ? String(existing.matchId) : null,
         actionType: 'GRAPHICS_DELETED',
-        user: req.user!,
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
         metadata: { designId, name: existing.name },
       });
 

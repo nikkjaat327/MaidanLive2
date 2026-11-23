@@ -7,13 +7,22 @@ import { authService } from '../../services/auth/authService.ts';
 import { applyOverlayQueryParams } from '../../utils/overlayConfig.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
+import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 
 export function ObsOverlayViewerPage() {
   const { matchId } = useParams<{ matchId: string }>();
   const location = useLocation();
   const { adminUser, adminLoading } = useAuth();
-  const { stream, score, setScore, overlayConfig, setOverlayConfig, loading, refetch } =
-    useObsOverlay(matchId);
+  const {
+    stream,
+    score,
+    setScore,
+    overlayConfig,
+    setOverlayConfig,
+    graphicsState,
+    loading,
+    refetch,
+  } = useObsOverlay(matchId);
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const obsForced = searchParams.get('obs') === '1' || searchParams.get('controls') === '0';
@@ -113,24 +122,31 @@ export function ObsOverlayViewerPage() {
 
   return (
     <div className="w-screen h-screen bg-transparent overflow-hidden relative flex items-center justify-center">
-      {showScoreboardOnYoutube && (
-        <div
-          style={{
-            width: canvasWidth,
-            height: canvasHeight,
-            transform: `scale(${scale})`,
-            transformOrigin: 'center center',
-          }}
-          className="shrink-0 relative bg-transparent overflow-hidden"
-        >
+      <div
+        style={{
+          width: canvasWidth,
+          height: canvasHeight,
+          transform: `scale(${scale})`,
+          transformOrigin: 'center center',
+        }}
+        className="shrink-0 relative bg-transparent overflow-hidden pointer-events-none"
+      >
+        {showScoreboardOnYoutube && (
           <HotstarBroadcastOverlay
             stream={stream}
             score={score}
             config={effectiveConfig}
             isPortrait={isPortrait}
           />
-        </div>
-      )}
+        )}
+        <ObsGraphicsLayer
+          graphicsState={graphicsState}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
+          matchId={matchId}
+          tournamentId={stream.tournamentId || null}
+        />
+      </div>
 
       {canShowAdminControls && !showScoreboardOnYoutube && (
         <div className="fixed top-4 left-4 z-50 pointer-events-none px-3.5 py-2 rounded-lg border border-amber-500/40 bg-slate-950/90 text-xs font-semibold text-amber-200 shadow-lg backdrop-blur-md">

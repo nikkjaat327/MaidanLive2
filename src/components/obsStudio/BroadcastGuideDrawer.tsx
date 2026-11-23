@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 export type GuideLanguageMode = 'mixed' | 'hinglish' | 'english';
-export type GuideJumpTarget = 'live' | 'cameras' | 'overlay' | 'connection' | 'map_sources';
+export type GuideJumpTarget = 'live' | 'graphics' | 'cameras' | 'overlay' | 'connection' | 'map_sources';
 
 interface BroadcastGuideDrawerProps {
   open: boolean;
@@ -222,6 +222,38 @@ const GUIDE_SECTIONS: GuideStep[] = [
       'Polling automatically pauses when the browser tab is inactive to protect streaming CPU and upload bandwidth.',
       'If a tile reports preview unavailable, verify the mapped OBS input name exists in OBS Studio and is active.',
     ],
+  },
+  {
+    id: 'live-graphics-studio',
+    badge: 'STEP 05',
+    icon: Sparkles,
+    titleMixed: 'Step 5: Live Graphics Studio & Saved Ads (One-Click SHOW LIVE)',
+    titleHinglish: 'Step 5: Live Sponsor Ads, Banners, QR Codes & Auto-Triggers Chalayein',
+    titleEnglish: 'Step 5: Live Broadcast Graphics Studio, Saved Ads Library & Automation',
+    summaryMixed:
+      'Live Graphics Studio me custom sponsor banners, logos, QR codes aur promotional text 1920x1080 canvas par design karein. Saved Ads Library me ek baar save karke match ke dauran jab chahein one-click SHOW LIVE dabayein — OBS Browser Source par bina YouTube stream reload kiye live dikhega.',
+    summaryHinglish:
+      'Apne sponsors ke liye banners, lower-thirds, corner logos aur QR cards banakar Saved Ads Library me save karein. Live match ke beech kisi bhi card par duration (5s, 15s, Permanent) choose karke "SHOW LIVE" dabane par ad turant broadcast par chal jaata hai.',
+    summaryEnglish:
+      'Design custom sponsor banners, lower thirds, corner logos, and scannable QR cards on the 1920x1080 canvas. Save ads once into your persistent library and click SHOW LIVE anytime during the broadcast — animations push instantly via Socket.IO over your existing OBS Browser Source without reloading YouTube.',
+    bulletsMixed: [
+      'One-Click SHOW LIVE: Saved Ad card par optional duration override chunein aur SHOW LIVE dabayein; HIDE LIVE ya CLEAR LIVE se turant hatayein.',
+      'Replace vs Stack Mode: Single active ad ke liye "Replace Active" aur multiple simultaneous overlays ke liye "Stack Multiple" use karein.',
+      'Broadcast Ad Queue: Multiple ads ko serial order me play karne ke liye "+Q" dabakar queue chalayein.',
+      'Event Automation: Boundary Four, Six, Wicket, Timeout, ya Half-Time par automatic sponsor graphic dikhane ke liye Event Rules enable karein.',
+    ],
+    bulletsHinglish: [
+      'Saved Ads Library se ek click me SHOW LIVE aur HIDE LIVE chalayein.',
+      'Replace Active ya Stack Multiple mode se single ya multi-ad playback control karein.',
+      'Queue aur Event Rules (4, 6, Wicket, Timeout, Half-Time) se auto-ads run karein.',
+    ],
+    bulletsEnglish: [
+      'Click SHOW LIVE on any Saved Ad card with an optional temporary duration override, or open the Studio editor to design custom layers.',
+      'Use Replace Active for one clean ad at a time or Stack Multiple to display a corner logo alongside a bottom banner.',
+      'Configure the Ad Playback Queue or bind Saved Ads to 12 live scoring/match events with cooldown protection.',
+    ],
+    jumpLabel: 'Open Live Graphics Studio',
+    jumpTarget: 'graphics',
   },
 ];
 

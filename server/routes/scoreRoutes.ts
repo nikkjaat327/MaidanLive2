@@ -679,6 +679,7 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           autoCompletedInnings1,
           autoCompletedMatch,
           cricketWicketEvent,
+          eventType,
           actionLabel: label,
         };
       });
@@ -878,6 +879,7 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
       const rawActType = String(actionPayload?.type || '').toUpperCase();
       const rawEvType = String(actionPayload?.eventType || txResult.eventType || '').toUpperCase();
       const batRuns = Number(actionPayload?.batRuns ?? actionPayload?.runs ?? 0);
+      const activeSport = txResult.score.sportType;
       if (txResult.autoCompletedMatch) {
         triggerBroadcastGraphicEvent(id, 'MATCH_COMPLETED', `score_${histId}`).catch(() => {});
       } else if (txResult.autoCompletedInnings1 || rawEvType === 'INNINGS_BREAK' || rawEvType === 'MATCH_BREAK') {
@@ -885,14 +887,14 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
       } else if (txResult.cricketWicketEvent) {
         triggerBroadcastGraphicEvent(id, 'WICKET', `score_${histId}`).catch(() => {});
       } else if (
-        scoreSport === 'Cricket' &&
+        activeSport === 'Cricket' &&
         (batRuns === 6 || rawEvType === 'SIX') &&
         rawActType !== 'WIDE' &&
         rawActType !== 'NO_BALL'
       ) {
         triggerBroadcastGraphicEvent(id, 'SIX', `score_${histId}`).catch(() => {});
       } else if (
-        scoreSport === 'Cricket' &&
+        activeSport === 'Cricket' &&
         (batRuns === 4 || rawEvType === 'FOUR') &&
         rawActType !== 'WIDE' &&
         rawActType !== 'NO_BALL'

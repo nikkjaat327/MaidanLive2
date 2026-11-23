@@ -45,8 +45,8 @@ const broadcastGraphicsStateSchema = new Schema<IBroadcastGraphicsState>(
     },
     animationsPaused: { type: Boolean, default: false },
     pausedAt: { type: Date, default: null },
-    activeSlots: { type: [Schema.Types.Mixed], default: [] },
-    queue: { type: [Schema.Types.Mixed], default: [] },
+    activeSlots: { type: Schema.Types.Mixed, default: [] },
+    queue: { type: Schema.Types.Mixed, default: [] },
     queueStatus: {
       type: String,
       enum: ['idle', 'playing', 'paused'],
@@ -54,7 +54,7 @@ const broadcastGraphicsStateSchema = new Schema<IBroadcastGraphicsState>(
     },
     currentQueueIndex: { type: Number, default: 0, min: 0 },
     queueAutoAdvance: { type: Boolean, default: false },
-    eventRules: { type: [Schema.Types.Mixed], default: [] },
+    eventRules: { type: Schema.Types.Mixed, default: [] },
     lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }

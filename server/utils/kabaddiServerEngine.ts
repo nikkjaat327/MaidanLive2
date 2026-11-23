@@ -404,7 +404,7 @@ export async function handleKabaddiEventRoute(
       historyItem: populatedHistory,
     });
 
-    if (txResult.triggeredAllOut || txResult.applied.triggeredAllOut) {
+    if (txResult.applied.triggeredAllOut) {
       triggerBroadcastGraphicEvent(id, 'ALL_OUT', `k_allout_${txResult.historyId}`).catch(() => {});
     } else if (txResult.applied.eventType === 'SUPER_TACKLE') {
       triggerBroadcastGraphicEvent(id, 'SUPER_TACKLE', `k_st_${txResult.historyId}`).catch(() => {});

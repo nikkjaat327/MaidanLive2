@@ -25,6 +25,7 @@ import {
   ensureObsProfileForMatch,
 } from '../services/obsControllerService.ts';
 import {
+  clearLiveGraphics,
   getGraphicsStateForMatch,
   triggerBroadcastGraphicEvent,
 } from '../services/broadcastGraphicsService.ts';
@@ -1976,6 +1977,7 @@ router.patch(
       );
 
       const payload = formatPublicStream(stream.toObject(), { score }, true);
+      await clearLiveGraphics(stream._id.toString(), req.user!).catch(() => {});
       emitStreamEvent(stream._id.toString(), 'live:ended', payload);
       await emitFullStudioState(stream._id.toString());
 
