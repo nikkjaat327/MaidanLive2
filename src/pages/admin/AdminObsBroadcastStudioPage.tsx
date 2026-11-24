@@ -3970,14 +3970,36 @@ export function AdminObsBroadcastStudioPage() {
                 {/* Primary Beginner Action Row */}
                 <div className="flex flex-wrap items-center gap-2.5">
                   {installerStatus?.available ? (
-                    <a
-                      href="/api/obs/bridge/installer/download"
-                      download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
-                      className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-900 rounded-xl hover:bg-slate-800 whitespace-nowrap shrink-0"
-                    >
-                      <Download className="w-4 h-4 text-[#EA580C]" />
-                      <span>Download Windows Bridge ({installerSizeMb})</span>
-                    </a>
+                    <>
+                      <a
+                        href="/api/obs/bridge/installer/download"
+                        download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
+                        className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-900 rounded-xl hover:bg-slate-800 whitespace-nowrap shrink-0"
+                      >
+                        <Download className="w-4 h-4 text-[#EA580C]" />
+                        <span>
+                          Download Windows Bridge{installerStatus.version ? ` v${installerStatus.version}` : ''} ({installerSizeMb})
+                        </span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyText(
+                            'bridgeInstallerUrl',
+                            `${window.location.origin}/api/obs/bridge/installer/download`
+                          )
+                        }
+                        className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 whitespace-nowrap shrink-0"
+                        title="Copy direct installer download link if browser iframe blocks downloads"
+                      >
+                        {copiedKey === 'bridgeInstallerUrl' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                        <span>{copiedKey === 'bridgeInstallerUrl' ? 'Link Copied' : 'Copy Installer URL'}</span>
+                      </button>
+                    </>
                   ) : (
                     <span className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded-xl">
                       <Download className="w-4 h-4" />
@@ -4855,24 +4877,64 @@ export function AdminObsBroadcastStudioPage() {
 
                 {profile.agentOnline && !profile.mediamtxControlSupported && (
                   <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-3">
-                    <div className="space-y-0.5">
+                    <div className="space-y-1 max-w-2xl">
                       <p className="font-bold text-amber-900">
                         Connected Windows OBS Bridge Does Not Report Remote MediaMTX Support
                       </p>
                       <p className="text-amber-800">
                         Your connected Bridge ({profile.bridgeVersion ? `v${profile.bridgeVersion}` : 'legacy build'}) does not advertise remote MediaMTX control. Install the updated Windows OBS Bridge{installerStatus?.version ? ` (v${installerStatus.version})` : ''} to upgrade in place while keeping your existing pairing.
                       </p>
+                      {localBridgeProbe?.running && !localBridgeProbe?.bridgeVersion && (
+                        <p className="text-[11px] font-semibold text-amber-900">
+                          Legacy process detected on this PC (likely minimized in the Windows System Tray). Right-click <strong>MaidanLive OBS Bridge</strong> in the System Tray &rarr; <strong>Quit MaidanLive Bridge</strong>, then run <strong>MaidanLive OBS Bridge Setup.exe</strong>.
+                        </p>
+                      )}
                     </div>
-                    {installerStatus?.available && (
-                      <a
-                        href="/api/obs/bridge/installer/download"
-                        download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
-                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap shrink-0"
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {installerStatus?.available && (
+                        <>
+                          <a
+                            href="/api/obs/bridge/installer/download"
+                            download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
+                            className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+                          >
+                            <Download className="w-3.5 h-3.5 text-[#EA580C]" />
+                            <span>Download Updated Bridge{installerStatus.version ? ` v${installerStatus.version}` : ''}</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyText(
+                                'bridgeInstallerUrl',
+                                `${window.location.origin}/api/obs/bridge/installer/download`
+                              )
+                            }
+                            className="min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 whitespace-nowrap"
+                            title="Copy direct installer URL if embedded preview blocks file downloads"
+                          >
+                            {copiedKey === 'bridgeInstallerUrl' ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                            <span>{copiedKey === 'bridgeInstallerUrl' ? 'Copied' : 'Copy Link'}</span>
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void checkInstallerAndLocalBridge();
+                          void refetch();
+                          void loadBridges();
+                        }}
+                        disabled={probingLocalBridge}
+                        className="min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap"
                       >
-                        <Download className="w-3.5 h-3.5 text-[#EA580C]" />
-                        <span>Download Updated Bridge{installerStatus.version ? ` v${installerStatus.version}` : ''}</span>
-                      </a>
-                    )}
+                        <RefreshCw className={`w-3.5 h-3.5 ${probingLocalBridge ? 'animate-spin' : ''}`} />
+                        <span>Re-check</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 

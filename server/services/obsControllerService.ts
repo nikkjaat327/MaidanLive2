@@ -184,6 +184,21 @@ function isMatchBridgeOnlineSync(matchId: string): boolean {
   return false;
 }
 
+function getLiveMatchBridgeContextSync(matchId: string): ObsAgentContext | null {
+  const directMatchAgent = agentSockets.get(matchId);
+  if (directMatchAgent && directMatchAgent.connected) {
+    return ((directMatchAgent.data as any)?.obsContext as ObsAgentContext | undefined) || null;
+  }
+  for (const sock of bridgeSockets.values()) {
+    if (!sock.connected) continue;
+    const ctx = (sock.data as any)?.obsContext as ObsAgentContext | undefined;
+    if (ctx?.matchIds?.includes(matchId) || ctx?.matchId === matchId) {
+      return ctx || null;
+    }
+  }
+  return null;
+}
+
 function emitObsStateEvents(
   matchId: string,
   prevStatus: string,
@@ -459,6 +474,15 @@ export function initObsControllerBridge(): void {
         : undefined;
 
       if (context.bridgeId) {
+        const liveSock = bridgeSockets.get(context.bridgeId);
+        if (liveSock) {
+          const prevCtx = ((liveSock.data as any).obsContext || context) as ObsAgentContext;
+          (liveSock.data as any).obsContext = {
+            ...prevCtx,
+            ...(reportedBridgeVersion !== undefined ? { bridgeVersion: reportedBridgeVersion } : {}),
+            ...(reportedCapabilities !== undefined ? { capabilities: reportedCapabilities } : {}),
+          };
+        }
         const br = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
         if (!br || br.status === 'REVOKED') {
           disconnectBridgeSocket(context.bridgeId, 'Bridge revoked');
@@ -489,6 +513,16 @@ export function initObsControllerBridge(): void {
           bridgeUpdate.mediamtxState = mediamtxPayload;
         }
         await ObsBridge.findOneAndUpdate({ bridgeId: context.bridgeId }, { $set: bridgeUpdate });
+      } else if (context.matchId) {
+        const liveSock = agentSockets.get(context.matchId);
+        if (liveSock) {
+          const prevCtx = ((liveSock.data as any).obsContext || context) as ObsAgentContext;
+          (liveSock.data as any).obsContext = {
+            ...prevCtx,
+            ...(reportedBridgeVersion !== undefined ? { bridgeVersion: reportedBridgeVersion } : {}),
+            ...(reportedCapabilities !== undefined ? { capabilities: reportedCapabilities } : {}),
+          };
+        }
       }
 
       const matchIds = await resolveMatchIdsForContext(context);
@@ -953,6 +987,11 @@ export function formatSafeProfile(profile: any) {
   const direct = directSessions.get(matchId);
 
   const realAgentOnline = isMatchBridgeOnlineSync(matchId);
+  const liveCtx = realAgentOnline ? getLiveMatchBridgeContextSync(matchId) : null;
+  const effectiveBridgeVersion = profile.bridgeVersion || liveCtx?.bridgeVersion || '';
+  const profileCaps = normalizeBridgeCapabilities(profile.bridgeCapabilities);
+  const effectiveCapabilities =
+    profileCaps.length > 0 ? profileCaps : normalizeBridgeCapabilities(liveCtx?.capabilities);
   let effectiveStatus = profile.connectionStatus || 'DISCONNECTED';
   if (profile.connectionMode === 'local_agent' && !realAgentOnline) {
     effectiveStatus = 'DISCONNECTED';
@@ -977,9 +1016,9 @@ export function formatSafeProfile(profile: any) {
     agentOnline: realAgentOnline,
     agentLastSeenAt: profile.agentLastSeenAt || null,
     agentLabel: profile.agentLabel || '',
-    bridgeVersion: profile.bridgeVersion || '',
-    capabilities: normalizeBridgeCapabilities(profile.bridgeCapabilities),
-    mediamtxControlSupported: hasMediaMTXControlCapability(profile.bridgeCapabilities),
+    bridgeVersion: effectiveBridgeVersion,
+    capabilities: effectiveCapabilities,
+    mediamtxControlSupported: hasMediaMTXControlCapability(effectiveCapabilities),
     connectionStatus: effectiveStatus,
     lastError: profile.lastError || '',
     obsVersion: profile.obsVersion || '',
