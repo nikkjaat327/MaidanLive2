@@ -16,6 +16,22 @@ import { Team } from '../models/Team.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Venue } from '../models/Venue.ts';
 import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
+import { ScoreHistory } from '../models/ScoreHistory.ts';
+import { MatchHighlight } from '../models/MatchHighlight.ts';
+import { ChatMessage } from '../models/ChatMessage.ts';
+import { Poll } from '../models/Poll.ts';
+import { ViewerMetric } from '../models/ViewerMetric.ts';
+import { MatchReport } from '../models/MatchReport.ts';
+import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
+import { SponsorOverlay } from '../models/Sponsor.ts';
+import { BroadcastCamera } from '../models/BroadcastCamera.ts';
+import { BroadcastScene } from '../models/BroadcastScene.ts';
+import { BroadcastAdDesign } from '../models/BroadcastAdDesign.ts';
+import { BroadcastAdSchedule } from '../models/BroadcastAdSchedule.ts';
+import { BroadcastGraphicsAsset } from '../models/BroadcastGraphicsAsset.ts';
+import { BroadcastGraphicsState } from '../models/BroadcastGraphicsState.ts';
+import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
+import { ObsBridge } from '../models/ObsBridge.ts';
 import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
 import {
   buildPublicStreamVisibilityQuery,
@@ -2185,6 +2201,131 @@ router.patch(
     } catch (err) {
       console.error('[LiveStream] Replay error:', err);
       res.status(500).json({ message: 'Failed to update replay settings.' });
+    }
+  }
+);
+
+// DELETE /api/live/:id - Delete any match (prepared draft, upcoming, live, or ended) — SUPER_ADMIN & ADMIN only
+router.delete(
+  '/:id',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid match stream ID.' });
+        return;
+      }
+
+      if (req.user?.role !== 'SUPER_ADMIN' && req.user?.role !== 'ADMIN') {
+        res.status(403).json({
+          message: 'Forbidden: Only Super Admin or Admin can delete matches.',
+        });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id);
+      if (!stream) {
+        res.status(404).json({ message: 'Match not found.' });
+        return;
+      }
+
+      const matchTitle =
+        stream.matchTitle ||
+        [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
+        stream.youtubeVideoId ||
+        stream.mediamtxStreamPath ||
+        id;
+      const previousStatus = stream.status;
+      const previousPhase = stream.broadcastPhase;
+
+      // Unlink any fixture that pointed to this live stream
+      if (stream.fixtureId) {
+        const fixture = await Fixture.findById(stream.fixtureId).catch(() => null);
+        if (fixture) {
+          fixture.liveStreamId = null;
+          if (fixture.status === 'LIVE') {
+            fixture.status = 'SCHEDULED';
+          }
+          await fixture.save().catch(() => {});
+        }
+      }
+      await Fixture.updateMany(
+        { liveStreamId: stream._id },
+        { $set: { liveStreamId: null } }
+      ).catch(() => {});
+
+      // Clean up ObsBridge references safely on both MongoDB and SQLite fallback
+      const bridgesWithMatch = await ObsBridge.find({
+        $or: [{ assignedMatchIds: stream._id }, { activeMatchId: stream._id }],
+      }).catch(() => []);
+      for (const br of bridgesWithMatch) {
+        br.assignedMatchIds = (br.assignedMatchIds || []).filter(
+          (mid: any) => String(mid) !== id
+        );
+        if (br.activeMatchId && String(br.activeMatchId) === id) {
+          br.activeMatchId = null;
+        }
+        await br.save().catch(() => {});
+      }
+
+      await clearLiveGraphics(id, req.user!).catch(() => {});
+      await handleMatchSessionEndedForSchedules(id).catch(() => {});
+
+      // Delete all match-scoped child documents
+      await Promise.all([
+        LiveScore.deleteMany({ liveStreamId: stream._id }),
+        ScoreHistory.deleteMany({ liveStreamId: stream._id }),
+        MatchHighlight.deleteMany({ liveStreamId: stream._id }),
+        ChatMessage.deleteMany({ liveStreamId: stream._id }),
+        Poll.deleteMany({ liveStreamId: stream._id }),
+        ViewerMetric.deleteMany({ liveStreamId: stream._id }),
+        MatchReport.deleteMany({ liveStreamId: stream._id }),
+        PlayerMatchStat.deleteMany({ liveStreamId: stream._id }),
+        SponsorOverlay.deleteMany({ liveStreamId: stream._id }),
+        BroadcastCamera.deleteMany({ matchId: stream._id }),
+        BroadcastScene.deleteMany({ matchId: stream._id }),
+        ObsControllerProfile.deleteMany({ matchId: stream._id }),
+        BroadcastAdDesign.deleteMany({ matchId: stream._id }),
+        BroadcastAdSchedule.deleteMany({ matchId: stream._id }),
+        BroadcastGraphicsAsset.deleteMany({ matchId: stream._id }),
+        BroadcastGraphicsState.deleteMany({ matchId: stream._id }),
+        BroadcastAssignment.deleteMany({ matchId: stream._id }),
+      ]);
+
+      await LiveStream.deleteOne({ _id: stream._id });
+      invalidateViewerVisibilityCache(id);
+
+      await recordActivity(
+        req.user!,
+        'DELETE_STREAM',
+        'LiveStream',
+        id,
+        `Deleted match "${matchTitle}" (${previousStatus} / ${previousPhase})`,
+        {
+          previousValue: {
+            status: previousStatus,
+            broadcastPhase: previousPhase,
+            matchTitle,
+          },
+        }
+      );
+
+      emitStreamEvent(id, 'live:deleted', {
+        id,
+        status: previousStatus,
+        matchTitle,
+      });
+
+      res.json({
+        deleted: true,
+        id,
+        message: `Match "${matchTitle}" and its associated broadcast data were permanently deleted.`,
+      });
+    } catch (err) {
+      console.error('[LiveStream] Delete match error:', err);
+      res.status(500).json({ message: 'Failed to delete match.' });
     }
   }
 );

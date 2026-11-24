@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Palette, RotateCcw, Sparkles, Type } from 'lucide-react';
 import type { BroadcastOverlayConfig } from '../../types/index.ts';
+import { MaidanLiveFallbackLogoCrest } from './ObsBrandMark.tsx';
 import {
   BRAND_LOGO_BOUNDS,
   CUSTOM_DESIGN_BOUNDS,
@@ -171,6 +172,7 @@ export function CustomScoreboardDesigner({
   serverLogoUrl,
 }: CustomScoreboardDesignerProps) {
   const [logoUrlInput, setLogoUrlInput] = useState(config.brandLogoUrl || '');
+  const [logoThumbFailed, setLogoThumbFailed] = useState(false);
   const [localLogoDraft, setLocalLogoDraft] = useState<{
     brandLogoSize?: number;
     brandLogoOpacity?: number;
@@ -183,7 +185,8 @@ export function CustomScoreboardDesigner({
 
   useEffect(() => {
     setLogoUrlInput(config.brandLogoUrl || '');
-  }, [config.brandLogoUrl]);
+    setLogoThumbFailed(false);
+  }, [config.brandLogoUrl, serverLogoUrl]);
 
   useEffect(() => {
     return () => {
@@ -307,13 +310,18 @@ export function CustomScoreboardDesigner({
 
         {/* Logo Preview + URL Override */}
         <div className={`rounded-lg border p-2.5 flex items-center gap-3 ${subCardBg}`}>
-          <div className="w-14 h-12 rounded-md bg-slate-900/90 border border-slate-700/70 flex items-center justify-center p-1 shrink-0 overflow-hidden">
-            <img
-              src={effectiveLogoUrl}
-              alt="Brand Logo Preview"
-              referrerPolicy="no-referrer"
-              className="max-h-full max-w-full object-contain"
-            />
+          <div className="w-20 h-12 rounded-md bg-slate-900/90 border border-slate-700/70 flex items-center justify-center p-1 shrink-0 overflow-hidden">
+            {effectiveLogoUrl && !logoThumbFailed ? (
+              <img
+                src={effectiveLogoUrl}
+                alt="Brand Logo Preview"
+                referrerPolicy="no-referrer"
+                onError={() => setLogoThumbFailed(true)}
+                className="max-h-full max-w-full object-contain"
+              />
+            ) : (
+              <MaidanLiveFallbackLogoCrest height={34} className="scale-[0.72] origin-center" />
+            )}
           </div>
           <div className="flex-1 min-w-0 space-y-1.5">
             <div className="flex items-center gap-1.5">

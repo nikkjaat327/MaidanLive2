@@ -63,10 +63,12 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
 import { QuickLiveScoreControls } from '../../components/obs/QuickLiveScoreControls.tsx';
+import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
 
 export function AdminScoreboardPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { triggerOverlayPreview } = useBroadcastPreview();
 
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -217,6 +219,13 @@ export function AdminScoreboardPage() {
     const next = normalizeOverlayConfig({ ...prev, ...apiPatch });
     pendingObsSliderRef.current = {};
     setObsOverlayConfig(next);
+    triggerOverlayPreview({
+      matchId: stream.id,
+      stream,
+      score,
+      config: next,
+      sourceTabKey: 'admin_scoreboard',
+    });
     setObsOverlaySaving(true);
     setListError(null);
     try {
@@ -238,6 +247,13 @@ export function AdminScoreboardPage() {
     const next = normalizeOverlayConfig({ ...obsOverlayConfig, customScale: val });
     pendingObsSliderRef.current = { ...pendingObsSliderRef.current, customScale: val };
     setObsOverlayConfig(next);
+    triggerOverlayPreview({
+      matchId: stream.id,
+      stream,
+      score,
+      config: next,
+      sourceTabKey: 'admin_scoreboard',
+    });
     if (obsSliderDebounceRef.current !== null) {
       window.clearTimeout(obsSliderDebounceRef.current);
     }

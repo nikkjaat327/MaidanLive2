@@ -4,7 +4,10 @@ import { AuthProvider } from './context/AuthContext.tsx';
 import { LanguageProvider } from './context/LanguageContext.tsx';
 import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
 import { LiveMonitorProvider } from './context/LiveMonitorContext.tsx';
+import { BroadcastPreviewProvider } from './context/BroadcastPreviewContext.tsx';
 import { GlobalLiveMonitor } from './components/streaming/GlobalLiveMonitor.tsx';
+import { FloatingYouTubePreviewWindow } from './components/streaming/FloatingYouTubePreviewWindow.tsx';
+import { FloatingScoreboardLogoPreview } from './components/broadcast/FloatingScoreboardLogoPreview.tsx';
 import { offlineScoreService } from './services/scoreboard/offlineScoreService.ts';
 import { useAuth } from './hooks/useAuth.ts';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
@@ -91,8 +94,9 @@ export default function App() {
       <AdminThemeProvider>
         <AuthProvider>
           <LiveMonitorProvider>
-            <BrowserRouter>
-              <Routes>
+            <BroadcastPreviewProvider>
+              <BrowserRouter>
+                <Routes>
               {/* Isolated Public OBS Studio Browser Source Route (zero chrome, genuine transparency) */}
               <Route path="/broadcast/overlay/view/:matchId" element={<ObsOverlayViewerPage />} />
 
@@ -176,8 +180,11 @@ export default function App() {
                 {/* Fallback */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
-              <GlobalLiveMonitor />
-            </BrowserRouter>
+                <GlobalLiveMonitor />
+                <FloatingScoreboardLogoPreview />
+                <FloatingYouTubePreviewWindow />
+              </BrowserRouter>
+            </BroadcastPreviewProvider>
           </LiveMonitorProvider>
         </AuthProvider>
       </AdminThemeProvider>

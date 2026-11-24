@@ -144,6 +144,13 @@ export const liveStreamService = {
     return data;
   },
 
+  async deleteStream(id: string): Promise<{ deleted: boolean; id: string; message: string }> {
+    const { data } = await adminApi.delete<{ deleted: boolean; id: string; message: string }>(
+      `/live/${id}`
+    );
+    return data;
+  },
+
   async updateReplay(
     id: string,
     payload: {

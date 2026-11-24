@@ -23,6 +23,7 @@ import {
   Layers,
   Loader2,
   Lock,
+  Megaphone,
   Mic,
   MicOff,
   Monitor,
@@ -64,7 +65,7 @@ import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
 import { isMatchPreparedDraft } from '../../utils/broadcastWorkflow.ts';
 import { offlineScoreQueue } from '../../utils/offlineScoreQueue.ts';
-import type { LiveStreamData, StreamingProvider } from '../../types/index.ts';
+import type { BroadcastOverlayConfig, LiveStreamData, StreamingProvider } from '../../types/index.ts';
 import type {
   BroadcastAdDesignData,
   BroadcastGraphicsStateData,
@@ -85,6 +86,7 @@ import type {
   ObsDiscoveredInput,
   ObsSceneItemData,
   ObsSceneTransformItem,
+  ObsStudioMatchSummary,
 } from '../../types/obs.ts';
 import {
   OVERLAY_MODES,
@@ -128,6 +130,10 @@ import {
   resolveStickyOrPreferredMatch,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
+import {
+  dispatchTabChangedEvent,
+  useBroadcastPreview,
+} from '../../context/BroadcastPreviewContext.tsx';
 import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonitors.tsx';
 import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
 import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
@@ -209,6 +215,7 @@ export function AdminObsBroadcastStudioPage() {
 
   const { refreshStreams } = useLiveMonitor();
   const { score: liveMatchScore } = useScoreboard(matchId);
+  const { triggerOverlayPreview } = useBroadcastPreview();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [matches, setMatches] = useState<
@@ -223,6 +230,7 @@ export function AdminObsBroadcastStudioPage() {
   const activeTab: StudioTab = normalizeStudioTab(searchParams.get('tab'));
   const setActiveTab = useCallback(
     (nextTab: StudioTab) => {
+      dispatchTabChangedEvent(nextTab);
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -2153,6 +2161,50 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
+  function buildPreviewStreamFromStudioMatch(
+    m: ObsStudioMatchSummary,
+    overlay: BroadcastOverlayConfig
+  ): LiveStreamData {
+    return {
+      id: m.id,
+      streamingProvider: m.activeStreamingProvider,
+      activeStreamingProvider: m.activeStreamingProvider,
+      youtubeVideoId: m.youtubeVideoId || '',
+      youtubeInput: m.youtubeVideoId || '',
+      youtubeStreamStatus: (m.youtubeStreamStatus as LiveStreamData['youtubeStreamStatus']) || 'UNKNOWN',
+      mediamtxStreamPath: m.mediamtxStreamPath || '',
+      mediamtxPublishStatus:
+        (m.mediamtxPublishStatus as LiveStreamData['mediamtxPublishStatus']) || 'IDLE',
+      teamAName: m.teamAName || 'Team A',
+      teamBName: m.teamBName || 'Team B',
+      teamALogo: '',
+      teamBLogo: '',
+      location: '',
+      gameName: (m.gameName as LiveStreamData['gameName']) || '',
+      matchTitle: m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`,
+      tournamentName: m.tournamentName || '',
+      tournamentId: m.tournamentId || null,
+      matchDate: null,
+      matchDescription: '',
+      status: m.status,
+      broadcastPublished: m.broadcastPublished,
+      wasPublished: m.wasPublished,
+      broadcastPhase: m.broadcastPhase,
+      preparedAt: m.preparedAt,
+      activatedAt: m.activatedAt,
+      startedAt: m.startedAt,
+      endedAt: m.endedAt,
+      replayVideoId: '',
+      replayInput: '',
+      replayAvailable: false,
+      replayPublished: false,
+      showScoreboardOnYoutube: m.showScoreboardOnYoutube,
+      overlayConfig: overlay,
+      createdAt: '',
+      updatedAt: '',
+    };
+  }
+
   // Quick Scoreboard Overlay & Sponsor sync
   async function handleUpdateOverlay(patch: Record<string, unknown>) {
     if (!matchId || !studio?.match) return;
@@ -2174,13 +2226,28 @@ export function AdminObsBroadcastStudioPage() {
     setStudio((prev) =>
       prev ? { ...prev, match: { ...prev.match, overlayConfig: next } } : prev
     );
+    triggerOverlayPreview({
+      matchId,
+      stream: buildPreviewStreamFromStudioMatch(studio.match, next),
+      score: liveMatchScore,
+      config: next,
+      sourceTabKey: activeTab,
+    });
     try {
       setSavingOverlay(true);
       const res = await liveStreamService.updateOverlayConfig(matchId, apiPatch);
       if (res?.overlayConfig) {
+        const synced = normalizeOverlayConfig(res.overlayConfig);
         setStudio((prev) =>
-          prev ? { ...prev, match: { ...prev.match, overlayConfig: normalizeOverlayConfig(res.overlayConfig) } } : prev
+          prev ? { ...prev, match: { ...prev.match, overlayConfig: synced } } : prev
         );
+        triggerOverlayPreview({
+          matchId,
+          stream: buildPreviewStreamFromStudioMatch(studio.match, synced),
+          score: liveMatchScore,
+          config: synced,
+          sourceTabKey: activeTab,
+        });
       }
       notifySuccess('Scoreboard overlay synced live to OBS Browser Source.');
     } catch (err) {
@@ -2199,6 +2266,13 @@ export function AdminObsBroadcastStudioPage() {
     setStudio((prev) =>
       prev ? { ...prev, match: { ...prev.match, overlayConfig: next } } : prev
     );
+    triggerOverlayPreview({
+      matchId,
+      stream: buildPreviewStreamFromStudioMatch(studio.match, next),
+      score: liveMatchScore,
+      config: next,
+      sourceTabKey: activeTab,
+    });
     if (overlaySliderDebounceRef.current !== null) {
       window.clearTimeout(overlaySliderDebounceRef.current);
     }
@@ -2231,6 +2305,51 @@ export function AdminObsBroadcastStudioPage() {
         setSavingOverlay(false);
       }
     }, 160);
+  }
+
+  async function handleOneClickSponsorAdToggle(sponsorOverride?: {
+    id: string;
+    name: string;
+    logoUrl: string;
+    sponsorshipType: string;
+    tagline?: string;
+  }) {
+    if (!matchId || !studio?.match) return;
+    const current = normalizeOverlayConfig(studio.match.overlayConfig);
+    const switchingSponsor =
+      Boolean(sponsorOverride?.id) &&
+      Boolean(current.sponsorAdVisible) &&
+      current.sponsorAdId !== sponsorOverride?.id;
+    const nextVisible = switchingSponsor ? true : !current.sponsorAdVisible;
+
+    if (!nextVisible) {
+      await handleUpdateOverlay({ sponsorAdVisible: false });
+      return;
+    }
+
+    const selectedSponsor =
+      sponsorOverride ||
+      studio.sponsors.find((s) => s.id === current.sponsorAdId) ||
+      studio.sponsors.find((s) => (profile?.selectedSponsorIds || []).includes(s.id)) ||
+      studio.sponsors[0] ||
+      null;
+
+    await handleUpdateOverlay({
+      sponsorAdVisible: true,
+      sponsorAdId: selectedSponsor?.id || current.sponsorAdId || '',
+      sponsorAdName:
+        selectedSponsor?.name ||
+        (current.sponsorAdName || '').trim() ||
+        'Official Broadcast Partner',
+      sponsorAdTagline:
+        selectedSponsor?.tagline ||
+        selectedSponsor?.sponsorshipType ||
+        (current.sponsorAdTagline || '').trim() ||
+        'Live Match Sponsor',
+      sponsorAdLogoUrl: selectedSponsor?.logoUrl || current.sponsorAdLogoUrl || '',
+      sponsorAdCta: (current.sponsorAdCta || '').trim() || 'SPONSORED',
+      sponsorAdPosition: current.sponsorAdPosition || 'top-right',
+    });
   }
 
   async function handleToggleSponsor(sponsorId: string) {
@@ -2428,6 +2547,23 @@ export function AdminObsBroadcastStudioPage() {
             </span>
           </button>
 
+          {studio?.match && (
+            <button
+              type="button"
+              disabled={savingOverlay}
+              onClick={() => void handleOneClickSponsorAdToggle()}
+              title="Toggle Live Sponsor Advertisement on OBS & Player"
+              className={`h-9 px-3 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-45 ${
+                currentOverlay.sponsorAdVisible
+                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                  : 'bg-[#121826] border-amber-500/40 text-amber-300 hover:bg-slate-800'
+              }`}
+            >
+              <Megaphone className="w-3.5 h-3.5" />
+              <span>{currentOverlay.sponsorAdVisible ? 'Sponsor Ad ON' : 'Sponsor Ad'}</span>
+            </button>
+          )}
+
           {profile && studio?.permissions?.canOverride && (
             <button
               type="button"
@@ -2481,7 +2617,11 @@ export function AdminObsBroadcastStudioPage() {
 
       {/* Admin-only horizontal tab strip (Broadcaster portal uses its main left sidebar directly) */}
       {!isBroadcasterPortal && (
-        <div className="bg-[#0B101B] border-b border-slate-800/90 px-3 py-1.5 flex flex-wrap items-center gap-1.5">
+        <div
+          role="tablist"
+          aria-label="Broadcast studio tabs"
+          className="bg-[#0B101B] border-b border-slate-800/90 px-3 py-1.5 flex flex-wrap items-center gap-1.5"
+        >
           {(
             [
               { id: 'control_room', label: 'Control Room', icon: Radio },
@@ -2497,6 +2637,8 @@ export function AdminObsBroadcastStudioPage() {
               <button
                 key={item.id}
                 type="button"
+                role="tab"
+                aria-selected={active}
                 onClick={() => setActiveTab(item.id)}
                 className={`h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
                   active
@@ -4133,45 +4275,96 @@ export function AdminObsBroadcastStudioPage() {
                 </div>
               </section>
 
-              {/* Active Broadcast Sponsors */}
+              {/* Active Broadcast Sponsors & 1-Button Live Advertisement */}
               <section className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
                   <div>
                     <h2 className="font-display text-base font-bold text-slate-900">
                       Broadcast Sponsors ({profile.selectedSponsorIds.length} active)
                     </h2>
                     <p className="text-xs text-slate-500">
-                      Select tournament sponsors linked to this match broadcast.
+                      Select sponsors or flash live Sponsor Ad in 1 click on OBS &amp; player.
                     </p>
                   </div>
-                  {!isBroadcasterRole && (
-                    <Link
-                      to="/admin/sponsors"
-                      className="text-xs font-semibold text-[#EA580C] hover:underline"
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={savingOverlay}
+                      onClick={() => void handleOneClickSponsorAdToggle()}
+                      className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider border transition-colors ${
+                        currentOverlay.sponsorAdVisible
+                          ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-500 shadow'
+                          : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-slate-900'
+                      }`}
                     >
-                      Manage Sponsors
-                    </Link>
-                  )}
+                      <Megaphone className="w-3.5 h-3.5" />
+                      <span>
+                        {currentOverlay.sponsorAdVisible ? 'Sponsor Ad ON' : 'Show Sponsor Ad'}
+                      </span>
+                    </button>
+                    {!isBroadcasterRole && (
+                      <Link
+                        to="/admin/sponsors"
+                        className="text-xs font-semibold text-[#EA580C] hover:underline"
+                      >
+                        Manage
+                      </Link>
+                    )}
+                  </div>
+                </div>
+
+                {/* Ad Corner Position */}
+                <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                  <span className="text-[11px] font-semibold text-slate-700">
+                    Sponsor Ad Corner
+                  </span>
+                  <select
+                    value={currentOverlay.sponsorAdPosition || 'top-right'}
+                    disabled={savingOverlay}
+                    onChange={(e) =>
+                      void handleUpdateOverlay({
+                        sponsorAdPosition: e.target.value,
+                      })
+                    }
+                    className="min-h-[30px] px-2 text-xs font-semibold border border-slate-300 rounded bg-white text-slate-800"
+                  >
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                  </select>
                 </div>
 
                 {studio.sponsors.length === 0 ? (
                   <p className="text-xs text-slate-500">
-                    No active sponsors configured yet. Add sponsors in Admin → Sponsors.
+                    No active sponsors configured yet. Add sponsors in Admin → Sponsors (or click Show Sponsor Ad above to display default match partner banner).
                   </p>
                 ) : (
                   <div className="space-y-2 max-h-80 overflow-y-auto">
                     {studio.sponsors.map((sp) => {
                       const checked = profile.selectedSponsorIds.includes(sp.id);
+                      const isLiveAd =
+                        Boolean(currentOverlay.sponsorAdVisible) &&
+                        currentOverlay.sponsorAdId === sp.id;
                       return (
-                        <label
+                        <div
                           key={sp.id}
-                          className={`flex items-center justify-between gap-3 p-2.5 rounded-lg border cursor-pointer ${
-                            checked
-                              ? 'border-[#EA580C] bg-orange-50/50'
-                              : 'border-slate-200 bg-slate-50'
+                          className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border ${
+                            isLiveAd
+                              ? 'border-amber-500 bg-amber-50/70'
+                              : checked
+                                ? 'border-[#EA580C] bg-orange-50/50'
+                                : 'border-slate-200 bg-slate-50'
                           }`}
                         >
-                          <div className="flex items-center gap-2.5 min-w-0">
+                          <label className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={savingSponsors}
+                              onChange={() => handleToggleSponsor(sp.id)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#EA580C] shrink-0"
+                            />
                             {sp.logoUrl ? (
                               <img
                                 src={sp.logoUrl}
@@ -4187,15 +4380,20 @@ export function AdminObsBroadcastStudioPage() {
                               <p className="text-xs font-bold text-slate-900 truncate">{sp.name}</p>
                               <p className="text-[11px] text-slate-500 truncate">{sp.sponsorshipType}</p>
                             </div>
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={savingSponsors}
-                            onChange={() => handleToggleSponsor(sp.id)}
-                            className="w-4 h-4 rounded border-slate-300 text-[#EA580C] shrink-0"
-                          />
-                        </label>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={savingOverlay}
+                            onClick={() => void handleOneClickSponsorAdToggle(sp)}
+                            className={`px-2.5 py-1 rounded text-[10px] font-extrabold uppercase tracking-wider shrink-0 border transition-colors ${
+                              isLiveAd
+                                ? 'bg-amber-500 text-slate-950 border-amber-500'
+                                : 'bg-white text-slate-700 border-slate-300 hover:border-amber-500 hover:text-amber-700'
+                            }`}
+                          >
+                            {isLiveAd ? 'Live Ad ON' : 'Show Ad'}
+                          </button>
+                        </div>
                       );
                     })}
                   </div>

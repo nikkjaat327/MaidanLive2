@@ -339,6 +339,13 @@ export interface BroadcastOverlayConfig {
   brandLogoOpacity: number;
   brandLogoOffsetX: number;
   brandLogoOffsetY: number;
+  sponsorAdVisible: boolean;
+  sponsorAdId: string;
+  sponsorAdName: string;
+  sponsorAdTagline: string;
+  sponsorAdLogoUrl: string;
+  sponsorAdCta: string;
+  sponsorAdPosition: OverlayPosition;
   customScoreboardDesign: CustomScoreboardDesign;
 }
 
@@ -424,6 +431,13 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   brandLogoOpacity: BRAND_LOGO_BOUNDS.brandLogoOpacity.defaultVal,
   brandLogoOffsetX: BRAND_LOGO_BOUNDS.brandLogoOffsetX.defaultVal,
   brandLogoOffsetY: BRAND_LOGO_BOUNDS.brandLogoOffsetY.defaultVal,
+  sponsorAdVisible: false,
+  sponsorAdId: '',
+  sponsorAdName: '',
+  sponsorAdTagline: '',
+  sponsorAdLogoUrl: '',
+  sponsorAdCta: '',
+  sponsorAdPosition: 'top-right',
   customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
 };
 
@@ -589,6 +603,12 @@ export function normalizeOverlayConfig(
     ? (src.brandLogoPosition as OverlayPosition)
     : DEFAULT_OVERLAY_CONFIG.brandLogoPosition;
 
+  const sponsorAdPosition: OverlayPosition = OVERLAY_POSITIONS.includes(
+    src.sponsorAdPosition as OverlayPosition
+  )
+    ? (src.sponsorAdPosition as OverlayPosition)
+    : DEFAULT_OVERLAY_CONFIG.sponsorAdPosition;
+
   const scale: OverlayScale = OVERLAY_SCALES.includes(src.scale as OverlayScale)
     ? (src.scale as OverlayScale)
     : DEFAULT_OVERLAY_CONFIG.scale;
@@ -694,6 +714,14 @@ export function normalizeOverlayConfig(
         DEFAULT_OVERLAY_CONFIG.brandLogoOffsetY
       )
     ),
+    sponsorAdVisible: bool(src.sponsorAdVisible, DEFAULT_OVERLAY_CONFIG.sponsorAdVisible),
+    sponsorAdId: typeof src.sponsorAdId === 'string' ? src.sponsorAdId.trim().slice(0, 80) : '',
+    sponsorAdName: typeof src.sponsorAdName === 'string' ? src.sponsorAdName.trim().slice(0, 120) : '',
+    sponsorAdTagline:
+      typeof src.sponsorAdTagline === 'string' ? src.sponsorAdTagline.trim().slice(0, 200) : '',
+    sponsorAdLogoUrl: sanitizeBrandLogoUrl(src.sponsorAdLogoUrl),
+    sponsorAdCta: typeof src.sponsorAdCta === 'string' ? src.sponsorAdCta.trim().slice(0, 60) : '',
+    sponsorAdPosition,
     customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
   };
 }
@@ -749,6 +777,11 @@ export function applyOverlayQueryParams(
     next.teamBColor = teamBColor.toUpperCase();
   }
 
+  const sponsorAdPosition = params.get('sponsorAdPosition');
+  if (sponsorAdPosition && OVERLAY_POSITIONS.includes(sponsorAdPosition as OverlayPosition)) {
+    next.sponsorAdPosition = sponsorAdPosition as OverlayPosition;
+  }
+
   const boolKeys = [
     'visible',
     'showTournamentName',
@@ -764,6 +797,7 @@ export function applyOverlayQueryParams(
     'showLiveIndicator',
     'showMatchStatus',
     'showBrandLogo',
+    'sponsorAdVisible',
   ] as const;
 
   for (const key of boolKeys) {

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { ROLE_LABELS } from '../../constants/roles.ts';
+import { HeaderYouTubePreviewControl } from '../streaming/HeaderYouTubePreviewControl.tsx';
 import {
   ACTIVE_MATCH_CHANGED_EVENT,
   ACTIVE_MATCH_STORAGE_KEY,
@@ -529,6 +530,7 @@ export function BroadcasterLayout() {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            <HeaderYouTubePreviewControl tone="dark" compact />
             {adminUser && (
               <span className="hidden md:inline text-xs text-slate-400 font-mono">
                 {adminUser.name} · {ROLE_LABELS[adminUser.role] || adminUser.role}

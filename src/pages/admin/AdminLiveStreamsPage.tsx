@@ -17,6 +17,7 @@ import {
   Server,
   SlidersHorizontal,
   StopCircle,
+  Trash2,
   Tv,
   Video,
   Youtube,
@@ -51,11 +52,16 @@ import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
+import { useAuth } from '../../hooks/useAuth.ts';
+import { getStickyMatchId, setStickyMatchId } from '../../utils/activeMatchSelection.ts';
+import { dispatchTabChangedEvent } from '../../context/BroadcastPreviewContext.tsx';
 
 type AdminStreamTab = 'ACTIVE' | 'UPCOMING' | 'HISTORY' | 'REPLAYS';
 
 export function AdminLiveStreamsPage() {
   const navigate = useNavigate();
+  const { adminUser } = useAuth();
+  const canDeleteMatch = adminUser?.role === 'SUPER_ADMIN' || adminUser?.role === 'ADMIN';
   const { isOpen: monitorOpen, selectedStreamId, toggleMonitor, refreshStreams } = useLiveMonitor();
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [teams, setTeams] = useState<TeamData[]>([]);
@@ -96,6 +102,10 @@ export function AdminLiveStreamsPage() {
   // End Stream confirmation
   const [endTarget, setEndTarget] = useState<LiveStreamData | null>(null);
   const [ending, setEnding] = useState(false);
+
+  // Delete Match confirmation (SUPER_ADMIN & ADMIN)
+  const [deleteTarget, setDeleteTarget] = useState<LiveStreamData | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Replay management modal
   const [replayTarget, setReplayTarget] = useState<LiveStreamData | null>(null);
@@ -245,6 +255,25 @@ export function AdminLiveStreamsPage() {
     }
   }
 
+  async function handleDeleteMatch() {
+    if (!deleteTarget) return;
+    try {
+      setDeleting(true);
+      setError(null);
+      const res = await liveStreamService.deleteStream(deleteTarget.id);
+      if (getStickyMatchId() === deleteTarget.id) {
+        setStickyMatchId('');
+      }
+      setDeleteTarget(null);
+      setSuccess(res.message || 'Match permanently deleted.');
+      await Promise.all([loadAll(), refreshStreams()]);
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to delete match.'));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   function openReplayModal(stream: LiveStreamData) {
     setReplayTarget(stream);
     setReplayInput(stream.replayInput || stream.replayVideoId || stream.youtubeVideoId || '');
@@ -386,7 +415,12 @@ export function AdminLiveStreamsPage() {
             <button
               key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab.key)}
+              role="tab"
+              aria-selected={activeTab === tab.key}
+              onClick={() => {
+                setActiveTab(tab.key);
+                dispatchTabChangedEvent(`live_streams_${tab.key}`);
+              }}
               className={`min-h-[38px] px-4 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === tab.key
                   ? 'bg-[#EA580C] text-white shadow-xs'
@@ -705,6 +739,17 @@ export function AdminLiveStreamsPage() {
                       <span>Manage Replay</span>
                     </button>
                   )}
+
+                  {canDeleteMatch && (
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(stream)}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 whitespace-nowrap"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -981,6 +1026,26 @@ export function AdminLiveStreamsPage() {
         title="End MaidanLive Stream"
         message="This will mark the stream as ENDED on MaidanLive, preserve all final scores, move it to Stream History, and notify viewers. Remember to also stop your broadcast encoder if you are still streaming."
         confirmLabel="End Stream"
+      />
+
+      {/* Confirm Permanent Match Deletion (Prepared Draft, Upcoming, Live, or Completed) */}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteMatch}
+        loading={deleting}
+        title="Delete Match Permanently"
+        message={
+          deleteTarget
+            ? `Permanently delete "${
+                deleteTarget.matchTitle ||
+                `${deleteTarget.teamAName || 'Team A'} vs ${deleteTarget.teamBName || 'Team B'}`
+              }" (${
+                isMatchPreparedDraft(deleteTarget) ? 'Prepared Draft' : deleteTarget.status
+              })? All scores, overlays, camera scenes, chat, and stream records for this match will be removed.`
+            : ''
+        }
+        confirmLabel="Delete Permanently"
       />
 
       {/* Manage & Verify Replay Modal */}

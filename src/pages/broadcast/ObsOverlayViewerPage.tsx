@@ -8,6 +8,7 @@ import { applyOverlayQueryParams } from '../../utils/overlayConfig.ts';
 import { computeObsLayoutBoxes } from '../../utils/obsLayoutGeometry.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 import { MultiCamSplitBorders } from '../../components/obsStudio/MultiCamSplitBorders.tsx';
@@ -176,6 +177,13 @@ export function ObsOverlayViewerPage() {
           serverLogoUrl={brandLogoUrl}
           variant="canvas"
           zIndex={24}
+        />
+
+        {/* 1-Button Live Sponsor Advertisement Overlay */}
+        <BroadcastSponsorAdBanner
+          config={effectiveConfig}
+          variant="canvas"
+          zIndex={26}
         />
 
         {showScoreboardOnYoutube && !sbOff && (

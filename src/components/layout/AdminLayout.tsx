@@ -38,6 +38,7 @@ import {
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useAdminTheme } from '../../context/AdminThemeContext.tsx';
 import { ROLE_LABELS } from '../../constants/roles.ts';
+import { HeaderYouTubePreviewControl } from '../streaming/HeaderYouTubePreviewControl.tsx';
 import {
   ACTIVE_MATCH_CHANGED_EVENT,
   getStickyMatchId,
@@ -475,6 +476,10 @@ export function AdminLayout() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <HeaderYouTubePreviewControl
+              tone={theme === 'dark' ? 'dark' : 'light'}
+              compact
+            />
             {adminUser && (
               <span className="hidden md:inline text-xs text-slate-500 whitespace-nowrap">
                 {adminUser.name} · {ROLE_LABELS[adminUser.role] || adminUser.role}

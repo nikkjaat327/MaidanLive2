@@ -11,6 +11,7 @@ import {
   HelpCircle,
   ImagePlus,
   Layers,
+  Megaphone,
   Monitor,
   Radio,
   RotateCcw,
@@ -22,8 +23,9 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import type { BroadcastOverlayConfig, LiveStreamData } from '../../types/index.ts';
+import type { BroadcastOverlayConfig, LiveStreamData, SponsorData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsOverlay } from '../../hooks/useObsOverlay.ts';
 import {
@@ -45,9 +47,12 @@ import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails }
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
 import { FloatingOverlayScorePanel } from '../../components/obs/FloatingOverlayScorePanel.tsx';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
 import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
+import { HeaderYouTubePreviewControl } from '../../components/streaming/HeaderYouTubePreviewControl.tsx';
+import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -135,10 +140,12 @@ export function BroadcastOverlayConfigPage() {
   const navigate = useNavigate();
 
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
+  const [sponsors, setSponsors] = useState<SponsorData[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const { triggerOverlayPreview } = useBroadcastPreview();
 
   const [backdrop, setBackdrop] = useState<PreviewBackdrop>('stadium');
   const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait'>('landscape');
@@ -197,6 +204,18 @@ export function BroadcastOverlayConfigPage() {
       })
       .catch(() => {});
   }, [matchId, navigate]);
+
+  useEffect(() => {
+    platformOpsService
+      .listSponsors()
+      .then((items) => setSponsors(items))
+      .catch(() => {
+        platformOpsService
+          .listPublicSponsors()
+          .then((items) => setSponsors(items))
+          .catch(() => {});
+      });
+  }, []);
 
   useEffect(() => {
     const el = previewContainerRef.current;
@@ -264,12 +283,35 @@ export function BroadcastOverlayConfigPage() {
     pendingSliderPatchRef.current = {};
     setSliderDraft(null);
     setOverlayConfig(next);
+    if (stream) {
+      triggerOverlayPreview({
+        matchId,
+        stream,
+        score,
+        config: next,
+        brandLogoUrl,
+        serverClockOffsetMs,
+        sourceTabKey: 'overlay_studio',
+      });
+    }
     setSaving(true);
     setActionError(null);
     try {
       const res = await liveStreamService.updateOverlayConfig(matchId, apiPatch);
       if (Date.now() - lastSliderEditAtRef.current >= 400) {
-        setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
+        const synced = normalizeOverlayConfig(res.overlayConfig);
+        setOverlayConfig(synced);
+        if (stream) {
+          triggerOverlayPreview({
+            matchId,
+            stream,
+            score,
+            config: synced,
+            brandLogoUrl,
+            serverClockOffsetMs,
+            sourceTabKey: 'overlay_studio',
+          });
+        }
       }
       setSaveNotice('Synced to live OBS sources');
       window.setTimeout(() => setSaveNotice(null), 2000);
@@ -279,6 +321,43 @@ export function BroadcastOverlayConfigPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleToggleOneClickSponsorAd() {
+    const currentlyVisible = Boolean(effectiveOverlayConfig.sponsorAdVisible);
+    if (currentlyVisible) {
+      void persistOverlayPatch({ sponsorAdVisible: false });
+      return;
+    }
+    const matchedSponsor =
+      sponsors.find((s) => s.id === effectiveOverlayConfig.sponsorAdId) ||
+      sponsors.find((s) => s.isActive !== false) ||
+      sponsors[0] ||
+      null;
+    const adName =
+      (effectiveOverlayConfig.sponsorAdName || '').trim() ||
+      matchedSponsor?.name ||
+      'Official Broadcast Partner';
+    const adTagline =
+      (effectiveOverlayConfig.sponsorAdTagline || '').trim() ||
+      matchedSponsor?.tagline ||
+      matchedSponsor?.sponsorshipType ||
+      'Live Match Sponsor';
+    const adLogoUrl =
+      (effectiveOverlayConfig.sponsorAdLogoUrl || '').trim() || matchedSponsor?.logoUrl || '';
+    const adCta =
+      (effectiveOverlayConfig.sponsorAdCta || '').trim() ||
+      matchedSponsor?.ctaText ||
+      'SPONSORED';
+    void persistOverlayPatch({
+      sponsorAdVisible: true,
+      sponsorAdId: effectiveOverlayConfig.sponsorAdId || matchedSponsor?.id || '',
+      sponsorAdName: adName,
+      sponsorAdTagline: adTagline,
+      sponsorAdLogoUrl: adLogoUrl,
+      sponsorAdCta: adCta,
+      sponsorAdPosition: effectiveOverlayConfig.sponsorAdPosition || 'top-right',
+    });
   }
 
   async function handleToggleScoreboardOnYoutube(nextVal: boolean) {
@@ -316,6 +395,17 @@ export function BroadcastOverlayConfigPage() {
     setSliderDraft(nextDraft);
     const next = normalizeOverlayConfig({ ...overlayConfig, ...nextDraft });
     setOverlayConfig(next);
+    if (stream) {
+      triggerOverlayPreview({
+        matchId,
+        stream,
+        score,
+        config: next,
+        brandLogoUrl,
+        serverClockOffsetMs,
+        sourceTabKey: 'overlay_studio',
+      });
+    }
 
     if (sliderDebounceRef.current !== null) {
       window.clearTimeout(sliderDebounceRef.current);
@@ -427,8 +517,8 @@ export function BroadcastOverlayConfigPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      {/* Top Broadcast Studio Header */}
-      <header className="sticky top-0 z-30 border-b border-slate-800/90 bg-slate-950/95 backdrop-blur-md">
+      {/* Top Broadcast Studio Header (non-sticky so OBS Stage Preview sticks cleanly at top: 10px) */}
+      <header className="relative z-30 border-b border-slate-800/90 bg-slate-950/95 backdrop-blur-md">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3 min-w-0">
             <Link
@@ -467,6 +557,8 @@ export function BroadcastOverlayConfigPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            <HeaderYouTubePreviewControl tone="dark" compact />
+
             {streams.length > 0 && (
               <select
                 value={matchId || ''}
@@ -657,12 +749,12 @@ export function BroadcastOverlayConfigPage() {
               </div>
             </section>
 
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-              {/* LEFT COLUMN (7/12): 16:9 PREVIEW + QUICK LIVE CONTROLS BELOW MONITOR + OBS URL + OBS GUIDE */}
-              <div className="xl:col-span-7 space-y-5">
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+              {/* LEFT COLUMN (7/12): STICKY LIVE 16:9 / 9:16 OBS STAGE PREVIEW (sticks at top: 10px while scrolling customization) */}
+              <div className="xl:col-span-7">
                 {/* SECTION B: LIVE 16:9 OVERLAY PREVIEW */}
-                <div className="relative">
-                <section className="rounded-xl border border-slate-800 bg-slate-900/90 overflow-hidden">
+                <div className="xl:sticky xl:top-[10px] z-20 space-y-4">
+                <section className="rounded-xl border border-slate-800 bg-slate-900/95 overflow-hidden shadow-2xl">
                   <div className="px-4 py-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Monitor className="w-4 h-4 text-[#EA580C]" />
@@ -809,6 +901,11 @@ export function BroadcastOverlayConfigPage() {
                           variant="canvas"
                           zIndex={24}
                         />
+                        <BroadcastSponsorAdBanner
+                          config={effectiveOverlayConfig}
+                          variant="canvas"
+                          zIndex={26}
+                        />
                         <HotstarBroadcastOverlay
                           stream={stream}
                           score={score}
@@ -833,141 +930,6 @@ export function BroadcastOverlayConfigPage() {
                   />
                 )}
                 </div>
-
-                {/* SECTION D: OBS BROADCAST URL GENERATOR */}
-                <section className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-[#EA580C]" />
-                      <h2 className="font-display text-sm font-bold uppercase tracking-wide text-white">
-                        OBS Browser Source URLs
-                      </h2>
-                    </div>
-                    <a
-                      href={`${primaryObsPath}?controls=1`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Open Overlay Preview in New Tab</span>
-                    </a>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Primary OBS Overlay URL (Synced Live Settings)
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={primaryObsUrl}
-                          onFocus={(e) => e.currentTarget.select()}
-                          className="flex-1 min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-950 border border-slate-700 rounded-lg text-slate-100"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => copyUrl('primary', primaryObsUrl)}
-                          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-lg whitespace-nowrap shrink-0"
-                        >
-                          {copiedKey === 'primary' ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy URL</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Compact Corner URL (Optional Override)
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={compactObsUrl}
-                          onFocus={(e) => e.currentTarget.select()}
-                          className="flex-1 min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-950 border border-slate-800 rounded-lg text-slate-300"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => copyUrl('compact', compactObsUrl)}
-                          className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg whitespace-nowrap shrink-0"
-                        >
-                          {copiedKey === 'compact' ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                {/* SECTION E: HOW TO ADD THIS SCOREBOARD TO OBS */}
-                <section className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <HelpCircle className="w-4 h-4 text-[#EA580C]" />
-                      <h2 className="font-display text-sm font-bold uppercase tracking-wide text-white">
-                        HOW TO ADD THIS SCOREBOARD TO OBS
-                      </h2>
-                    </div>
-                    <a
-                      href="https://obsproject.com/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs font-semibold text-orange-400 hover:text-orange-300 inline-flex items-center gap-1"
-                    >
-                      <span>obsproject.com</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-
-                  <ol className="space-y-2 text-xs text-slate-300 list-decimal list-inside">
-                    <li>
-                      Open <strong className="text-white">OBS Studio</strong> (available at{' '}
-                      <span className="font-mono text-orange-300">obsproject.com</span>) and select
-                      your live match scene.
-                    </li>
-                    <li>
-                      In the <strong className="text-white">Sources</strong> dock, click{' '}
-                      <strong className="text-white">+</strong> and choose{' '}
-                      <strong className="text-white">Browser</strong>.
-                    </li>
-                    <li>
-                      Paste the <strong className="text-white">Primary OBS Overlay URL</strong> above
-                      into the URL field.
-                    </li>
-                    <li>
-                      Set <strong className="text-white">Width: 1920</strong> and{' '}
-                      <strong className="text-white">Height: 1080</strong> (matches standard 16:9
-                      canvas; background outside the score bar stays 100% transparent).
-                    </li>
-                    <li>
-                      Keep this Browser Source <strong className="text-white">above</strong> your
-                      camera/video feed. Score changes, chases, and show/hide toggles sync live via
-                      Socket.IO without refreshing OBS.
-                    </li>
-                  </ol>
-                </section>
               </div>
 
               {/* RIGHT COLUMN (5/12): OVERLAY CUSTOMIZATION CONTROLS */}
@@ -1037,6 +999,161 @@ export function BroadcastOverlayConfigPage() {
                   darkSurface
                   onChange={(patch) => void persistOverlayPatch(patch)}
                 />
+
+                {/* Live Sponsor Advertisement (1-Button Toggle across OBS + MaidanLive) */}
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Megaphone className="w-4 h-4 text-amber-400 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate">
+                          Live Sponsor Advertisement
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          1-click live sponsor banner on OBS Browser Source &amp; player
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={handleToggleOneClickSponsorAd}
+                      className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider border transition-colors shrink-0 ${
+                        effectiveOverlayConfig.sponsorAdVisible
+                          ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                          : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40'
+                      }`}
+                    >
+                      <Megaphone className="w-3.5 h-3.5" />
+                      <span>
+                        {effectiveOverlayConfig.sponsorAdVisible ? 'Sponsor Ad ON' : 'Show Sponsor Ad'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {sponsors.length > 0 && (
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Select Registered Sponsor
+                      </label>
+                      <select
+                        value={effectiveOverlayConfig.sponsorAdId || ''}
+                        disabled={saving}
+                        onChange={(e) => {
+                          const sp = sponsors.find((item) => item.id === e.target.value);
+                          if (!sp) return;
+                          void persistOverlayPatch({
+                            sponsorAdId: sp.id,
+                            sponsorAdName: sp.name,
+                            sponsorAdTagline: sp.tagline || sp.sponsorshipType || '',
+                            sponsorAdLogoUrl: sp.logoUrl || '',
+                            sponsorAdCta: sp.ctaText || 'SPONSORED',
+                          });
+                        }}
+                        className="w-full min-h-[36px] px-2.5 py-1.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      >
+                        <option value="">-- Choose sponsor or type custom below --</option>
+                        {sponsors.map((sp) => (
+                          <option key={sp.id} value={sp.id}>
+                            {sp.name} ({sp.sponsorshipType})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Sponsor Brand Name
+                      </label>
+                      <input
+                        type="text"
+                        value={effectiveOverlayConfig.sponsorAdName || ''}
+                        disabled={saving}
+                        placeholder="e.g. Apex Sports Co."
+                        onChange={(e) =>
+                          setOverlayConfig(
+                            normalizeOverlayConfig({
+                              ...effectiveOverlayConfig,
+                              sponsorAdName: e.target.value,
+                            })
+                          )
+                        }
+                        onBlur={(e) =>
+                          void persistOverlayPatch({ sponsorAdName: e.target.value.trim() })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Ad Position
+                      </label>
+                      <select
+                        value={effectiveOverlayConfig.sponsorAdPosition || 'top-right'}
+                        disabled={saving}
+                        onChange={(e) =>
+                          void persistOverlayPatch({
+                            sponsorAdPosition: e.target.value as BroadcastOverlayConfig['sponsorAdPosition'],
+                          })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      >
+                        <option value="top-left">Top Left</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Tagline / Offer
+                      </label>
+                      <input
+                        type="text"
+                        value={effectiveOverlayConfig.sponsorAdTagline || ''}
+                        disabled={saving}
+                        placeholder="Powered by Title Sponsor"
+                        onChange={(e) =>
+                          setOverlayConfig(
+                            normalizeOverlayConfig({
+                              ...effectiveOverlayConfig,
+                              sponsorAdTagline: e.target.value,
+                            })
+                          )
+                        }
+                        onBlur={(e) =>
+                          void persistOverlayPatch({ sponsorAdTagline: e.target.value.trim() })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        CTA Badge
+                      </label>
+                      <input
+                        type="text"
+                        value={effectiveOverlayConfig.sponsorAdCta || ''}
+                        disabled={saving}
+                        placeholder="SPONSORED"
+                        onChange={(e) =>
+                          setOverlayConfig(
+                            normalizeOverlayConfig({
+                              ...effectiveOverlayConfig,
+                              sponsorAdCta: e.target.value,
+                            })
+                          )
+                        }
+                        onBlur={(e) =>
+                          void persistOverlayPatch({ sponsorAdCta: e.target.value.trim() })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      />
+                    </div>
+                  </div>
+                </div>
 
                 {/* Display Mode */}
                 <div className="space-y-2">
@@ -1289,6 +1406,144 @@ export function BroadcastOverlayConfigPage() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* SECTION D & E BELOW STICKY STAGE WORKSPACE SO PREVIEW STAYS PINNED THROUGHOUT CUSTOMIZATION */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* SECTION D: OBS BROADCAST URL GENERATOR */}
+              <section className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[#EA580C]" />
+                    <h2 className="font-display text-sm font-bold uppercase tracking-wide text-white">
+                      OBS Browser Source URLs
+                    </h2>
+                  </div>
+                  <a
+                    href={`${primaryObsPath}?controls=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open Overlay Preview in New Tab</span>
+                  </a>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                      Primary OBS Overlay URL (Synced Live Settings)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={primaryObsUrl}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="flex-1 min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-950 border border-slate-700 rounded-lg text-slate-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => copyUrl('primary', primaryObsUrl)}
+                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-lg whitespace-nowrap shrink-0"
+                      >
+                        {copiedKey === 'primary' ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy URL</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                      Compact Corner URL (Optional Override)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={compactObsUrl}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="flex-1 min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-950 border border-slate-800 rounded-lg text-slate-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => copyUrl('compact', compactObsUrl)}
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg whitespace-nowrap shrink-0"
+                      >
+                        {copiedKey === 'compact' ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* SECTION E: HOW TO ADD THIS SCOREBOARD TO OBS */}
+              <section className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-[#EA580C]" />
+                    <h2 className="font-display text-sm font-bold uppercase tracking-wide text-white">
+                      HOW TO ADD THIS SCOREBOARD TO OBS
+                    </h2>
+                  </div>
+                  <a
+                    href="https://obsproject.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-semibold text-orange-400 hover:text-orange-300 inline-flex items-center gap-1"
+                  >
+                    <span>obsproject.com</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+
+                <ol className="space-y-2 text-xs text-slate-300 list-decimal list-inside">
+                  <li>
+                    Open <strong className="text-white">OBS Studio</strong> (available at{' '}
+                    <span className="font-mono text-orange-300">obsproject.com</span>) and select
+                    your live match scene.
+                  </li>
+                  <li>
+                    In the <strong className="text-white">Sources</strong> dock, click{' '}
+                    <strong className="text-white">+</strong> and choose{' '}
+                    <strong className="text-white">Browser</strong>.
+                  </li>
+                  <li>
+                    Paste the <strong className="text-white">Primary OBS Overlay URL</strong> above
+                    into the URL field.
+                  </li>
+                  <li>
+                    Set <strong className="text-white">Width: 1920</strong> and{' '}
+                    <strong className="text-white">Height: 1080</strong> (matches standard 16:9
+                    canvas; background outside the score bar stays 100% transparent).
+                  </li>
+                  <li>
+                    Keep this Browser Source <strong className="text-white">above</strong> your
+                    camera/video feed. Score changes, chases, and show/hide toggles sync live via
+                    Socket.IO without refreshing OBS.
+                  </li>
+                </ol>
+              </section>
             </div>
           </>
         )}

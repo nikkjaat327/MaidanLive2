@@ -80,6 +80,59 @@ export function ObsBrandMark({
   );
 }
 
+export function MaidanLiveFallbackLogoCrest({
+  height,
+  className = '',
+}: {
+  height: number | string;
+  className?: string;
+}) {
+  return (
+    <div
+      style={{ height }}
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/90 border border-pink-500/60 shadow-[0_0_20px_rgba(236,72,153,0.45),0_6px_18px_rgba(0,0,0,0.75)] backdrop-blur-md select-none ${className}`}
+    >
+      <svg
+        viewBox="0 0 32 32"
+        fill="none"
+        aria-hidden="true"
+        className="h-[78%] w-auto aspect-square shrink-0"
+      >
+        <defs>
+          <linearGradient id="ml-crest-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#EC4899" />
+            <stop offset="55%" stopColor="#8B5CF6" />
+            <stop offset="100%" stopColor="#06B6D4" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M16 2.5L27 7.2V15.4C27 22.1 22.4 27.5 16 29.6C9.6 27.5 5 22.1 5 15.4V7.2L16 2.5Z"
+          fill="url(#ml-crest-grad)"
+          fillOpacity="0.22"
+          stroke="url(#ml-crest-grad)"
+          strokeWidth="2.2"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M10.5 20V11.5L16 16.5L21.5 11.5V20"
+          stroke="#FFFFFF"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div className="flex flex-col justify-center leading-none pr-0.5">
+        <span className="font-display font-black tracking-wider text-white uppercase whitespace-nowrap text-[clamp(11px,1.9em,22px)]">
+          MAIDAN<span className="text-pink-400">LIVE</span>
+        </span>
+        <span className="font-mono font-bold tracking-[0.2em] text-cyan-300 uppercase whitespace-nowrap text-[clamp(7px,0.75em,10px)] mt-0.5">
+          SPORTS BROADCAST
+        </span>
+      </div>
+    </div>
+  );
+}
+
 interface BroadcastBrandLogoBugProps {
   config?: Partial<BroadcastOverlayConfig> | null;
   serverLogoUrl?: string | null;
@@ -103,7 +156,7 @@ export function BroadcastBrandLogoBug({
     setFailed(false);
   }, [logoUrl]);
 
-  if (!show || !logoUrl || failed) {
+  if (!show) {
     return null;
   }
 
@@ -118,7 +171,7 @@ export function BroadcastBrandLogoBug({
   const offsetX = isResponsive ? Math.max(8, Math.round(rawOffX * 0.45)) : rawOffX;
   const offsetY = isResponsive ? Math.max(8, Math.round(rawOffY * 0.45)) : rawOffY;
   const heightStyle = isResponsive
-    ? `clamp(22px, ${Math.round(rawSize * 0.52)}px, 96px)`
+    ? `clamp(24px, ${Math.round(rawSize * 0.52)}px, 96px)`
     : `${rawSize}px`;
 
   const posStyle: CSSProperties = {
@@ -141,15 +194,19 @@ export function BroadcastBrandLogoBug({
   }
 
   return (
-    <div style={posStyle} className={`select-none ${className}`}>
-      <img
-        src={logoUrl}
-        alt="MaidanLive Broadcast Logo"
-        referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
-        style={{ height: heightStyle, width: 'auto' }}
-        className="object-contain max-w-[260px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.75)]"
-      />
+    <div style={posStyle} className={`select-none ${className}`} data-obs-brand-logo="true">
+      {logoUrl && !failed ? (
+        <img
+          src={logoUrl}
+          alt="MaidanLive Broadcast Logo"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+          style={{ height: heightStyle, width: 'auto' }}
+          className="object-contain max-w-[320px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.75)]"
+        />
+      ) : (
+        <MaidanLiveFallbackLogoCrest height={heightStyle} />
+      )}
     </div>
   );
 }

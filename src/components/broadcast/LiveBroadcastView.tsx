@@ -66,6 +66,7 @@ import {
 } from '../../utils/kabaddiScoring.ts';
 import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 
 interface LiveBroadcastViewProps {
@@ -814,6 +815,13 @@ export function LiveBroadcastView({
               config={normalizeOverlayConfig(stream.overlayConfig)}
               variant="responsive"
               zIndex={22}
+            />
+
+            {/* 1-Button Live Sponsor Advertisement inside Viewer Video Stage */}
+            <BroadcastSponsorAdBanner
+              config={normalizeOverlayConfig(stream.overlayConfig)}
+              variant="responsive"
+              zIndex={23}
             />
 
             {/* Sponsor Overlay Strip */}

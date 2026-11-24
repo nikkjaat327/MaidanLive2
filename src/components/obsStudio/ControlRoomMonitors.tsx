@@ -31,6 +31,7 @@ import {
 } from '../../utils/obsTransformGeometry.ts';
 import { HotstarBroadcastOverlay } from '../obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
 import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
 import type { ProgramMonitorMode } from './ProgramAndCompositionWorkspace.tsx';
@@ -86,14 +87,16 @@ function ScaledScoreboardOverlayLayer({
     return () => ro.disconnect();
   }, []);
 
-  if (!stream || stream.showScoreboardOnYoutube === false) return null;
+  if (!stream) return null;
   const scale = width > 0 ? width / 1920 : 0.35;
+  const showScoreboard =
+    stream.showScoreboardOnYoutube !== false &&
+    config.visible &&
+    config.mode !== 'hidden';
   const previewConfig: BroadcastOverlayConfig = {
     ...config,
-    visible: config.visible && config.mode !== 'hidden',
+    visible: showScoreboard,
   };
-
-  if (!previewConfig.visible) return null;
 
   const normalizedStream: LiveStreamData = {
     youtubeInput: '',
@@ -134,12 +137,15 @@ function ScaledScoreboardOverlayLayer({
         className="shrink-0 relative pointer-events-none"
       >
         <BroadcastBrandLogoBug config={config} variant="canvas" zIndex={24} />
-        <HotstarBroadcastOverlay
-          stream={normalizedStream}
-          score={score}
-          config={previewConfig}
-          isPortrait={false}
-        />
+        <BroadcastSponsorAdBanner config={config} variant="canvas" zIndex={26} />
+        {showScoreboard && (
+          <HotstarBroadcastOverlay
+            stream={normalizedStream}
+            score={score}
+            config={previewConfig}
+            isPortrait={false}
+          />
+        )}
       </div>
     </div>
   );

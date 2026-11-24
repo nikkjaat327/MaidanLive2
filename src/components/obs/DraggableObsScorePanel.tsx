@@ -47,6 +47,10 @@ import {
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { ScoreboardStyleSelector } from './ScoreboardStyleSelector.tsx';
+import {
+  dispatchTabChangedEvent,
+  useBroadcastPreview,
+} from '../../context/BroadcastPreviewContext.tsx';
 
 interface DraggableObsScorePanelProps {
   stream: LiveStreamData;
@@ -132,7 +136,12 @@ export function DraggableObsScorePanel({
   const [hasCustomPos, setHasCustomPos] = useState(false);
   const [pos, setPos] = useState<Point>(() => computeDefaultPosition(overlayPosition, null));
 
-  const [activeTab, setActiveTab] = useState<'manual' | 'events' | 'size'>('manual');
+  const [activeTab, setActiveTabState] = useState<'manual' | 'events' | 'size'>('manual');
+  const { triggerOverlayPreview } = useBroadcastPreview();
+  const setActiveTab = useCallback((tab: 'manual' | 'events' | 'size') => {
+    setActiveTabState(tab);
+    dispatchTabChangedEvent(`draggable_panel_${tab}`);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const overlaySliderDebounceRef = useRef<number | null>(null);
@@ -438,12 +447,27 @@ export function DraggableObsScorePanel({
     const next = normalizeOverlayConfig({ ...prev, ...apiPatch });
     pendingOverlaySliderRef.current = {};
     onOverlayConfigChange(next);
+    triggerOverlayPreview({
+      matchId: stream.id,
+      stream,
+      score,
+      config: next,
+      sourceTabKey: `draggable_panel_${activeTab}`,
+    });
     try {
       setBusy(true);
       setFeedback(null);
       const res = await liveStreamService.updateOverlayConfig(stream.id, apiPatch);
       if (res?.overlayConfig) {
-        onOverlayConfigChange(normalizeOverlayConfig(res.overlayConfig));
+        const synced = normalizeOverlayConfig(res.overlayConfig);
+        onOverlayConfigChange(synced);
+        triggerOverlayPreview({
+          matchId: stream.id,
+          stream,
+          score,
+          config: synced,
+          sourceTabKey: `draggable_panel_${activeTab}`,
+        });
       }
       setFeedback({ type: 'success', text: label || 'Overlay updated live' });
     } catch (err) {
@@ -459,6 +483,13 @@ export function DraggableObsScorePanel({
     const next = normalizeOverlayConfig({ ...overlayConfig, customScale: val });
     pendingOverlaySliderRef.current = { ...pendingOverlaySliderRef.current, customScale: val };
     onOverlayConfigChange(next);
+    triggerOverlayPreview({
+      matchId: stream.id,
+      stream,
+      score,
+      config: next,
+      sourceTabKey: `draggable_panel_${activeTab}`,
+    });
     if (overlaySliderDebounceRef.current !== null) {
       window.clearTimeout(overlaySliderDebounceRef.current);
     }
