@@ -56,6 +56,7 @@ import {
   pairBridgeViaUserAccount,
   reactivateObsBridge,
   reconnectCameraSource,
+  refreshMatchCameras,
   refreshObsState,
   registerObsBridge,
   removeCameraObsSource,
@@ -85,7 +86,7 @@ import {
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import { verifyTotpCode } from '../services/totpService.ts';
-import { LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
+import { LAYOUT_METADATA, MAX_CONTROL_ROOM_CAMERAS } from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
@@ -2955,9 +2956,20 @@ router.post(
       const layoutType: ObsLayoutType = VALID_LAYOUTS.includes(req.body.layoutType)
         ? req.body.layoutType
         : 'DYNAMIC_GRID';
-      const cameraIds = Array.isArray(req.body.cameraIds)
-        ? req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string')
+      const cameraIds: string[] = Array.isArray(req.body.cameraIds)
+        ? Array.from(
+            new Set<string>(
+              req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string' && Boolean(s))
+            )
+          )
         : [];
+      if (cameraIds.length > MAX_CONTROL_ROOM_CAMERAS) {
+        res.status(400).json({
+          ok: false,
+          message: `Control Room supports a maximum of ${MAX_CONTROL_ROOM_CAMERAS} simultaneous cameras.`,
+        });
+        return;
+      }
       const pipPosition: PipPosition | undefined = VALID_PIP_POSITIONS.includes(req.body.pipPosition)
         ? req.body.pipPosition
         : undefined;
@@ -3029,6 +3041,35 @@ router.post(
   }
 );
 
+// POST /api/obs/matches/:matchId/cameras/refresh - Refresh camera signal, MediaMTX health & OBS state
+router.post(
+  '/matches/:matchId/cameras/refresh',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const result = await refreshMatchCameras(matchId, req.user!);
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to refresh match cameras.',
+      });
+    }
+  }
+);
+
 // POST /api/obs/matches/:matchId/transition - Execute instant cut (0ms) or fade transition (500ms)
 router.post(
   '/matches/:matchId/transition',
@@ -3047,9 +3088,20 @@ router.post(
           ? 0
           : 500;
 
-      const cameraIds = Array.isArray(req.body.cameraIds)
-        ? req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string')
+      const cameraIds: string[] = Array.isArray(req.body.cameraIds)
+        ? Array.from(
+            new Set<string>(
+              req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string' && Boolean(s))
+            )
+          )
         : [];
+      if (cameraIds.length > MAX_CONTROL_ROOM_CAMERAS) {
+        res.status(400).json({
+          ok: false,
+          message: `Control Room supports a maximum of ${MAX_CONTROL_ROOM_CAMERAS} simultaneous cameras.`,
+        });
+        return;
+      }
       const sceneName = typeof req.body.sceneName === 'string' ? sanitizeText(req.body.sceneName, 120) : '';
 
       if (cameraIds.length === 0 && sceneName) {

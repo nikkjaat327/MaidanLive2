@@ -46,6 +46,7 @@ import {
 } from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
+import { ScoreboardStyleSelector } from './ScoreboardStyleSelector.tsx';
 
 interface DraggableObsScorePanelProps {
   stream: LiveStreamData;
@@ -1317,6 +1318,24 @@ export function DraggableObsScorePanel({
 
         {activeTab === 'size' && overlayConfig && onOverlayConfigChange && (
           <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-slate-300">Scoreboard Style (10)</span>
+                <span className="text-[10px] font-mono text-purple-300">
+                  {overlayConfig.style || 'broadcast_classic'}
+                </span>
+              </div>
+              <div className="max-h-44 overflow-y-auto pr-1">
+                <ScoreboardStyleSelector
+                  compact
+                  darkSurface
+                  disabled={busy}
+                  value={overlayConfig.style || 'broadcast_classic'}
+                  onChange={(style) => applyOverlayPatch({ style }, `Style: ${style}`)}
+                />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-semibold text-slate-300">Size Preset</span>

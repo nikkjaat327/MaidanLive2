@@ -45,6 +45,7 @@ import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails }
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { FloatingOverlayScorePanel } from '../../components/obs/FloatingOverlayScorePanel.tsx';
+import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -975,6 +976,24 @@ export function BroadcastOverlayConfigPage() {
                     </span>
                   </span>
                 </label>
+
+                {/* Scoreboard Style (10 Layouts) */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Scoreboard Style (10 Distinct Layouts)
+                    </label>
+                    <span className="text-[10px] font-mono text-purple-300">
+                      {overlayConfig.style || 'broadcast_classic'}
+                    </span>
+                  </div>
+                  <ScoreboardStyleSelector
+                    value={overlayConfig.style || 'broadcast_classic'}
+                    disabled={saving}
+                    darkSurface
+                    onChange={(style) => persistOverlayPatch({ style })}
+                  />
+                </div>
 
                 {/* Display Mode */}
                 <div className="space-y-2">

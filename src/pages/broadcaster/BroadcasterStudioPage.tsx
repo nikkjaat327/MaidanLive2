@@ -21,6 +21,7 @@ import {
   Tv,
   Video,
   WifiOff,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
@@ -34,7 +35,10 @@ import type {
 } from '../../types/obs.ts';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import type { BroadcastGraphicsStateData } from '../../types/broadcastGraphics.ts';
-import type { ObsLayoutType } from '../../utils/obsLayoutGeometry.ts';
+import {
+  MAX_CONTROL_ROOM_CAMERAS,
+  type ObsLayoutType,
+} from '../../utils/obsLayoutGeometry.ts';
 import {
   getPreviewMediaStyles,
   normalizeOrientationMode,
@@ -46,7 +50,7 @@ import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOv
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 
 type CameraTab = 'connected' | 'disconnected';
-type MultiCamLayoutType = 'SPLIT_2_H' | 'SPLIT_2_V' | 'SPLIT_3' | 'GRID_4' | 'PIP';
+type MultiCamLayoutType = 'SPLIT_2_H' | 'SPLIT_2_V' | 'SPLIT_3' | 'GRID_4' | 'GRID_5' | 'GRID_6' | 'PIP';
 
 interface LayoutOptionDef {
   type: ObsLayoutType;
@@ -61,6 +65,8 @@ const LAYOUT_OPTIONS: LayoutOptionDef[] = [
   { type: 'SPLIT_2_V', label: '2 Split (V)', requiredCount: 2, icon: Rows2 },
   { type: 'SPLIT_3', label: '3 Split', requiredCount: 3, icon: LayoutGrid },
   { type: 'GRID_4', label: '4 Quad', requiredCount: 4, icon: Grid2X2 },
+  { type: 'GRID_5', label: '5-Cam', requiredCount: 5, icon: LayoutGrid },
+  { type: 'GRID_6', label: '6-Cam', requiredCount: 6, icon: LayoutGrid },
   { type: 'PIP', label: 'PIP', requiredCount: 2, icon: PictureInPicture2 },
 ];
 
@@ -128,8 +134,13 @@ function resolveGridLayoutClass(count: number): string {
   if (count === 2) return 'grid-cols-1 md:grid-cols-2 grid-rows-2 md:grid-rows-1';
   if (count === 3) return 'grid-cols-1 md:grid-cols-3 grid-rows-3 md:grid-rows-1';
   if (count === 4) return 'grid-cols-2 grid-rows-2';
-  if (count <= 6) return 'grid-cols-2 lg:grid-cols-3 grid-rows-3 lg:grid-rows-2';
-  return 'grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 auto-rows-[minmax(220px,1fr)] overflow-y-auto pr-1';
+  if (count === 5) return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 lg:grid-rows-2';
+  return 'grid-cols-2 lg:grid-cols-3 grid-rows-3 lg:grid-rows-2';
+}
+
+function resolveTileSpanClass(totalCount: number, idx: number): string {
+  if (totalCount !== 5) return '';
+  return idx < 2 ? 'lg:col-span-3' : 'lg:col-span-2';
 }
 
 function LiveCameraScoreboardLayer({
@@ -199,6 +210,8 @@ function ConnectedCameraTile({
   isSwitching,
   isMuting,
   obsConnected,
+  autoFitEnabled,
+  tileSpanClass,
   snapshot,
   previewError,
   stream,
@@ -218,6 +231,8 @@ function ConnectedCameraTile({
   isSwitching: boolean;
   isMuting: boolean;
   obsConnected: boolean;
+  autoFitEnabled: boolean;
+  tileSpanClass?: string;
   snapshot?: PreviewSnapshot;
   previewError?: string;
   stream: LiveStreamData | null;
@@ -248,7 +263,7 @@ function ConnectedCameraTile({
   const isMuted = Boolean(cam.obsInputMuted ?? cam.audioMuted ?? cam.telemetry?.audioMuted);
   const sourceBadge = resolveSourceBadge(cam);
   const liveWebUrl = resolveCameraLiveWebUrl(cam);
-  const tileFit = normalizePreviewFit(cam.previewFit);
+  const tileFit = autoFitEnabled ? normalizePreviewFit(cam.previewFit || 'contain') : 'cover';
   const tileRot = parseOrientationDegrees(normalizeOrientationMode(cam.orientationMode));
   const mediaStyles = getPreviewMediaStyles({
     rotationDeg: tileRot,
@@ -279,11 +294,11 @@ function ConnectedCameraTile({
 
   return (
     <div
-      className={`group relative min-h-0 h-full flex flex-col rounded-xl border-2 overflow-hidden transition-all bg-[#0B0F17] ${
+      className={`group relative min-h-0 h-full flex flex-col rounded-xl border-2 overflow-hidden transition-all bg-[#0B0F17] ${tileSpanClass || ''} ${
         isSelected && inProgram
-          ? 'border-amber-400 ring-2 ring-red-500/70'
+          ? 'border-purple-400 ring-2 ring-red-500/70'
           : isSelected
-            ? 'border-amber-400 ring-2 ring-amber-400/35'
+            ? 'border-purple-500 ring-2 ring-purple-500/40'
             : inProgram
               ? 'border-red-500 ring-2 ring-red-500/45 shadow-lg shadow-red-950/40'
               : 'border-slate-800 hover:border-slate-500'
@@ -478,8 +493,10 @@ export function BroadcasterStudioPage() {
 
   const [switchingCamId, setSwitchingCamId] = useState<string | null>(null);
   const [applyingLayout, setApplyingLayout] = useState(false);
+  const [transitioningMode, setTransitioningMode] = useState<'cut' | 'fade' | null>(null);
   const [mutingCamId, setMutingCamId] = useState<string | null>(null);
   const [reconnectingCamId, setReconnectingCamId] = useState<string | null>(null);
+  const [autoFitEnabled, setAutoFitEnabled] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [actionBanner, setActionBanner] = useState<{
@@ -558,19 +575,24 @@ export function BroadcasterStudioPage() {
     [cameras, profile, obsConnected]
   );
 
+  const displayedConnectedCameras = useMemo(
+    () => connectedCameras.slice(0, MAX_CONTROL_ROOM_CAMERAS),
+    [connectedCameras]
+  );
+
   const disconnectedCameras = useMemo(
     () => cameras.filter((cam) => !isCameraConnected(cam, profile, obsConnected)),
     [cameras, profile, obsConnected]
   );
 
-  // Remove any staged camera that went offline
+  // Remove any staged camera that went offline or outside max-6 window
   useEffect(() => {
-    const onlineSet = new Set(connectedCameras.map((c) => c.cameraId));
+    const onlineSet = new Set(displayedConnectedCameras.map((c) => c.cameraId));
     setStagedCameraIds((prev) => {
-      const next = prev.filter((id) => onlineSet.has(id));
+      const next = prev.filter((id) => onlineSet.has(id)).slice(0, MAX_CONTROL_ROOM_CAMERAS);
       return next.length === prev.length ? prev : next;
     });
-  }, [connectedCameras]);
+  }, [displayedConnectedCameras]);
 
   // Reset staging when switching matches
   useEffect(() => {
@@ -595,8 +617,8 @@ export function BroadcasterStudioPage() {
 
   // Poll OBS snapshots ONLY for connected cameras that don't have a live WebRTC/VDO iframe
   const snapshotTargets = useMemo(
-    () => connectedCameras.filter((cam) => !resolveCameraLiveWebUrl(cam)),
-    [connectedCameras]
+    () => displayedConnectedCameras.filter((cam) => !resolveCameraLiveWebUrl(cam)),
+    [displayedConnectedCameras]
   );
   const snapshotTargetsRef = useRef(snapshotTargets);
   snapshotTargetsRef.current = snapshotTargets;
@@ -706,10 +728,10 @@ export function BroadcasterStudioPage() {
       return;
     }
     const multiType = opt.type as MultiCamLayoutType;
-    if (connectedCameras.length < opt.requiredCount) {
+    if (displayedConnectedCameras.length < opt.requiredCount) {
       setActionBanner({
         type: 'error',
-        message: `${opt.label} requires ${opt.requiredCount} connected cameras (only ${connectedCameras.length} connected right now).`,
+        message: `${opt.label} requires ${opt.requiredCount} connected cameras (only ${displayedConnectedCameras.length} connected right now).`,
       });
       return;
     }
@@ -719,7 +741,9 @@ export function BroadcasterStudioPage() {
       return;
     }
     setStagingLayout(multiType);
-    setStagedCameraIds([]);
+    setStagedCameraIds(
+      displayedConnectedCameras.slice(0, opt.requiredCount).map((c) => c.cameraId)
+    );
     setActiveTab('connected');
     setActionBanner(null);
   };
@@ -730,7 +754,7 @@ export function BroadcasterStudioPage() {
       return;
     }
 
-    const reqCount = activeStagingMeta.requiredCount;
+    const reqCount = Math.min(MAX_CONTROL_ROOM_CAMERAS, activeStagingMeta.requiredCount);
     setStagedCameraIds((prev) => {
       if (prev.includes(cam.cameraId)) {
         return prev.filter((id) => id !== cam.cameraId);
@@ -761,7 +785,7 @@ export function BroadcasterStudioPage() {
       setActionBanner(null);
       await obsStudioService.applyLayout(activeMatchId, {
         layoutType: stagingLayout,
-        cameraIds: stagedCameraIds,
+        cameraIds: stagedCameraIds.slice(0, MAX_CONTROL_ROOM_CAMERAS),
         mainCameraId: stagedCameraIds[0],
         includeScoreboardOverlay: true,
         override: false,
@@ -780,6 +804,57 @@ export function BroadcasterStudioPage() {
       });
     } finally {
       setApplyingLayout(false);
+    }
+  };
+
+  const handleQuickTransition = async (mode: 'cut' | 'fade') => {
+    if (!activeMatchId) return;
+    if (!obsConnected) {
+      setActionBanner({ type: 'error', message: 'OBS Studio is disconnected.' });
+      return;
+    }
+    try {
+      setTransitioningMode(mode);
+      setActionBanner(null);
+      await obsStudioService.executeTransition(activeMatchId, {
+        mode,
+        durationMs: mode === 'fade' ? 500 : 0,
+        layoutType: stagingLayout || 'SINGLE',
+        cameraIds: stagedCameraIds.slice(0, MAX_CONTROL_ROOM_CAMERAS),
+        mainCameraId: stagedCameraIds[0],
+        includeScoreboardOverlay: true,
+        override: false,
+      });
+      setActionBanner({
+        type: 'success',
+        message: mode === 'cut' ? 'Executed instant Cut to Program.' : 'Executed 0.5s Fade transition.',
+      });
+      if (stagingLayout) {
+        setStagingLayout(null);
+        setStagedCameraIds([]);
+      }
+      await refetch();
+    } catch (err) {
+      setActionBanner({
+        type: 'error',
+        message: extractApiError(err, 'Transition failed.'),
+      });
+    } finally {
+      setTransitioningMode(null);
+    }
+  };
+
+  const handleRefreshAll = async () => {
+    if (!activeMatchId) return;
+    setRefreshingPreviews(true);
+    try {
+      await obsStudioService.refreshCameras(activeMatchId).catch(() => null);
+      await refetch();
+      if (snapshotTargets.length > 0) {
+        await refreshCameraPreviews(snapshotTargets, false);
+      }
+    } finally {
+      setRefreshingPreviews(false);
     }
   };
 
@@ -832,15 +907,15 @@ export function BroadcasterStudioPage() {
     }
   };
 
-  // Number keys 1..9 quick switch when in 1-Click Live mode on Connected tab
+  // Number keys 1..6 quick switch when in 1-Click Live mode on Connected tab
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (stagingLayout || activeTab !== 'connected') return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (/^[1-9]$/.test(e.key)) {
+      if (/^[1-6]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
-        const targetCam = connectedCameras[idx];
+        const targetCam = displayedConnectedCameras[idx];
         if (targetCam && obsConnected && !switchingCamId) {
           void handleCutCameraLive(targetCam);
         }
@@ -848,7 +923,7 @@ export function BroadcasterStudioPage() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stagingLayout, activeTab, connectedCameras, obsConnected, switchingCamId, handleCutCameraLive]);
+  }, [stagingLayout, activeTab, displayedConnectedCameras, obsConnected, switchingCamId, handleCutCameraLive]);
 
   const activeLayoutInObs = profile?.activeLayoutType || 'SINGLE';
   const neededCount = activeStagingMeta?.requiredCount || 0;
@@ -927,7 +1002,8 @@ export function BroadcasterStudioPage() {
                 const isStagingThis =
                   opt.type === 'SINGLE' ? stagingLayout === null : stagingLayout === opt.type;
                 const isLiveInObs = activeLayoutInObs === opt.type && obsConnected;
-                const insufficient = opt.type !== 'SINGLE' && connectedCameras.length < opt.requiredCount;
+                const insufficient =
+                  opt.type !== 'SINGLE' && displayedConnectedCameras.length < opt.requiredCount;
 
                 return (
                   <button
@@ -941,7 +1017,7 @@ export function BroadcasterStudioPage() {
                     }
                     className={`h-8 px-2.5 rounded-md text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
                       isStagingThis
-                        ? 'bg-[#EA580C] text-white shadow'
+                        ? 'bg-purple-600 text-white shadow'
                         : insufficient
                           ? 'text-slate-600 hover:text-slate-400'
                           : isLiveInObs
@@ -957,15 +1033,15 @@ export function BroadcasterStudioPage() {
             </div>
 
             {stagingLayout && activeStagingMeta && (
-              <div className="inline-flex items-center gap-1.5 pl-1">
-                <span className="px-2 py-1 rounded-md bg-amber-500/15 border border-amber-400/40 text-amber-200 font-mono tabular-nums text-[11px] font-bold whitespace-nowrap">
+              <div className="inline-flex flex-wrap items-center gap-1.5 pl-1">
+                <span className="px-2 py-1 rounded-md bg-purple-500/15 border border-purple-400/40 text-purple-200 font-mono tabular-nums text-[11px] font-bold whitespace-nowrap">
                   {stagedCameraIds.length}/{neededCount} Selected
                 </span>
                 <button
                   type="button"
-                  disabled={!canApplyLayout}
+                  disabled={!canApplyLayout || transitioningMode !== null}
                   onClick={() => void handleApplyStagedLayout()}
-                  className="h-8 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold inline-flex items-center gap-1.5 disabled:opacity-40 whitespace-nowrap shadow"
+                  className="h-8 px-3.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-extrabold inline-flex items-center gap-1.5 disabled:opacity-40 whitespace-nowrap shadow"
                 >
                   {applyingLayout ? (
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -973,6 +1049,25 @@ export function BroadcasterStudioPage() {
                     <Check className="w-3.5 h-3.5" />
                   )}
                   <span>{applyingLayout ? 'Applying...' : 'Apply'}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!canApplyLayout || transitioningMode !== null}
+                  onClick={() => void handleQuickTransition('cut')}
+                  title="Instant Cut"
+                  className="h-8 px-2.5 rounded-lg bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40 whitespace-nowrap"
+                >
+                  <Zap className="w-3 h-3 text-purple-400" />
+                  <span>Cut</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!canApplyLayout || transitioningMode !== null}
+                  onClick={() => void handleQuickTransition('fade')}
+                  title="0.5s Fade Transition"
+                  className="h-8 px-2.5 rounded-lg bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40 whitespace-nowrap"
+                >
+                  <span>0.5s</span>
                 </button>
                 <button
                   type="button"
@@ -989,49 +1084,69 @@ export function BroadcasterStudioPage() {
           </div>
         )}
 
-        {/* Right: Connected / Disconnected Tabs + Utilities + Sign Out */}
+        {/* Right: Connected / Disconnected Tabs + Auto Fit + Utilities + Sign Out */}
         <div className="flex items-center gap-2 shrink-0">
           {activeMatchId && (
-            <div
-              role="tablist"
-              aria-label="Camera Connection Status Tabs"
-              className="inline-flex items-center p-0.5 rounded-lg bg-slate-950 border border-slate-800"
-            >
+            <>
               <button
                 type="button"
-                role="tab"
-                aria-selected={activeTab === 'connected'}
-                onClick={() => setActiveTab('connected')}
-                className={`h-7 px-2.5 rounded-md text-[11px] font-bold tabular-nums whitespace-nowrap transition-colors ${
-                  activeTab === 'connected'
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-slate-400 hover:text-white'
+                role="switch"
+                aria-checked={autoFitEnabled}
+                onClick={() => setAutoFitEnabled((v) => !v)}
+                title="Toggle Auto Fit (Aspect Ratio)"
+                className={`hidden md:inline-flex h-8 px-2.5 items-center gap-1.5 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                  autoFitEnabled
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-900 border-slate-700 text-slate-300'
                 }`}
               >
-                Connected ({connectedCameras.length})
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    autoFitEnabled ? 'bg-emerald-400' : 'bg-slate-500'
+                  }`}
+                />
+                <span>Auto Fit</span>
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'disconnected'}
-                onClick={() => setActiveTab('disconnected')}
-                className={`h-7 px-2.5 rounded-md text-[11px] font-bold tabular-nums whitespace-nowrap transition-colors ${
-                  activeTab === 'disconnected'
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+
+              <div
+                role="tablist"
+                aria-label="Camera Connection Status Tabs"
+                className="inline-flex items-center p-0.5 rounded-lg bg-slate-950 border border-slate-800"
               >
-                Offline ({disconnectedCameras.length})
-              </button>
-            </div>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'connected'}
+                  onClick={() => setActiveTab('connected')}
+                  className={`h-7 px-2.5 rounded-md text-[11px] font-bold tabular-nums whitespace-nowrap transition-colors ${
+                    activeTab === 'connected'
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Connected ({displayedConnectedCameras.length}
+                  {connectedCameras.length > MAX_CONTROL_ROOM_CAMERAS ? '/6' : ''})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'disconnected'}
+                  onClick={() => setActiveTab('disconnected')}
+                  className={`h-7 px-2.5 rounded-md text-[11px] font-bold tabular-nums whitespace-nowrap transition-colors ${
+                    activeTab === 'disconnected'
+                      ? 'bg-slate-700 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Offline ({disconnectedCameras.length})
+                </button>
+              </div>
+            </>
           )}
 
           <button
             type="button"
-            onClick={() => {
-              void refetch();
-              if (snapshotTargets.length > 0) void refreshCameraPreviews(snapshotTargets, false);
-            }}
+            onClick={() => void handleRefreshAll()}
             disabled={refreshingPreviews || !activeMatchId}
             title="Refresh live camera feeds"
             aria-label="Refresh live camera feeds"
@@ -1128,7 +1243,7 @@ export function BroadcasterStudioPage() {
             </button>
           </div>
         ) : activeTab === 'connected' ? (
-          connectedCameras.length === 0 ? (
+          displayedConnectedCameras.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 p-6">
               <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center">
                 <WifiOff className="w-6 h-6 text-amber-400" />
@@ -1154,10 +1269,10 @@ export function BroadcasterStudioPage() {
           ) : (
             <div
               className={`flex-1 min-h-0 grid gap-2.5 sm:gap-3 ${resolveGridLayoutClass(
-                connectedCameras.length
+                displayedConnectedCameras.length
               )}`}
             >
-              {connectedCameras.map((cam, idx) => (
+              {displayedConnectedCameras.map((cam, idx) => (
                 <ConnectedCameraTile
                   key={cam.cameraId}
                   cam={cam}
@@ -1169,6 +1284,8 @@ export function BroadcasterStudioPage() {
                   isSwitching={switchingCamId === cam.cameraId}
                   isMuting={mutingCamId === cam.cameraId}
                   obsConnected={obsConnected}
+                  autoFitEnabled={autoFitEnabled}
+                  tileSpanClass={resolveTileSpanClass(displayedConnectedCameras.length, idx)}
                   snapshot={previewSnapshots[cam.cameraId]}
                   previewError={previewErrors[cam.cameraId]}
                   stream={overlayStream}

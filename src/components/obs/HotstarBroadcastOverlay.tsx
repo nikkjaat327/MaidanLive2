@@ -2,11 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import { computeOverlayMetrics, type OverlayPosition } from '../../utils/overlayConfig.ts';
 import { resolveObsTheme } from './obsTheme.ts';
-import { CricketObsOverlay } from './CricketObsOverlay.tsx';
-import { FootballObsOverlay } from './FootballObsOverlay.tsx';
-import { KabaddiObsOverlay } from './KabaddiObsOverlay.tsx';
-import { VolleyballObsOverlay } from './VolleyballObsOverlay.tsx';
-import { GenericObsOverlay } from './GenericObsOverlay.tsx';
+import { ScoreboardStyleRenderer } from './ScoreboardStyleRenderer.tsx';
 
 interface HotstarBroadcastOverlayProps {
   stream: LiveStreamData;
@@ -36,62 +32,10 @@ export function HotstarBroadcastOverlay({
   const position = config.position || 'bottom-center';
   const theme = resolveObsTheme(config);
   const sport = score?.sportType || stream.gameName || 'Other';
-  const isFullWidthBar = config.mode === 'full' || config.mode === 'compact';
-
-  const renderSportGraphic = () => {
-    switch (sport) {
-      case 'Cricket':
-        return (
-          <CricketObsOverlay
-            stream={stream}
-            score={score}
-            config={config}
-            theme={theme}
-            isPortrait={isPortrait}
-          />
-        );
-      case 'Football':
-        return (
-          <FootballObsOverlay
-            stream={stream}
-            score={score}
-            config={config}
-            theme={theme}
-            isPortrait={isPortrait}
-          />
-        );
-      case 'Kabaddi':
-        return (
-          <KabaddiObsOverlay
-            stream={stream}
-            score={score}
-            config={config}
-            theme={theme}
-            isPortrait={isPortrait}
-          />
-        );
-      case 'Volleyball':
-        return (
-          <VolleyballObsOverlay
-            stream={stream}
-            score={score}
-            config={config}
-            theme={theme}
-            isPortrait={isPortrait}
-          />
-        );
-      default:
-        return (
-          <GenericObsOverlay
-            stream={stream}
-            score={score}
-            config={config}
-            theme={theme}
-            isPortrait={isPortrait}
-          />
-        );
-    }
-  };
+  const styleId = config.style || 'broadcast_classic';
+  const isFullWidthBar =
+    (config.mode === 'full' || config.mode === 'compact') &&
+    styleId !== 'minimal_corner_bug';
 
   const metrics = computeOverlayMetrics(config, isPortrait);
   const slideOffsetY = position.startsWith('top') ? -14 : 14;
@@ -114,7 +58,7 @@ export function HotstarBroadcastOverlay({
       <AnimatePresence mode="wait">
         {isVisible && (
           <motion.div
-            key={`${sport}-${config.mode}-${position}-${isPortrait ? 'portrait' : 'landscape'}`}
+            key={`${sport}-${styleId}-${config.mode}-${position}-${isPortrait ? 'portrait' : 'landscape'}`}
             initial={{ opacity: 0, y: slideOffsetY }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: slideOffsetY }}
@@ -122,7 +66,13 @@ export function HotstarBroadcastOverlay({
             style={wrapperStyle}
             className={`pointer-events-auto min-w-0 transition-[width,max-width] duration-200 ease-out ${wrapperWidthClass}`}
           >
-            {renderSportGraphic()}
+            <ScoreboardStyleRenderer
+              stream={stream}
+              score={score}
+              config={config}
+              theme={theme}
+              isPortrait={isPortrait}
+            />
           </motion.div>
         )}
       </AnimatePresence>

@@ -779,7 +779,7 @@ export function LiveBroadcastView({
               !(broadcast.status === 'UPCOMING' && !showUpcomingPreview) && (
                 <div
                   className={`pointer-events-none absolute z-25 flex ${
-                    stream.scoreboardPosition === 'BOTTOM'
+                    !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
                       ? 'bottom-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
                       : stream.scoreboardPosition === 'LEFT'
                         ? 'top-12 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
@@ -798,9 +798,9 @@ export function LiveBroadcastView({
                 </div>
               )}
 
-            {/* Fullscreen Scoreboard Overlay */}
+            {/* Fullscreen Scoreboard Overlay (Bottom Center by default) */}
             {isFullscreenActive && scoreboardVisible && (
-              <div className="pointer-events-none absolute top-14 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center">
+              <div className="pointer-events-none absolute bottom-12 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center">
                 <div className="pointer-events-auto w-full max-w-2xl">
                   <BroadcastScoreboard broadcast={broadcast} compact />
                 </div>

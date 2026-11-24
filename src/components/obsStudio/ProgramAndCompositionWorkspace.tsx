@@ -16,6 +16,7 @@ import {
 import {
   computeObsLayoutBoxes,
   LAYOUT_METADATA,
+  MAX_CONTROL_ROOM_CAMERAS,
   ObsLayoutType,
   PipPosition,
   PipSize,
@@ -114,6 +115,8 @@ const LAYOUT_TYPES: ObsLayoutType[] = [
   'SPLIT_2_V',
   'SPLIT_3',
   'GRID_4',
+  'GRID_5',
+  'GRID_6',
   'PIP',
   'MAIN_PLUS_SECONDARY',
   'DYNAMIC_GRID',
@@ -164,6 +167,25 @@ function LayoutSchematicIcon({ type, active }: { type: ObsLayoutType; active: bo
           <rect x="21" y="3" width="16" height="8.5" rx="1" fill={stroke} opacity="0.35" />
           <rect x="3" y="12.5" width="16" height="8.5" rx="1" fill={stroke} opacity="0.35" />
           <rect x="21" y="12.5" width="16" height="8.5" rx="1" fill={stroke} opacity="0.35" />
+        </>
+      )}
+      {type === 'GRID_5' && (
+        <>
+          <rect x="3" y="3" width="16" height="8.5" rx="0.8" fill={accent} opacity="0.5" />
+          <rect x="21" y="3" width="16" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="3" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="14.7" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="26.5" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+        </>
+      )}
+      {type === 'GRID_6' && (
+        <>
+          <rect x="3" y="3" width="10.5" height="8.5" rx="0.8" fill={accent} opacity="0.5" />
+          <rect x="14.7" y="3" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="26.5" y="3" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="3" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="14.7" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+          <rect x="26.5" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
         </>
       )}
       {type === 'PIP' && (
@@ -908,13 +930,15 @@ export function ProgramAndCompositionWorkspace({
                 <button
                   type="button"
                   onClick={() => {
-                    const allIds = enabledCameras.map((c) => c.cameraId);
+                    const allIds = enabledCameras
+                      .slice(0, MAX_CONTROL_ROOM_CAMERAS)
+                      .map((c) => c.cameraId);
                     onChangeSelectedCameraIds(allIds);
                     if (!mainCameraId && allIds[0]) onChangeMainCameraId(allIds[0]);
                   }}
                   className="text-[11px] font-semibold text-orange-400 hover:text-orange-300"
                 >
-                  Select All
+                  Select All (Max {MAX_CONTROL_ROOM_CAMERAS})
                 </button>
               )}
               {selectedCameraIds.length > 0 && (

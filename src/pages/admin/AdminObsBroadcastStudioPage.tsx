@@ -24,6 +24,7 @@ import {
   Layers,
   Loader2,
   Lock,
+  Menu,
   Mic,
   MicOff,
   Monitor,
@@ -33,6 +34,7 @@ import {
   RefreshCw,
   RotateCcw,
   Server,
+  Settings,
   Shield,
   ShieldAlert,
   Sliders,
@@ -101,7 +103,14 @@ import {
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
-import type { ObsLayoutType, PipPosition, PipSize } from '../../utils/obsLayoutGeometry.ts';
+import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
+import {
+  getLayoutSlotCount,
+  MAX_CONTROL_ROOM_CAMERAS,
+  type ObsLayoutType,
+  type PipPosition,
+  type PipSize,
+} from '../../utils/obsLayoutGeometry.ts';
 import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
 import { CameraFormModal, SmartphoneWizardModal } from '../../components/obsStudio/CameraSetupModal.tsx';
 import { LarixConnectionModal } from '../../components/obsStudio/LarixConnectionModal.tsx';
@@ -113,6 +122,14 @@ import {
 import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoomWorkflowPanel.tsx';
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
+import {
+  ControlRoomSidebar,
+  type ControlRoomNavId,
+} from '../../components/obsStudio/ControlRoomSidebar.tsx';
+import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonitors.tsx';
+import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
+import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
+import { ControlRoomSceneBar } from '../../components/obsStudio/ControlRoomSceneBar.tsx';
 import { SavedAdsLibraryPanel } from '../../components/obsGraphics/SavedAdsLibraryPanel.tsx';
 import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
@@ -126,7 +143,7 @@ const LazyGraphicsStudioEditor = React.lazy(
   () => import('../../components/obsGraphics/GraphicsStudioEditor.tsx')
 );
 
-type StudioTab = 'live' | 'graphics' | 'cameras' | 'overlay' | 'connection' | 'audit';
+type StudioTab = ControlRoomNavId;
 
 function obsStatusBadgeClass(status: ObsConnectionStatus) {
   switch (status) {
@@ -178,7 +195,16 @@ export function AdminObsBroadcastStudioPage() {
     >
   >([]);
   const [loadingMatches, setLoadingMatches] = useState(true);
-  const [activeTab, setActiveTab] = useState<StudioTab>('live');
+  const [activeTab, setActiveTab] = useState<StudioTab>('control_room');
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  const [autoFitEnabled, setAutoFitEnabled] = useState(true);
+  const [transitioningMode, setTransitioningMode] = useState<'cut' | 'fade' | null>(null);
+  const [refreshingCams, setRefreshingCams] = useState(false);
+  const [disconnectingAll, setDisconnectingAll] = useState(false);
+  const [disconnectAllConfirmOpen, setDisconnectAllConfirmOpen] = useState(false);
+  const [addSceneModalOpen, setAddSceneModalOpen] = useState(false);
+  const [newSceneNameDraft, setNewSceneNameDraft] = useState('');
+  const [savingNewScene, setSavingNewScene] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -336,15 +362,6 @@ export function AdminObsBroadcastStudioPage() {
   const [graphicsStudioView, setGraphicsStudioView] = useState<'library' | 'editor'>('library');
   const [editingAdDesign, setEditingAdDesign] = useState<BroadcastAdDesignData | null>(null);
   const [showLiveQuickAds, setShowLiveQuickAds] = useState(false);
-  const workspaceTabsRef = useRef<HTMLDivElement | null>(null);
-
-  const jumpToAdsAndGraphics = useCallback(() => {
-    setActiveTab('graphics');
-    setGraphicsStudioView('library');
-    window.setTimeout(() => {
-      workspaceTabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 50);
-  }, []);
 
   const loadSavedAdDesigns = useCallback(async () => {
     if (!matchId) return;
@@ -1203,7 +1220,14 @@ export function AdminObsBroadcastStudioPage() {
 
   // Independent continuous auto-polling for PROGRAM OUTPUT (never disabled by grid preview mode)
   useEffect(() => {
-    if (!matchId || !obsConnected || !profile?.activeObsScene || activeTab !== 'live') return;
+    if (
+      !matchId ||
+      !obsConnected ||
+      !profile?.activeObsScene ||
+      (activeTab !== 'control_room' && activeTab !== 'layouts')
+    ) {
+      return;
+    }
 
     let timerId: number | null = null;
     const intervalMs = programUsesLiveWebRtc ? 4500 : 1000;
@@ -1264,14 +1288,22 @@ export function AdminObsBroadcastStudioPage() {
   function handleToggleSelectCamera(cam: BroadcastCameraData) {
     setStagedCameraIds((prev) => {
       const exists = prev.includes(cam.cameraId);
+      if (!exists && prev.length >= MAX_CONTROL_ROOM_CAMERAS) {
+        setActionError(`Maximum ${MAX_CONTROL_ROOM_CAMERAS} cameras can be staged in the Control Room layout.`);
+        return prev;
+      }
       const next = exists ? prev.filter((id) => id !== cam.cameraId) : [...prev, cam.cameraId];
       setStagedMainCameraId((currMain) => {
         if (!exists && !currMain) return cam.cameraId;
         if (exists && currMain === cam.cameraId) return next[0] || '';
         return currMain;
       });
-      if (!exists && next.length === 2 && stagedLayoutType === 'SINGLE') {
-        setStagedLayoutType('SPLIT_2_H');
+      if (!exists) {
+        if (next.length === 2 && stagedLayoutType === 'SINGLE') setStagedLayoutType('SPLIT_2_H');
+        else if (next.length === 3 && stagedLayoutType === 'SPLIT_2_H') setStagedLayoutType('SPLIT_3');
+        else if (next.length === 4 && stagedLayoutType === 'SPLIT_3') setStagedLayoutType('GRID_4');
+        else if (next.length === 5 && stagedLayoutType === 'GRID_4') setStagedLayoutType('GRID_5');
+        else if (next.length === 6 && stagedLayoutType === 'GRID_5') setStagedLayoutType('GRID_6');
       } else if (next.length <= 1 && stagedLayoutType !== 'SINGLE' && stagedLayoutType !== 'SPORT_BROADCAST') {
         setStagedLayoutType('SINGLE');
       }
@@ -1279,12 +1311,151 @@ export function AdminObsBroadcastStudioPage() {
     });
   }
 
+  function handleSelectLayoutAndAutoPopulate(nextLayout: ObsLayoutType) {
+    setStagedLayoutType(nextLayout);
+    const pool = enabledCameras.slice(0, MAX_CONTROL_ROOM_CAMERAS);
+    if (pool.length === 0) return;
+    const needed = Math.min(
+      pool.length,
+      getLayoutSlotCount(nextLayout, Math.max(stagedCameraIds.length, pool.length))
+    );
+    const existingValid = stagedCameraIds.filter((id) => pool.some((c) => c.cameraId === id));
+    const filled = [...existingValid];
+    for (const c of pool) {
+      if (filled.length >= needed) break;
+      if (!filled.includes(c.cameraId)) filled.push(c.cameraId);
+    }
+    const finalIds = filled.slice(0, needed);
+    setStagedCameraIds(finalIds);
+    if (!stagedMainCameraId || !finalIds.includes(stagedMainCameraId)) {
+      setStagedMainCameraId(finalIds[0] || '');
+    }
+  }
+
+  function handleSlotClick(slotIdx: number, cameraId?: string) {
+    if (cameraId) {
+      setStagedMainCameraId(cameraId);
+      return;
+    }
+    const pool = enabledCameras.slice(0, MAX_CONTROL_ROOM_CAMERAS);
+    const nextCam = pool.find((c) => !stagedCameraIds.includes(c.cameraId));
+    if (!nextCam) return;
+    setStagedCameraIds((prev) => {
+      if (prev.length >= MAX_CONTROL_ROOM_CAMERAS) return prev;
+      const copy = [...prev];
+      copy.splice(slotIdx, 0, nextCam.cameraId);
+      return Array.from(new Set(copy)).slice(0, MAX_CONTROL_ROOM_CAMERAS);
+    });
+    if (!stagedMainCameraId) setStagedMainCameraId(nextCam.cameraId);
+  }
+
+  async function handleCutOrFade(mode: 'cut' | 'fade') {
+    if (!matchId || stagedCameraIds.length === 0) return;
+    try {
+      setTransitioningMode(mode);
+      setActionError(null);
+      const boundedIds = stagedCameraIds.slice(0, MAX_CONTROL_ROOM_CAMERAS);
+      const res = await obsStudioService.executeTransition(matchId, {
+        mode,
+        durationMs: mode === 'cut' ? 0 : 500,
+        layoutType: stagedLayoutType,
+        cameraIds: boundedIds,
+        mainCameraId: stagedMainCameraId || boundedIds[0],
+        pipPosition: stagedLayoutType === 'PIP' ? stagedPipPosition : undefined,
+        pipSize: stagedLayoutType === 'PIP' ? stagedPipSize : undefined,
+        sceneName: stagedSceneName.trim() || undefined,
+        includeScoreboardOverlay: stagedIncludeScoreboard,
+        override: Boolean(profile?.adminOverrideLocked),
+      });
+      notifySuccess(
+        mode === 'cut'
+          ? `Instant Cut live (${stagedLayoutType}).`
+          : `0.5s Transition applied live (${stagedLayoutType}).`
+      );
+      await refetch();
+      void loadSceneTransforms(res?.sceneName || stagedSceneName.trim() || '');
+      void handleCaptureActiveScenePreview({ background: true });
+    } catch (err) {
+      setActionError(
+        extractApiError(
+          err,
+          mode === 'cut' ? 'Failed to execute instant cut.' : 'Failed to execute 0.5s transition.'
+        )
+      );
+    } finally {
+      setTransitioningMode(null);
+    }
+  }
+
+  async function handleRefreshAllCams() {
+    if (!matchId) return;
+    try {
+      setRefreshingCams(true);
+      setActionError(null);
+      await obsStudioService.refreshCameras(matchId);
+      await refetch();
+      const targets = enabledCameras.slice(0, MAX_CONTROL_ROOM_CAMERAS);
+      if (obsConnected && targets.length > 0) {
+        await handleRefreshAllPreviews(targets);
+      }
+      notifySuccess('Refreshed camera health and live previews.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to refresh cameras.'));
+    } finally {
+      setRefreshingCams(false);
+    }
+  }
+
+  async function handleConfirmDisconnectAll() {
+    if (!matchId) return;
+    try {
+      setDisconnectingAll(true);
+      setActionError(null);
+      await obsStudioService.disconnectAllCameras(matchId);
+      setDisconnectAllConfirmOpen(false);
+      notifySuccess('Disconnected all active camera feeds.');
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to disconnect all cameras.'));
+    } finally {
+      setDisconnectingAll(false);
+    }
+  }
+
+  async function handleCreateSceneFromModal(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = newSceneNameDraft.trim();
+    if (!clean) return;
+    const pool =
+      stagedCameraIds.length > 0
+        ? stagedCameraIds.slice(0, MAX_CONTROL_ROOM_CAMERAS)
+        : enabledCameras.slice(0, 1).map((c) => c.cameraId);
+    try {
+      setSavingNewScene(true);
+      await handleSaveScenePreset({
+        name: clean,
+        obsSceneName: clean.toUpperCase().replace(/[^A-Z0-9 _-]+/g, '').trim() || clean,
+        layoutType: stagedLayoutType,
+        cameraIds: pool,
+        mainCameraId: stagedMainCameraId || pool[0],
+        pipPosition: stagedLayoutType === 'PIP' ? stagedPipPosition : undefined,
+        pipSize: stagedLayoutType === 'PIP' ? stagedPipSize : undefined,
+        includeScoreboardOverlay: stagedIncludeScoreboard,
+      });
+      setAddSceneModalOpen(false);
+      setNewSceneNameDraft('');
+    } finally {
+      setSavingNewScene(false);
+    }
+  }
+
   async function handleApplyStagedComposition() {
     if (stagedCameraIds.length === 0) return;
+    const boundedIds = stagedCameraIds.slice(0, MAX_CONTROL_ROOM_CAMERAS);
     await handleApplyLayout({
       layoutType: stagedLayoutType,
-      cameraIds: stagedCameraIds,
-      mainCameraId: stagedMainCameraId || stagedCameraIds[0],
+      cameraIds: boundedIds,
+      mainCameraId: stagedMainCameraId || boundedIds[0],
       pipPosition: stagedLayoutType === 'PIP' ? stagedPipPosition : undefined,
       pipSize: stagedLayoutType === 'PIP' ? stagedPipSize : undefined,
       sceneName: stagedSceneName.trim() || undefined,
@@ -1331,8 +1502,20 @@ export function AdminObsBroadcastStudioPage() {
 
   function handleGuideJump(target: GuideJumpTarget) {
     if (target === 'map_sources') {
-      setActiveTab('live');
+      setActiveTab('control_room');
       setMapSourcesModalOpen(true);
+      return;
+    }
+    if (target === 'live') {
+      setActiveTab('control_room');
+      return;
+    }
+    if (target === 'overlay') {
+      setActiveTab('scoreboard');
+      return;
+    }
+    if (target === 'connection') {
+      setActiveTab('settings');
       return;
     }
     setActiveTab(target);
@@ -1446,7 +1629,7 @@ export function AdminObsBroadcastStudioPage() {
   );
 
   useEffect(() => {
-    if (obsConnected && activeTab === 'live') {
+    if (obsConnected && (activeTab === 'control_room' || activeTab === 'layouts' || activeTab === 'streaming')) {
       loadSceneItems(profile?.activeObsScene || '');
       loadSceneTransforms(profile?.activeObsScene || '');
     } else if (!obsConnected) {
@@ -2034,636 +2217,744 @@ export function AdminObsBroadcastStudioPage() {
   const currentOverlay = normalizeOverlayConfig(studio?.match?.overlayConfig);
   const currentOverlayMetrics = computeOverlayMetrics(currentOverlay, false);
 
+  const liveReadyStatus = obsConnected
+    ? profile?.obsStreamActive
+      ? { label: 'ON AIR', dot: 'bg-red-500 animate-pulse', pill: 'bg-red-500/15 text-red-300 border-red-500/40' }
+      : { label: 'Live Ready', dot: 'bg-emerald-400', pill: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' }
+    : profile?.agentOnline
+      ? { label: 'Bridge Online', dot: 'bg-amber-400', pill: 'bg-amber-500/15 text-amber-300 border-amber-500/40' }
+      : { label: 'OBS Offline', dot: 'bg-slate-500', pill: 'bg-slate-800/90 text-slate-300 border-slate-700' };
+
+  const selectedMatchObj = matches.find((m) => m.id === matchId);
+  const currentMatchLabel =
+    studio?.match?.matchTitle ||
+    (studio?.match?.teamAName || studio?.match?.teamBName
+      ? [studio?.match?.teamAName, studio?.match?.teamBName].filter(Boolean).join(' vs ')
+      : '') ||
+    selectedMatchObj?.matchTitle ||
+    (selectedMatchObj?.teamAName || selectedMatchObj?.teamBName
+      ? [selectedMatchObj?.teamAName, selectedMatchObj?.teamBName].filter(Boolean).join(' vs ')
+      : 'Select Match');
+
+  function handleHeaderGoLiveClick() {
+    if (!matchId || !profile) return;
+    if (!obsConnected) {
+      setActiveTab('settings');
+      setActionError('Connect OBS Studio or Windows Bridge before going live.');
+      return;
+    }
+    if (profile.obsStreamActive) {
+      if (canControlStream) {
+        void handleObsOutputAction('stop_stream');
+      }
+      return;
+    }
+    if (canControlStream) {
+      void handleObsOutputAction('start_stream');
+    } else if (!isBroadcasterRole && studio?.match && !studio.match.broadcastPublished) {
+      void handleActivateBroadcast();
+    }
+  }
+
   return (
-    <div className="space-y-5">
-      {/* Studio Header Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Video className="w-5 h-5 text-[#EA580C] shrink-0" />
-              <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 truncate">
-                Multi-Camera OBS Broadcast Studio
-              </h1>
-              {profile && (
-                <>
-                  {profile.connectionMode === 'local_agent' && (
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${
-                        profile.agentOnline
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-slate-100 text-slate-700 border-slate-300'
-                      }`}
-                    >
-                      <Laptop className="w-3 h-3" />
-                      {profile.agentOnline ? 'BRIDGE ONLINE' : 'BRIDGE OFFLINE'}
-                    </span>
-                  )}
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${obsStatusBadgeClass(
-                      profile.connectionStatus
-                    )}`}
-                  >
-                    {profile.connectionStatus === 'CONNECTED'
-                      ? 'OBS CONNECTED'
-                      : profile.connectionStatus === 'CONNECTING'
-                        ? 'OBS CONNECTING'
-                        : profile.connectionStatus === 'ERROR'
-                          ? 'OBS ERROR'
-                          : 'OBS DISCONNECTED'}
-                  </span>
-                  {studio?.match && (
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap shrink-0 ${
-                        obsConnected && profile.obsStreamActive
-                          ? 'bg-red-600 text-white border-red-600'
-                          : studio.match.youtubeVideoId ||
-                              studio.match.activeStreamingProvider === 'mediamtx'
-                            ? 'bg-sky-50 text-sky-700 border-sky-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      <Radio className="w-3 h-3" />
-                      {obsConnected && profile.obsStreamActive
-                        ? `STREAM LIVE${profile.obsStreamTimecode ? ` · ${profile.obsStreamTimecode}` : ''}`
-                        : studio.match.activeStreamingProvider === 'mediamtx'
-                          ? 'MEDIAMTX READY'
-                          : studio.match.youtubeVideoId
-                            ? 'YOUTUBE READY'
-                            : 'STREAM OFFLINE'}
-                    </span>
-                  )}
-                </>
-              )}
-              <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold border whitespace-nowrap shrink-0 ${
-                  socketConnected
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200'
-                }`}
-              >
-                {socketConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                {socketConnected ? 'Sync Live' : 'Reconnecting...'}
-              </span>
-              {profile?.lastSyncedAt && (
-                <span className="text-[11px] font-mono text-slate-400 whitespace-nowrap tabular-nums">
-                  Synced {new Date(profile.lastSyncedAt).toLocaleTimeString()}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500">
-              Visual Multi-Camera Production Desk — select cameras, preview Split / Grid / PIP compositions, and switch OBS scenes cleanly without interrupting live viewers.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <select
-              value={matchId || ''}
-              disabled={loadingMatches}
-              onChange={(e) => {
-                if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
-              }}
-              aria-label="Select broadcast match"
-              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white max-w-[240px]"
-            >
-              {matches.length === 0 && <option value="">No matches available</option>}
-              {matches.map((m) => (
-                <option key={m.id} value={m.id}>
-                  [{isMatchPreparedDraft(m) ? 'PREPARED' : m.status}]{' '}
-                  {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
-                </option>
-              ))}
-            </select>
-
-            {!isBroadcasterRole && (
-              <button
-                type="button"
-                onClick={openNewMatchSetupModal}
-                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>New Match Setup</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setGuideOpen(true)}
-              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#EA580C] bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 whitespace-nowrap shrink-0"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Control Room Guide</span>
-            </button>
-
-            {matchId && (
-              <>
-                <button
-                  type="button"
-                  onClick={jumpToAdsAndGraphics}
-                  className={`min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                    activeTab === 'graphics'
-                      ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                      : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                  }`}
-                >
-                  <Sparkles
-                    className={`w-3.5 h-3.5 ${
-                      activeTab === 'graphics' ? 'text-white' : 'text-[#EA580C]'
-                    }`}
-                  />
-                  <span>
-                    Run Ads / Graphics
-                    {(studio?.graphicsState?.activeSlots?.length || 0) > 0
-                      ? ` (${studio!.graphicsState!.activeSlots.length} LIVE)`
-                      : ''}
-                  </span>
-                </button>
-                <Link
-                  to={`/broadcast/overlay/${matchId}`}
-                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
-                >
-                  <Tv className="w-3.5 h-3.5 text-[#EA580C]" />
-                  <span>Overlay Studio</span>
-                </Link>
-                {!isBroadcasterRole && (
-                  <Link
-                    to={`/admin/scoreboard/${matchId}`}
-                    className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
-                  >
-                    <SlidersHorizontal className="w-3.5 h-3.5" />
-                    <span>Scoreboard</span>
-                  </Link>
-                )}
-              </>
-            )}
-
-            {profile && studio?.permissions?.canOverride && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (profile.adminOverrideLocked) {
-                    handleConfirmOverride(false);
-                  } else {
-                    setOverrideModalOpen(true);
-                  }
-                }}
-                disabled={togglingOverride}
-                className={`min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                  profile.adminOverrideLocked
-                    ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
-                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                }`}
-              >
-                {profile.adminOverrideLocked ? (
-                  <>
-                    <Unlock className="w-3.5 h-3.5" />
-                    <span>Release Override Lock</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Admin Override</span>
-                  </>
-                )}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Match Context Strip */}
-        {studio?.match && (
-          <div className="pt-3 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tournament</p>
-              <p className="font-semibold text-slate-900 truncate">
-                {studio.match.tournamentName || 'Open / Standalone'}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match</p>
-              <p className="font-semibold text-slate-900 truncate">
-                {studio.match.matchTitle ||
-                  [studio.match.teamAName, studio.match.teamBName].filter(Boolean).join(' vs ')}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match ID</p>
-              <button
-                type="button"
-                onClick={() => copyText('matchId', studio.match.id)}
-                title="Copy Match ID"
-                className="inline-flex items-center gap-1 font-mono font-semibold text-slate-700 hover:text-[#EA580C] max-w-full"
-              >
-                <span className="truncate">{studio.match.id.slice(-8)}</span>
-                {copiedKey === 'matchId' ? (
-                  <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                ) : (
-                  <Copy className="w-3 h-3 shrink-0" />
-                )}
-              </button>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Match Status</p>
-              <p className="font-mono font-bold text-slate-900">
-                {studio.match.status} · {studio.match.gameName || 'Sport'}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">YouTube Output</p>
-              <p className="font-mono font-semibold text-slate-900 truncate">
-                {obsConnected && profile?.obsStreamActive
-                  ? 'STREAMING LIVE'
-                  : studio.match.activeStreamingProvider === 'mediamtx'
-                    ? 'MediaMTX Direct'
-                    : studio.match.youtubeVideoId
-                      ? `Linked (${studio.match.youtubeVideoId})`
-                      : 'Not Linked'}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Duration</p>
-              <p className="font-mono tabular-nums font-semibold text-slate-900 truncate">
-                {obsConnected && profile?.obsStreamActive
-                  ? profile.obsStreamTimecode || '00:00:00'
-                  : 'Offline'}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Program Scene</p>
-              <p className="font-mono font-bold text-[#EA580C] truncate">
-                {obsConnected
-                  ? profile?.sceneLabels?.[profile.activeObsScene] || profile?.activeObsScene || 'Connected'
-                  : 'OBS DISCONNECTED'}
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Banners */}
-      <FeedbackBanner
-        type="error"
-        message={actionError || liveErrorToast || error}
-        onDismiss={() => {
-          setActionError(null);
-          clearLiveErrorToast();
-        }}
-      />
-      <FeedbackBanner
-        type="success"
-        message={actionSuccess}
-        onDismiss={() => setActionSuccess(null)}
-      />
-
-      {/* Admin Override Warning Banner */}
-      {profile?.adminOverrideLocked && (
-        <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 flex flex-wrap items-center justify-between gap-3 text-xs text-red-900">
-          <div className="flex items-center gap-2.5">
-            <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
-            <div>
-              <strong>ADMIN OVERRIDE LOCK ACTIVE</strong> — Locked by{' '}
-              <strong>{profile.adminOverrideByName || 'Admin'}</strong>
-              {profile.adminOverrideReason ? ` (${profile.adminOverrideReason})` : ''}. Non-admin operators cannot switch OBS scenes.
-            </div>
-          </div>
-          {studio?.permissions?.canOverride && (
-            <button
-              type="button"
-              onClick={() => handleConfirmOverride(false)}
-              className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700"
-            >
-              Unlock Now
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Real OBS Error Banner */}
-      {profile?.connectionStatus !== 'CONNECTED' && profile?.lastError && (
-        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              <strong>OBS Studio disconnected:</strong> {profile.lastError}
-            </span>
-          </div>
+    <div
+      data-admin-theme="dark"
+      className="rounded-2xl border border-slate-800 bg-[#070A10] text-slate-100 overflow-hidden shadow-2xl"
+    >
+      {/* Top Broadcast Control Room Header */}
+      <header className="bg-[#0B101B] border-b border-slate-800/90 px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             type="button"
-            onClick={() => setActiveTab('connection')}
-            className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700"
+            onClick={() => setSidebarMobileOpen(true)}
+            aria-label="Open Control Room navigation"
+            className="lg:hidden p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:text-white"
           >
-            Configure OBS Connection
+            <Menu className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-6 h-6 rounded-md bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600 flex items-center justify-center text-white font-black text-[11px] shrink-0 shadow">
+              M
+            </span>
+            <span className="font-display text-sm sm:text-base font-bold text-white tracking-tight truncate">
+              MaidanLive
+            </span>
+            <span className="px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+              Live
+            </span>
+            <span className="hidden sm:inline text-slate-600">|</span>
+            <span className="hidden sm:inline font-display text-sm font-semibold text-slate-200 truncate">
+              Control Room
+            </span>
+          </div>
+        </div>
+
+        {/* Center Status Pills */}
+        <div className="hidden md:flex items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold ${liveReadyStatus.pill}`}
+          >
+            <span className={`w-2 h-2 rounded-full ${liveReadyStatus.dot}`} />
+            <span>{liveReadyStatus.label}</span>
+          </span>
+          <span
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono ${
+              socketConnected
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+            }`}
+          >
+            {socketConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            <span>{socketConnected ? 'Sync' : 'Reconnecting'}</span>
+          </span>
+        </div>
+
+        {/* Right Match Selector + Go Live + Settings */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <select
+            value={matchId || ''}
+            disabled={loadingMatches}
+            onChange={(e) => {
+              if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
+            }}
+            aria-label="Select broadcast match"
+            title={`Match: ${currentMatchLabel}`}
+            className="h-9 px-3 rounded-lg bg-[#121826] border border-slate-700/90 text-xs font-semibold text-slate-100 max-w-[230px] focus:outline-none focus:border-purple-500"
+          >
+            {matches.length === 0 && <option value="">No matches available</option>}
+            {matches.map((m) => (
+              <option key={m.id} value={m.id}>
+                Match: {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            disabled={executingObsAction !== null || activatingBroadcast}
+            onClick={handleHeaderGoLiveClick}
+            className={`h-9 px-3.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 shadow transition-all disabled:opacity-45 whitespace-nowrap ${
+              obsConnected && profile?.obsStreamActive
+                ? 'bg-red-700 hover:bg-red-600 text-white ring-2 ring-red-400/50'
+                : 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span>
+              {executingObsAction === 'start_stream'
+                ? 'Starting...'
+                : executingObsAction === 'stop_stream'
+                  ? 'Stopping...'
+                  : obsConnected && profile?.obsStreamActive
+                    ? `Stop Live${profile.obsStreamTimecode ? ` (${profile.obsStreamTimecode})` : ''}`
+                    : 'Go Live'}
+            </span>
+          </button>
+
+          {profile && studio?.permissions?.canOverride && (
+            <button
+              type="button"
+              onClick={() => {
+                if (profile.adminOverrideLocked) {
+                  void handleConfirmOverride(false);
+                } else {
+                  setOverrideModalOpen(true);
+                }
+              }}
+              disabled={togglingOverride}
+              title={profile.adminOverrideLocked ? 'Release Admin Override Lock' : 'Engage Admin Override Lock'}
+              className={`h-9 px-2.5 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                profile.adminOverrideLocked
+                  ? 'bg-red-600 border-red-500 text-white'
+                  : 'bg-[#121826] border-slate-700/90 text-slate-200 hover:border-purple-500'
+              }`}
+            >
+              {profile.adminOverrideLocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+              <span className="hidden xl:inline">
+                {profile.adminOverrideLocked ? 'Locked' : 'Override'}
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            title="Control Room Guide"
+            aria-label="Control Room Guide"
+            className="h-9 w-9 inline-flex items-center justify-center rounded-lg bg-[#121826] border border-slate-700/90 text-slate-300 hover:text-white hover:border-purple-500"
+          >
+            <BookOpen className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('settings')}
+            title="Control Room & OBS Settings"
+            aria-label="Control Room Settings"
+            className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border transition-colors ${
+              activeTab === 'settings'
+                ? 'bg-purple-600 border-purple-500 text-white'
+                : 'bg-[#121826] border-slate-700/90 text-slate-300 hover:text-white hover:border-purple-500'
+            }`}
+          >
+            <Settings className="w-4 h-4" />
           </button>
         </div>
-      )}
+      </header>
 
-      {!matchId && !loadingMatches && matches.length === 0 ? (
-        <EmptyState
-          icon={<Video className="w-6 h-6" />}
-          title="No match broadcasts found"
-          description="Initialize a match first (no YouTube link required yet), prepare OBS cameras & overlays, then connect YouTube and activate."
-          action={
-            !isBroadcasterRole ? (
-              <button
-                type="button"
-                onClick={openNewMatchSetupModal}
-                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
-              >
-                <Plus className="w-4 h-4" />
-                <span>New Match Setup</span>
-              </button>
-            ) : (
-              <Link
-                to="/admin/live-streams"
-                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
-              >
-                <Radio className="w-4 h-4" />
-                <span>Go to Broadcasts</span>
-              </Link>
-            )
-          }
+      {/* Main Sidebar + Viewport Body */}
+      <div className="flex flex-col lg:flex-row min-h-[780px]">
+        <ControlRoomSidebar
+          activeNav={activeTab}
+          onSelectNav={setActiveTab}
+          profile={profile}
+          obsConnected={obsConnected}
+          isBroadcasterRole={isBroadcasterRole}
+          activeAdsCount={studio?.graphicsState?.activeSlots?.length || 0}
+          cameraCount={cameras.length}
+          mobileOpen={sidebarMobileOpen}
+          onCloseMobile={() => setSidebarMobileOpen(false)}
         />
-      ) : loading || !studio || !profile ? (
-        <TableSkeleton rows={5} />
-      ) : (
-        <>
-          {/* Separated Status Matrix + 7-Step Control Room Workflow */}
-          <ControlRoomWorkflowPanel
-            match={studio.match}
-            profile={profile}
-            cameras={cameras}
-            score={liveMatchScore}
-            scoreboardOverlayUrl={studio.scoreboardOverlayUrl}
-            isBroadcasterRole={isBroadcasterRole}
-            ytInputDraft={ytInputDraft}
-            ytProviderDraft={ytProviderDraft}
-            onChangeYtInputDraft={setYtInputDraft}
-            onChangeYtProviderDraft={setYtProviderDraft}
-            savingYtOutput={savingYtOutput}
-            verifyingYtOutput={verifyingYtOutput}
-            ytVerification={ytVerification}
-            onSaveYouTubeOutput={handleSaveYouTubeOutput}
-            togglingScoreboardOnYoutube={togglingScoreboardOnYoutube}
-            onToggleScoreboardOnYoutube={handleToggleScoreboardOnYoutube}
-            activatingBroadcast={activatingBroadcast}
-            endingBroadcast={endingBroadcast}
-            onActivateBroadcast={handleActivateBroadcast}
-            onRequestEndBroadcast={() => setEndConfirmOpen(true)}
-            onOpenNextMatchSetup={openNewMatchSetupModal}
-            onEditMatchSetup={openEditMatchSetupModal}
-            onOpenConnection={() => setActiveTab('connection')}
-            onOpenMapSources={() => setMapSourcesModalOpen(true)}
-            onOpenCamerasTab={() => setActiveTab('cameras')}
-            onOpenOverlayTab={() => setActiveTab('overlay')}
-            onOpenGuide={() => setGuideOpen(true)}
+
+        <div className="flex-1 min-w-0 p-3 sm:p-4 space-y-3 bg-[#070A10]">
+          {/* Banners */}
+          <FeedbackBanner
+            type="error"
+            message={actionError || liveErrorToast || error}
+            onDismiss={() => {
+              setActionError(null);
+              clearLiveErrorToast();
+            }}
+          />
+          <FeedbackBanner
+            type="success"
+            message={actionSuccess}
+            onDismiss={() => setActionSuccess(null)}
           />
 
-          {/* Active Session & Controller Presence Bar */}
-          <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="inline-flex items-center gap-1.5 font-mono font-bold text-slate-900">
-                <UserCheck className="w-4 h-4 text-[#EA580C]" />
-                <span>
-                  Controller:{' '}
-                  {profile.activeControllerName
-                    ? `${profile.activeControllerName} (${profile.activeControllerRole || 'Operator'})`
-                    : 'Unclaimed'}
-                </span>
-              </span>
-              <span className="font-mono text-slate-500">
-                Session: {profile.broadcastSessionId || 'No active session'}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {!profile.broadcastSessionId ? (
+          {/* Admin Override Warning Banner */}
+          {profile?.adminOverrideLocked && (
+            <div className="p-3 rounded-xl bg-red-950/75 border border-red-500/45 flex flex-wrap items-center justify-between gap-3 text-xs text-red-100">
+              <div className="flex items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+                <div>
+                  <strong>ADMIN OVERRIDE LOCK ACTIVE</strong> — Locked by{' '}
+                  <strong>{profile.adminOverrideByName || 'Admin'}</strong>
+                  {profile.adminOverrideReason ? ` (${profile.adminOverrideReason})` : ''}. Non-admin operators cannot switch OBS scenes.
+                </div>
+              </div>
+              {studio?.permissions?.canOverride && (
                 <button
                   type="button"
-                  disabled={managingSession !== null}
-                  onClick={() => handleManageSession('start')}
-                  className="min-h-[32px] px-3 py-1 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                  onClick={() => handleConfirmOverride(false)}
+                  className="px-3 py-1 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-500"
                 >
-                  {managingSession === 'start' ? 'Starting...' : 'Start Broadcast Session'}
+                  Unlock Now
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    disabled={managingSession !== null}
-                    onClick={() => handleManageSession('takeover')}
-                    className="min-h-[32px] px-3 py-1 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 disabled:opacity-50"
-                  >
-                    {managingSession === 'takeover' ? 'Claiming...' : 'Take Active Control'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={managingSession !== null}
-                    onClick={() => handleManageSession('end')}
-                    className="min-h-[32px] px-3 py-1 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50"
-                  >
-                    {managingSession === 'end' ? 'Ending...' : 'End Session'}
-                  </button>
-                </>
               )}
             </div>
-          </div>
+          )}
 
-          {/* 4-Cell Studio KPI Strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Active OBS Scene
-              </p>
-              <p className="font-mono text-base sm:text-lg font-bold text-slate-900 truncate mt-1">
-                {obsConnected ? profile.activeObsScene || 'Connected (Idle)' : 'OBS Not Connected'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                Layout: <span className="font-mono">{profile.activeLayoutType}</span>
-              </p>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Configured Cameras
-              </p>
-              <p className="font-mono tabular-nums text-2xl font-bold text-slate-900 mt-1">
-                {onlineCameraCount}{' '}
-                <span className="text-sm font-normal text-slate-500">
-                  online / {cameras.length} total
+          {/* Real OBS Error Banner */}
+          {profile?.connectionStatus !== 'CONNECTED' && profile?.lastError && activeTab !== 'control_room' && (
+            <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-100">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>
+                  <strong>OBS Studio disconnected:</strong> {profile.lastError}
                 </span>
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {enabledCameras.length} enabled · Unlimited slots
-              </p>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                OBS Performance
-              </p>
-              <p className="font-mono tabular-nums text-lg font-bold text-slate-900 mt-1">
-                {obsConnected && profile.obsStats
-                  ? `${Math.round(profile.obsStats.activeFps)} FPS · ${profile.obsStats.cpuUsage.toFixed(1)}% CPU`
-                  : 'Unavailable'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 font-mono tabular-nums">
-                {obsConnected && profile.obsStats
-                  ? `Dropped: ${profile.obsStats.outputSkippedFrames} frames`
-                  : 'Connect OBS to read live telemetry'}
-              </p>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  OBS Stream &amp; Recording
-                </p>
-                {obsConnected && profile.obsRecordActive && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-mono font-bold">
-                    <Circle className="w-2.5 h-2.5 fill-current" />
-                    REC
-                  </span>
-                )}
               </div>
-              <p
-                className={`font-mono text-sm sm:text-base font-bold ${
-                  obsConnected && profile.obsStreamActive ? 'text-red-500' : 'text-slate-700'
-                }`}
+              <button
+                type="button"
+                onClick={() => setActiveTab('settings')}
+                className="px-3 py-1 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-500"
               >
-                {obsConnected
-                  ? profile.obsStreamActive
-                    ? `OBS LIVE ${profile.obsStreamTimecode || ''}`
-                    : 'OBS Output Idle'
-                  : studio.match.status}
-              </p>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {canControlStream && (
-                  <button
-                    type="button"
-                    disabled={!obsConnected || executingObsAction !== null}
-                    onClick={() =>
-                      handleObsOutputAction(profile.obsStreamActive ? 'stop_stream' : 'start_stream')
-                    }
-                    className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
-                      profile.obsStreamActive
-                        ? 'bg-red-600 text-white border-red-600'
-                        : 'bg-slate-900 text-white border-slate-700 hover:bg-slate-800'
-                    }`}
-                  >
-                    {profile.obsStreamActive ? <Square className="w-3 h-3" /> : <Radio className="w-3 h-3" />}
-                    <span>{profile.obsStreamActive ? 'Stop Stream' : 'Start Stream'}</span>
-                  </button>
-                )}
-                {canControlRecord && (
-                  <button
-                    type="button"
-                    disabled={!obsConnected || executingObsAction !== null}
-                    onClick={() =>
-                      handleObsOutputAction(profile.obsRecordActive ? 'stop_record' : 'start_record')
-                    }
-                    className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
-                      profile.obsRecordActive
-                        ? 'bg-amber-600 text-white border-amber-600'
-                        : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
-                    }`}
-                  >
-                    <Circle className="w-3 h-3" />
-                    <span>{profile.obsRecordActive ? 'Stop Rec' : 'Record'}</span>
-                  </button>
-                )}
-              </div>
-              <p className="text-[10px] font-mono text-slate-500 truncate">
-                {profile.obsStreamBytes && profile.obsStreamBytes > 0
-                  ? `${(profile.obsStreamBytes / (1024 * 1024)).toFixed(1)} MB sent`
-                  : `Provider: ${studio.match.activeStreamingProvider.toUpperCase()}`}
-              </p>
+                Configure OBS Connection
+              </button>
             </div>
-          </div>
+          )}
 
-          {/* 6 Workspace Tabs */}
-          <div
-            ref={workspaceTabsRef}
-            className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl overflow-x-auto"
-          >
-            {[
-              { id: 'live' as const, label: 'Live Switching & Layouts', icon: Monitor },
-              {
-                id: 'graphics' as const,
-                label: `Live Graphics Studio${
-                  (studio.graphicsState?.activeSlots?.length || 0) > 0
-                    ? ` (${studio.graphicsState!.activeSlots.length} LIVE)`
-                    : ''
-                }`,
-                icon: Sparkles,
-              },
-              { id: 'cameras' as const, label: `Cameras & Smartphones (${cameras.length})`, icon: Camera },
-              { id: 'overlay' as const, label: 'Scoreboard & Sponsors', icon: Tv },
-              { id: 'connection' as const, label: 'OBS Connection & Agent', icon: Server },
-              { id: 'audit' as const, label: `Audit Logs (${studio.auditLogs.length})`, icon: ClipboardList },
-            ].map((t) => {
-              const Icon = t.icon;
-              const active = activeTab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setActiveTab(t.id)}
-                  className={`min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-[#EA580C] text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{t.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          {!matchId && !loadingMatches && matches.length === 0 ? (
+            <EmptyState
+              icon={<Video className="w-6 h-6" />}
+              title="No match broadcasts found"
+              description="Initialize a match first (no YouTube link required yet), prepare OBS cameras & overlays, then connect YouTube and activate."
+              action={
+                !isBroadcasterRole ? (
+                  <button
+                    type="button"
+                    onClick={openNewMatchSetupModal}
+                    className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-500"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>New Match Setup</span>
+                  </button>
+                ) : (
+                  <Link
+                    to="/admin/live-streams"
+                    className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-500"
+                  >
+                    <Radio className="w-4 h-4" />
+                    <span>Go to Broadcasts</span>
+                  </Link>
+                )
+              }
+            />
+          ) : loading || !studio || !profile ? (
+            <TableSkeleton rows={5} />
+          ) : (
+            <>
+              {/* ============================================================== */}
+              {/* PRIMARY VIEW: PRO MULTI-CAMERA CONTROL ROOM (MAX 6 CAMERAS)    */}
+              {/* ============================================================== */}
+              {activeTab === 'control_room' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
+                    <div className="xl:col-span-9 space-y-3 min-w-0">
+                      <ControlRoomMonitors
+                        cameras={cameras}
+                        profile={profile}
+                        obsConnected={obsConnected}
+                        matchStream={studio.match}
+                        liveScore={liveMatchScore}
+                        overlayConfig={currentOverlay}
+                        previewSnapshots={previewSnapshots}
+                        programSnapshotError={programSnapshotError}
+                        capturingProgramPreview={capturingProgramPreview}
+                        programMonitorMode={programMonitorMode}
+                        onChangeProgramMonitorMode={setProgramMonitorMode}
+                        onRefreshProgramPreview={() => handleCaptureActiveScenePreview()}
+                        onOpenSettings={() => setActiveTab('settings')}
+                        stagedCameraIds={stagedCameraIds}
+                        stagedMainCameraId={stagedMainCameraId}
+                        stagedLayoutType={stagedLayoutType}
+                        stagedPipPosition={stagedPipPosition}
+                        stagedPipSize={stagedPipSize}
+                        autoFitEnabled={autoFitEnabled}
+                        obsTransforms={obsTransforms}
+                        detectedContentMap={detectedContentMap}
+                        onFrameContentDetected={handleFrameContentDetected}
+                      />
 
-          {/* ============================================================== */}
-          {/* TAB 1: LIVE CAMERA PRODUCTION DESK (PROGRAM + COMPOSITION)     */}
-          {/* ============================================================== */}
-          {activeTab === 'live' && (
-            <div className="space-y-5">
-              {/* Dual-Pane Program Output (Live) vs Camera Composition (Preview / Staged) */}
-              <ProgramAndCompositionWorkspace
-                cameras={cameras}
-                profile={profile}
-                obsConnected={obsConnected}
-                previewSnapshots={previewSnapshots}
-                programSnapshotError={programSnapshotError}
-                capturingProgramPreview={capturingProgramPreview}
-                programMonitorMode={programMonitorMode}
-                onChangeProgramMonitorMode={setProgramMonitorMode}
-                selectedCameraIds={stagedCameraIds}
-                mainCameraId={stagedMainCameraId}
-                layoutType={stagedLayoutType}
-                pipPosition={stagedPipPosition}
-                pipSize={stagedPipSize}
-                customSceneName={stagedSceneName}
-                includeScoreboardOverlay={stagedIncludeScoreboard}
-                applying={applyingLayout}
-                onChangeSelectedCameraIds={setStagedCameraIds}
-                onChangeMainCameraId={setStagedMainCameraId}
-                onChangeLayoutType={setStagedLayoutType}
-                onChangePipPosition={setStagedPipPosition}
-                onChangePipSize={setStagedPipSize}
-                onChangeCustomSceneName={setStagedSceneName}
-                onChangeIncludeScoreboardOverlay={setStagedIncludeScoreboard}
-                onRefreshProgramPreview={() => handleCaptureActiveScenePreview()}
-                onApplyLive={handleApplyStagedComposition}
-                onSavePreset={handleSaveScenePreset}
-                onOpenConnectionTab={() => setActiveTab('connection')}
-                obsTransforms={obsTransforms}
-                detectedContentMap={detectedContentMap}
-                onFrameContentDetected={handleFrameContentDetected}
-                updatingTransformCamId={updatingTransformCamId}
-                onUpdateCameraFraming={handleUpdateCameraFraming}
-              />
+                      <ControlRoomCameraGrid
+                        cameras={cameras}
+                        profile={profile}
+                        obsConnected={obsConnected}
+                        canManageCameras={canManageCameras}
+                        previewSnapshots={previewSnapshots}
+                        previewErrors={previewErrors}
+                        switchingKey={switchingKey}
+                        mutingCamId={mutingCamId}
+                        reconnectingCamId={reconnectingCamId}
+                        refreshingAllPreviews={refreshingAllPreviews}
+                        selectedCameraIds={stagedCameraIds}
+                        mainCameraId={stagedMainCameraId}
+                        stagedLayoutType={stagedLayoutType}
+                        autoFitEnabled={autoFitEnabled}
+                        onToggleAutoFit={setAutoFitEnabled}
+                        onSelectMultiViewLayout={handleSelectLayoutAndAutoPopulate}
+                        onToggleSelectCamera={handleToggleSelectCamera}
+                        onCutCameraLive={handleSwitchCamera}
+                        onToggleAudio={handleToggleCameraAudio}
+                        onReconnectCamera={handleReconnectCamera}
+                        onRefreshAllPreviews={handleRefreshAllPreviews}
+                        onOpenQrWizard={(cam) => {
+                          setWizardCamera(cam);
+                          setWizardConnectUrl(null);
+                        }}
+                        onOpenLarixWizard={(cam) => {
+                          setLarixTargetCamera(cam);
+                          setLarixModalOpen(true);
+                          void loadMediaMTXConfig();
+                        }}
+                        onOpenMapSourcesModal={() => setMapSourcesModalOpen(true)}
+                        onOpenCamerasTab={() => setActiveTab('cameras')}
+                        obsTransforms={obsTransforms}
+                        detectedContentMap={detectedContentMap}
+                        onFrameContentDetected={handleFrameContentDetected}
+                      />
+                    </div>
 
-              {/* Visual Connected Camera Panel */}
-              <CameraPreviewGrid
+                    <div className="xl:col-span-3">
+                      <ControlRoomRightPanel
+                        cameras={cameras}
+                        profile={profile}
+                        matchStream={studio.match}
+                        obsConnected={obsConnected}
+                        canManageCameras={canManageCameras}
+                        stagedLayoutType={stagedLayoutType}
+                        stagedCameraIds={stagedCameraIds}
+                        stagedMainCameraId={stagedMainCameraId}
+                        applyingLayout={applyingLayout}
+                        transitioningMode={transitioningMode}
+                        refreshingCams={refreshingCams}
+                        disconnectingAll={disconnectingAll}
+                        onSelectLayoutType={handleSelectLayoutAndAutoPopulate}
+                        onSlotClick={handleSlotClick}
+                        onApplyToLive={() => void handleApplyStagedComposition()}
+                        onCutInstant={() => void handleCutOrFade('cut')}
+                        onFadeTransition={() => void handleCutOrFade('fade')}
+                        onRefreshCams={() => void handleRefreshAllCams()}
+                        onDisconnectAll={() => setDisconnectAllConfirmOpen(true)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Bottom Live Layouts & Scene Switcher Bar */}
+                  <ControlRoomSceneBar
+                    profile={profile}
+                    scenes={scenes}
+                    obsConnected={obsConnected}
+                    switchingKey={switchingKey}
+                    applyingLayout={applyingLayout}
+                    onSwitchObsScene={(sceneName) => void handleSwitchSceneName(sceneName)}
+                    onApplySavedScene={(sc) =>
+                      void handleApplyLayout({
+                        layoutType: sc.layoutType,
+                        cameraIds: sc.cameraIds,
+                        mainCameraId: sc.mainCameraId || undefined,
+                        pipPosition: sc.pipPosition || undefined,
+                        pipSize: sc.pipSize || undefined,
+                        sceneName: sc.obsSceneName,
+                        includeScoreboardOverlay: sc.includeScoreboardOverlay,
+                      })
+                    }
+                    onAddSceneClick={() => {
+                      setNewSceneNameDraft(stagedSceneName || `Scene ${scenes.length + 1}`);
+                      setAddSceneModalOpen(true);
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* ============================================================== */}
+              {/* DASHBOARD OVERVIEW & WORKFLOW CHECKLIST                        */}
+              {/* ============================================================== */}
+              {activeTab === 'dashboard' && (
+                <div className="space-y-4 text-slate-900">
+                  <ControlRoomWorkflowPanel
+                    match={studio.match}
+                    profile={profile}
+                    cameras={cameras}
+                    score={liveMatchScore}
+                    scoreboardOverlayUrl={studio.scoreboardOverlayUrl}
+                    isBroadcasterRole={isBroadcasterRole}
+                    ytInputDraft={ytInputDraft}
+                    ytProviderDraft={ytProviderDraft}
+                    onChangeYtInputDraft={setYtInputDraft}
+                    onChangeYtProviderDraft={setYtProviderDraft}
+                    savingYtOutput={savingYtOutput}
+                    verifyingYtOutput={verifyingYtOutput}
+                    ytVerification={ytVerification}
+                    onSaveYouTubeOutput={handleSaveYouTubeOutput}
+                    togglingScoreboardOnYoutube={togglingScoreboardOnYoutube}
+                    onToggleScoreboardOnYoutube={handleToggleScoreboardOnYoutube}
+                    activatingBroadcast={activatingBroadcast}
+                    endingBroadcast={endingBroadcast}
+                    onActivateBroadcast={handleActivateBroadcast}
+                    onRequestEndBroadcast={() => setEndConfirmOpen(true)}
+                    onOpenNextMatchSetup={openNewMatchSetupModal}
+                    onEditMatchSetup={openEditMatchSetupModal}
+                    onOpenConnection={() => setActiveTab('settings')}
+                    onOpenMapSources={() => setMapSourcesModalOpen(true)}
+                    onOpenCamerasTab={() => setActiveTab('cameras')}
+                    onOpenOverlayTab={() => setActiveTab('scoreboard')}
+                    onOpenGuide={() => setGuideOpen(true)}
+                  />
+
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="inline-flex items-center gap-1.5 font-mono font-bold text-slate-900">
+                        <UserCheck className="w-4 h-4 text-[#EA580C]" />
+                        <span>
+                          Controller:{' '}
+                          {profile.activeControllerName
+                            ? `${profile.activeControllerName} (${profile.activeControllerRole || 'Operator'})`
+                            : 'Unclaimed'}
+                        </span>
+                      </span>
+                      <span className="font-mono text-slate-500">
+                        Session: {profile.broadcastSessionId || 'No active session'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!profile.broadcastSessionId ? (
+                        <button
+                          type="button"
+                          disabled={managingSession !== null}
+                          onClick={() => handleManageSession('start')}
+                          className="min-h-[32px] px-3 py-1 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          {managingSession === 'start' ? 'Starting...' : 'Start Broadcast Session'}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            disabled={managingSession !== null}
+                            onClick={() => handleManageSession('takeover')}
+                            className="min-h-[32px] px-3 py-1 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 disabled:opacity-50"
+                          >
+                            {managingSession === 'takeover' ? 'Claiming...' : 'Take Active Control'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={managingSession !== null}
+                            onClick={() => handleManageSession('end')}
+                            className="min-h-[32px] px-3 py-1 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50"
+                          >
+                            {managingSession === 'end' ? 'Ending...' : 'End Session'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-white border border-slate-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        Active OBS Scene
+                      </p>
+                      <p className="font-mono text-base sm:text-lg font-bold text-slate-900 truncate mt-1">
+                        {obsConnected ? profile.activeObsScene || 'Connected (Idle)' : 'OBS Not Connected'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                        Layout: <span className="font-mono">{profile.activeLayoutType}</span>
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        Configured Cameras
+                      </p>
+                      <p className="font-mono tabular-nums text-2xl font-bold text-slate-900 mt-1">
+                        {onlineCameraCount}{' '}
+                        <span className="text-sm font-normal text-slate-500">
+                          online / {cameras.length} total
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {Math.min(MAX_CONTROL_ROOM_CAMERAS, enabledCameras.length)} active in Control Room (max {MAX_CONTROL_ROOM_CAMERAS})
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        OBS Performance
+                      </p>
+                      <p className="font-mono tabular-nums text-lg font-bold text-slate-900 mt-1">
+                        {obsConnected && profile.obsStats
+                          ? `${Math.round(profile.obsStats.activeFps)} FPS · ${profile.obsStats.cpuUsage.toFixed(1)}% CPU`
+                          : 'Unavailable'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5 font-mono tabular-nums">
+                        {obsConnected && profile.obsStats
+                          ? `Dropped: ${profile.obsStats.outputSkippedFrames} frames`
+                          : 'Connect OBS to read live telemetry'}
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          OBS Stream &amp; Recording
+                        </p>
+                        {obsConnected && profile.obsRecordActive && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-mono font-bold">
+                            <Circle className="w-2.5 h-2.5 fill-current" />
+                            REC
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className={`font-mono text-sm sm:text-base font-bold ${
+                          obsConnected && profile.obsStreamActive ? 'text-red-500' : 'text-slate-700'
+                        }`}
+                      >
+                        {obsConnected
+                          ? profile.obsStreamActive
+                            ? `OBS LIVE ${profile.obsStreamTimecode || ''}`
+                            : 'OBS Output Idle'
+                          : studio.match.status}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {canControlStream && (
+                          <button
+                            type="button"
+                            disabled={!obsConnected || executingObsAction !== null}
+                            onClick={() =>
+                              handleObsOutputAction(profile.obsStreamActive ? 'stop_stream' : 'start_stream')
+                            }
+                            className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
+                              profile.obsStreamActive
+                                ? 'bg-red-600 text-white border-red-600'
+                                : 'bg-slate-900 text-white border-slate-700 hover:bg-slate-800'
+                            }`}
+                          >
+                            {profile.obsStreamActive ? <Square className="w-3 h-3" /> : <Radio className="w-3 h-3" />}
+                            <span>{profile.obsStreamActive ? 'Stop Stream' : 'Start Stream'}</span>
+                          </button>
+                        )}
+                        {canControlRecord && (
+                          <button
+                            type="button"
+                            disabled={!obsConnected || executingObsAction !== null}
+                            onClick={() =>
+                              handleObsOutputAction(profile.obsRecordActive ? 'stop_record' : 'start_record')
+                            }
+                            className={`min-h-[28px] inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded border disabled:opacity-40 ${
+                              profile.obsRecordActive
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                            }`}
+                          >
+                            <Circle className="w-3 h-3" />
+                            <span>{profile.obsRecordActive ? 'Stop Rec' : 'Record'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================== */}
+              {/* MATCH CONTROL & SCORING CONSOLE                                */}
+              {/* ============================================================== */}
+              {activeTab === 'match_control' && (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
+                    <div className="space-y-1 min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-purple-300">
+                        {studio.match.tournamentName || 'Tournament Match'} · {studio.match.gameName || 'Sport'}
+                      </p>
+                      <h2 className="font-display text-lg font-bold text-white truncate">
+                        {currentMatchLabel}
+                      </h2>
+                      <p className="text-xs font-mono text-slate-400">
+                        Status: <span className="text-emerald-400 font-bold">{studio.match.status}</span> ·{' '}
+                        {liveMatchScore
+                          ? `${studio.match.teamAName || 'Team A'} ${liveMatchScore.teamAScore} vs ${studio.match.teamBName || 'Team B'} ${liveMatchScore.teamBScore}`
+                          : 'Waiting for scoreboard feed'}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!isBroadcasterRole && (
+                        <>
+                          <Link
+                            to={`/admin/scoreboard/${matchId}`}
+                            className="h-9 px-3.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                          >
+                            <SlidersHorizontal className="w-3.5 h-3.5" />
+                            <span>Open Live Scorer</span>
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={openEditMatchSetupModal}
+                            className="h-9 px-3.5 rounded-lg bg-[#121826] border border-slate-700 text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit Match</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openNewMatchSetupModal}
+                            className="h-9 px-3.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>New Match Setup</span>
+                          </button>
+                        </>
+                      )}
+                      <Link
+                        to={`/broadcast/overlay/${matchId}`}
+                        className="h-9 px-3.5 rounded-lg bg-[#121826] border border-slate-700 text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                      >
+                        <Tv className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Overlay Studio</span>
+                      </Link>
+                    </div>
+                  </div>
+
+                  <div className="text-slate-900">
+                    <ControlRoomWorkflowPanel
+                      match={studio.match}
+                      profile={profile}
+                      cameras={cameras}
+                      score={liveMatchScore}
+                      scoreboardOverlayUrl={studio.scoreboardOverlayUrl}
+                      isBroadcasterRole={isBroadcasterRole}
+                      ytInputDraft={ytInputDraft}
+                      ytProviderDraft={ytProviderDraft}
+                      onChangeYtInputDraft={setYtInputDraft}
+                      onChangeYtProviderDraft={setYtProviderDraft}
+                      savingYtOutput={savingYtOutput}
+                      verifyingYtOutput={verifyingYtOutput}
+                      ytVerification={ytVerification}
+                      onSaveYouTubeOutput={handleSaveYouTubeOutput}
+                      togglingScoreboardOnYoutube={togglingScoreboardOnYoutube}
+                      onToggleScoreboardOnYoutube={handleToggleScoreboardOnYoutube}
+                      activatingBroadcast={activatingBroadcast}
+                      endingBroadcast={endingBroadcast}
+                      onActivateBroadcast={handleActivateBroadcast}
+                      onRequestEndBroadcast={() => setEndConfirmOpen(true)}
+                      onOpenNextMatchSetup={openNewMatchSetupModal}
+                      onEditMatchSetup={openEditMatchSetupModal}
+                      onOpenConnection={() => setActiveTab('settings')}
+                      onOpenMapSources={() => setMapSourcesModalOpen(true)}
+                      onOpenCamerasTab={() => setActiveTab('cameras')}
+                      onOpenOverlayTab={() => setActiveTab('scoreboard')}
+                      onOpenGuide={() => setGuideOpen(true)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================== */}
+              {/* LAYOUTS DESK: DETAILED MULTI-BOX INSPECTOR & ADVANCED SCENES   */}
+              {/* ============================================================== */}
+              {activeTab === 'layouts' && (
+                <div className="space-y-5 text-slate-900">
+                  <ProgramAndCompositionWorkspace
+                    cameras={cameras}
+                    profile={profile}
+                    obsConnected={obsConnected}
+                    previewSnapshots={previewSnapshots}
+                    programSnapshotError={programSnapshotError}
+                    capturingProgramPreview={capturingProgramPreview}
+                    programMonitorMode={programMonitorMode}
+                    onChangeProgramMonitorMode={setProgramMonitorMode}
+                    selectedCameraIds={stagedCameraIds}
+                    mainCameraId={stagedMainCameraId}
+                    layoutType={stagedLayoutType}
+                    pipPosition={stagedPipPosition}
+                    pipSize={stagedPipSize}
+                    customSceneName={stagedSceneName}
+                    includeScoreboardOverlay={stagedIncludeScoreboard}
+                    applying={applyingLayout}
+                    onChangeSelectedCameraIds={setStagedCameraIds}
+                    onChangeMainCameraId={setStagedMainCameraId}
+                    onChangeLayoutType={setStagedLayoutType}
+                    onChangePipPosition={setStagedPipPosition}
+                    onChangePipSize={setStagedPipSize}
+                    onChangeCustomSceneName={setStagedSceneName}
+                    onChangeIncludeScoreboardOverlay={setStagedIncludeScoreboard}
+                    onRefreshProgramPreview={() => handleCaptureActiveScenePreview()}
+                    onApplyLive={handleApplyStagedComposition}
+                    onSavePreset={handleSaveScenePreset}
+                    onOpenConnectionTab={() => setActiveTab('settings')}
+                    obsTransforms={obsTransforms}
+                    detectedContentMap={detectedContentMap}
+                    onFrameContentDetected={handleFrameContentDetected}
+                    updatingTransformCamId={updatingTransformCamId}
+                    onUpdateCameraFraming={handleUpdateCameraFraming}
+                  />
+
+                  {/* Visual Connected Camera Panel */}
+                  <CameraPreviewGrid
                 cameras={cameras}
                 profile={profile}
                 obsConnected={obsConnected}
@@ -3140,7 +3431,7 @@ export function AdminObsBroadcastStudioPage() {
           {/* TAB 1B: LIVE GRAPHICS & ADVERTISING STUDIO (LAZY EDITOR)       */}
           {/* ============================================================== */}
           {activeTab === 'graphics' && matchId && (
-            <div className="space-y-4">
+            <div className="space-y-4 text-slate-900">
               {graphicsStudioView === 'library' ? (
                 <SavedAdsLibraryPanel
                   matchId={matchId}
@@ -3194,7 +3485,7 @@ export function AdminObsBroadcastStudioPage() {
           {/* TAB 2: UNLIMITED CAMERA & SMARTPHONE MANAGEMENT                 */}
           {/* ============================================================== */}
           {activeTab === 'cameras' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+            <section className="bg-white text-slate-900 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="font-display text-base font-bold text-slate-900">
@@ -3512,8 +3803,8 @@ export function AdminObsBroadcastStudioPage() {
           {/* ============================================================== */}
           {/* TAB 3: SCOREBOARD OVERLAY & SPONSORS SYNC                       */}
           {/* ============================================================== */}
-          {activeTab === 'overlay' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {activeTab === 'scoreboard' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 text-slate-900">
               <section className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
                   <div>
@@ -3649,6 +3940,25 @@ export function AdminObsBroadcastStudioPage() {
                       ))}
                     </select>
                   </div>
+                </div>
+
+                {/* 10 Scoreboard Layout Styles */}
+                <div className="pt-3 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Scoreboard Design Style (10 Broadcast Themes)
+                    </label>
+                    <span className="text-[11px] font-mono text-purple-600 font-bold">
+                      {currentOverlay.style}
+                    </span>
+                  </div>
+                  <ScoreboardStyleSelector
+                    value={currentOverlay.style}
+                    disabled={savingOverlay}
+                    darkSurface={false}
+                    compact
+                    onChange={(style) => void handleUpdateOverlay({ style })}
+                  />
                 </div>
 
                 {/* OBS Scoreboard Size & Scale Control */}
@@ -3823,7 +4133,7 @@ export function AdminObsBroadcastStudioPage() {
           {/* ============================================================== */}
           {/* TAB 4: ONE-CLICK WINDOWS OBS BRIDGE & CONNECTION STUDIO         */}
           {/* ============================================================== */}
-          {activeTab === 'connection' && (() => {
+          {activeTab === 'settings' && (() => {
             const activeMatchBridge =
               bridges.find(
                 (b) =>
@@ -3841,7 +4151,7 @@ export function AdminObsBroadcastStudioPage() {
             const countdownSec = String(pairingRemainingSec % 60).padStart(2, '0');
 
             return (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 text-slate-900">
               {/* BEGINNER-FRIENDLY ONE-CLICK WINDOWS BRIDGE SETUP CARD */}
               <section className="lg:col-span-12 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3">
@@ -5159,14 +5469,168 @@ export function AdminObsBroadcastStudioPage() {
           })()}
 
           {/* ============================================================== */}
-          {/* TAB 5: BROADCAST PRODUCTION AUDIT LOGS                          */}
+          {/* STREAMING: YOUTUBE LIVE, OBS OUTPUT & MEDIAMTX INGEST          */}
           {/* ============================================================== */}
-          {activeTab === 'audit' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+          {activeTab === 'streaming' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <section className="lg:col-span-7 rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-white">
+                      YouTube Live &amp; MediaMTX Output Stream
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Configure the public broadcast destination and control OBS streaming/recording without leaving Control Room.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInlineYtPreview((v) => !v)}
+                    className="h-8 px-3 rounded-lg bg-[#121826] border border-slate-700 text-xs font-semibold text-slate-200 hover:border-purple-500 inline-flex items-center gap-1.5"
+                  >
+                    <Tv className="w-3.5 h-3.5 text-purple-400" />
+                    <span>{showInlineYtPreview ? 'Hide Player' : 'Preview Live Feed'}</span>
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveYouTubeOutput} className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={ytInputDraft}
+                      onChange={(e) => setYtInputDraft(e.target.value)}
+                      placeholder="YouTube Live URL or 11-char ID"
+                      className="sm:col-span-2 h-9 px-3 text-xs font-mono bg-[#121826] border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
+                    />
+                    <select
+                      value={ytProviderDraft}
+                      onChange={(e) => setYtProviderDraft(e.target.value as StreamingProvider)}
+                      className="h-9 px-2.5 text-xs font-semibold bg-[#121826] border border-slate-700 rounded-lg text-white"
+                    >
+                      <option value="youtube">YouTube Live</option>
+                      <option value="mediamtx">MediaMTX Direct</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">
+                      OBS Stream keys remain strictly inside local OBS Studio.
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={savingYtOutput}
+                      className="h-8 px-3.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold disabled:opacity-50"
+                    >
+                      {savingYtOutput ? 'Saving...' : 'Save Output Destination'}
+                    </button>
+                  </div>
+                </form>
+
+                {showInlineYtPreview && (
+                  <div className="relative aspect-video w-full rounded-lg overflow-hidden border border-slate-800 bg-black">
+                    <LiveStreamPlayer
+                      provider={studio.match.activeStreamingProvider}
+                      youtubeVideoId={studio.match.youtubeVideoId || ''}
+                      title={studio.match.matchTitle}
+                    />
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center gap-2">
+                  {canControlStream && (
+                    <button
+                      type="button"
+                      disabled={!obsConnected || executingObsAction !== null}
+                      onClick={() =>
+                        handleObsOutputAction(profile.obsStreamActive ? 'stop_stream' : 'start_stream')
+                      }
+                      className={`h-9 px-3.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-40 ${
+                        profile.obsStreamActive
+                          ? 'bg-red-600 hover:bg-red-500 text-white'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      }`}
+                    >
+                      {profile.obsStreamActive ? <Square className="w-3.5 h-3.5" /> : <Radio className="w-3.5 h-3.5" />}
+                      <span>{profile.obsStreamActive ? 'Stop OBS Stream' : 'Start OBS Stream'}</span>
+                    </button>
+                  )}
+                  {canControlRecord && (
+                    <button
+                      type="button"
+                      disabled={!obsConnected || executingObsAction !== null}
+                      onClick={() =>
+                        handleObsOutputAction(profile.obsRecordActive ? 'stop_record' : 'start_record')
+                      }
+                      className={`h-9 px-3.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border disabled:opacity-40 ${
+                        profile.obsRecordActive
+                          ? 'bg-amber-600 border-amber-500 text-white'
+                          : 'bg-[#121826] border-slate-700 text-slate-200 hover:border-purple-500'
+                      }`}
+                    >
+                      <Circle className="w-3.5 h-3.5" />
+                      <span>{profile.obsRecordActive ? 'Stop OBS Recording' : 'Start OBS Recording'}</span>
+                    </button>
+                  )}
+                  {!isBroadcasterRole && !studio.match.broadcastPublished && (
+                    <button
+                      type="button"
+                      disabled={activatingBroadcast}
+                      onClick={handleActivateBroadcast}
+                      className="h-9 px-3.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
+                    >
+                      {activatingBroadcast ? 'Publishing...' : 'Publish Match Live'}
+                    </button>
+                  )}
+                </div>
+              </section>
+
+              <section className="lg:col-span-5 rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-3">
+                <h3 className="font-display text-sm font-bold text-white uppercase tracking-wide">
+                  OBS &amp; MediaMTX Stream Telemetry
+                </h3>
+                <div className="space-y-2 text-xs">
+                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
+                    <span className="text-slate-400">OBS Status</span>
+                    <span className={obsConnected ? 'text-emerald-400 font-bold' : 'text-slate-300'}>
+                      {obsConnected ? 'CONNECTED' : profile.connectionStatus}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
+                    <span className="text-slate-400">FPS / Skipped Frames</span>
+                    <span className="font-mono text-slate-100">
+                      {obsConnected && profile.obsStats
+                        ? `${Math.round(profile.obsStats.activeFps)} fps · ${profile.obsStats.outputSkippedFrames} drop`
+                        : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
+                    <span className="text-slate-400">MediaMTX Receiver</span>
+                    <span className={profile.mediamtxState?.running ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+                      {profile.mediamtxState?.running
+                        ? `Running (${profile.mediamtxState.activePathCount ?? profile.mediamtxState.activePaths?.length ?? 0} paths)`
+                        : 'Standby'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('settings')}
+                  className="w-full h-9 rounded-lg bg-[#121826] border border-slate-700 hover:border-purple-500 text-xs font-semibold text-slate-200"
+                >
+                  Open Bridge &amp; MediaMTX Configuration
+                </button>
+              </section>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* SETTINGS AUDIT LOGS (ADMIN ONLY)                               */}
+          {/* ============================================================== */}
+          {activeTab === 'settings' && !isBroadcasterRole && (
+            <section className="bg-white text-slate-900 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="font-display text-base font-bold text-slate-900">
-                    Broadcast Production Audit Trail
+                    Broadcast Production Audit Trail ({studio.auditLogs.length})
                   </h2>
                   <p className="text-xs text-slate-500">
                     Every OBS connection, camera switch, multi-cam layout change, Admin Override, and rejected request is logged.
@@ -5275,8 +5739,10 @@ export function AdminObsBroadcastStudioPage() {
               )}
             </section>
           )}
-        </>
-      )}
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Camera Add/Edit Modal */}
       <CameraFormModal
@@ -5434,6 +5900,66 @@ export function AdminObsBroadcastStudioPage() {
         message="This will end the broadcast on MaidanLive, preserve all final scores and match history, unpublish the active live stage, and allow initializing the next match cleanly."
         confirmLabel="End Broadcast"
       />
+
+      {/* Confirm Disconnect All Cameras */}
+      <ConfirmDialog
+        open={disconnectAllConfirmOpen}
+        onClose={() => setDisconnectAllConfirmOpen(false)}
+        onConfirm={handleConfirmDisconnectAll}
+        loading={disconnectingAll}
+        title="Disconnect All Cameras?"
+        message="This disconnects all active smartphone/camera sessions for this match without closing the OBS stream."
+        confirmLabel="Disconnect All"
+        variant="danger"
+      />
+
+      {/* Add Scene Modal */}
+      <Modal
+        open={addSceneModalOpen}
+        onClose={() => setAddSceneModalOpen(false)}
+        title="Save Live Scene Preset"
+        subtitle="Create a reusable scene preset in the Live Layouts dock using the currently staged layout and cameras."
+        maxWidthClass="max-w-md"
+      >
+        <form onSubmit={handleCreateSceneFromModal} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Scene Name
+            </label>
+            <input
+              type="text"
+              required
+              value={newSceneNameDraft}
+              onChange={(e) => setNewSceneNameDraft(e.target.value)}
+              placeholder="e.g. Match Live · Pitch + Boundary"
+              className="w-full min-h-[40px] px-3 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
+            Layout: <strong className="font-mono text-slate-900">{stagedLayoutType}</strong> · Cameras staged:{' '}
+            <strong className="font-mono text-slate-900">
+              {Math.min(MAX_CONTROL_ROOM_CAMERAS, Math.max(1, stagedCameraIds.length))}
+            </strong>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setAddSceneModalOpen(false)}
+              className="min-h-[38px] px-4 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={savingNewScene || !newSceneNameDraft.trim()}
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-purple-600 rounded-lg hover:bg-purple-500 disabled:opacity-50"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{savingNewScene ? 'Saving...' : 'Save Scene'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

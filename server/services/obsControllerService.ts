@@ -24,7 +24,11 @@ import {
   hashScopedToken,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
-import { computeObsLayoutBoxes, LAYOUT_METADATA } from '../../src/utils/obsLayoutGeometry.ts';
+import {
+  computeObsLayoutBoxes,
+  LAYOUT_METADATA,
+  MAX_CONTROL_ROOM_CAMERAS,
+} from '../../src/utils/obsLayoutGeometry.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
 import {
   buildObsSceneItemTransform,
@@ -2685,13 +2689,25 @@ export async function applyDynamicLayoutToObs(
     .select('+mediamtxStreamKeyEnc')
     .sort({ sortOrder: 1, cameraNumber: 1 });
   const cameraMap = new Map(allCameras.map((c) => [c.cameraId, c]));
-  const selectedIds = params.cameraIds.filter((id) => {
-    const cam = cameraMap.get(id);
-    return cam && cam.enabled;
-  });
+  const selectedIds = Array.from(
+    new Set(
+      params.cameraIds.filter((id) => {
+        const cam = cameraMap.get(id);
+        return cam && cam.enabled;
+      })
+    )
+  );
 
   if (selectedIds.length === 0) {
     const err: any = new Error('Select at least one enabled camera for this layout.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (selectedIds.length > MAX_CONTROL_ROOM_CAMERAS) {
+    const err: any = new Error(
+      `Control Room supports a maximum of ${MAX_CONTROL_ROOM_CAMERAS} cameras per layout.`
+    );
     err.statusCode = 400;
     throw err;
   }
@@ -4786,6 +4802,63 @@ export async function controlBridgeMediaMTX(
   return data;
 }
 
+export async function refreshMatchCameras(matchId: string, actor: IUser) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  const cameras = await BroadcastCamera.find({ matchId }).sort({ sortOrder: 1, cameraNumber: 1 });
 
+  const isObsConnected =
+    profile.connectionMode === 'local_agent'
+      ? Boolean((await isMatchBridgeOnline(matchId)) && profile.connectionStatus === 'CONNECTED')
+      : Boolean(directSessions.get(matchId)?.connected);
 
+  if (isObsConnected) {
+    try {
+      await refreshObsState(matchId);
+    } catch {
+      // Non-fatal: continue refreshing camera heartbeats and MediaMTX stream state
+    }
+  }
 
+  let onlineCount = 0;
+  for (const cam of cameras) {
+    if (!cam.enabled) continue;
+
+    if (cam.sourceType === 'mediamtx' && (cam.mediamtxStreamPath || cam.connectionUrl)) {
+      try {
+        const mtx = await verifyMediaMTXStreamHealth({
+          streamPath: cam.mediamtxStreamPath || cam.connectionUrl,
+          hlsPlaybackUrl: cam.connectionUrl,
+          webrtcPlaybackUrl: '',
+        });
+        cam.mediamtxPublisherConnected = mtx.ok;
+        if (!mtx.ok && !cam.lastError) {
+          cam.lastError = mtx.message.slice(0, 400);
+        } else if (mtx.ok && cam.lastError) {
+          cam.lastError = '';
+        }
+      } catch {
+        // Keep existing state if MediaMTX API probe cannot be reached
+      }
+    }
+
+    cam.status = computeEffectiveCameraStatus(
+      cam,
+      profile.activeCameraId || '',
+      profile.activeObsScene || '',
+      isObsConnected,
+      profile.activeCameraIds || []
+    );
+    if (cam.status === 'ACTIVE' || cam.status === 'CONNECTED' || cam.mediamtxPublisherConnected) {
+      onlineCount += 1;
+    }
+    await cam.save();
+  }
+
+  await emitFullStudioState(matchId);
+
+  return {
+    ok: true,
+    refreshedCount: cameras.filter((c) => c.enabled).length,
+    onlineCount,
+  };
+}

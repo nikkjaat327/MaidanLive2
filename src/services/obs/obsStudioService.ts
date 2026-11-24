@@ -461,6 +461,11 @@ export const obsStudioService = {
     return data;
   },
 
+  async refreshCameras(matchId: string) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/refresh`);
+    return data;
+  },
+
   async executeTransition(
     matchId: string,
     payload: {

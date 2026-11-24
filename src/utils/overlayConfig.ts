@@ -17,12 +17,99 @@ export type OverlayTheme =
   | 'minimal_white'
   | 'team_colors';
 
+export type ScoreboardStyleId =
+  | 'broadcast_classic'
+  | 'floating_pill'
+  | 'esports_angular'
+  | 'stacked_glass'
+  | 'espn_ticker'
+  | 'split_versus_card'
+  | 'minimal_corner_bug'
+  | 'championship_marquee'
+  | 'vertical_hud_dock'
+  | 'dynamic_capsule';
+
+export interface ScoreboardStyleMeta {
+  id: ScoreboardStyleId;
+  name: string;
+  shortName: string;
+  tagline: string;
+}
+
+export const SCOREBOARD_STYLES: readonly ScoreboardStyleMeta[] = [
+  {
+    id: 'broadcast_classic',
+    name: 'Broadcast Classic',
+    shortName: 'Classic',
+    tagline: 'Signature angled TV bar with brand shield & live telemetry strip',
+  },
+  {
+    id: 'floating_pill',
+    name: 'Floating Pill Bar',
+    shortName: 'Floating Pill',
+    tagline: 'Sleek rounded-full obsidian capsule with circular center badge',
+  },
+  {
+    id: 'esports_angular',
+    name: 'Esports Chamfer HUD',
+    shortName: 'Esports HUD',
+    tagline: 'Sharp diagonal cyber cuts, neon edge rim & hexagonal center core',
+  },
+  {
+    id: 'stacked_glass',
+    name: 'Stacked Frosted Glass',
+    shortName: 'Frosted Glass',
+    tagline: 'Dual-tier translucent glassmorphic cards with glowing accent rails',
+  },
+  {
+    id: 'espn_ticker',
+    name: 'Flat Ticker Strip',
+    shortName: 'Flat Ticker',
+    tagline: 'Crisp full-bleed flat broadcast strip with sharp vertical dividers',
+  },
+  {
+    id: 'split_versus_card',
+    name: 'Center VS Tower',
+    shortName: 'VS Tower',
+    tagline: 'Elevated central clock & VS pedestal flanked by wing scorecards',
+  },
+  {
+    id: 'minimal_corner_bug',
+    name: 'Minimal Corner Bug',
+    shortName: 'Corner Bug',
+    tagline: 'Ultra-compact stacked TV bug leaving 95%+ of the match unobstructed',
+  },
+  {
+    id: 'championship_marquee',
+    name: 'Championship Plaque',
+    shortName: 'Champ Gold',
+    tagline: 'Top tournament crown header over a beveled championship ribbon',
+  },
+  {
+    id: 'vertical_hud_dock',
+    name: 'Stacked Team Table',
+    shortName: 'Team Stack',
+    tagline: 'Two-row versus score matrix with dedicated right telemetry wing',
+  },
+  {
+    id: 'dynamic_capsule',
+    name: 'Modular Bento Pods',
+    shortName: 'Bento Pods',
+    tagline: 'Detached floating pods for Brand, Teams, Center Score & Stat Pill',
+  },
+];
+
+export const VALID_SCOREBOARD_STYLES: readonly ScoreboardStyleId[] = SCOREBOARD_STYLES.map(
+  (s) => s.id
+);
+
 export interface BroadcastOverlayConfig {
   visible: boolean;
   mode: OverlayMode;
   position: OverlayPosition;
   scale: OverlayScale;
   theme: OverlayTheme;
+  style: ScoreboardStyleId;
   teamAColor: string;
   teamBColor: string;
   showTournamentName: boolean;
@@ -92,6 +179,7 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   position: 'bottom-center',
   scale: 'medium',
   theme: 'maidan_dark',
+  style: 'broadcast_classic',
   teamAColor: '#EA580C',
   teamBColor: '#2563EB',
   showTournamentName: true,
@@ -151,6 +239,10 @@ export function normalizeOverlayConfig(
     ? (src.theme as OverlayTheme)
     : DEFAULT_OVERLAY_CONFIG.theme;
 
+  const style: ScoreboardStyleId = VALID_SCOREBOARD_STYLES.includes(src.style as ScoreboardStyleId)
+    ? (src.style as ScoreboardStyleId)
+    : DEFAULT_OVERLAY_CONFIG.style;
+
   const bool = (val: unknown, def: boolean): boolean =>
     typeof val === 'boolean' ? val : def;
 
@@ -160,6 +252,7 @@ export function normalizeOverlayConfig(
     position,
     scale,
     theme,
+    style,
     teamAColor: sanitizeHexColor(src.teamAColor, DEFAULT_OVERLAY_CONFIG.teamAColor),
     teamBColor: sanitizeHexColor(src.teamBColor, DEFAULT_OVERLAY_CONFIG.teamBColor),
     showTournamentName: bool(src.showTournamentName, DEFAULT_OVERLAY_CONFIG.showTournamentName),
@@ -240,6 +333,11 @@ export function applyOverlayQueryParams(
   const theme = params.get('theme');
   if (theme && OVERLAY_THEMES.includes(theme as OverlayTheme)) {
     next.theme = theme as OverlayTheme;
+  }
+
+  const style = params.get('style');
+  if (style && VALID_SCOREBOARD_STYLES.includes(style as ScoreboardStyleId)) {
+    next.style = style as ScoreboardStyleId;
   }
 
   const teamAColor = params.get('teamAColor');
