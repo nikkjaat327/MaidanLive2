@@ -105,6 +105,25 @@ export function useLiveStream(streamId?: string, authKey = '') {
       );
     };
 
+    const handleOverlayConfigUpdated = (payload: {
+      streamId?: string;
+      overlayConfig?: LiveStreamData['overlayConfig'];
+      showScoreboardOnYoutube?: boolean;
+    }) => {
+      if (payload?.streamId !== streamId) return;
+      setStream((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...(payload.overlayConfig ? { overlayConfig: payload.overlayConfig } : {}),
+              ...(typeof payload.showScoreboardOnYoutube === 'boolean'
+                ? { showScoreboardOnYoutube: payload.showScoreboardOnYoutube }
+                : {}),
+            }
+          : prev
+      );
+    };
+
     let hasConnectedOnce = socket.connected;
     const handleConnect = () => {
       if (hasConnectedOnce) {
@@ -116,6 +135,7 @@ export function useLiveStream(streamId?: string, authKey = '') {
     socket.on('live:updated', handleUpdated);
     socket.on('live:started', handleUpdated);
     socket.on('live:ended', handleEnded);
+    socket.on('overlay:config_updated', handleOverlayConfigUpdated);
     socket.on('streaming_provider_changed', handleProviderChanged);
     socket.on('mediamtx:status_changed', handleHealthUpdated);
     socket.on('stream:health_updated', handleHealthUpdated);
@@ -127,6 +147,7 @@ export function useLiveStream(streamId?: string, authKey = '') {
       socket.off('live:updated', handleUpdated);
       socket.off('live:started', handleUpdated);
       socket.off('live:ended', handleEnded);
+      socket.off('overlay:config_updated', handleOverlayConfigUpdated);
       socket.off('streaming_provider_changed', handleProviderChanged);
       socket.off('mediamtx:status_changed', handleHealthUpdated);
       socket.off('stream:health_updated', handleHealthUpdated);

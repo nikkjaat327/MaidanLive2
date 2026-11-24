@@ -48,6 +48,13 @@ import {
 } from '../../utils/obsTransformGeometry.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 import {
   getStickyMatchId,
@@ -181,6 +188,8 @@ function LiveCameraScoreboardLayer({
     visible: true,
     mode: overlayConfig.mode === 'hidden' ? 'compact' : overlayConfig.mode || 'full',
   };
+  const timeoutInfo = resolveMatchTimeoutState(stream, score);
+  const timeoutDecision = resolveTimeoutOverlayDecision(tileConfig, timeoutInfo);
 
   return (
     <div
@@ -197,11 +206,39 @@ function LiveCameraScoreboardLayer({
         className="shrink-0 relative bg-transparent overflow-hidden pointer-events-none"
       >
         <BroadcastBrandLogoBug config={tileConfig} variant="canvas" zIndex={24} />
-        <HotstarBroadcastOverlay
+        <BroadcastSponsorAdBanner
+          config={tileConfig}
+          variant="canvas"
+          zIndex={26}
+          suppress={timeoutDecision.isAnyTakeoverActive}
+        />
+        {!timeoutDecision.isAnyTakeoverActive && (
+          <HotstarBroadcastOverlay
+            stream={stream}
+            score={score}
+            config={tileConfig}
+            isPortrait={false}
+          />
+        )}
+        <JioHotstarFullScoreboard
           stream={stream}
           score={score}
           config={tileConfig}
+          timeoutInfo={timeoutInfo}
           isPortrait={false}
+          variant="canvas"
+          zIndex={31}
+          visible={timeoutDecision.showFullScoreboard}
+        />
+        <TimeoutFullscreenSponsorAd
+          stream={stream}
+          score={score}
+          config={tileConfig}
+          timeoutInfo={timeoutInfo}
+          variant="canvas"
+          isPortrait={false}
+          zIndex={32}
+          visible={timeoutDecision.showFullscreenSponsorAd}
         />
         {graphicsState && (
           <ObsGraphicsLayer

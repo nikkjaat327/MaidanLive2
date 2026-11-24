@@ -29,9 +29,15 @@ import {
   resolveCameraOrientationSummary,
   type DetectedFrameContentInfo,
 } from '../../utils/obsTransformGeometry.ts';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 import { HotstarBroadcastOverlay } from '../obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
 import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
 import type { ProgramMonitorMode } from './ProgramAndCompositionWorkspace.tsx';
@@ -121,6 +127,9 @@ function ScaledScoreboardOverlayLayer({
     youtubeVideoId: stream.youtubeVideoId,
   };
 
+  const timeoutInfo = resolveMatchTimeoutState(normalizedStream, score);
+  const timeoutDecision = resolveTimeoutOverlayDecision(config, timeoutInfo);
+
   return (
     <div
       ref={containerRef}
@@ -137,8 +146,13 @@ function ScaledScoreboardOverlayLayer({
         className="shrink-0 relative pointer-events-none"
       >
         <BroadcastBrandLogoBug config={config} variant="canvas" zIndex={24} />
-        <BroadcastSponsorAdBanner config={config} variant="canvas" zIndex={26} />
-        {showScoreboard && (
+        <BroadcastSponsorAdBanner
+          config={config}
+          variant="canvas"
+          zIndex={26}
+          suppress={timeoutDecision.isAnyTakeoverActive}
+        />
+        {showScoreboard && !timeoutDecision.isAnyTakeoverActive && (
           <HotstarBroadcastOverlay
             stream={normalizedStream}
             score={score}
@@ -146,6 +160,26 @@ function ScaledScoreboardOverlayLayer({
             isPortrait={false}
           />
         )}
+        <JioHotstarFullScoreboard
+          stream={normalizedStream}
+          score={score}
+          config={config}
+          timeoutInfo={timeoutInfo}
+          isPortrait={false}
+          variant="canvas"
+          zIndex={31}
+          visible={timeoutDecision.showFullScoreboard}
+        />
+        <TimeoutFullscreenSponsorAd
+          stream={normalizedStream}
+          score={score}
+          config={config}
+          timeoutInfo={timeoutInfo}
+          variant="canvas"
+          isPortrait={false}
+          zIndex={32}
+          visible={timeoutDecision.showFullscreenSponsorAd}
+        />
       </div>
     </div>
   );

@@ -6,9 +6,15 @@ import { useAuth } from '../../hooks/useAuth.ts';
 import { authService } from '../../services/auth/authService.ts';
 import { applyOverlayQueryParams } from '../../utils/overlayConfig.ts';
 import { computeObsLayoutBoxes } from '../../utils/obsLayoutGeometry.ts';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 import { MultiCamSplitBorders } from '../../components/obsStudio/MultiCamSplitBorders.tsx';
@@ -98,6 +104,23 @@ export function ObsOverlayViewerPage() {
     [overlayConfig, location.search]
   );
 
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const timeoutInfo = useMemo(
+    () => resolveMatchTimeoutState(stream, score, nowMs + serverClockOffsetMs),
+    [stream, score, nowMs, serverClockOffsetMs]
+  );
+  const timeoutDecision = useMemo(
+    () => resolveTimeoutOverlayDecision(effectiveConfig, timeoutInfo),
+    [effectiveConfig, timeoutInfo]
+  );
+
+  useEffect(() => {
+    if (!timeoutInfo.isTimeout && !timeoutDecision.showFullScoreboard) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [timeoutInfo.isTimeout, timeoutDecision.showFullScoreboard]);
+
   const isPortrait = viewport.h > viewport.w;
 
   const { canvasWidth, canvasHeight, scale } = useMemo(() => {
@@ -184,9 +207,10 @@ export function ObsOverlayViewerPage() {
           config={effectiveConfig}
           variant="canvas"
           zIndex={26}
+          suppress={timeoutDecision.isAnyTakeoverActive}
         />
 
-        {showScoreboardOnYoutube && !sbOff && (
+        {showScoreboardOnYoutube && !sbOff && !timeoutDecision.isAnyTakeoverActive && (
           <HotstarBroadcastOverlay
             stream={stream}
             score={score}
@@ -195,6 +219,30 @@ export function ObsOverlayViewerPage() {
             serverClockOffsetMs={serverClockOffsetMs}
           />
         )}
+
+        <JioHotstarFullScoreboard
+          stream={stream}
+          score={score}
+          config={effectiveConfig}
+          timeoutInfo={timeoutInfo}
+          isPortrait={isPortrait}
+          variant="canvas"
+          serverClockOffsetMs={serverClockOffsetMs}
+          zIndex={31}
+          visible={timeoutDecision.showFullScoreboard && !sbOff}
+        />
+
+        <TimeoutFullscreenSponsorAd
+          stream={stream}
+          score={score}
+          config={effectiveConfig}
+          timeoutInfo={timeoutInfo}
+          variant="canvas"
+          isPortrait={isPortrait}
+          zIndex={32}
+          visible={timeoutDecision.showFullscreenSponsorAd}
+        />
+
         <ObsGraphicsLayer
           graphicsState={graphicsState}
           canvasWidth={canvasWidth}

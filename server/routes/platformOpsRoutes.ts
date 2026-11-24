@@ -462,6 +462,21 @@ router.post(
         return;
       }
 
+      const validAnimations = ['none', 'pulse', 'float', 'glow', 'shimmer', 'bounce'];
+      const validTransitions = [
+        'fade',
+        'slide-left',
+        'slide-right',
+        'slide-top',
+        'slide-bottom',
+        'zoom',
+        'pop',
+        'none',
+      ];
+      const parsedDuration = Number(req.body.durationSeconds);
+      const parsedTransitionMs = Number(req.body.transitionDurationMs);
+      const parsedRepeatSec = Number(req.body.repeatIntervalSeconds);
+
       const overlay = await SponsorOverlay.create({
         sponsorId: req.body.sponsorId,
         liveStreamId:
@@ -475,7 +490,19 @@ router.post(
         position: ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'].includes(req.body.position)
           ? req.body.position
           : 'BOTTOM',
-        durationSeconds: Math.max(3, Math.min(300, Number(req.body.durationSeconds) || 12)),
+        durationSeconds: Math.max(2, Math.min(300, Number.isFinite(parsedDuration) ? parsedDuration : 12)),
+        animation: validAnimations.includes(req.body.animation) ? req.body.animation : 'pulse',
+        transition: validTransitions.includes(req.body.transition) ? req.body.transition : 'fade',
+        transitionDurationMs: Math.max(
+          100,
+          Math.min(3000, Number.isFinite(parsedTransitionMs) ? parsedTransitionMs : 450)
+        ),
+        repeatIntervalSeconds: Math.max(
+          0,
+          Math.min(3600, Number.isFinite(parsedRepeatSec) ? parsedRepeatSec : 15)
+        ),
+        repeatContinuously: req.body.repeatContinuously === false ? false : true,
+        showOnTimeoutFullscreen: req.body.showOnTimeoutFullscreen === true,
         displayOrder: Math.max(1, Number(req.body.displayOrder) || 1),
         mode: req.body.mode === 'ANNOUNCEMENT' ? 'ANNOUNCEMENT' : 'BANNER',
         announcementText: sanitizeText(req.body.announcementText, 180),
@@ -529,11 +556,43 @@ router.patch(
         res.status(404).json({ message: 'Sponsor overlay not found.' });
         return;
       }
+      const validAnimations = ['none', 'pulse', 'float', 'glow', 'shimmer', 'bounce'];
+      const validTransitions = [
+        'fade',
+        'slide-left',
+        'slide-right',
+        'slide-top',
+        'slide-bottom',
+        'zoom',
+        'pop',
+        'none',
+      ];
       if (['TOP', 'BOTTOM', 'LEFT', 'RIGHT'].includes(req.body.position)) {
         overlay.position = req.body.position;
       }
       if (req.body.durationSeconds !== undefined) {
-        overlay.durationSeconds = Math.max(3, Math.min(300, Number(req.body.durationSeconds) || 12));
+        const d = Number(req.body.durationSeconds);
+        if (Number.isFinite(d)) overlay.durationSeconds = Math.max(2, Math.min(300, d));
+      }
+      if (validAnimations.includes(req.body.animation)) {
+        overlay.animation = req.body.animation;
+      }
+      if (validTransitions.includes(req.body.transition)) {
+        overlay.transition = req.body.transition;
+      }
+      if (req.body.transitionDurationMs !== undefined) {
+        const tm = Number(req.body.transitionDurationMs);
+        if (Number.isFinite(tm)) overlay.transitionDurationMs = Math.max(100, Math.min(3000, tm));
+      }
+      if (req.body.repeatIntervalSeconds !== undefined) {
+        const r = Number(req.body.repeatIntervalSeconds);
+        if (Number.isFinite(r)) overlay.repeatIntervalSeconds = Math.max(0, Math.min(3600, r));
+      }
+      if (typeof req.body.repeatContinuously === 'boolean') {
+        overlay.repeatContinuously = req.body.repeatContinuously;
+      }
+      if (typeof req.body.showOnTimeoutFullscreen === 'boolean') {
+        overlay.showOnTimeoutFullscreen = req.body.showOnTimeoutFullscreen;
       }
       if (req.body.displayOrder !== undefined) {
         overlay.displayOrder = Math.max(1, Number(req.body.displayOrder) || 1);

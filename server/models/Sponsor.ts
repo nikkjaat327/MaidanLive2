@@ -53,12 +53,29 @@ const sponsorSchema = new Schema<ISponsor>(
 const MongooseSponsor = mongoose.model<ISponsor>('Sponsor', sponsorSchema);
 export const Sponsor = createDualModel<ISponsor>('sponsors', MongooseSponsor);
 
+export type SponsorOverlayAnimation = 'none' | 'pulse' | 'float' | 'glow' | 'shimmer' | 'bounce';
+export type SponsorOverlayTransition =
+  | 'fade'
+  | 'slide-left'
+  | 'slide-right'
+  | 'slide-top'
+  | 'slide-bottom'
+  | 'zoom'
+  | 'pop'
+  | 'none';
+
 export interface ISponsorOverlay extends Document {
   sponsorId: mongoose.Types.ObjectId;
   liveStreamId?: mongoose.Types.ObjectId | null;
   tournamentId?: mongoose.Types.ObjectId | null;
   position: 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
   durationSeconds: number;
+  animation: SponsorOverlayAnimation;
+  transition: SponsorOverlayTransition;
+  transitionDurationMs: number;
+  repeatIntervalSeconds: number;
+  repeatContinuously: boolean;
+  showOnTimeoutFullscreen: boolean;
   displayOrder: number;
   mode: 'BANNER' | 'ANNOUNCEMENT';
   announcementText: string;
@@ -74,7 +91,21 @@ const sponsorOverlaySchema = new Schema<ISponsorOverlay>(
     liveStreamId: { type: Schema.Types.ObjectId, ref: 'LiveStream', default: null, index: true },
     tournamentId: { type: Schema.Types.ObjectId, ref: 'Tournament', default: null, index: true },
     position: { type: String, enum: ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'], default: 'BOTTOM' },
-    durationSeconds: { type: Number, default: 12, min: 3, max: 300 },
+    durationSeconds: { type: Number, default: 12, min: 2, max: 300 },
+    animation: {
+      type: String,
+      enum: ['none', 'pulse', 'float', 'glow', 'shimmer', 'bounce'],
+      default: 'pulse',
+    },
+    transition: {
+      type: String,
+      enum: ['fade', 'slide-left', 'slide-right', 'slide-top', 'slide-bottom', 'zoom', 'pop', 'none'],
+      default: 'fade',
+    },
+    transitionDurationMs: { type: Number, default: 450, min: 100, max: 3000 },
+    repeatIntervalSeconds: { type: Number, default: 15, min: 0, max: 3600 },
+    repeatContinuously: { type: Boolean, default: true },
+    showOnTimeoutFullscreen: { type: Boolean, default: false },
     displayOrder: { type: Number, default: 1, min: 1 },
     mode: { type: String, enum: ['BANNER', 'ANNOUNCEMENT'], default: 'BANNER' },
     announcementText: { type: String, trim: true, default: '', maxlength: 180 },

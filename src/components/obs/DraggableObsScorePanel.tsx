@@ -4,14 +4,17 @@ import { Link } from 'react-router-dom';
 import {
   ArrowLeftRight,
   Check,
+  Clock,
   ExternalLink,
   GripHorizontal,
   LocateFixed,
   Lock,
+  Maximize2,
   Minus,
   Plus,
   RotateCcw,
   SlidersHorizontal,
+  Tv,
   Undo2,
   X,
 } from 'lucide-react';
@@ -46,6 +49,7 @@ import {
 } from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
+import { resolveMatchTimeoutState } from '../../utils/matchTimeout.ts';
 import { ScoreboardStyleSelector } from './ScoreboardStyleSelector.tsx';
 import {
   dispatchTabChangedEvent,
@@ -170,6 +174,7 @@ export function DraggableObsScorePanel({
     () => computeCricketChaseState(cricketDetails, nameA, nameB),
     [cricketDetails, nameA, nameB]
   );
+  const timeoutInfo = useMemo(() => resolveMatchTimeoutState(stream, score), [stream, score]);
 
   // Manual draft state synced with live score
   const [manualTeamAScore, setManualTeamAScore] = useState<number>(score?.teamAScore ?? 0);
@@ -356,6 +361,44 @@ export function DraggableObsScorePanel({
       setFeedback({ type: 'success', text: `Undid: ${res.undoneAction}` });
     } catch (err) {
       setFeedback({ type: 'error', text: extractApiError(err, 'Nothing to undo.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTimeoutAction(side: 'A' | 'B' | 'END') {
+    try {
+      setBusy(true);
+      setFeedback(null);
+      if (sport === 'Kabaddi') {
+        const res = await scoreboardService.controlKabaddiClock(
+          stream.id,
+          side === 'END' ? { type: 'END_TIMEOUT' } : { type: 'START_TIMEOUT', team: side }
+        );
+        if (res?.score) onScoreChange(res.score);
+      } else {
+        const nextStatus =
+          side === 'END'
+            ? 'LIVE'
+            : `${side === 'A' ? nameA : nameB} TIMEOUT`;
+        const res = await offlineScoreService.submitScorePatch(
+          stream.id,
+          {
+            matchStatus: nextStatus,
+            action: side === 'END' ? 'Resumed Live' : `Timeout (${side === 'A' ? shortA : shortB})`,
+            allowLockedOverride: true,
+          },
+          score
+        );
+        if (res.score) onScoreChange(res.score);
+      }
+      onRefresh?.();
+      setFeedback({
+        type: 'success',
+        text: side === 'END' ? 'Timeout ended — Match Live' : `${side === 'A' ? shortA : shortB} Timeout Active`,
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: extractApiError(err, 'Failed to update timeout.') });
     } finally {
       setBusy(false);
     }
@@ -670,6 +713,98 @@ export function DraggableObsScorePanel({
             </button>
           </div>
         )}
+
+        {/* Quick Broadcast Takeover & Timeout Strip */}
+        <div className="flex flex-wrap items-center gap-1.5 p-2 rounded-lg border border-slate-800 bg-slate-900/80">
+          {overlayConfig && onOverlayConfigChange && (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  applyOverlayPatch(
+                    {
+                      fullScoreboardVisible: !overlayConfig.fullScoreboardVisible,
+                      ...(!overlayConfig.fullScoreboardVisible
+                        ? { timeoutFullscreenSponsorAdActive: false }
+                        : {}),
+                    },
+                    !overlayConfig.fullScoreboardVisible ? 'Full Scoreboard ON' : 'Full Scoreboard OFF'
+                  )
+                }
+                className={`min-h-[28px] px-2 py-1 rounded-md text-[10px] font-bold inline-flex items-center gap-1 border transition-colors ${
+                  overlayConfig.fullScoreboardVisible
+                    ? 'bg-indigo-600 text-white border-indigo-400'
+                    : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>{overlayConfig.fullScoreboardVisible ? 'Hide Full Score' : 'Full Scoreboard'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  applyOverlayPatch(
+                    {
+                      timeoutFullscreenSponsorAdActive: !overlayConfig.timeoutFullscreenSponsorAdActive,
+                      ...(!overlayConfig.timeoutFullscreenSponsorAdActive
+                        ? { fullScoreboardVisible: false }
+                        : {}),
+                    },
+                    !overlayConfig.timeoutFullscreenSponsorAdActive
+                      ? 'Fullscreen Timeout Ad ON'
+                      : 'Fullscreen Timeout Ad OFF'
+                  )
+                }
+                className={`min-h-[28px] px-2 py-1 rounded-md text-[10px] font-bold inline-flex items-center gap-1 border transition-colors ${
+                  overlayConfig.timeoutFullscreenSponsorAdActive
+                    ? 'bg-amber-600 text-white border-amber-400'
+                    : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                <Tv className="w-3 h-3" />
+                <span>{overlayConfig.timeoutFullscreenSponsorAdActive ? 'End Ad' : 'Timeout Ad'}</span>
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => handleTimeoutAction('A')}
+            className={`min-h-[28px] px-2 py-1 rounded-md text-[10px] font-semibold inline-flex items-center gap-1 border ${
+              timeoutInfo.isTimeout && timeoutInfo.teamSide === 'A'
+                ? 'bg-amber-500 text-slate-950 border-amber-300'
+                : 'bg-slate-800 text-amber-300 border-slate-700 hover:bg-slate-700'
+            }`}
+          >
+            <Clock className="w-3 h-3" />
+            <span>{shortA} TO</span>
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => handleTimeoutAction('B')}
+            className={`min-h-[28px] px-2 py-1 rounded-md text-[10px] font-semibold inline-flex items-center gap-1 border ${
+              timeoutInfo.isTimeout && timeoutInfo.teamSide === 'B'
+                ? 'bg-amber-500 text-slate-950 border-amber-300'
+                : 'bg-slate-800 text-sky-300 border-slate-700 hover:bg-slate-700'
+            }`}
+          >
+            <Clock className="w-3 h-3" />
+            <span>{shortB} TO</span>
+          </button>
+          {timeoutInfo.isTimeout && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => handleTimeoutAction('END')}
+              className="min-h-[28px] px-2 py-1 rounded-md text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400"
+            >
+              Resume
+            </button>
+          )}
+        </div>
 
         {/* MANUAL ADJUSTMENTS TAB */}
         {activeTab === 'manual' && sport === 'Cricket' && (

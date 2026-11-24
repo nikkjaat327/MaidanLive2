@@ -5,6 +5,12 @@ import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
 import { HotstarBroadcastOverlay } from '../obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 import stadiumHeroImg from '../../assets/images/stadium_floodlight_hero_1795011087164.jpg';
 
 export function FloatingScoreboardLogoPreview() {
@@ -38,6 +44,8 @@ export function FloatingScoreboardLogoPreview() {
   const boxW = isPortrait ? 240 : 420;
   const boxH = Math.round((boxW * canvasH) / canvasW);
   const scale = boxW / canvasW;
+  const timeoutInfo = resolveMatchTimeoutState(overlayPreview.stream, overlayPreview.score);
+  const timeoutDecision = resolveTimeoutOverlayDecision(overlayPreview.config, timeoutInfo);
 
   return (
     <aside
@@ -127,13 +135,37 @@ export function FloatingScoreboardLogoPreview() {
               config={overlayPreview.config}
               variant="canvas"
               zIndex={26}
+              suppress={timeoutDecision.isAnyTakeoverActive}
             />
-            <HotstarBroadcastOverlay
+            {!timeoutDecision.isAnyTakeoverActive && (
+              <HotstarBroadcastOverlay
+                stream={overlayPreview.stream}
+                score={overlayPreview.score}
+                config={overlayPreview.config}
+                isPortrait={isPortrait}
+                serverClockOffsetMs={overlayPreview.serverClockOffsetMs}
+              />
+            )}
+            <JioHotstarFullScoreboard
               stream={overlayPreview.stream}
               score={overlayPreview.score}
               config={overlayPreview.config}
+              timeoutInfo={timeoutInfo}
               isPortrait={isPortrait}
+              variant="canvas"
               serverClockOffsetMs={overlayPreview.serverClockOffsetMs}
+              zIndex={31}
+              visible={timeoutDecision.showFullScoreboard}
+            />
+            <TimeoutFullscreenSponsorAd
+              stream={overlayPreview.stream}
+              score={overlayPreview.score}
+              config={overlayPreview.config}
+              timeoutInfo={timeoutInfo}
+              variant="canvas"
+              isPortrait={isPortrait}
+              zIndex={32}
+              visible={timeoutDecision.showFullscreenSponsorAd}
             />
           </div>
         </div>

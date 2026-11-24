@@ -67,7 +67,13 @@ import {
 import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -176,6 +182,19 @@ export function LiveBroadcastView({
   const broadcast = useMemo(
     () => normalizeBroadcast(stream, score, kabaddiNowMs),
     [stream, score, kabaddiNowMs]
+  );
+
+  const normalizedOverlayConfig = useMemo(
+    () => normalizeOverlayConfig(stream.overlayConfig),
+    [stream.overlayConfig]
+  );
+  const timeoutInfo = useMemo(
+    () => resolveMatchTimeoutState(stream, score, kabaddiNowMs),
+    [stream, score, kabaddiNowMs]
+  );
+  const timeoutDecision = useMemo(
+    () => resolveTimeoutOverlayDecision(normalizedOverlayConfig, timeoutInfo),
+    [normalizedOverlayConfig, timeoutInfo]
   );
 
   const kabaddiActiveRaids = useMemo(
@@ -812,23 +831,52 @@ export function LiveBroadcastView({
 
             {/* Brand Logo Bug inside Viewer Video Stage */}
             <BroadcastBrandLogoBug
-              config={normalizeOverlayConfig(stream.overlayConfig)}
+              config={normalizedOverlayConfig}
               variant="responsive"
               zIndex={22}
             />
 
             {/* 1-Button Live Sponsor Advertisement inside Viewer Video Stage */}
             <BroadcastSponsorAdBanner
-              config={normalizeOverlayConfig(stream.overlayConfig)}
+              config={normalizedOverlayConfig}
               variant="responsive"
               zIndex={23}
+              suppress={timeoutDecision.isAnyTakeoverActive}
             />
 
             {/* Sponsor Overlay Strip */}
             {sponsorOverlays.length > 0 && (
               <div className="pointer-events-none absolute bottom-12 right-2.5 z-20 max-w-[75%] flex justify-end">
-                <SponsorOverlayBanner overlays={sponsorOverlays} />
+                <SponsorOverlayBanner
+                  overlays={sponsorOverlays}
+                  suppress={timeoutDecision.isAnyTakeoverActive}
+                />
               </div>
+            )}
+
+            {/* JioHotstar Full Scoreboard & Fullscreen Timeout Sponsor Ad inside Video Stage */}
+            {canPlayVideo && !videoDisabled && (
+              <>
+                <JioHotstarFullScoreboard
+                  stream={stream}
+                  score={score}
+                  config={normalizedOverlayConfig}
+                  timeoutInfo={timeoutInfo}
+                  variant="responsive"
+                  zIndex={27}
+                  visible={timeoutDecision.showFullScoreboard}
+                />
+                <TimeoutFullscreenSponsorAd
+                  stream={stream}
+                  score={score}
+                  config={normalizedOverlayConfig}
+                  timeoutInfo={timeoutInfo}
+                  fallbackSponsorOverlays={sponsorOverlays}
+                  variant="responsive"
+                  zIndex={28}
+                  visible={timeoutDecision.showFullscreenSponsorAd}
+                />
+              </>
             )}
           </div>
         </div>

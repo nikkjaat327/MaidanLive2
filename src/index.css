@@ -284,6 +284,12 @@ html[data-obs-overlay-view="true"] #root {
   0% { transform: translate3d(18%, 0, 0); }
   100% { transform: translate3d(-18%, 0, 0); }
 }
+@keyframes mlSponsorShimmerSweep {
+  0% { transform: translateX(-140%) skewX(-20deg); opacity: 0; }
+  30% { opacity: 0.45; }
+  70% { opacity: 0.45; }
+  100% { transform: translateX(260%) skewX(-20deg); opacity: 0; }
+}
 
 
 

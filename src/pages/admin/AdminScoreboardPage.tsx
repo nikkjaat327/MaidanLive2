@@ -530,15 +530,57 @@ export function AdminScoreboardPage() {
                   Width {obsOverlayMetrics.barWidthPct}% · {Math.round(obsOverlayMetrics.overallScale * 100)}%
                 </span>
               </div>
-              <button
-                type="button"
-                disabled={obsOverlaySaving}
-                onClick={() => handleUpdateObsOverlay({ scale: 'medium', customScale: 1 })}
-                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset Size</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={obsOverlaySaving}
+                  onClick={() =>
+                    handleUpdateObsOverlay({
+                      fullScoreboardVisible: !obsOverlayConfig.fullScoreboardVisible,
+                      ...(!obsOverlayConfig.fullScoreboardVisible
+                        ? { timeoutFullscreenSponsorAdActive: false }
+                        : {}),
+                    })
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg border transition-colors ${
+                    obsOverlayConfig.fullScoreboardVisible
+                      ? 'bg-indigo-600 text-white border-indigo-500 hover:bg-indigo-700'
+                      : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                  }`}
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>{obsOverlayConfig.fullScoreboardVisible ? 'Hide Full Scoreboard' : 'Show Full Scoreboard'}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={obsOverlaySaving}
+                  onClick={() =>
+                    handleUpdateObsOverlay({
+                      timeoutFullscreenSponsorAdActive: !obsOverlayConfig.timeoutFullscreenSponsorAdActive,
+                      ...(!obsOverlayConfig.timeoutFullscreenSponsorAdActive
+                        ? { fullScoreboardVisible: false }
+                        : {}),
+                    })
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg border transition-colors ${
+                    obsOverlayConfig.timeoutFullscreenSponsorAdActive
+                      ? 'bg-amber-600 text-white border-amber-500 hover:bg-amber-700'
+                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Tv className="w-3.5 h-3.5" />
+                  <span>{obsOverlayConfig.timeoutFullscreenSponsorAdActive ? 'Close Timeout Ad' : 'Timeout Fullscreen Ad'}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={obsOverlaySaving}
+                  onClick={() => handleUpdateObsOverlay({ scale: 'medium', customScale: 1 })}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Reset Size</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">

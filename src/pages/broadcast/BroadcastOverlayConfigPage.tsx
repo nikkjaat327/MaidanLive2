@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
+  Clock,
   Copy,
   ExternalLink,
   Eye,
@@ -11,6 +12,7 @@ import {
   HelpCircle,
   ImagePlus,
   Layers,
+  Maximize2,
   Megaphone,
   Monitor,
   Radio,
@@ -26,6 +28,8 @@ import {
 import type { BroadcastOverlayConfig, LiveStreamData, SponsorData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
+import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
+import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsOverlay } from '../../hooks/useObsOverlay.ts';
 import {
@@ -40,14 +44,28 @@ import {
   OverlayScale,
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
+  SPONSOR_AD_TIMING_BOUNDS,
+  type SponsorAdAnimation,
+  type SponsorAdTransition,
+  type TimeoutDisplayMode,
   computeOverlayMetrics,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
 import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails } from '../../utils/cricketScoring.ts';
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
+import {
+  SPONSOR_ANIMATION_OPTIONS,
+  SPONSOR_TRANSITION_OPTIONS,
+} from '../../utils/sponsorAnimation.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
 import { FloatingOverlayScorePanel } from '../../components/obs/FloatingOverlayScorePanel.tsx';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
 import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
@@ -261,6 +279,23 @@ export function BroadcastOverlayConfigPage() {
     [overlayConfig, sliderDraft]
   );
 
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const timeoutInfo = useMemo(
+    () => resolveMatchTimeoutState(stream, score, nowMs + serverClockOffsetMs),
+    [stream, score, nowMs, serverClockOffsetMs]
+  );
+  const timeoutDecision = useMemo(
+    () => resolveTimeoutOverlayDecision(effectiveOverlayConfig, timeoutInfo),
+    [effectiveOverlayConfig, timeoutInfo]
+  );
+
+  useEffect(() => {
+    if (!timeoutInfo.isTimeout && !timeoutDecision.showFullScoreboard) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [timeoutInfo.isTimeout, timeoutDecision.showFullScoreboard]);
+
   const pendingSliderPatchRef = useRef<Partial<BroadcastOverlayConfig>>({});
 
   async function persistOverlayPatch(partial: Partial<BroadcastOverlayConfig>) {
@@ -358,6 +393,44 @@ export function BroadcastOverlayConfigPage() {
       sponsorAdCta: adCta,
       sponsorAdPosition: effectiveOverlayConfig.sponsorAdPosition || 'top-right',
     });
+  }
+
+  async function handleTriggerTeamTimeout(side: 'A' | 'B' | 'END') {
+    if (!matchId || !stream) return;
+    const activeSport = score?.sportType || stream.gameName || 'Other';
+    setSaving(true);
+    setActionError(null);
+    try {
+      if (activeSport === 'Kabaddi') {
+        const res = await scoreboardService.controlKabaddiClock(
+          stream.id,
+          side === 'END' ? { type: 'END_TIMEOUT' } : { type: 'START_TIMEOUT', team: side }
+        );
+        if (res?.score) setScore(res.score);
+      } else {
+        const nextStatus =
+          side === 'END'
+            ? 'LIVE'
+            : `${side === 'A' ? stream.teamAName || 'TEAM A' : stream.teamBName || 'TEAM B'} TIMEOUT`;
+        const res = await offlineScoreService.submitScorePatch(
+          stream.id,
+          {
+            matchStatus: nextStatus,
+            action: side === 'END' ? 'Resumed Live' : `Timeout (${side})`,
+            allowLockedOverride: true,
+          },
+          score
+        );
+        if (res?.score) setScore(res.score);
+      }
+      setSaveNotice(side === 'END' ? 'Timeout ended — resumed live' : 'Team Timeout started');
+      window.setTimeout(() => setSaveNotice(null), 2200);
+      refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to update timeout state.'));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleToggleScoreboardOnYoutube(nextVal: boolean) {
@@ -905,13 +978,37 @@ export function BroadcastOverlayConfigPage() {
                           config={effectiveOverlayConfig}
                           variant="canvas"
                           zIndex={26}
+                          suppress={timeoutDecision.isAnyTakeoverActive}
                         />
-                        <HotstarBroadcastOverlay
+                        {!timeoutDecision.isAnyTakeoverActive && (
+                          <HotstarBroadcastOverlay
+                            stream={stream}
+                            score={score}
+                            config={effectiveOverlayConfig}
+                            isPortrait={isPreviewPortrait}
+                            serverClockOffsetMs={serverClockOffsetMs}
+                          />
+                        )}
+                        <JioHotstarFullScoreboard
                           stream={stream}
                           score={score}
                           config={effectiveOverlayConfig}
+                          timeoutInfo={timeoutInfo}
                           isPortrait={isPreviewPortrait}
+                          variant="canvas"
                           serverClockOffsetMs={serverClockOffsetMs}
+                          zIndex={31}
+                          visible={timeoutDecision.showFullScoreboard}
+                        />
+                        <TimeoutFullscreenSponsorAd
+                          stream={stream}
+                          score={score}
+                          config={effectiveOverlayConfig}
+                          timeoutInfo={timeoutInfo}
+                          variant="canvas"
+                          isPortrait={isPreviewPortrait}
+                          zIndex={32}
+                          visible={timeoutDecision.showFullscreenSponsorAd}
                         />
                       </div>
                     </div>
@@ -923,6 +1020,8 @@ export function BroadcastOverlayConfigPage() {
                     stream={stream}
                     score={score}
                     overlayPosition={overlayConfig.position}
+                    overlayConfig={overlayConfig}
+                    onOverlayConfigChange={setOverlayConfig}
                     onScoreChange={setScore}
                     onRefresh={refetch}
                     onClose={() => setFloatingControlsOpen(false)}
@@ -1152,6 +1251,276 @@ export function BroadcastOverlayConfigPage() {
                         className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
                       />
                     </div>
+                  </div>
+
+                  {/* Sponsor Timing, Animation, Transition & Continuous Repeat Controls */}
+                  <div className="pt-2 border-t border-slate-800/90 space-y-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                      Timing, Animation &amp; Repeat Schedule
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                          Show Time (sec)
+                        </label>
+                        <input
+                          type="number"
+                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.min}
+                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.max}
+                          value={effectiveOverlayConfig.sponsorAdDurationSeconds}
+                          disabled={saving}
+                          onChange={(e) =>
+                            setOverlayConfig(
+                              normalizeOverlayConfig({
+                                ...effectiveOverlayConfig,
+                                sponsorAdDurationSeconds: Number(e.target.value),
+                              })
+                            )
+                          }
+                          onBlur={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdDurationSeconds: Number(e.target.value) || 12,
+                            })
+                          }
+                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                          Repeat After (sec)
+                        </label>
+                        <input
+                          type="number"
+                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.min}
+                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.max}
+                          value={effectiveOverlayConfig.sponsorAdRepeatIntervalSeconds}
+                          disabled={saving}
+                          onChange={(e) =>
+                            setOverlayConfig(
+                              normalizeOverlayConfig({
+                                ...effectiveOverlayConfig,
+                                sponsorAdRepeatIntervalSeconds: Number(e.target.value),
+                              })
+                            )
+                          }
+                          onBlur={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdRepeatIntervalSeconds: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                          Transition Time (ms)
+                        </label>
+                        <input
+                          type="number"
+                          step={50}
+                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.min}
+                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.max}
+                          value={effectiveOverlayConfig.sponsorAdTransitionMs}
+                          disabled={saving}
+                          onChange={(e) =>
+                            setOverlayConfig(
+                              normalizeOverlayConfig({
+                                ...effectiveOverlayConfig,
+                                sponsorAdTransitionMs: Number(e.target.value),
+                              })
+                            )
+                          }
+                          onBlur={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdTransitionMs: Number(e.target.value) || 450,
+                            })
+                          }
+                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                          Animation Style
+                        </label>
+                        <select
+                          value={effectiveOverlayConfig.sponsorAdAnimation || 'pulse'}
+                          disabled={saving}
+                          onChange={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdAnimation: e.target.value as SponsorAdAnimation,
+                            })
+                          }
+                          className="w-full min-h-[34px] px-2 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                        >
+                          {SPONSOR_ANIMATION_OPTIONS.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                          Transition Effect
+                        </label>
+                        <select
+                          value={effectiveOverlayConfig.sponsorAdTransition || 'slide-right'}
+                          disabled={saving}
+                          onChange={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdTransition: e.target.value as SponsorAdTransition,
+                            })
+                          }
+                          className="w-full min-h-[34px] px-2 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                        >
+                          {SPONSOR_TRANSITION_OPTIONS.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900/90 text-[11px] font-semibold text-slate-200 cursor-pointer self-end min-h-[34px]">
+                        <input
+                          type="checkbox"
+                          checked={effectiveOverlayConfig.sponsorAdRepeatContinuously !== false}
+                          disabled={saving}
+                          onChange={(e) =>
+                            void persistOverlayPatch({
+                              sponsorAdRepeatContinuously: e.target.checked,
+                            })
+                          }
+                          className="w-3.5 h-3.5 rounded border-slate-600 text-amber-500 shrink-0"
+                        />
+                        <span className="truncate">Repeat Loop</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Timeout & Full-Screen JioHotstar Scoreboard Controls */}
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-indigo-500/35 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Maximize2 className="w-4 h-4 text-sky-400 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate">
+                          Timeout Ad &amp; JioHotstar Full Scoreboard
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          Auto full-screen sponsor ad on timeout, or trigger full scoreboard anytime
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() =>
+                        void persistOverlayPatch({
+                          fullScoreboardVisible: !effectiveOverlayConfig.fullScoreboardVisible,
+                          ...(effectiveOverlayConfig.fullScoreboardVisible
+                            ? {}
+                            : { timeoutFullscreenSponsorAdActive: false }),
+                        })
+                      }
+                      className={`min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-extrabold uppercase tracking-wider border transition-colors ${
+                        effectiveOverlayConfig.fullScoreboardVisible
+                          ? 'bg-sky-500 hover:bg-sky-400 text-slate-950 border-sky-400 shadow-lg shadow-sky-500/25'
+                          : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border-sky-500/40'
+                      }`}
+                    >
+                      <Tv className="w-3.5 h-3.5" />
+                      <span>
+                        {effectiveOverlayConfig.fullScoreboardVisible
+                          ? 'Full Scoreboard ON'
+                          : 'Show Full Scoreboard'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() =>
+                        void persistOverlayPatch({
+                          timeoutFullscreenSponsorAdActive:
+                            !effectiveOverlayConfig.timeoutFullscreenSponsorAdActive,
+                          ...(effectiveOverlayConfig.timeoutFullscreenSponsorAdActive
+                            ? {}
+                            : { fullScoreboardVisible: false }),
+                        })
+                      }
+                      className={`min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-extrabold uppercase tracking-wider border transition-colors ${
+                        effectiveOverlayConfig.timeoutFullscreenSponsorAdActive
+                          ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/25'
+                          : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40'
+                      }`}
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>
+                        {effectiveOverlayConfig.timeoutFullscreenSponsorAdActive
+                          ? 'Fullscreen Ad ON'
+                          : 'Show Fullscreen Ad'}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                      When Team Takes Timeout
+                    </label>
+                    <select
+                      value={effectiveOverlayConfig.timeoutDisplayMode || 'fullscreen_ad'}
+                      disabled={saving}
+                      onChange={(e) =>
+                        void persistOverlayPatch({
+                          timeoutDisplayMode: e.target.value as TimeoutDisplayMode,
+                        })
+                      }
+                      className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                    >
+                      <option value="fullscreen_ad">Show Big Fullscreen Sponsor Ad</option>
+                      <option value="full_scoreboard">Show JioHotstar Full Scoreboard</option>
+                      <option value="none">Keep Normal Lower Scoreboard</option>
+                    </select>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void handleTriggerTeamTimeout('A')}
+                      className="flex-1 min-h-[32px] px-2.5 py-1 rounded-lg bg-orange-600/20 hover:bg-orange-600/35 border border-orange-500/40 text-orange-200 text-[11px] font-bold inline-flex items-center justify-center gap-1"
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>{stream.teamAName || 'Team A'} Timeout</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void handleTriggerTeamTimeout('B')}
+                      className="flex-1 min-h-[32px] px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/35 border border-sky-500/40 text-sky-200 text-[11px] font-bold inline-flex items-center justify-center gap-1"
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>{stream.teamBName || 'Team B'} Timeout</span>
+                    </button>
+                    {timeoutInfo.isTimeout && (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => void handleTriggerTeamTimeout('END')}
+                        className="min-h-[32px] px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold"
+                      >
+                        Resume Live
+                      </button>
+                    )}
                   </div>
                 </div>
 

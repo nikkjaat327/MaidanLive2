@@ -44,6 +44,58 @@ export type ScoreboardStyleId =
   | 'arena_spotlight_bar'
   | 'custom_designer';
 
+export type SponsorAdAnimation =
+  | 'none'
+  | 'pulse'
+  | 'float'
+  | 'glow'
+  | 'shimmer'
+  | 'bounce';
+
+export type SponsorAdTransition =
+  | 'fade'
+  | 'slide-left'
+  | 'slide-right'
+  | 'slide-top'
+  | 'slide-bottom'
+  | 'zoom'
+  | 'pop'
+  | 'none';
+
+export type TimeoutDisplayMode = 'fullscreen_ad' | 'full_scoreboard' | 'none';
+
+export const SPONSOR_AD_ANIMATIONS: readonly SponsorAdAnimation[] = [
+  'none',
+  'pulse',
+  'float',
+  'glow',
+  'shimmer',
+  'bounce',
+];
+
+export const SPONSOR_AD_TRANSITIONS: readonly SponsorAdTransition[] = [
+  'fade',
+  'slide-left',
+  'slide-right',
+  'slide-top',
+  'slide-bottom',
+  'zoom',
+  'pop',
+  'none',
+];
+
+export const TIMEOUT_DISPLAY_MODES: readonly TimeoutDisplayMode[] = [
+  'fullscreen_ad',
+  'full_scoreboard',
+  'none',
+];
+
+export const SPONSOR_AD_TIMING_BOUNDS = {
+  sponsorAdDurationSeconds: { min: 2, max: 300, step: 1, defaultVal: 12 },
+  sponsorAdTransitionMs: { min: 100, max: 3000, step: 50, defaultVal: 450 },
+  sponsorAdRepeatIntervalSeconds: { min: 0, max: 3600, step: 1, defaultVal: 20 },
+} as const;
+
 export interface ScoreboardStyleMeta {
   id: ScoreboardStyleId;
   name: string;
@@ -346,6 +398,15 @@ export interface BroadcastOverlayConfig {
   sponsorAdLogoUrl: string;
   sponsorAdCta: string;
   sponsorAdPosition: OverlayPosition;
+  sponsorAdDurationSeconds: number;
+  sponsorAdAnimation: SponsorAdAnimation;
+  sponsorAdTransition: SponsorAdTransition;
+  sponsorAdTransitionMs: number;
+  sponsorAdRepeatIntervalSeconds: number;
+  sponsorAdRepeatContinuously: boolean;
+  timeoutDisplayMode: TimeoutDisplayMode;
+  timeoutFullscreenSponsorAdActive: boolean;
+  fullScoreboardVisible: boolean;
   customScoreboardDesign: CustomScoreboardDesign;
 }
 
@@ -438,6 +499,15 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   sponsorAdLogoUrl: '',
   sponsorAdCta: '',
   sponsorAdPosition: 'top-right',
+  sponsorAdDurationSeconds: SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.defaultVal,
+  sponsorAdAnimation: 'pulse',
+  sponsorAdTransition: 'slide-right',
+  sponsorAdTransitionMs: SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.defaultVal,
+  sponsorAdRepeatIntervalSeconds: SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.defaultVal,
+  sponsorAdRepeatContinuously: true,
+  timeoutDisplayMode: 'fullscreen_ad',
+  timeoutFullscreenSponsorAdActive: false,
+  fullScoreboardVisible: false,
   customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
 };
 
@@ -621,6 +691,24 @@ export function normalizeOverlayConfig(
     ? (src.style as ScoreboardStyleId)
     : DEFAULT_OVERLAY_CONFIG.style;
 
+  const sponsorAdAnimation: SponsorAdAnimation = SPONSOR_AD_ANIMATIONS.includes(
+    src.sponsorAdAnimation as SponsorAdAnimation
+  )
+    ? (src.sponsorAdAnimation as SponsorAdAnimation)
+    : DEFAULT_OVERLAY_CONFIG.sponsorAdAnimation;
+
+  const sponsorAdTransition: SponsorAdTransition = SPONSOR_AD_TRANSITIONS.includes(
+    src.sponsorAdTransition as SponsorAdTransition
+  )
+    ? (src.sponsorAdTransition as SponsorAdTransition)
+    : DEFAULT_OVERLAY_CONFIG.sponsorAdTransition;
+
+  const timeoutDisplayMode: TimeoutDisplayMode = TIMEOUT_DISPLAY_MODES.includes(
+    src.timeoutDisplayMode as TimeoutDisplayMode
+  )
+    ? (src.timeoutDisplayMode as TimeoutDisplayMode)
+    : DEFAULT_OVERLAY_CONFIG.timeoutDisplayMode;
+
   const bool = (val: unknown, def: boolean): boolean =>
     typeof val === 'boolean' ? val : def;
 
@@ -722,6 +810,45 @@ export function normalizeOverlayConfig(
     sponsorAdLogoUrl: sanitizeBrandLogoUrl(src.sponsorAdLogoUrl),
     sponsorAdCta: typeof src.sponsorAdCta === 'string' ? src.sponsorAdCta.trim().slice(0, 60) : '',
     sponsorAdPosition,
+    sponsorAdDurationSeconds: Math.round(
+      clampScaleNumber(
+        src.sponsorAdDurationSeconds,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.min,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.max,
+        DEFAULT_OVERLAY_CONFIG.sponsorAdDurationSeconds
+      )
+    ),
+    sponsorAdAnimation,
+    sponsorAdTransition,
+    sponsorAdTransitionMs: Math.round(
+      clampScaleNumber(
+        src.sponsorAdTransitionMs,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.min,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.max,
+        DEFAULT_OVERLAY_CONFIG.sponsorAdTransitionMs
+      )
+    ),
+    sponsorAdRepeatIntervalSeconds: Math.round(
+      clampScaleNumber(
+        src.sponsorAdRepeatIntervalSeconds,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.min,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.max,
+        DEFAULT_OVERLAY_CONFIG.sponsorAdRepeatIntervalSeconds
+      )
+    ),
+    sponsorAdRepeatContinuously: bool(
+      src.sponsorAdRepeatContinuously,
+      DEFAULT_OVERLAY_CONFIG.sponsorAdRepeatContinuously
+    ),
+    timeoutDisplayMode,
+    timeoutFullscreenSponsorAdActive: bool(
+      src.timeoutFullscreenSponsorAdActive,
+      DEFAULT_OVERLAY_CONFIG.timeoutFullscreenSponsorAdActive
+    ),
+    fullScoreboardVisible: bool(
+      src.fullScoreboardVisible,
+      DEFAULT_OVERLAY_CONFIG.fullScoreboardVisible
+    ),
     customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
   };
 }
@@ -782,6 +909,24 @@ export function applyOverlayQueryParams(
     next.sponsorAdPosition = sponsorAdPosition as OverlayPosition;
   }
 
+  const sponsorAdAnimation = params.get('sponsorAdAnimation');
+  if (sponsorAdAnimation && SPONSOR_AD_ANIMATIONS.includes(sponsorAdAnimation as SponsorAdAnimation)) {
+    next.sponsorAdAnimation = sponsorAdAnimation as SponsorAdAnimation;
+  }
+
+  const sponsorAdTransition = params.get('sponsorAdTransition');
+  if (
+    sponsorAdTransition &&
+    SPONSOR_AD_TRANSITIONS.includes(sponsorAdTransition as SponsorAdTransition)
+  ) {
+    next.sponsorAdTransition = sponsorAdTransition as SponsorAdTransition;
+  }
+
+  const timeoutDisplayMode = params.get('timeoutDisplayMode');
+  if (timeoutDisplayMode && TIMEOUT_DISPLAY_MODES.includes(timeoutDisplayMode as TimeoutDisplayMode)) {
+    next.timeoutDisplayMode = timeoutDisplayMode as TimeoutDisplayMode;
+  }
+
   const boolKeys = [
     'visible',
     'showTournamentName',
@@ -798,6 +943,9 @@ export function applyOverlayQueryParams(
     'showMatchStatus',
     'showBrandLogo',
     'sponsorAdVisible',
+    'sponsorAdRepeatContinuously',
+    'timeoutFullscreenSponsorAdActive',
+    'fullScoreboardVisible',
   ] as const;
 
   for (const key of boolKeys) {
@@ -835,6 +983,20 @@ export function applyOverlayQueryParams(
     if (raw !== null) {
       const bounds = BRAND_LOGO_BOUNDS[key];
       next[key] = clampScaleNumber(raw, bounds.min, bounds.max, next[key]);
+    }
+  }
+
+  const sponsorTimingKeys = [
+    'sponsorAdDurationSeconds',
+    'sponsorAdTransitionMs',
+    'sponsorAdRepeatIntervalSeconds',
+  ] as const;
+
+  for (const key of sponsorTimingKeys) {
+    const raw = params.get(key);
+    if (raw !== null) {
+      const bounds = SPONSOR_AD_TIMING_BOUNDS[key];
+      next[key] = Math.round(clampScaleNumber(raw, bounds.min, bounds.max, next[key]));
     }
   }
 

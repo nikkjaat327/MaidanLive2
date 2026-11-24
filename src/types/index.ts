@@ -703,6 +703,20 @@ export interface SponsorOverlayData {
   tournamentId?: { _id: string; name: string } | string | null;
   position: ScoreboardPosition;
   durationSeconds: number;
+  animation?: 'none' | 'pulse' | 'float' | 'glow' | 'shimmer' | 'bounce';
+  transition?:
+    | 'fade'
+    | 'slide-left'
+    | 'slide-right'
+    | 'slide-top'
+    | 'slide-bottom'
+    | 'zoom'
+    | 'pop'
+    | 'none';
+  transitionDurationMs?: number;
+  repeatIntervalSeconds?: number;
+  repeatContinuously?: boolean;
+  showOnTimeoutFullscreen?: boolean;
   displayOrder: number;
   mode: 'BANNER' | 'ANNOUNCEMENT';
   announcementText?: string;

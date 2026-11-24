@@ -17,7 +17,14 @@ import { BroadcastScoreboardOverlay } from '../scoreboard/broadcast/BroadcastSco
 import { StartingSoonGraphic } from './StartingSoonGraphic.tsx';
 import { SponsorOverlayBanner } from './SponsorOverlayBanner.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
+import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
+import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
+import {
+  resolveMatchTimeoutState,
+  resolveTimeoutOverlayDecision,
+} from '../../utils/matchTimeout.ts';
 
 interface BroadcastPlayerShellProps {
   stream: LiveStreamData;
@@ -180,6 +187,9 @@ export function BroadcastPlayerShell({
 
   const activeExpanded = isNativeFullscreen || isExpandedFallback;
   const position: ScoreboardPosition = stream.scoreboardPosition || 'BOTTOM';
+  const normalizedOverlayConfig = normalizeOverlayConfig(stream.overlayConfig);
+  const timeoutInfo = resolveMatchTimeoutState(stream, score);
+  const timeoutDecision = resolveTimeoutOverlayDecision(normalizedOverlayConfig, timeoutInfo);
 
   const getScoreboardAnchorClass = () => {
     switch (position) {
@@ -296,9 +306,16 @@ export function BroadcastPlayerShell({
 
           {/* Admin-Configured Brand Logo Bug */}
           <BroadcastBrandLogoBug
-            config={normalizeOverlayConfig(stream.overlayConfig)}
+            config={normalizedOverlayConfig}
             variant="responsive"
             zIndex={22}
+          />
+
+          <BroadcastSponsorAdBanner
+            config={normalizedOverlayConfig}
+            variant="responsive"
+            zIndex={23}
+            suppress={timeoutDecision.isAnyTakeoverActive}
           />
 
           {/* Active Sponsor Overlay Strip (positioned away from scoreboard when possible) */}
@@ -310,9 +327,32 @@ export function BroadcastPlayerShell({
                   : 'bottom-12 right-2 sm:right-3 max-w-[75%] flex justify-end'
               }`}
             >
-              <SponsorOverlayBanner overlays={sponsorOverlays} />
+              <SponsorOverlayBanner
+                overlays={sponsorOverlays}
+                suppress={timeoutDecision.isAnyTakeoverActive}
+              />
             </div>
           )}
+
+          <JioHotstarFullScoreboard
+            stream={stream}
+            score={score}
+            config={normalizedOverlayConfig}
+            timeoutInfo={timeoutInfo}
+            variant="responsive"
+            zIndex={27}
+            visible={timeoutDecision.showFullScoreboard}
+          />
+          <TimeoutFullscreenSponsorAd
+            stream={stream}
+            score={score}
+            config={normalizedOverlayConfig}
+            timeoutInfo={timeoutInfo}
+            fallbackSponsorOverlays={sponsorOverlays}
+            variant="responsive"
+            zIndex={28}
+            visible={timeoutDecision.showFullscreenSponsorAd}
+          />
         </div>
       </div>
 

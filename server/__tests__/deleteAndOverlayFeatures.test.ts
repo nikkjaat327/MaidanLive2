@@ -22,10 +22,15 @@ const { Fixture } = await import('../models/Fixture.ts');
 const { BroadcastCamera } = await import('../models/BroadcastCamera.ts');
 const { ObsControllerProfile } = await import('../models/ObsControllerProfile.ts');
 const { ObsBridge } = await import('../models/ObsBridge.ts');
+const { Sponsor } = await import('../models/Sponsor.ts');
 const { signAuthToken } = await import('../middleware/auth.ts');
 const liveStreamRoutes = (await import('../routes/liveStreamRoutes.ts')).default;
+const platformOpsRoutes = (await import('../routes/platformOpsRoutes.ts')).default;
 const { applyOverlayQueryParams, normalizeOverlayConfig } = await import(
   '../../src/utils/overlayConfig.ts'
+);
+const { resolveMatchTimeoutState, resolveTimeoutOverlayDecision } = await import(
+  '../../src/utils/matchTimeout.ts'
 );
 const { extractYouTubeVideoId } = await import('../../src/utils/youtube.ts');
 
@@ -98,6 +103,7 @@ describe('Match Deletion RBAC, Sponsor Ad Overlay & YouTube Header Link Parsing'
     const app = express();
     app.use(express.json());
     app.use('/api/live', liveStreamRoutes);
+    app.use('/api', platformOpsRoutes);
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
@@ -324,5 +330,158 @@ describe('Match Deletion RBAC, Sponsor Ad Overlay & YouTube Header Link Parsing'
     );
     assert.equal(extractYouTubeVideoId('dQw4w9WgXcQ').videoId, 'dQw4w9WgXcQ');
     assert.equal(extractYouTubeVideoId('https://example.com/not-youtube').valid, false);
+  });
+
+  it('persists sponsor timing, animation, transition, continuous repeat, and timeout takeover settings', async () => {
+    const match = await LiveStream.create({
+      matchTitle: 'Timeout & Timing Test Match',
+      teamAName: 'Patna Pirates',
+      teamBName: 'Jaipur Pink Panthers',
+      gameName: 'Kabaddi',
+      status: 'LIVE',
+      activeStreamingProvider: 'youtube',
+    });
+
+    const patchRes = await apiJson(
+      'PATCH',
+      `/api/live/${match._id.toString()}/overlay`,
+      adminToken,
+      {
+        sponsorAdVisible: true,
+        sponsorAdName: 'Dream11',
+        sponsorAdDurationSeconds: 18,
+        sponsorAdAnimation: 'shimmer',
+        sponsorAdTransition: 'slide-right',
+        sponsorAdTransitionMs: 650,
+        sponsorAdRepeatIntervalSeconds: 45,
+        sponsorAdRepeatContinuously: true,
+        timeoutDisplayMode: 'fullscreen_ad',
+        timeoutFullscreenSponsorAdActive: false,
+        fullScoreboardVisible: true,
+      }
+    );
+
+    assert.equal(patchRes.status, 200);
+    assert.equal(patchRes.json.overlayConfig.sponsorAdDurationSeconds, 18);
+    assert.equal(patchRes.json.overlayConfig.sponsorAdAnimation, 'shimmer');
+    assert.equal(patchRes.json.overlayConfig.sponsorAdTransition, 'slide-right');
+    assert.equal(patchRes.json.overlayConfig.sponsorAdTransitionMs, 650);
+    assert.equal(patchRes.json.overlayConfig.sponsorAdRepeatIntervalSeconds, 45);
+    assert.equal(patchRes.json.overlayConfig.sponsorAdRepeatContinuously, true);
+    assert.equal(patchRes.json.overlayConfig.timeoutDisplayMode, 'fullscreen_ad');
+    assert.equal(patchRes.json.overlayConfig.fullScoreboardVisible, true);
+
+    const sponsor = await Sponsor.create({
+      name: 'Tata IPL Sponsor',
+      logoUrl: 'https://cdn.example.com/tata.png',
+      tagline: 'Official Broadcast Partner',
+      isActive: true,
+    });
+
+    const createOverlayRes = await apiJson('POST', '/api/admin/sponsor-overlays', adminToken, {
+      sponsorId: sponsor._id.toString(),
+      liveStreamId: match._id.toString(),
+      position: 'BOTTOM',
+      durationSeconds: 999,
+      animation: 'float',
+      transition: 'zoom',
+      transitionDurationMs: 5000,
+      repeatIntervalSeconds: -10,
+      repeatContinuously: true,
+      showOnTimeoutFullscreen: true,
+    });
+    assert.equal(createOverlayRes.status, 201);
+    assert.equal(createOverlayRes.json.overlay.durationSeconds, 300);
+    assert.equal(createOverlayRes.json.overlay.animation, 'float');
+    assert.equal(createOverlayRes.json.overlay.transition, 'zoom');
+    assert.equal(createOverlayRes.json.overlay.transitionDurationMs, 3000);
+    assert.equal(createOverlayRes.json.overlay.repeatIntervalSeconds, 0);
+    assert.equal(createOverlayRes.json.overlay.repeatContinuously, true);
+    assert.equal(createOverlayRes.json.overlay.showOnTimeoutFullscreen, true);
+
+    const patchOverlayRes = await apiJson(
+      'PATCH',
+      `/api/admin/sponsor-overlays/${createOverlayRes.json.overlay.id}`,
+      adminToken,
+      {
+        durationSeconds: 10,
+        animation: 'glow',
+        transition: 'pop',
+        transitionDurationMs: 500,
+        repeatIntervalSeconds: 20,
+        repeatContinuously: false,
+      }
+    );
+    assert.equal(patchOverlayRes.status, 200);
+    assert.equal(patchOverlayRes.json.overlay.durationSeconds, 10);
+    assert.equal(patchOverlayRes.json.overlay.animation, 'glow');
+    assert.equal(patchOverlayRes.json.overlay.transition, 'pop');
+    assert.equal(patchOverlayRes.json.overlay.transitionDurationMs, 500);
+    assert.equal(patchOverlayRes.json.overlay.repeatIntervalSeconds, 20);
+    assert.equal(patchOverlayRes.json.overlay.repeatContinuously, false);
+  });
+
+  it('resolves timeout full-screen sponsor ad vs JioHotstar full scoreboard takeover decisions', () => {
+    const kabaddiStream = {
+      teamAName: 'Patna Pirates',
+      teamBName: 'U Mumba',
+      gameName: 'Kabaddi' as const,
+      status: 'LIVE' as const,
+    };
+    const kabaddiTimeoutScore = {
+      id: 'sc_1',
+      liveStreamId: 'st_1',
+      sportType: 'Kabaddi' as const,
+      teamAScore: 22,
+      teamBScore: 19,
+      matchStatus: 'TIMEOUT',
+      sportSpecificDetails: {
+        clock: {
+          status: 'TIMEOUT',
+          timeoutActive: true,
+          timeoutTeam: 'A',
+          timeoutRemainingSec: 40,
+          remainingSeconds: 600,
+          halfDurationSeconds: 1200,
+        },
+      },
+      lastUpdatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const kTimeout = resolveMatchTimeoutState(kabaddiStream, kabaddiTimeoutScore);
+    assert.equal(kTimeout.isTimeout, true);
+    assert.equal(kTimeout.teamSide, 'A');
+    assert.equal(kTimeout.teamName, 'Patna Pirates');
+
+    // During timeout with fullscreen_ad mode, big sponsor ad activates automatically
+    const adDecision = resolveTimeoutOverlayDecision(
+      normalizeOverlayConfig({ timeoutDisplayMode: 'fullscreen_ad', fullScoreboardVisible: false }),
+      kTimeout
+    );
+    assert.equal(adDecision.showFullscreenSponsorAd, true);
+    assert.equal(adDecision.showFullScoreboard, false);
+
+    // When admin clicks "Show Full Scoreboard", JioHotstar full scoreboard overrides fullscreen ad
+    const adminScoreboardOverride = resolveTimeoutOverlayDecision(
+      normalizeOverlayConfig({ timeoutDisplayMode: 'fullscreen_ad', fullScoreboardVisible: true }),
+      kTimeout
+    );
+    assert.equal(adminScoreboardOverride.showFullScoreboard, true);
+    assert.equal(adminScoreboardOverride.showFullscreenSponsorAd, false);
+
+    // Query params also propagate new timing/takeover settings
+    const parsedQuery = applyOverlayQueryParams(
+      normalizeOverlayConfig({}),
+      '?sponsorAdDurationSeconds=25&sponsorAdAnimation=bounce&sponsorAdTransition=pop&sponsorAdTransitionMs=600&sponsorAdRepeatIntervalSeconds=30&sponsorAdRepeatContinuously=0&fullScoreboardVisible=1&timeoutDisplayMode=full_scoreboard'
+    );
+    assert.equal(parsedQuery.sponsorAdDurationSeconds, 25);
+    assert.equal(parsedQuery.sponsorAdAnimation, 'bounce');
+    assert.equal(parsedQuery.sponsorAdTransition, 'pop');
+    assert.equal(parsedQuery.sponsorAdTransitionMs, 600);
+    assert.equal(parsedQuery.sponsorAdRepeatIntervalSeconds, 30);
+    assert.equal(parsedQuery.sponsorAdRepeatContinuously, false);
+    assert.equal(parsedQuery.fullScoreboardVisible, true);
+    assert.equal(parsedQuery.timeoutDisplayMode, 'full_scoreboard');
   });
 });

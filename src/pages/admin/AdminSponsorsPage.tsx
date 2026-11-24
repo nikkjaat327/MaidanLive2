@@ -8,6 +8,11 @@ import {
   SponsorPlacement,
   TournamentData,
 } from '../../types/index.ts';
+import type { SponsorAdAnimation, SponsorAdTransition } from '../../utils/overlayConfig.ts';
+import {
+  SPONSOR_ANIMATION_OPTIONS,
+  SPONSOR_TRANSITION_OPTIONS,
+} from '../../utils/sponsorAnimation.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
@@ -47,6 +52,7 @@ export function AdminSponsorsPage() {
 
   // Overlay modal
   const [overlayModalOpen, setOverlayModalOpen] = useState(false);
+  const [editingOverlay, setEditingOverlay] = useState<SponsorOverlayData | null>(null);
   const [ovSponsorId, setOvSponsorId] = useState('');
   const [ovStreamId, setOvStreamId] = useState('');
   const [ovTournamentId, setOvTournamentId] = useState('');
@@ -56,6 +62,12 @@ export function AdminSponsorsPage() {
   const [ovMode, setOvMode] = useState<'BANNER' | 'ANNOUNCEMENT'>('BANNER');
   const [ovText, setOvText] = useState('');
   const [ovVisible, setOvVisible] = useState(true);
+  const [ovAnimation, setOvAnimation] = useState<SponsorAdAnimation>('pulse');
+  const [ovTransition, setOvTransition] = useState<SponsorAdTransition>('fade');
+  const [ovTransitionMs, setOvTransitionMs] = useState('450');
+  const [ovRepeatIntervalSec, setOvRepeatIntervalSec] = useState('0');
+  const [ovRepeatContinuously, setOvRepeatContinuously] = useState(true);
+  const [ovTimeoutFullscreen, setOvTimeoutFullscreen] = useState(true);
   const [savingOverlay, setSavingOverlay] = useState(false);
 
   const [deleteSponsorTarget, setDeleteSponsorTarget] = useState<SponsorData | null>(null);
@@ -163,7 +175,7 @@ export function AdminSponsorsPage() {
     }
   }
 
-  async function handleCreateOverlay(e: React.FormEvent) {
+  async function handleSaveOverlay(e: React.FormEvent) {
     e.preventDefault();
     if (!ovSponsorId) {
       setError('Select a sponsor for the broadcast overlay.');
@@ -172,25 +184,69 @@ export function AdminSponsorsPage() {
     try {
       setSavingOverlay(true);
       setError(null);
-      await platformOpsService.createSponsorOverlay({
+      const payload: Partial<SponsorOverlayData> = {
         sponsorId: ovSponsorId,
         liveStreamId: ovStreamId || null,
         tournamentId: ovTournamentId || null,
         position: ovPosition,
-        durationSeconds: Math.max(3, Number(ovDuration) || 12),
+        durationSeconds: Math.max(2, Number(ovDuration) || 12),
         displayOrder: Math.max(1, Number(ovOrder) || 1),
         mode: ovMode,
         announcementText: ovText.trim(),
         isVisible: ovVisible,
-      });
+        animation: ovAnimation,
+        transition: ovTransition,
+        transitionDurationMs: Math.max(100, Math.min(3000, Number(ovTransitionMs) || 450)),
+        repeatIntervalSeconds: Math.max(0, Number(ovRepeatIntervalSec) || 0),
+        repeatContinuously: ovRepeatContinuously,
+        showOnTimeoutFullscreen: ovTimeoutFullscreen,
+      };
+      if (editingOverlay) {
+        await platformOpsService.updateSponsorOverlay(editingOverlay.id, payload);
+        setSuccess('Broadcast sponsor overlay updated.');
+      } else {
+        await platformOpsService.createSponsorOverlay(payload);
+        setSuccess('Broadcast sponsor overlay configured.');
+      }
       setOverlayModalOpen(false);
-      setSuccess('Broadcast sponsor overlay configured.');
       await loadAll();
     } catch (err) {
       setError(extractApiError(err, 'Failed to save sponsor overlay.'));
     } finally {
       setSavingOverlay(false);
     }
+  }
+
+  function openEditOverlay(ov: SponsorOverlayData) {
+    setEditingOverlay(ov);
+    setOvSponsorId(
+      typeof ov.sponsorId === 'object' && ov.sponsorId
+        ? ov.sponsorId._id || ov.sponsorId.id || ''
+        : (ov.sponsorId as string) || ''
+    );
+    setOvStreamId(
+      typeof ov.liveStreamId === 'object' && ov.liveStreamId
+        ? ov.liveStreamId._id || ''
+        : (ov.liveStreamId as string) || ''
+    );
+    setOvTournamentId(
+      typeof ov.tournamentId === 'object' && ov.tournamentId
+        ? ov.tournamentId._id || ''
+        : (ov.tournamentId as string) || ''
+    );
+    setOvPosition(ov.position || 'TOP');
+    setOvDuration(String(ov.durationSeconds ?? 12));
+    setOvOrder(String(ov.displayOrder ?? 1));
+    setOvMode(ov.mode || 'BANNER');
+    setOvText(ov.announcementText || '');
+    setOvVisible(ov.isVisible !== false);
+    setOvAnimation(ov.animation || 'pulse');
+    setOvTransition(ov.transition || 'fade');
+    setOvTransitionMs(String(ov.transitionDurationMs ?? 450));
+    setOvRepeatIntervalSec(String(ov.repeatIntervalSeconds ?? 0));
+    setOvRepeatContinuously(ov.repeatContinuously !== false);
+    setOvTimeoutFullscreen(ov.showOnTimeoutFullscreen !== false);
+    setOverlayModalOpen(true);
   }
 
   async function toggleOverlayVisibility(ov: SponsorOverlayData) {
@@ -246,6 +302,7 @@ export function AdminSponsorsPage() {
           <button
             type="button"
             onClick={() => {
+              setEditingOverlay(null);
               setOvSponsorId(sponsors[0]?.id || '');
               setOvStreamId('');
               setOvTournamentId('');
@@ -255,6 +312,12 @@ export function AdminSponsorsPage() {
               setOvMode('BANNER');
               setOvText('');
               setOvVisible(true);
+              setOvAnimation('pulse');
+              setOvTransition('fade');
+              setOvTransitionMs('450');
+              setOvRepeatIntervalSec('0');
+              setOvRepeatContinuously(true);
+              setOvTimeoutFullscreen(true);
               setOverlayModalOpen(true);
             }}
             disabled={sponsors.length === 0}
@@ -431,9 +494,24 @@ export function AdminSponsorsPage() {
                       )}
                     </td>
                     <td className="py-3 px-4 font-mono text-xs text-slate-600">
-                      {ov.durationSeconds}s (#{ov.displayOrder})
+                      <div>
+                        {ov.durationSeconds}s (#{ov.displayOrder})
+                        {ov.repeatContinuously !== false ? ' · Loop' : ' · Once'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {ov.animation || 'pulse'} · {ov.transition || 'fade'} ({ov.transitionDurationMs || 450}ms)
+                        {(ov.repeatIntervalSeconds ?? 0) > 0 ? ` · +${ov.repeatIntervalSeconds}s gap` : ''}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => openEditOverlay(ov)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md mr-1"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Edit</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => toggleOverlayVisibility(ov)}
@@ -643,9 +721,9 @@ export function AdminSponsorsPage() {
       <Modal
         open={overlayModalOpen}
         onClose={() => setOverlayModalOpen(false)}
-        title="Add Broadcast Sponsor Overlay"
+        title={editingOverlay ? 'Edit Broadcast Sponsor Overlay' : 'Add Broadcast Sponsor Overlay'}
       >
-        <form onSubmit={handleCreateOverlay} className="space-y-4">
+        <form onSubmit={handleSaveOverlay} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Sponsor *</label>
             <select
@@ -723,13 +801,73 @@ export function AdminSponsorsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Duration (seconds)
+                Show Time (seconds)
               </label>
               <input
                 type="number"
-                min={3}
+                min={2}
+                max={300}
                 value={ovDuration}
                 onChange={(e) => setOvDuration(e.target.value)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Repeat After (seconds)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={3600}
+                value={ovRepeatIntervalSec}
+                onChange={(e) => setOvRepeatIntervalSec(e.target.value)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Animation Style
+              </label>
+              <select
+                value={ovAnimation}
+                onChange={(e) => setOvAnimation(e.target.value as SponsorAdAnimation)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                {SPONSOR_ANIMATION_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Transition Effect
+              </label>
+              <select
+                value={ovTransition}
+                onChange={(e) => setOvTransition(e.target.value as SponsorAdTransition)}
+                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                {SPONSOR_TRANSITION_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Transition Time (ms)
+              </label>
+              <input
+                type="number"
+                step={50}
+                min={100}
+                max={3000}
+                value={ovTransitionMs}
+                onChange={(e) => setOvTransitionMs(e.target.value)}
                 className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -760,15 +898,35 @@ export function AdminSponsorsPage() {
             />
           </div>
 
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
-            <input
-              type="checkbox"
-              checked={ovVisible}
-              onChange={(e) => setOvVisible(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-300"
-            />
-            <span>Visible on broadcast player</span>
-          </label>
+          <div className="flex flex-wrap items-center gap-5">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={ovVisible}
+                onChange={(e) => setOvVisible(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              <span>Visible on broadcast player</span>
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={ovRepeatContinuously}
+                onChange={(e) => setOvRepeatContinuously(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              <span>Repeat Continuously</span>
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={ovTimeoutFullscreen}
+                onChange={(e) => setOvTimeoutFullscreen(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              <span>Show on Team Timeout Fullscreen</span>
+            </label>
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -783,7 +941,7 @@ export function AdminSponsorsPage() {
               disabled={savingOverlay}
               className="min-h-[42px] px-5 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
             >
-              {savingOverlay ? 'Saving...' : 'Create Overlay'}
+              {savingOverlay ? 'Saving...' : editingOverlay ? 'Update Overlay' : 'Create Overlay'}
             </button>
           </div>
         </form>

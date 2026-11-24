@@ -1,15 +1,19 @@
 import { useMemo, useState } from 'react';
 import {
   ArrowLeftRight,
+  Clock,
   Lock,
+  Maximize2,
   Play,
   RotateCcw,
   ShieldAlert,
+  Tv,
   Undo2,
   Zap,
 } from 'lucide-react';
-import type { LiveScoreData, LiveStreamData } from '../../types/index.ts';
+import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import type { SportOption } from '../../constants/sports.ts';
+import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -28,6 +32,8 @@ import {
 } from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
+import { resolveMatchTimeoutState } from '../../utils/matchTimeout.ts';
+import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 import { Modal } from '../common/Modal.tsx';
 
 interface QuickLiveScoreControlsProps {
@@ -98,6 +104,11 @@ export function QuickLiveScoreControls({
   const cricketChase = useMemo(
     () => computeCricketChaseState(cricketDetails, nameA, nameB),
     [cricketDetails, nameA, nameB]
+  );
+  const timeoutInfo = useMemo(() => resolveMatchTimeoutState(stream, score), [stream, score]);
+  const currentOverlay = useMemo(
+    () => normalizeOverlayConfig(stream.overlayConfig),
+    [stream.overlayConfig]
   );
 
   // Show strictly when stream is LIVE
@@ -188,6 +199,81 @@ export function QuickLiveScoreControls({
       setFeedback({ type: 'success', text: `Undid: ${res.undoneAction}` });
     } catch (err) {
       setFeedback({ type: 'error', text: extractApiError(err, 'Nothing to undo.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTimeoutAction(side: 'A' | 'B' | 'END') {
+    try {
+      setBusy(true);
+      setFeedback(null);
+      if (sport === 'Kabaddi') {
+        const res = await scoreboardService.controlKabaddiClock(
+          stream.id,
+          side === 'END' ? { type: 'END_TIMEOUT' } : { type: 'START_TIMEOUT', team: side }
+        );
+        if (res?.score) onScoreChange(res.score);
+      } else {
+        const nextStatus =
+          side === 'END'
+            ? 'LIVE'
+            : `${side === 'A' ? nameA : nameB} TIMEOUT`;
+        const res = await offlineScoreService.submitScorePatch(
+          stream.id,
+          {
+            matchStatus: nextStatus,
+            action: side === 'END' ? 'Resumed Live' : `Timeout (${side === 'A' ? shortA : shortB})`,
+          },
+          score
+        );
+        if (res.score) onScoreChange(res.score);
+      }
+      onRefresh?.();
+      setFeedback({
+        type: 'success',
+        text: side === 'END' ? 'Timeout ended — Match Live' : `${side === 'A' ? shortA : shortB} Timeout Active`,
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: extractApiError(err, 'Failed to update timeout.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleOverlayTakeover(target: 'full_scoreboard' | 'fullscreen_ad') {
+    try {
+      setBusy(true);
+      setFeedback(null);
+      const patch: Partial<BroadcastOverlayConfig> =
+        target === 'full_scoreboard'
+          ? {
+              fullScoreboardVisible: !currentOverlay.fullScoreboardVisible,
+              ...(!currentOverlay.fullScoreboardVisible
+                ? { timeoutFullscreenSponsorAdActive: false }
+                : {}),
+            }
+          : {
+              timeoutFullscreenSponsorAdActive: !currentOverlay.timeoutFullscreenSponsorAdActive,
+              ...(!currentOverlay.timeoutFullscreenSponsorAdActive
+                ? { fullScoreboardVisible: false }
+                : {}),
+            };
+      await liveStreamService.updateOverlayConfig(stream.id, patch);
+      onRefresh?.();
+      setFeedback({
+        type: 'success',
+        text:
+          target === 'full_scoreboard'
+            ? !currentOverlay.fullScoreboardVisible
+              ? 'JioHotstar Full Scoreboard ON'
+              : 'Full Scoreboard OFF'
+            : !currentOverlay.timeoutFullscreenSponsorAdActive
+              ? 'Fullscreen Timeout Sponsor Ad ON'
+              : 'Fullscreen Timeout Ad OFF',
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: extractApiError(err, 'Failed to update broadcast takeover.') });
     } finally {
       setBusy(false);
     }
@@ -311,6 +397,76 @@ export function QuickLiveScoreControls({
           </button>
         </div>
       )}
+
+      {/* Team Timeout & Full-Screen Broadcast Takeover Row */}
+      <div className={`px-3 py-2 rounded-lg border flex flex-wrap items-center gap-2 ${subBarClass}`}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => handleToggleOverlayTakeover('full_scoreboard')}
+          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+            currentOverlay.fullScoreboardVisible
+              ? 'bg-indigo-600 text-white border-indigo-400'
+              : btnNeutral
+          }`}
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+          <span>{currentOverlay.fullScoreboardVisible ? 'Hide Full Scoreboard' : 'Show Full Scoreboard'}</span>
+        </button>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => handleToggleOverlayTakeover('fullscreen_ad')}
+          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+            currentOverlay.timeoutFullscreenSponsorAdActive
+              ? 'bg-amber-600 text-white border-amber-400'
+              : btnNeutral
+          }`}
+        >
+          <Tv className="w-3.5 h-3.5" />
+          <span>{currentOverlay.timeoutFullscreenSponsorAdActive ? 'Close Fullscreen Ad' : 'Fullscreen Timeout Ad'}</span>
+        </button>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => handleTimeoutAction('A')}
+          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-xs font-semibold inline-flex items-center gap-1 ${
+            timeoutInfo.isTimeout && timeoutInfo.teamSide === 'A'
+              ? 'bg-amber-500 text-slate-950 border-amber-400'
+              : btnNeutral
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span>{shortA} Timeout</span>
+        </button>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => handleTimeoutAction('B')}
+          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-xs font-semibold inline-flex items-center gap-1 ${
+            timeoutInfo.isTimeout && timeoutInfo.teamSide === 'B'
+              ? 'bg-amber-500 text-slate-950 border-amber-400'
+              : btnNeutral
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span>{shortB} Timeout</span>
+        </button>
+
+        {timeoutInfo.isTimeout && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => handleTimeoutAction('END')}
+            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+          >
+            Resume Live
+          </button>
+        )}
+      </div>
 
       {/* CRICKET QUICK CONTROLS */}
       {sport === 'Cricket' && (
