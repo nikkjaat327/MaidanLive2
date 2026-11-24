@@ -65,6 +65,8 @@ import {
   normalizeKabaddiDetails,
 } from '../../utils/kabaddiScoring.ts';
 import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
+import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -806,6 +808,13 @@ export function LiveBroadcastView({
                 </div>
               </div>
             )}
+
+            {/* Brand Logo Bug inside Viewer Video Stage */}
+            <BroadcastBrandLogoBug
+              config={normalizeOverlayConfig(stream.overlayConfig)}
+              variant="responsive"
+              zIndex={22}
+            />
 
             {/* Sponsor Overlay Strip */}
             {sponsorOverlays.length > 0 && (

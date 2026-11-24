@@ -9,10 +9,16 @@ import { MatchHighlightsManager } from '../../components/scoreboard/MatchHighlig
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import {
+  getStickyMatchId,
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+  subscribeStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 export function AdminHighlightsPage() {
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => getStickyMatchId());
   const [highlights, setHighlights] = useState<MatchHighlightData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -22,15 +28,22 @@ export function AdminHighlightsPage() {
       setError(null);
       const list = await liveStreamService.listStreams();
       setStreams(list);
-      if (list.length > 0 && !selectedId) {
-        setSelectedId(list[0].id);
+      if (list.length > 0) {
+        setSelectedId((prev) => {
+          const resolved = resolveStickyOrPreferredMatch(
+            prev && list.some((s) => s.id === prev) ? prev : undefined,
+            list
+          );
+          if (resolved) setStickyMatchId(resolved);
+          return resolved;
+        });
       }
     } catch (err) {
       setError(extractApiError(err, 'Failed to load streams.'));
     } finally {
       setLoading(false);
     }
-  }, [selectedId]);
+  }, []);
 
   const loadHighlights = useCallback(async (streamId: string) => {
     if (!streamId) return;
@@ -45,6 +58,14 @@ export function AdminHighlightsPage() {
   useEffect(() => {
     loadStreams();
   }, [loadStreams]);
+
+  useEffect(() => {
+    return subscribeStickyMatchId((nextId) => {
+      if (nextId && streams.some((s) => s.id === nextId)) {
+        setSelectedId(nextId);
+      }
+    });
+  }, [streams]);
 
   useEffect(() => {
     if (selectedId) {
@@ -84,7 +105,11 @@ export function AdminHighlightsPage() {
               </label>
               <select
                 value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setSelectedId(next);
+                  setStickyMatchId(next);
+                }}
                 className="flex-1 max-w-xl min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
               >
                 {streams.map((s) => (

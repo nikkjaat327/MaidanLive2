@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
-import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
+import { computeOverlayMetrics, resolveScoreboardTeamName } from '../../utils/overlayConfig.ts';
 import {
   computeEffectiveKabaddiClock,
   normalizeKabaddiDetails,
@@ -45,6 +45,8 @@ export function KabaddiObsOverlay({
   const nameB = stream.teamBName || 'Team B';
   const shortA = deriveShortTeamName(nameA, 'TMA');
   const shortB = deriveShortTeamName(nameB, 'TMB');
+  const displayA = resolveScoreboardTeamName(nameA, shortA, isPortrait);
+  const displayB = resolveScoreboardTeamName(nameB, shortB, isPortrait);
 
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
@@ -101,8 +103,8 @@ export function KabaddiObsOverlay({
           }}
           className="inline-flex items-center rounded-lg border shadow-xl backdrop-blur-md max-w-full"
         >
-          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-            {shortA}
+          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate max-w-[260px]">
+            {displayA}
           </span>
           <span
             key={pulseKey}
@@ -119,8 +121,8 @@ export function KabaddiObsOverlay({
           >
             {scoreA} - {scoreB}
           </span>
-          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-            {shortB}
+          <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate max-w-[260px]">
+            {displayB}
           </span>
           {config.showMatchStatus && vis.showMatchTimer && (
             <span
@@ -179,7 +181,7 @@ export function KabaddiObsOverlay({
               style={{ fontSize: m.teamNameFontPx }}
               className="font-display font-extrabold uppercase tracking-wide truncate"
             >
-              {config.mode === 'compact' || isPortrait ? shortA : nameA}
+              {displayA}
             </span>
           </div>
 
@@ -226,7 +228,7 @@ export function KabaddiObsOverlay({
                 style={{ fontSize: m.teamNameFontPx }}
                 className="font-display font-extrabold uppercase tracking-wide truncate"
               >
-                {config.mode === 'compact' || isPortrait ? shortB : nameB}
+                {displayB}
               </span>
             )}
             <ObsTeamBadge

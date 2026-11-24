@@ -6,12 +6,13 @@ export type ObsLayoutType =
   | 'GRID_4'
   | 'GRID_5'
   | 'GRID_6'
+  | 'GRID_8'
   | 'PIP'
   | 'MAIN_PLUS_SECONDARY'
   | 'DYNAMIC_GRID'
   | 'SPORT_BROADCAST';
 
-export const MAX_CONTROL_ROOM_CAMERAS = 6;
+export const MAX_CONTROL_ROOM_CAMERAS = 8;
 
 export type PipPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type PipSize = 'small' | 'medium' | 'large';
@@ -29,6 +30,15 @@ export interface ObsLayoutBox {
   y: number;
   width: number;
   height: number;
+}
+
+export interface ObsSplitBorderSegment {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  orientation: 'vertical' | 'horizontal' | 'box';
 }
 
 export const LAYOUT_METADATA: Record<
@@ -98,6 +108,14 @@ export const LAYOUT_METADATA: Record<
     description: 'Full 3×2 6-camera broadcast wall across the 1920×1080 frame.',
     defaultSceneName: 'GRID 6 CAM',
   },
+  GRID_8: {
+    label: '8-Cam (8 Cameras)',
+    shortLabel: '8-Cam',
+    minCameras: 8,
+    recommendedCameras: '8 cameras',
+    description: 'Compact 4×2 8-camera broadcast wall across the 1920×1080 frame.',
+    defaultSceneName: 'GRID 8 CAM',
+  },
   PIP: {
     label: 'Picture-in-Picture (PiP)',
     shortLabel: 'PiP',
@@ -110,7 +128,7 @@ export const LAYOUT_METADATA: Record<
     label: 'Main Camera + Secondary Strip',
     shortLabel: 'Main + N',
     minCameras: 2,
-    recommendedCameras: '2–6 cameras',
+    recommendedCameras: '2–8 cameras',
     description: 'Large primary feed with all selected secondary cameras tiled along the right rail.',
     defaultSceneName: 'MAIN + SECONDARY',
   },
@@ -119,14 +137,14 @@ export const LAYOUT_METADATA: Record<
     shortLabel: 'N-Cam Grid',
     minCameras: 1,
     recommendedCameras: 'Any N cameras',
-    description: 'Automatically balances rows and columns for 2–6 cameras.',
+    description: 'Automatically balances rows and columns for 2–8 cameras.',
     defaultSceneName: 'MULTI CAM GRID',
   },
   SPORT_BROADCAST: {
     label: 'Sport Broadcast + Scoreboard',
     shortLabel: 'Sport Broadcast',
     minCameras: 1,
-    recommendedCameras: '1–6 cameras',
+    recommendedCameras: '1–8 cameras',
     description: 'Live sport production scene combining camera feed(s) with MaidanLive scoreboard.',
     defaultSceneName: 'SPORT BROADCAST',
   },
@@ -148,6 +166,8 @@ export function getLayoutSlotCount(layoutType: ObsLayoutType, availableCount = 1
       return 5;
     case 'GRID_6':
       return 6;
+    case 'GRID_8':
+      return 8;
     case 'MAIN_PLUS_SECONDARY':
     case 'DYNAMIC_GRID':
     case 'SPORT_BROADCAST':
@@ -246,7 +266,7 @@ export function computeObsLayoutBoxes(
       role: idx === 0 ? 'main' : 'secondary',
       x: idx * halfW,
       y: 0,
-      width: halfW,
+      width: idx === 1 ? canvasWidth - halfW : halfW,
       height: canvasHeight,
     }));
   }
@@ -260,7 +280,7 @@ export function computeObsLayoutBoxes(
       x: 0,
       y: idx * halfH,
       width: canvasWidth,
-      height: halfH,
+      height: idx === 1 ? canvasHeight - halfH : halfH,
     }));
   }
 
@@ -306,15 +326,19 @@ export function computeObsLayoutBoxes(
   if (layoutType === 'GRID_4' && uniqueIds.length >= 4) {
     const w = Math.floor(canvasWidth / 2);
     const h = Math.floor(canvasHeight / 2);
-    return uniqueIds.slice(0, 4).map((camId, idx) => ({
-      cameraId: camId,
-      slotIndex: idx,
-      role: 'grid',
-      x: (idx % 2) * w,
-      y: Math.floor(idx / 2) * h,
-      width: w,
-      height: h,
-    }));
+    return uniqueIds.slice(0, 4).map((camId, idx) => {
+      const col = idx % 2;
+      const row = Math.floor(idx / 2);
+      return {
+        cameraId: camId,
+        slotIndex: idx,
+        role: 'grid',
+        x: col * w,
+        y: row * h,
+        width: col === 1 ? canvasWidth - w : w,
+        height: row === 1 ? canvasHeight - h : h,
+      };
+    });
   }
 
   if (layoutType === 'GRID_5' && uniqueIds.length >= 5) {
@@ -346,6 +370,25 @@ export function computeObsLayoutBoxes(
         x: col * colW,
         y: row * rowH,
         width: col === 2 ? canvasWidth - colW * 2 : colW,
+        height: row === 1 ? canvasHeight - rowH : rowH,
+      };
+    });
+  }
+
+  if (layoutType === 'GRID_8' && uniqueIds.length >= 8) {
+    const eight = uniqueIds.slice(0, 8);
+    const colW = Math.floor(canvasWidth / 4);
+    const rowH = Math.floor(canvasHeight / 2);
+    return eight.map((camId, idx) => {
+      const col = idx % 4;
+      const row = Math.floor(idx / 4);
+      return {
+        cameraId: camId,
+        slotIndex: idx,
+        role: 'grid',
+        x: col * colW,
+        y: row * rowH,
+        width: col === 3 ? canvasWidth - colW * 3 : colW,
         height: row === 1 ? canvasHeight - rowH : rowH,
       };
     });
@@ -397,8 +440,8 @@ export function computeObsLayoutBoxes(
         role: 'secondary',
         x: mainW + col * tileW,
         y: row * tileH,
-        width: tileW,
-        height: tileH,
+        width: col === sideCols - 1 ? sideAreaW - col * tileW : tileW,
+        height: row === sideRows - 1 ? canvasHeight - row * tileH : tileH,
       });
     });
 
@@ -436,8 +479,129 @@ export function computeObsLayoutBoxes(
       role: 'grid',
       x: col * cellW,
       y: row * cellH,
-      width: cellW,
-      height: cellH,
+      width: col === cols - 1 ? canvasWidth - col * cellW : cellW,
+      height: row === rows - 1 ? canvasHeight - row * cellH : cellH,
     };
   });
+}
+
+function mergeAxisIntervals(
+  entries: Array<{ coord: number; start: number; end: number }>
+): Array<{ coord: number; start: number; end: number }> {
+  const byCoord = new Map<number, Array<{ start: number; end: number }>>();
+  for (const item of entries) {
+    if (item.end <= item.start) continue;
+    const snapped = Math.round(item.coord);
+    // Group coordinates within 2px into a single axis
+    let matchedKey: number | null = null;
+    for (const key of byCoord.keys()) {
+      if (Math.abs(key - snapped) <= 2) {
+        matchedKey = key;
+        break;
+      }
+    }
+    const targetKey = matchedKey !== null ? matchedKey : snapped;
+    const bucket = byCoord.get(targetKey) || [];
+    bucket.push({ start: Math.round(item.start), end: Math.round(item.end) });
+    byCoord.set(targetKey, bucket);
+  }
+
+  const merged: Array<{ coord: number; start: number; end: number }> = [];
+  for (const [coord, intervals] of byCoord.entries()) {
+    const sorted = [...intervals].sort((a, b) => a.start - b.start);
+    let current = { ...sorted[0] };
+    for (let i = 1; i < sorted.length; i++) {
+      const next = sorted[i];
+      if (next.start <= current.end + 2) {
+        current.end = Math.max(current.end, next.end);
+      } else {
+        merged.push({ coord, start: current.start, end: current.end });
+        current = { ...next };
+      }
+    }
+    merged.push({ coord, start: current.start, end: current.end });
+  }
+  return merged;
+}
+
+/**
+ * Computes crisp internal split borders / separators for multi-camera OBS compositions.
+ * Always returns [] when fullscreen SINGLE camera is active.
+ */
+export function computeObsLayoutBorderSegments(
+  layoutType: ObsLayoutType,
+  boxes: ObsLayoutBox[],
+  canvasWidth = 1920,
+  canvasHeight = 1080
+): ObsSplitBorderSegment[] {
+  if (layoutType === 'SINGLE' || boxes.length <= 1) {
+    return [];
+  }
+
+  if (layoutType === 'PIP') {
+    const secondary = boxes.find((b) => b.role === 'secondary') || boxes[1];
+    if (!secondary) return [];
+    return [
+      {
+        id: 'pip-frame',
+        x: secondary.x,
+        y: secondary.y,
+        width: secondary.width,
+        height: secondary.height,
+        orientation: 'box',
+      },
+    ];
+  }
+
+  const rawVertical: Array<{ coord: number; start: number; end: number }> = [];
+  const rawHorizontal: Array<{ coord: number; start: number; end: number }> = [];
+
+  for (const box of boxes) {
+    const left = box.x;
+    const right = box.x + box.width;
+    const top = box.y;
+    const bottom = box.y + box.height;
+
+    if (left > 2 && left < canvasWidth - 2) {
+      rawVertical.push({ coord: left, start: top, end: bottom });
+    }
+    if (right > 2 && right < canvasWidth - 2) {
+      rawVertical.push({ coord: right, start: top, end: bottom });
+    }
+    if (top > 2 && top < canvasHeight - 2) {
+      rawHorizontal.push({ coord: top, start: left, end: right });
+    }
+    if (bottom > 2 && bottom < canvasHeight - 2) {
+      rawHorizontal.push({ coord: bottom, start: left, end: right });
+    }
+  }
+
+  const mergedVertical = mergeAxisIntervals(rawVertical);
+  const mergedHorizontal = mergeAxisIntervals(rawHorizontal);
+
+  const segments: ObsSplitBorderSegment[] = [];
+
+  mergedVertical.forEach((seg, idx) => {
+    segments.push({
+      id: `v-${idx}-${seg.coord}`,
+      x: seg.coord,
+      y: seg.start,
+      width: 2,
+      height: seg.end - seg.start,
+      orientation: 'vertical',
+    });
+  });
+
+  mergedHorizontal.forEach((seg, idx) => {
+    segments.push({
+      id: `h-${idx}-${seg.coord}`,
+      x: seg.start,
+      y: seg.coord,
+      width: seg.end - seg.start,
+      height: 2,
+      orientation: 'horizontal',
+    });
+  });
+
+  return segments;
 }

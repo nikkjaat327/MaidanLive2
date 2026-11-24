@@ -1,5 +1,18 @@
 export const ACTIVE_MATCH_STORAGE_KEY = 'maidanlive_active_control_room_match_id';
 export const ACTIVE_MATCH_CHANGED_EVENT = 'maidanlive:active_match_changed';
+export const ACTIVE_MATCH_CHANNEL_NAME = 'maidanlive_active_match_channel';
+
+let cachedBroadcastChannel: BroadcastChannel | null | undefined;
+function getMatchBroadcastChannel(): BroadcastChannel | null {
+  if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return null;
+  if (cachedBroadcastChannel !== undefined) return cachedBroadcastChannel;
+  try {
+    cachedBroadcastChannel = new BroadcastChannel(ACTIVE_MATCH_CHANNEL_NAME);
+  } catch {
+    cachedBroadcastChannel = null;
+  }
+  return cachedBroadcastChannel;
+}
 
 function getSafeStorages(): Storage[] {
   if (typeof window === 'undefined') return [];
@@ -54,6 +67,11 @@ export function setStickyMatchId(matchId: string | undefined | null): string {
     } catch {
       // Ignore event dispatch errors
     }
+    try {
+      getMatchBroadcastChannel()?.postMessage({ matchId: normalized });
+    } catch {
+      // Ignore BroadcastChannel post errors
+    }
   }
 
   return normalized;
@@ -79,7 +97,49 @@ export function clearStickyMatchId(): void {
     } catch {
       // Ignore event dispatch errors
     }
+    try {
+      getMatchBroadcastChannel()?.postMessage({ matchId: '' });
+    } catch {
+      // Ignore BroadcastChannel post errors
+    }
   }
+}
+
+export function subscribeStickyMatchId(onChange: (matchId: string) => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const handleCustom = (ev: Event) => {
+    const next = (ev as CustomEvent<{ matchId?: string }>).detail?.matchId ?? getStickyMatchId();
+    onChange(next || '');
+  };
+  const handleStorage = (ev: StorageEvent) => {
+    if (!ev.key || ev.key === ACTIVE_MATCH_STORAGE_KEY) {
+      onChange((ev.newValue || getStickyMatchId() || '').trim());
+    }
+  };
+  const channel = getMatchBroadcastChannel();
+  const handleChannel = (ev: MessageEvent<{ matchId?: string }>) => {
+    const incoming = typeof ev.data?.matchId === 'string' ? ev.data.matchId.trim() : '';
+    if (incoming) {
+      for (const storage of getSafeStorages()) {
+        try {
+          storage.setItem(ACTIVE_MATCH_STORAGE_KEY, incoming);
+        } catch {
+          // Ignore storage write errors
+        }
+      }
+    }
+    onChange(incoming);
+  };
+
+  window.addEventListener(ACTIVE_MATCH_CHANGED_EVENT, handleCustom);
+  window.addEventListener('storage', handleStorage);
+  channel?.addEventListener('message', handleChannel);
+
+  return () => {
+    window.removeEventListener(ACTIVE_MATCH_CHANGED_EVENT, handleCustom);
+    window.removeEventListener('storage', handleStorage);
+    channel?.removeEventListener('message', handleChannel);
+  };
 }
 
 export interface StickyMatchCandidate {

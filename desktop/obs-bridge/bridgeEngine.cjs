@@ -90,15 +90,49 @@ function buildCenterBoxTransform(box) {
   };
 }
 
+const HEARTBEAT_INTERVAL_MS = Math.max(2000, Number(process.env.OBS_BRIDGE_HEARTBEAT_INTERVAL_MS) || 5000);
+const HEARTBEAT_ACK_TIMEOUT_MS = Math.max(2500, Number(process.env.OBS_BRIDGE_HEARTBEAT_ACK_TIMEOUT_MS) || 6000);
+const HEARTBEAT_LOST_MS = Math.max(10000, Number(process.env.OBS_BRIDGE_HEARTBEAT_LOST_MS) || 20000);
+const HEARTBEAT_OFFLINE_MS = Math.max(20000, Number(process.env.OBS_BRIDGE_HEARTBEAT_OFFLINE_MS) || 45000);
+const OBS_RPC_TIMEOUT_MS = 6000;
+
+function computeBackoffMs(attempt, baseMs = 1500, maxMs = 30000, jitterRatio = 0.25) {
+  const exp = Math.min(maxMs, Math.round(baseMs * Math.pow(1.8, Math.max(0, attempt))));
+  const delta = exp * jitterRatio;
+  return Math.max(500, Math.round(exp + (Math.random() * 2 - 1) * delta));
+}
+
+function withTimeout(promise, timeoutMs, label = 'OBS call') {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 class BridgeEngine extends EventEmitter {
   constructor() {
     super();
     this.obs = new OBSWebSocket();
     this.socket = null;
+    this.isConnectingServer = false;
     this.logs = [];
+    this.diagnostics = [];
     this.obsReconnectTimer = null;
     this.heartbeatTimer = null;
     this.envPollTimer = null;
+    this.sleepWatchTimer = null;
+    this.lastSleepWatchTick = Date.now();
+    this.obsReconnectAttempts = 0;
+    this.serverReconnectAttempts = 0;
+    this.missedServerHeartbeats = 0;
+    this.lastServerHeartbeatAckAt = 0;
+    this.serverDisconnectedAt = 0;
+    this.obsDisconnectedAt = 0;
 
     this.state = {
       bridgeVersion: BRIDGE_VERSION,
@@ -110,12 +144,17 @@ class BridgeEngine extends EventEmitter {
       activeMatch: null,
       bridgeRevoked: false,
       serverConnected: false,
-      serverStatus: 'OFFLINE', // OFFLINE | CONNECTING | ONLINE | REVOKED | ERROR
+      serverStatus: 'OFFLINE', // OFFLINE | CONNECTING | RECONNECTING | CONNECTION_LOST | ONLINE | REVOKED | ERROR
+      bridgeConnectionState: 'OFFLINE', // CONNECTED | RECONNECTING | CONNECTION_LOST | OFFLINE
+      missedHeartbeats: 0,
+      lastDisconnectReason: '',
+      reconnectAttempts: 0,
       serverError: '',
       obsUrl: 'ws://127.0.0.1:4455',
       obsConnected: false,
       obsConnecting: false,
-      obsStatus: 'DISCONNECTED', // DISCONNECTED | CONNECTING | CONNECTED | AUTH_REQUIRED | ERROR
+      obsStatus: 'DISCONNECTED', // DISCONNECTED | CONNECTING | RECONNECTING | CONNECTION_LOST | CONNECTED | AUTH_REQUIRED | ERROR
+      obsConnectionState: 'OFFLINE', // CONNECTED | RECONNECTING | CONNECTION_LOST | OFFLINE
       obsAuthRequired: false,
       obsError: '',
       obsVersion: '',
@@ -183,6 +222,32 @@ class BridgeEngine extends EventEmitter {
     this.logs.unshift(entry);
     if (this.logs.length > 200) this.logs.length = 200;
     this.emit('log', entry);
+  }
+
+  recordDiagnostic(level, category, message, reason = '', extra = {}) {
+    const event = {
+      timestamp: new Date().toISOString(),
+      level,
+      category,
+      message: this._redact(message),
+      reason: String(reason || '').slice(0, 200),
+      ...extra,
+    };
+    this.diagnostics.unshift(event);
+    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
+    this.log(level, `[${category}] ${event.message}`);
+    if (this.socket && this.socket.connected && !this.state.bridgeRevoked) {
+      try {
+        this.socket.emit('agent:diagnostic', event);
+      } catch {
+        // Ignore diagnostic emit failure while socket is dropping
+      }
+    }
+    this.emit('diagnostic', event);
+  }
+
+  getDiagnostics() {
+    return this.diagnostics;
   }
 
   getLogs() {
@@ -310,10 +375,20 @@ class BridgeEngine extends EventEmitter {
 
     if (!this.heartbeatTimer) {
       this.heartbeatTimer = setInterval(() => {
-        if (this.state.obsConnected && this.socket && this.socket.connected && !this.state.bridgeRevoked) {
-          this.emitObsSnapshot().catch(() => {});
+        this._runHeartbeatTick().catch(() => {});
+      }, HEARTBEAT_INTERVAL_MS);
+    }
+
+    if (!this.sleepWatchTimer) {
+      this.lastSleepWatchTick = Date.now();
+      this.sleepWatchTimer = setInterval(() => {
+        const now = Date.now();
+        const drift = now - this.lastSleepWatchTick;
+        this.lastSleepWatchTick = now;
+        if (drift > 12000) {
+          this.handleSystemResume(`clock_jump_${Math.round(drift / 1000)}s`);
         }
-      }, 5000);
+      }, 2000);
     }
 
     if (!hasPairedCredentials(cfg)) {
@@ -328,6 +403,145 @@ class BridgeEngine extends EventEmitter {
     }
     this.connectServerSocket();
     this.connectObsLoop();
+  }
+
+  async _runHeartbeatTick() {
+    const cfg = loadConfig();
+    if (!hasPairedCredentials(cfg) || this.state.bridgeRevoked) return;
+    const now = Date.now();
+
+    if (!this.socket || !this.socket.connected) {
+      const elapsedOffline = this.serverDisconnectedAt ? now - this.serverDisconnectedAt : 0;
+      this.missedServerHeartbeats += 1;
+      const nextBridgeState =
+        elapsedOffline >= HEARTBEAT_OFFLINE_MS
+          ? 'OFFLINE'
+          : elapsedOffline >= HEARTBEAT_LOST_MS || this.missedServerHeartbeats >= 3
+            ? 'CONNECTION_LOST'
+            : 'RECONNECTING';
+      if (this.state.bridgeConnectionState !== nextBridgeState || this.state.missedHeartbeats !== this.missedServerHeartbeats) {
+        this._setState({
+          bridgeConnectionState: nextBridgeState,
+          serverStatus: nextBridgeState === 'OFFLINE' ? 'OFFLINE' : nextBridgeState,
+          missedHeartbeats: this.missedServerHeartbeats,
+        });
+      }
+      return;
+    }
+
+    let ackReceived = false;
+    await new Promise((resolve) => {
+      const ackTimer = setTimeout(() => {
+        if (ackReceived) return;
+        this.missedServerHeartbeats += 1;
+        const nextBridgeState = this.missedServerHeartbeats >= 3 ? 'CONNECTION_LOST' : 'RECONNECTING';
+        this._setState({
+          bridgeConnectionState: nextBridgeState,
+          serverStatus: nextBridgeState,
+          missedHeartbeats: this.missedServerHeartbeats,
+          lastDisconnectReason: 'heartbeat_ack_timeout',
+        });
+        this.recordDiagnostic(
+          'warn',
+          'heartbeat_timeout',
+          `Server heartbeat ack timed out after ${HEARTBEAT_ACK_TIMEOUT_MS}ms (missed=${this.missedServerHeartbeats}). OBS & active stream untouched.`,
+          'heartbeat_timeout',
+          { missedHeartbeats: this.missedServerHeartbeats }
+        );
+        // Half-open TCP recovery after 2 missed acks without restarting OBS or interrupting broadcasts
+        if (this.missedServerHeartbeats >= 2 && this.socket) {
+          this.recordDiagnostic(
+            'warn',
+            'network_interruption',
+            'Detected stale half-open server socket; forcing Socket.IO transport refresh.',
+            'half_open_socket'
+          );
+          try {
+            this.socket.disconnect();
+            this.socket.connect();
+          } catch {
+            // Reconnect handler will retry cleanly
+          }
+        }
+        resolve();
+      }, HEARTBEAT_ACK_TIMEOUT_MS);
+
+      try {
+        this.socket.emit(
+          'agent:heartbeat',
+          {
+            bridgeId: cfg.bridgeId || undefined,
+            obsConnected: this.state.obsConnected,
+            obsConnectionState: this.state.obsConnectionState,
+            obsStreamActive: this.state.obsStreamActive,
+            reconnectAttempts: this.serverReconnectAttempts + this.obsReconnectAttempts,
+            sentAtMs: now,
+          },
+          () => {
+            ackReceived = true;
+            clearTimeout(ackTimer);
+            this.missedServerHeartbeats = 0;
+            this.lastServerHeartbeatAckAt = Date.now();
+            this.serverDisconnectedAt = 0;
+            if (
+              this.state.bridgeConnectionState !== 'CONNECTED' ||
+              this.state.missedHeartbeats !== 0
+            ) {
+              this._setState({
+                serverConnected: true,
+                serverStatus: 'ONLINE',
+                bridgeConnectionState: 'CONNECTED',
+                missedHeartbeats: 0,
+              });
+            }
+            resolve();
+          }
+        );
+      } catch {
+        clearTimeout(ackTimer);
+        resolve();
+      }
+    });
+
+    if (this.socket && this.socket.connected) {
+      await this.emitObsSnapshot().catch(() => {});
+    }
+  }
+
+  handleSystemSuspend(reason = 'system_suspend') {
+    this.recordDiagnostic(
+      'warn',
+      'network_interruption',
+      'System entering sleep/suspend mode; preserving OBS pairing state for automatic resume.',
+      reason
+    );
+  }
+
+  handleSystemResume(reason = 'system_resume') {
+    this.recordDiagnostic(
+      'info',
+      'network_interruption',
+      `System wake/resume detected (${reason}); verifying server & local OBS sockets without touching active broadcast.`,
+      reason
+    );
+    const cfg = loadConfig();
+    if (!hasPairedCredentials(cfg) || this.state.bridgeRevoked) return;
+    if (!this.socket || !this.socket.connected) {
+      if (this.socket && !this.socket.active) {
+        try {
+          this.socket.connect();
+        } catch {
+          this.connectServerSocket(true);
+        }
+      } else if (!this.socket) {
+        this.connectServerSocket();
+      }
+    } else {
+      this._runHeartbeatTick().catch(() => {});
+    }
+    if (!this.state.obsConnected && !this.state.obsConnecting) {
+      this.connectObsLoop();
+    }
   }
 
   async pairWithCode({ code, serverUrl }) {
@@ -478,12 +692,20 @@ class BridgeEngine extends EventEmitter {
     }
   }
 
-  connectServerSocket() {
+  connectServerSocket(force = false) {
     const cfg = loadConfig();
     if (!hasPairedCredentials(cfg) || this.state.bridgeRevoked) return;
+    if (!force && this.socket && (this.socket.connected || this.socket.active || this.isConnectingServer)) {
+      return;
+    }
+    this.isConnectingServer = true;
     this.disconnectServerSocket();
 
-    this._setState({ serverStatus: 'CONNECTING', serverError: '' });
+    this._setState({
+      serverStatus: this.serverReconnectAttempts > 0 ? 'RECONNECTING' : 'CONNECTING',
+      bridgeConnectionState: this.serverReconnectAttempts > 0 ? 'RECONNECTING' : this.state.bridgeConnectionState,
+      serverError: '',
+    });
     this.log('info', `Connecting outbound bridge to ${cfg.serverUrl}/obs-agent...`);
 
     const socket = io(`${cfg.serverUrl}/obs-agent`, {
@@ -499,26 +721,83 @@ class BridgeEngine extends EventEmitter {
       },
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 2000,
-      reconnectionDelayMax: 15000,
+      reconnectionDelay: 1500,
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.25,
+      timeout: 20000,
     });
     this.socket = socket;
 
     socket.on('connect', () => {
-      this._setState({ serverConnected: true, serverStatus: 'ONLINE', serverError: '' });
-      this.log('info', `Connected to MaidanLive Control Room (${cfg.bridgeId}).`);
+      const wasReconnect = this.serverReconnectAttempts > 0 || Boolean(this.serverDisconnectedAt);
+      this.isConnectingServer = false;
+      this.serverReconnectAttempts = 0;
+      this.missedServerHeartbeats = 0;
+      this.serverDisconnectedAt = 0;
+      this.lastServerHeartbeatAckAt = Date.now();
+      this._setState({
+        serverConnected: true,
+        serverStatus: 'ONLINE',
+        bridgeConnectionState: 'CONNECTED',
+        missedHeartbeats: 0,
+        lastDisconnectReason: '',
+        reconnectAttempts: this.obsReconnectAttempts,
+        serverError: '',
+      });
+      if (wasReconnect) {
+        this.recordDiagnostic(
+          'info',
+          'reconnect_success',
+          `Reconnected to MaidanLive Control Room (${cfg.bridgeId}). OBS & stream preserved.`,
+          'reconnected'
+        );
+      } else {
+        this.log('info', `Connected to MaidanLive Control Room (${cfg.bridgeId}).`);
+      }
       this.emitObsSnapshot().catch(() => {});
     });
 
-    socket.on('disconnect', (reason) => {
+    socket.io.on('reconnect_attempt', (attempt) => {
+      this.serverReconnectAttempts = Number(attempt) || (this.serverReconnectAttempts + 1);
       this._setState({
         serverConnected: false,
-        serverStatus: this.state.bridgeRevoked ? 'REVOKED' : 'OFFLINE',
+        serverStatus: 'RECONNECTING',
+        bridgeConnectionState: 'RECONNECTING',
+        reconnectAttempts: this.serverReconnectAttempts + this.obsReconnectAttempts,
       });
-      this.log('warn', `MaidanLive connection dropped (${reason}). Auto-reconnecting...`);
+      this.log('info', `Server reconnect attempt #${this.serverReconnectAttempts}...`);
+    });
+
+    socket.on('disconnect', (reason) => {
+      this.isConnectingServer = false;
+      if (!this.serverDisconnectedAt) this.serverDisconnectedAt = Date.now();
+      const cleanReason = String(reason || 'transport closed');
+      if (this.state.bridgeRevoked) {
+        this._setState({
+          serverConnected: false,
+          serverStatus: 'REVOKED',
+          bridgeConnectionState: 'OFFLINE',
+          lastDisconnectReason: cleanReason,
+        });
+        return;
+      }
+      // Keep RECONNECTING status and never stop OBS or active broadcast on transient server drops
+      this._setState({
+        serverConnected: false,
+        serverStatus: 'RECONNECTING',
+        bridgeConnectionState: 'RECONNECTING',
+        lastDisconnectReason: cleanReason,
+      });
+      this.recordDiagnostic(
+        'warn',
+        'disconnect_reason',
+        `MaidanLive connection interrupted (${cleanReason}). Retrying with backoff while keeping OBS running...`,
+        cleanReason
+      );
     });
 
     socket.on('connect_error', (err) => {
+      this.isConnectingServer = false;
       const msg = String(err?.message || err || 'Connection failed');
       const lower = msg.toLowerCase();
       if (lower.includes('revoked')) {
@@ -526,14 +805,23 @@ class BridgeEngine extends EventEmitter {
           bridgeRevoked: true,
           serverConnected: false,
           serverStatus: 'REVOKED',
+          bridgeConnectionState: 'OFFLINE',
           serverError: msg,
         });
         socket.io.opts.reconnection = false;
         this.log('error', msg);
         return;
       }
-      this._setState({ serverConnected: false, serverStatus: 'ERROR', serverError: msg });
-      this.log('warn', `MaidanLive handshake error: ${msg}`);
+      if (!this.serverDisconnectedAt) this.serverDisconnectedAt = Date.now();
+      const elapsed = Date.now() - this.serverDisconnectedAt;
+      const nextBridgeState = elapsed >= HEARTBEAT_OFFLINE_MS ? 'OFFLINE' : elapsed >= HEARTBEAT_LOST_MS ? 'CONNECTION_LOST' : 'RECONNECTING';
+      this._setState({
+        serverConnected: false,
+        serverStatus: nextBridgeState,
+        bridgeConnectionState: nextBridgeState,
+        serverError: msg,
+      });
+      this.log('warn', `MaidanLive handshake error (${nextBridgeState}): ${msg}`);
     });
 
     socket.on('server:bridge_revoked', (payload) => {
@@ -542,6 +830,8 @@ class BridgeEngine extends EventEmitter {
         bridgeRevoked: true,
         serverConnected: false,
         serverStatus: 'REVOKED',
+        bridgeConnectionState: 'OFFLINE',
+        lastDisconnectReason: reason,
         serverError: reason,
       });
       socket.io.opts.reconnection = false;
@@ -569,20 +859,44 @@ class BridgeEngine extends EventEmitter {
   }
 
   _bindObsListeners() {
+    this.obs.on('error', (err) => {
+      const msg = String(err?.message || err || 'OBS WebSocket transport error');
+      this.recordDiagnostic(
+        'warn',
+        'ws_error',
+        `OBS WebSocket error event: ${msg}`,
+        'obs_ws_error'
+      );
+      this._setState({ obsError: msg });
+    });
+
     this.obs.on('ConnectionClosed', (err) => {
       const formatted = this._formatObsConnectError(err);
+      if (!this.obsDisconnectedAt) this.obsDisconnectedAt = Date.now();
+      const willAutoRetry = !this.state.bridgeRevoked && this.state.paired && !formatted.authFailed;
+      // Preserve active obsStreamActive flag while auto-reconnecting so UI does not falsely drop active YouTube indicator
       this._setState({
         obsConnected: false,
         obsConnecting: false,
-        obsStatus: formatted.authFailed ? 'AUTH_REQUIRED' : 'DISCONNECTED',
+        obsStatus: formatted.authFailed ? 'AUTH_REQUIRED' : willAutoRetry ? 'RECONNECTING' : 'DISCONNECTED',
+        obsConnectionState: formatted.authFailed ? 'OFFLINE' : willAutoRetry ? 'RECONNECTING' : 'OFFLINE',
         obsAuthRequired: formatted.authFailed,
         obsError: formatted.message,
-        obsStreamActive: false,
-        obsRecordActive: false,
+        lastDisconnectReason: formatted.message,
+        ...(willAutoRetry ? {} : { obsStreamActive: false, obsRecordActive: false }),
       });
+      this.recordDiagnostic(
+        'warn',
+        'disconnect_reason',
+        `OBS WebSocket ConnectionClosed: ${formatted.message}. Active OBS stream preserved; scheduling reconnect.`,
+        formatted.message
+      );
       this.emitObsSnapshot().catch(() => {});
       if (!this.state.bridgeRevoked && this.state.paired) {
-        this._scheduleObsReconnect(formatted.authFailed ? 18000 : 4000);
+        const delay = formatted.authFailed
+          ? 18000
+          : computeBackoffMs(this.obsReconnectAttempts, 1500, 30000, 0.25);
+        this._scheduleObsReconnect(delay);
       }
     });
 
@@ -678,35 +992,80 @@ class BridgeEngine extends EventEmitter {
       return;
     }
 
-    this._setState({ obsConnecting: true, obsStatus: 'CONNECTING' });
+    const isRetry = this.obsReconnectAttempts > 0 || Boolean(this.obsDisconnectedAt);
+    this._setState({
+      obsConnecting: true,
+      obsStatus: isRetry ? 'RECONNECTING' : 'CONNECTING',
+      obsConnectionState: 'RECONNECTING',
+    });
     this.emitObsSnapshot().catch(() => {});
 
     try {
-      await this.obs.connect(cfg.obsUrl, cfg.obsPassword || undefined, { rpcVersion: 1 });
+      await withTimeout(
+        this.obs.connect(cfg.obsUrl, cfg.obsPassword || undefined, { rpcVersion: 1 }),
+        8000,
+        'OBS WebSocket connect'
+      );
+      const wasRetry = this.obsReconnectAttempts > 0 || Boolean(this.obsDisconnectedAt);
+      this.obsReconnectAttempts = 0;
+      this.obsDisconnectedAt = 0;
       this._setState({
         obsConnected: true,
         obsConnecting: false,
         obsStatus: 'CONNECTED',
+        obsConnectionState: 'CONNECTED',
         obsAuthRequired: false,
         obsError: '',
+        reconnectAttempts: this.serverReconnectAttempts,
       });
-      this.log('info', `Connected to local OBS Studio WebSocket v5 (${cfg.obsUrl}).`);
+      if (wasRetry) {
+        this.recordDiagnostic(
+          'info',
+          'reconnect_success',
+          `Reconnected cleanly to local OBS WebSocket (${cfg.obsUrl}) without restarting OBS or stopping broadcast.`,
+          'obs_reconnected'
+        );
+      } else {
+        this.log('info', `Connected to local OBS Studio WebSocket v5 (${cfg.obsUrl}).`);
+      }
       await this.emitObsSnapshot();
     } catch (err) {
       const formatted = this._formatObsConnectError(err);
+      this.obsReconnectAttempts += 1;
+      if (!this.obsDisconnectedAt) this.obsDisconnectedAt = Date.now();
+      const obsLostMs = Date.now() - this.obsDisconnectedAt;
+      const nextObsConnState = formatted.authFailed
+        ? 'OFFLINE'
+        : obsLostMs >= HEARTBEAT_OFFLINE_MS
+          ? 'OFFLINE'
+          : obsLostMs >= HEARTBEAT_LOST_MS || this.obsReconnectAttempts >= 3
+            ? 'CONNECTION_LOST'
+            : 'RECONNECTING';
+
       this._setState({
         obsConnected: false,
         obsConnecting: false,
-        obsStatus: formatted.authFailed ? 'AUTH_REQUIRED' : 'ERROR',
+        obsStatus: formatted.authFailed ? 'AUTH_REQUIRED' : nextObsConnState,
+        obsConnectionState: nextObsConnState,
         obsAuthRequired: formatted.authFailed,
         obsError: formatted.message,
+        reconnectAttempts: this.serverReconnectAttempts + this.obsReconnectAttempts,
       });
-      this.log('warn', formatted.message);
+      this.recordDiagnostic(
+        'warn',
+        'reconnect_attempt',
+        `OBS connect attempt #${this.obsReconnectAttempts} failed (${nextObsConnState}): ${formatted.message}`,
+        formatted.message,
+        { reconnectAttempts: this.obsReconnectAttempts }
+      );
       if (this.socket && this.socket.connected) {
         this.socket.emit('agent:obs_error', { message: formatted.message });
       }
       await this.emitObsSnapshot();
-      this._scheduleObsReconnect(formatted.authFailed ? 18000 : 5000);
+      const delay = formatted.authFailed
+        ? 18000
+        : computeBackoffMs(this.obsReconnectAttempts, 1500, 30000, 0.25);
+      this._scheduleObsReconnect(delay);
     }
   }
 
@@ -718,16 +1077,20 @@ class BridgeEngine extends EventEmitter {
           bridgeVersion: BRIDGE_VERSION,
           capabilities: BRIDGE_CAPABILITIES,
           connectionStatus: this.state.obsConnecting
-            ? 'CONNECTING'
-            : this.state.obsError
-              ? 'ERROR'
-              : 'DISCONNECTED',
+            ? 'RECONNECTING'
+            : this.state.obsStatus === 'RECONNECTING' || this.state.obsStatus === 'CONNECTION_LOST'
+              ? this.state.obsStatus
+              : this.state.obsError
+                ? 'RECONNECTING'
+                : 'DISCONNECTED',
+          obsConnectionState: this.state.obsConnectionState || 'RECONNECTING',
+          reconnectAttempts: this.obsReconnectAttempts + this.serverReconnectAttempts,
           lastError: this.state.obsError || '',
-          obsScenes: [],
-          obsInputs: [],
+          obsScenes: this.state.obsScenes || [],
+          obsInputs: this.state.obsInputs || [],
           obsMediaStates: {},
-          activeObsScene: '',
-          obsStreamActive: false,
+          activeObsScene: this.state.activeObsScene || '',
+          obsStreamActive: Boolean(this.state.obsStreamActive),
           mediamtx: mtxStatus,
         });
       }
@@ -736,14 +1099,13 @@ class BridgeEngine extends EventEmitter {
 
     try {
       const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
-        this.obs.call('GetVersion'),
-        this.obs.call('GetSceneList'),
-        this.obs.call('GetInputList').catch(() => ({ inputs: [] })),
-        this.obs
-          .call('GetStreamStatus')
+        withTimeout(this.obs.call('GetVersion'), OBS_RPC_TIMEOUT_MS, 'GetVersion'),
+        withTimeout(this.obs.call('GetSceneList'), OBS_RPC_TIMEOUT_MS, 'GetSceneList'),
+        withTimeout(this.obs.call('GetInputList'), OBS_RPC_TIMEOUT_MS, 'GetInputList').catch(() => ({ inputs: [] })),
+        withTimeout(this.obs.call('GetStreamStatus'), OBS_RPC_TIMEOUT_MS, 'GetStreamStatus')
           .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
-        this.obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
-        this.obs.call('GetStats').catch(() => null),
+        withTimeout(this.obs.call('GetRecordStatus'), OBS_RPC_TIMEOUT_MS, 'GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+        withTimeout(this.obs.call('GetStats'), OBS_RPC_TIMEOUT_MS, 'GetStats').catch(() => null),
       ]);
 
       const scenes = Array.isArray(sceneRes.scenes)
@@ -1477,6 +1839,7 @@ class BridgeEngine extends EventEmitter {
     if (this.obsReconnectTimer) clearTimeout(this.obsReconnectTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.envPollTimer) clearInterval(this.envPollTimer);
+    if (this.sleepWatchTimer) clearInterval(this.sleepWatchTimer);
     this.disconnectServerSocket();
     await stopMediaMTX({ onlyManaged: true }).catch(() => {});
     await this.obs.disconnect().catch(() => {});
@@ -1488,4 +1851,5 @@ module.exports = {
   BRIDGE_VERSION,
   BRIDGE_CAPABILITIES,
   APPROVED_COMMANDS,
+  computeBackoffMs,
 };

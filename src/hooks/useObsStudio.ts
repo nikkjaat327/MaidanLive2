@@ -166,7 +166,61 @@ export function useObsStudio(matchId?: string) {
               profile: {
                 ...prev.profile,
                 agentOnline: true,
+                bridgeConnectionState: 'CONNECTED',
+                missedHeartbeats: 0,
+                lastDisconnectReason: '',
                 agentLabel: payload.label || prev.profile.agentLabel,
+              },
+            }
+          : prev
+      );
+    };
+
+    const onBridgeReconnecting = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                bridgeConnectionState: payload?.bridgeConnectionState || 'RECONNECTING',
+                lastDisconnectReason: payload?.reason || prev.profile.lastDisconnectReason,
+                connectionStatus:
+                  prev.profile.connectionStatus === 'CONNECTED'
+                    ? 'RECONNECTING'
+                    : prev.profile.connectionStatus,
+              },
+            }
+          : prev
+      );
+    };
+
+    const onBridgeHealthChanged = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      const nextState = payload?.bridgeConnectionState;
+      if (!nextState) return;
+      setStudio((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                bridgeConnectionState: nextState,
+                missedHeartbeats:
+                  typeof payload.missedHeartbeats === 'number'
+                    ? payload.missedHeartbeats
+                    : prev.profile.missedHeartbeats,
+                agentOnline: nextState !== 'OFFLINE',
+                connectionStatus:
+                  nextState === 'OFFLINE'
+                    ? 'DISCONNECTED'
+                    : nextState === 'CONNECTION_LOST'
+                      ? 'CONNECTION_LOST'
+                      : nextState === 'RECONNECTING'
+                        ? 'RECONNECTING'
+                        : prev.profile.connectionStatus,
+                ...(nextState === 'OFFLINE' ? { obsStreamActive: false } : {}),
               },
             }
           : prev
@@ -175,6 +229,11 @@ export function useObsStudio(matchId?: string) {
 
     const onBridgeDisconnected = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
+      const nextBridgeState = payload?.bridgeConnectionState || 'OFFLINE';
+      if (nextBridgeState === 'RECONNECTING' || nextBridgeState === 'CONNECTION_LOST') {
+        onBridgeReconnecting(payload);
+        return;
+      }
       setSwitchingSceneRequest(null);
       setStudio((prev) =>
         prev
@@ -183,6 +242,8 @@ export function useObsStudio(matchId?: string) {
               profile: {
                 ...prev.profile,
                 agentOnline: false,
+                bridgeConnectionState: 'OFFLINE',
+                lastDisconnectReason: payload?.reason || prev.profile.lastDisconnectReason,
                 connectionStatus: 'DISCONNECTED',
               },
             }
@@ -213,6 +274,9 @@ export function useObsStudio(matchId?: string) {
 
     const onObsDisconnected = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
+      const incomingStatus = payload?.connectionStatus;
+      const isTransientReconnect =
+        incomingStatus === 'RECONNECTING' || incomingStatus === 'CONNECTION_LOST';
       setSwitchingSceneRequest(null);
       setStudio((prev) =>
         prev
@@ -220,9 +284,9 @@ export function useObsStudio(matchId?: string) {
               ...prev,
               profile: {
                 ...prev.profile,
-                connectionStatus: 'DISCONNECTED',
-                obsStreamActive: false,
-                lastError: payload?.reason || prev.profile.lastError,
+                connectionStatus: isTransientReconnect ? incomingStatus : 'DISCONNECTED',
+                ...(isTransientReconnect ? {} : { obsStreamActive: false }),
+                lastError: payload?.reason || payload?.error || prev.profile.lastError,
               },
             }
           : prev
@@ -366,6 +430,8 @@ export function useObsStudio(matchId?: string) {
     socket.on('obs:controller_presence', onControllerPresence);
     // Explicit Remote OBS Bridge events
     socket.on('BRIDGE_CONNECTED', onBridgeConnected);
+    socket.on('BRIDGE_RECONNECTING', onBridgeReconnecting);
+    socket.on('BRIDGE_HEALTH_CHANGED', onBridgeHealthChanged);
     socket.on('BRIDGE_DISCONNECTED', onBridgeDisconnected);
     socket.on('OBS_CONNECTED', onObsConnected);
     socket.on('OBS_DISCONNECTED', onObsDisconnected);
@@ -390,6 +456,8 @@ export function useObsStudio(matchId?: string) {
       socket.off('obs:error', onObsError);
       socket.off('obs:controller_presence', onControllerPresence);
       socket.off('BRIDGE_CONNECTED', onBridgeConnected);
+      socket.off('BRIDGE_RECONNECTING', onBridgeReconnecting);
+      socket.off('BRIDGE_HEALTH_CHANGED', onBridgeHealthChanged);
       socket.off('BRIDGE_DISCONNECTED', onBridgeDisconnected);
       socket.off('OBS_CONNECTED', onObsConnected);
       socket.off('OBS_DISCONNECTED', onObsDisconnected);

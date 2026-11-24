@@ -52,6 +52,7 @@ const ACTIVE_LAYOUT_OPTIONS: ObsLayoutType[] = [
   'GRID_4',
   'GRID_5',
   'GRID_6',
+  'GRID_8',
   'MAIN_PLUS_SECONDARY',
   'DYNAMIC_GRID',
   'SPORT_BROADCAST',
@@ -70,6 +71,7 @@ const QUICK_LAYOUTS: Array<{
   { type: 'GRID_4', label: 'Quad (4)', minCams: 4, icon: Grid2X2 },
   { type: 'GRID_5', label: '5-Cam', minCams: 5, icon: LayoutGrid },
   { type: 'GRID_6', label: '6-Cam', minCams: 6, icon: LayoutGrid },
+  { type: 'GRID_8', label: '8-Cam', minCams: 8, icon: LayoutGrid },
 ];
 
 export function ControlRoomRightPanel({
@@ -166,9 +168,11 @@ export function ControlRoomRightPanel({
           className={`grid gap-2 ${
             slotCount === 1
               ? 'grid-cols-1'
-              : slotCount === 3 || slotCount === 6
-                ? 'grid-cols-3'
-                : 'grid-cols-2'
+              : slotCount >= 7
+                ? 'grid-cols-4'
+                : slotCount === 3 || slotCount === 6
+                  ? 'grid-cols-3'
+                  : 'grid-cols-2'
           }`}
         >
           {Array.from({ length: slotCount }, (_, idx) => {

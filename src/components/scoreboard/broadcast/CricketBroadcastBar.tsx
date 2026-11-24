@@ -65,8 +65,8 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
           </span>
           <BroadcastLogo logoUrl={batLogo} alt={batShort} />
           <span className="font-display font-bold text-xs sm:text-sm tracking-wide uppercase truncate">
-            <span className="sm:hidden">{batShort}</span>
-            <span className="hidden sm:inline">{isBattingA ? nameA : nameB} ({batShort})</span>
+            <span className="hidden portrait:inline">{batShort}</span>
+            <span className="portrait:hidden">{isBattingA ? nameA : nameB}</span>
           </span>
           <span className="font-mono tabular-nums font-bold text-base sm:text-lg text-white leading-none ml-1">
             {runs}/{wickets}

@@ -2,6 +2,12 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { LiveStreamData } from '../types/index.ts';
 import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { useAuth } from '../hooks/useAuth.ts';
+import {
+  getStickyMatchId,
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+  subscribeStickyMatchId,
+} from '../utils/activeMatchSelection.ts';
 
 interface LiveMonitorContextValue {
   isOpen: boolean;
@@ -42,9 +48,22 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
   const [isOpen, setIsOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [selectedStreamId, setSelectedStreamId] = useState('');
+  const [selectedStreamId, setSelectedStreamIdState] = useState(() => getStickyMatchId());
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
+
+  const setSelectedStreamId = useCallback((streamId: string) => {
+    setSelectedStreamIdState(streamId);
+    if (streamId) setStickyMatchId(streamId);
+  }, []);
+
+  useEffect(() => {
+    return subscribeStickyMatchId((nextId) => {
+      if (nextId) {
+        setSelectedStreamIdState(nextId);
+      }
+    });
+  }, []);
 
   const refreshStreams = useCallback(async () => {
     if (!hasAdminSession) {
@@ -62,15 +81,18 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
         if (liveFirst.length === 0 && prev.length > 0) return prev;
         return liveFirst;
       });
-      setSelectedStreamId((prev) => {
-        if (prev && liveFirst.some((s) => (s.id || s._id) === prev && s.status !== 'ENDED')) {
+      setSelectedStreamIdState((prev) => {
+        const normalizedList = liveFirst.map((s) => ({
+          id: String(s.id || s._id || ''),
+          status: s.status,
+          broadcastPublished: s.broadcastPublished,
+        }));
+        if (prev && normalizedList.some((s) => s.id === prev)) {
           return prev;
         }
-        const firstLive =
-          liveFirst.find((s) => s.status === 'LIVE') ||
-          liveFirst.find((s) => s.status !== 'ENDED') ||
-          liveFirst[0];
-        return firstLive ? String(firstLive.id || firstLive._id || '') : prev;
+        const resolved = resolveStickyOrPreferredMatch(undefined, normalizedList);
+        if (resolved) setStickyMatchId(resolved);
+        return resolved || prev;
       });
     } catch {
       // Keep prior snapshot cleanly on transient fetch failure
@@ -102,7 +124,7 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
       setMinimized(false);
       setIsOpen(true);
     },
-    []
+    [setSelectedStreamId]
   );
 
   const closeMonitor = useCallback(() => {
@@ -125,7 +147,7 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
         return !prev;
       });
     },
-    [selectedStreamId]
+    [selectedStreamId, setSelectedStreamId]
   );
 
   return (

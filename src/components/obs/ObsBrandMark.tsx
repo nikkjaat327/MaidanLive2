@@ -1,4 +1,12 @@
 import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
+import type { BroadcastOverlayConfig } from '../../types/index.ts';
+import {
+  BRAND_LOGO_BOUNDS,
+  DEFAULT_OVERLAY_CONFIG,
+  resolveBrandLogoUrl,
+  type OverlayPosition,
+} from '../../utils/overlayConfig.ts';
 import type { ObsThemeTokens } from './obsTheme.ts';
 
 interface ObsBrandMarkProps {
@@ -68,6 +76,80 @@ export function ObsBrandMark({
       >
         MAIDAN<span className="opacity-80">LIVE</span>
       </span>
+    </div>
+  );
+}
+
+interface BroadcastBrandLogoBugProps {
+  config?: Partial<BroadcastOverlayConfig> | null;
+  serverLogoUrl?: string | null;
+  variant?: 'canvas' | 'responsive';
+  zIndex?: number;
+  className?: string;
+}
+
+export function BroadcastBrandLogoBug({
+  config,
+  serverLogoUrl,
+  variant = 'canvas',
+  zIndex = 24,
+  className = '',
+}: BroadcastBrandLogoBugProps) {
+  const show = config?.showBrandLogo ?? DEFAULT_OVERLAY_CONFIG.showBrandLogo;
+  const logoUrl = resolveBrandLogoUrl(config, serverLogoUrl);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [logoUrl]);
+
+  if (!show || !logoUrl || failed) {
+    return null;
+  }
+
+  const pos: OverlayPosition =
+    config?.brandLogoPosition ?? DEFAULT_OVERLAY_CONFIG.brandLogoPosition;
+  const rawSize = config?.brandLogoSize ?? BRAND_LOGO_BOUNDS.brandLogoSize.defaultVal;
+  const opacity = config?.brandLogoOpacity ?? BRAND_LOGO_BOUNDS.brandLogoOpacity.defaultVal;
+  const rawOffX = config?.brandLogoOffsetX ?? BRAND_LOGO_BOUNDS.brandLogoOffsetX.defaultVal;
+  const rawOffY = config?.brandLogoOffsetY ?? BRAND_LOGO_BOUNDS.brandLogoOffsetY.defaultVal;
+
+  const isResponsive = variant === 'responsive';
+  const offsetX = isResponsive ? Math.max(8, Math.round(rawOffX * 0.45)) : rawOffX;
+  const offsetY = isResponsive ? Math.max(8, Math.round(rawOffY * 0.45)) : rawOffY;
+  const heightStyle = isResponsive
+    ? `clamp(22px, ${Math.round(rawSize * 0.52)}px, 96px)`
+    : `${rawSize}px`;
+
+  const posStyle: CSSProperties = {
+    position: 'absolute',
+    zIndex,
+    opacity,
+    pointerEvents: 'none',
+  };
+
+  if (pos.startsWith('top')) posStyle.top = `${offsetY}px`;
+  else posStyle.bottom = `${offsetY}px`;
+
+  if (pos.endsWith('left')) {
+    posStyle.left = `${offsetX}px`;
+  } else if (pos.endsWith('right')) {
+    posStyle.right = `${offsetX}px`;
+  } else {
+    posStyle.left = '50%';
+    posStyle.transform = 'translateX(-50%)';
+  }
+
+  return (
+    <div style={posStyle} className={`select-none ${className}`}>
+      <img
+        src={logoUrl}
+        alt="MaidanLive Broadcast Logo"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        style={{ height: heightStyle, width: 'auto' }}
+        className="object-contain max-w-[260px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.75)]"
+      />
     </div>
   );
 }

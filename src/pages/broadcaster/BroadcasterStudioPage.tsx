@@ -47,10 +47,24 @@ import {
   resolveCameraLiveWebUrl,
 } from '../../utils/obsTransformGeometry.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
+import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
+import {
+  getStickyMatchId,
+  setStickyMatchId,
+  subscribeStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 type CameraTab = 'connected' | 'disconnected';
-type MultiCamLayoutType = 'SPLIT_2_H' | 'SPLIT_2_V' | 'SPLIT_3' | 'GRID_4' | 'GRID_5' | 'GRID_6' | 'PIP';
+type MultiCamLayoutType =
+  | 'SPLIT_2_H'
+  | 'SPLIT_2_V'
+  | 'SPLIT_3'
+  | 'GRID_4'
+  | 'GRID_5'
+  | 'GRID_6'
+  | 'GRID_8'
+  | 'PIP';
 
 interface LayoutOptionDef {
   type: ObsLayoutType;
@@ -67,6 +81,7 @@ const LAYOUT_OPTIONS: LayoutOptionDef[] = [
   { type: 'GRID_4', label: '4 Quad', requiredCount: 4, icon: Grid2X2 },
   { type: 'GRID_5', label: '5-Cam', requiredCount: 5, icon: LayoutGrid },
   { type: 'GRID_6', label: '6-Cam', requiredCount: 6, icon: LayoutGrid },
+  { type: 'GRID_8', label: '8-Cam', requiredCount: 8, icon: LayoutGrid },
   { type: 'PIP', label: 'PIP', requiredCount: 2, icon: PictureInPicture2 },
 ];
 
@@ -135,7 +150,8 @@ function resolveGridLayoutClass(count: number): string {
   if (count === 3) return 'grid-cols-1 md:grid-cols-3 grid-rows-3 md:grid-rows-1';
   if (count === 4) return 'grid-cols-2 grid-rows-2';
   if (count === 5) return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 lg:grid-rows-2';
-  return 'grid-cols-2 lg:grid-cols-3 grid-rows-3 lg:grid-rows-2';
+  if (count === 6) return 'grid-cols-2 lg:grid-cols-3 grid-rows-3 lg:grid-rows-2';
+  return 'grid-cols-2 lg:grid-cols-4 grid-rows-4 lg:grid-rows-2';
 }
 
 function resolveTileSpanClass(totalCount: number, idx: number): string {
@@ -180,6 +196,7 @@ function LiveCameraScoreboardLayer({
         }}
         className="shrink-0 relative bg-transparent overflow-hidden pointer-events-none"
       >
+        <BroadcastBrandLogoBug config={tileConfig} variant="canvas" zIndex={24} />
         <HotstarBroadcastOverlay
           stream={stream}
           score={score}
@@ -483,7 +500,7 @@ export function BroadcasterStudioPage() {
   const { adminUser, logoutAdmin } = useAuth();
 
   const [matches, setMatches] = useState<BroadcasterDashboardMatchItem[]>([]);
-  const [selectedMatchId, setSelectedMatchId] = useState<string>(routeMatchId || '');
+  const [selectedMatchId, setSelectedMatchId] = useState<string>(() => routeMatchId || getStickyMatchId());
   const [loadingMatches, setLoadingMatches] = useState(true);
   const [matchListError, setMatchListError] = useState<string | null>(null);
 
@@ -522,14 +539,19 @@ export function BroadcasterStudioPage() {
 
       if (routeMatchId && list.some((m) => m.id === routeMatchId)) {
         setSelectedMatchId(routeMatchId);
+        setStickyMatchId(routeMatchId);
       } else {
         setSelectedMatchId((prev) => {
+          const sticky = getStickyMatchId();
+          if (sticky && list.some((m) => m.id === sticky)) return sticky;
           if (prev && list.some((m) => m.id === prev)) return prev;
           const liveFirst =
             list.find((m) => m.status === 'LIVE') ||
             list.find((m) => m.obsConnectionStatus === 'CONNECTED') ||
             list[0];
-          return liveFirst ? liveFirst.id : '';
+          const chosen = liveFirst ? liveFirst.id : '';
+          if (chosen) setStickyMatchId(chosen);
+          return chosen;
         });
       }
     } catch (err) {
@@ -542,6 +564,16 @@ export function BroadcasterStudioPage() {
   useEffect(() => {
     void loadAssignedMatches();
   }, [loadAssignedMatches]);
+
+  // Sync sticky match changes initiated explicitly by the user in another tab/window
+  useEffect(() => {
+    return subscribeStickyMatchId((nextId) => {
+      if (!nextId) return;
+      if (matches.length === 0 || matches.some((m) => m.id === nextId)) {
+        setSelectedMatchId((prev) => (prev === nextId ? prev : nextId));
+      }
+    });
+  }, [matches]);
 
   const activeMatchId = selectedMatchId || '';
   const {
@@ -907,13 +939,13 @@ export function BroadcasterStudioPage() {
     }
   };
 
-  // Number keys 1..6 quick switch when in 1-Click Live mode on Connected tab
+  // Number keys 1..8 quick switch when in 1-Click Live mode on Connected tab
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (stagingLayout || activeTab !== 'connected') return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (/^[1-6]$/.test(e.key)) {
+      if (/^[1-8]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
         const targetCam = displayedConnectedCameras[idx];
         if (targetCam && obsConnected && !switchingCamId) {
@@ -950,7 +982,10 @@ export function BroadcasterStudioPage() {
             <select
               aria-label="Select assigned match"
               value={activeMatchId}
-              onChange={(e) => setSelectedMatchId(e.target.value)}
+              onChange={(e) => {
+                setSelectedMatchId(e.target.value);
+                setStickyMatchId(e.target.value);
+              }}
               className="h-8 max-w-[260px] px-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-white truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C]"
             >
               {matches.map((m) => (
@@ -1125,7 +1160,7 @@ export function BroadcasterStudioPage() {
                   }`}
                 >
                   Connected ({displayedConnectedCameras.length}
-                  {connectedCameras.length > MAX_CONTROL_ROOM_CAMERAS ? '/6' : ''})
+                  {connectedCameras.length > MAX_CONTROL_ROOM_CAMERAS ? `/${MAX_CONTROL_ROOM_CAMERAS}` : ''})
                 </button>
                 <button
                   type="button"

@@ -27,7 +27,22 @@ export type ScoreboardStyleId =
   | 'minimal_corner_bug'
   | 'championship_marquee'
   | 'vertical_hud_dock'
-  | 'dynamic_capsule';
+  | 'dynamic_capsule'
+  | 'ipl_neon_ribbon'
+  | 'world_cup_crest'
+  | 'premier_league_bar'
+  | 'pro_kabaddi_raid'
+  | 'olympic_gold_clean'
+  | 'cyber_grid_matrix'
+  | 'retro_arcade_pixel'
+  | 'champions_shield'
+  | 'stealth_carbon_pro'
+  | 'sunset_gradient_arc'
+  | 'minimal_mono_line'
+  | 'stadium_jumboscreen'
+  | 'tactical_hex_pod'
+  | 'arena_spotlight_bar'
+  | 'custom_designer';
 
 export interface ScoreboardStyleMeta {
   id: ScoreboardStyleId;
@@ -97,11 +112,198 @@ export const SCOREBOARD_STYLES: readonly ScoreboardStyleMeta[] = [
     shortName: 'Bento Pods',
     tagline: 'Detached floating pods for Brand, Teams, Center Score & Stat Pill',
   },
+  {
+    id: 'ipl_neon_ribbon',
+    name: 'T20 Neon Ribbon',
+    shortName: 'T20 Neon',
+    tagline: 'High-voltage magenta & indigo stadium ribbon with illuminated score badges',
+  },
+  {
+    id: 'world_cup_crest',
+    name: 'World Cup Crest',
+    shortName: 'WC Crest',
+    tagline: 'Diagonal royal team wings framing a championship medallion core',
+  },
+  {
+    id: 'premier_league_bar',
+    name: 'Premier Matchday Bar',
+    shortName: 'Premier Bar',
+    tagline: 'Crisp European broadcast bar with razor-sharp center clock module',
+  },
+  {
+    id: 'pro_kabaddi_raid',
+    name: 'Pro Arena Raid Deck',
+    shortName: 'Arena Raid',
+    tagline: 'Fiery saffron & electric cyan combat plate built for high-tempo action',
+  },
+  {
+    id: 'olympic_gold_clean',
+    name: 'Olympic Gold Clean',
+    shortName: 'Olympic Gold',
+    tagline: 'Alabaster & metallic gold podium strip with razor-crisp contrast',
+  },
+  {
+    id: 'cyber_grid_matrix',
+    name: 'Cyber Grid Matrix',
+    shortName: 'Cyber Grid',
+    tagline: 'Futurist neon scanline grid with holographic edge telemetry rails',
+  },
+  {
+    id: 'retro_arcade_pixel',
+    name: 'Arcade Versus Deck',
+    shortName: 'Arcade VS',
+    tagline: 'Crisp arcade fight-card frame with vibrant angled health-bar wings',
+  },
+  {
+    id: 'champions_shield',
+    name: 'Champions Armor Shield',
+    shortName: 'Champ Armor',
+    tagline: 'Brushed gunmetal deck with twin crest shields & metallic center seal',
+  },
+  {
+    id: 'stealth_carbon_pro',
+    name: 'Stealth Carbon Pro',
+    shortName: 'Carbon Pro',
+    tagline: 'Matte carbon fiber deck with precision crimson & emerald LED pips',
+  },
+  {
+    id: 'sunset_gradient_arc',
+    name: 'Sunset Broadcast Arc',
+    shortName: 'Sunset Arc',
+    tagline: 'Warm saffron-to-crimson TV gradient bar with luminous pill counters',
+  },
+  {
+    id: 'minimal_mono_line',
+    name: 'Minimal Hairline Strip',
+    shortName: 'Hairline',
+    tagline: 'Ultra-clean smoked hairline frame with zero visual clutter',
+  },
+  {
+    id: 'stadium_jumboscreen',
+    name: 'Stadium Jumbotron',
+    shortName: 'Jumbotron',
+    tagline: 'Bold floodlit arena LED display with wide marquee telemetry ticker',
+  },
+  {
+    id: 'tactical_hex_pod',
+    name: 'Tactical Hex Nexus',
+    shortName: 'Hex Nexus',
+    tagline: 'Hexagonal tactical center hub linking dual armored team wings',
+  },
+  {
+    id: 'arena_spotlight_bar',
+    name: 'Arena Spotlight Bar',
+    shortName: 'Spotlight',
+    tagline: 'Floodlit broadcast stage deck with oversized high-contrast score tiles',
+  },
+  {
+    id: 'custom_designer',
+    name: 'Custom Designed Scoreboard',
+    shortName: 'Custom Build',
+    tagline: 'Your bespoke scoreboard built with custom colors, borders, glow & typography',
+  },
 ];
 
 export const VALID_SCOREBOARD_STYLES: readonly ScoreboardStyleId[] = SCOREBOARD_STYLES.map(
   (s) => s.id
 );
+
+const VITE_BRAND_LOGO =
+  typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_BRAND_LOGO_URL
+    ? String((import.meta as { env?: Record<string, string> }).env?.VITE_BRAND_LOGO_URL).trim()
+    : '';
+const PROC_BRAND_LOGO =
+  typeof process !== 'undefined' && (process.env?.VITE_BRAND_LOGO_URL || process.env?.BRAND_LOGO_URL)
+    ? String(process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL).trim()
+    : '';
+
+export const DEFAULT_BRAND_LOGO_URL =
+  VITE_BRAND_LOGO ||
+  PROC_BRAND_LOGO ||
+  'https://res.cloudinary.com/dbexuvouv/image/upload/v1795534866/maidanlive/logo/Neon_Sports_Broadcast_Logo_with_Slogan_hhyz1d.png';
+
+export type CustomScoreboardLayoutVariant =
+  | 'classic_bar'
+  | 'split_wings'
+  | 'floating_pill'
+  | 'angled_ribbon'
+  | 'compact_tower';
+
+export type CustomScoreboardFontFamily = 'display' | 'sans' | 'mono';
+export type CustomScoreboardFontWeight = 'bold' | 'extrabold' | 'black';
+
+export interface CustomScoreboardDesign {
+  layoutVariant: CustomScoreboardLayoutVariant;
+  primaryColor: string;
+  secondaryColor: string;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  accentColor: string;
+  textColor: string;
+  subStripColor: string;
+  borderColor: string;
+  borderWidth: number;
+  glowColor: string;
+  glowIntensity: number;
+  borderRadius: number;
+  fontFamily: CustomScoreboardFontFamily;
+  fontWeight: CustomScoreboardFontWeight;
+  showBorders: boolean;
+  showGradient: boolean;
+  showShadow: boolean;
+  showDivider: boolean;
+  showTelemetryBar: boolean;
+}
+
+export const CUSTOM_LAYOUT_VARIANTS: readonly CustomScoreboardLayoutVariant[] = [
+  'classic_bar',
+  'split_wings',
+  'floating_pill',
+  'angled_ribbon',
+  'compact_tower',
+];
+
+export const CUSTOM_FONT_FAMILIES: readonly CustomScoreboardFontFamily[] = [
+  'display',
+  'sans',
+  'mono',
+];
+
+export const CUSTOM_FONT_WEIGHTS: readonly CustomScoreboardFontWeight[] = [
+  'bold',
+  'extrabold',
+  'black',
+];
+
+export const CUSTOM_DESIGN_BOUNDS = {
+  backgroundOpacity: { min: 0.35, max: 1, step: 0.05, defaultVal: 0.92 },
+  borderWidth: { min: 0, max: 6, step: 1, defaultVal: 2 },
+  glowIntensity: { min: 0, max: 40, step: 2, defaultVal: 16 },
+  borderRadius: { min: 0, max: 32, step: 2, defaultVal: 12 },
+} as const;
+
+export const DEFAULT_CUSTOM_SCOREBOARD_DESIGN: CustomScoreboardDesign = {
+  layoutVariant: 'classic_bar',
+  primaryColor: '#EC4899',
+  secondaryColor: '#3B82F6',
+  backgroundColor: '#090D1A',
+  backgroundOpacity: 0.92,
+  accentColor: '#F59E0B',
+  textColor: '#F8FAFC',
+  subStripColor: '#050811',
+  borderColor: '#A855F7',
+  borderWidth: 2,
+  glowColor: '#EC4899',
+  glowIntensity: 16,
+  borderRadius: 12,
+  fontFamily: 'display',
+  fontWeight: 'extrabold',
+  showBorders: true,
+  showGradient: true,
+  showShadow: true,
+  showDivider: true,
+  showTelemetryBar: true,
+};
 
 export interface BroadcastOverlayConfig {
   visible: boolean;
@@ -130,6 +332,14 @@ export interface BroadcastOverlayConfig {
   logoScale: number;
   teamNameScale: number;
   metaScale: number;
+  showBrandLogo: boolean;
+  brandLogoUrl: string;
+  brandLogoPosition: OverlayPosition;
+  brandLogoSize: number;
+  brandLogoOpacity: number;
+  brandLogoOffsetX: number;
+  brandLogoOffsetY: number;
+  customScoreboardDesign: CustomScoreboardDesign;
 }
 
 export const OVERLAY_MODES: readonly OverlayMode[] = ['full', 'compact', 'score_only', 'hidden'];
@@ -173,6 +383,13 @@ export const OVERLAY_SLIDER_BOUNDS = {
   metaScale: { min: 0.7, max: 1.65, step: 0.02, defaultVal: 1 },
 } as const;
 
+export const BRAND_LOGO_BOUNDS = {
+  brandLogoSize: { min: 28, max: 200, step: 2, defaultVal: 72 },
+  brandLogoOpacity: { min: 0.2, max: 1, step: 0.05, defaultVal: 0.95 },
+  brandLogoOffsetX: { min: 0, max: 200, step: 2, defaultVal: 24 },
+  brandLogoOffsetY: { min: 0, max: 200, step: 2, defaultVal: 20 },
+} as const;
+
 export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   visible: true,
   mode: 'full',
@@ -200,6 +417,14 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   logoScale: 1,
   teamNameScale: 1,
   metaScale: 1,
+  showBrandLogo: true,
+  brandLogoUrl: '',
+  brandLogoPosition: 'top-left',
+  brandLogoSize: BRAND_LOGO_BOUNDS.brandLogoSize.defaultVal,
+  brandLogoOpacity: BRAND_LOGO_BOUNDS.brandLogoOpacity.defaultVal,
+  brandLogoOffsetX: BRAND_LOGO_BOUNDS.brandLogoOffsetX.defaultVal,
+  brandLogoOffsetY: BRAND_LOGO_BOUNDS.brandLogoOffsetY.defaultVal,
+  customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
 };
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -211,11 +436,138 @@ export function sanitizeHexColor(val: unknown, fallback: string): string {
   return fallback;
 }
 
+export function sanitizeBrandLogoUrl(val: unknown): string {
+  if (typeof val !== 'string') return '';
+  const trimmed = val.trim().slice(0, 500);
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) {
+    return trimmed;
+  }
+  return '';
+}
+
+export function resolveBrandLogoUrl(
+  config?: Partial<BroadcastOverlayConfig> | null,
+  serverLogoUrl?: string | null
+): string {
+  const custom = sanitizeBrandLogoUrl(config?.brandLogoUrl);
+  if (custom) return custom;
+  const server = sanitizeBrandLogoUrl(serverLogoUrl);
+  if (server) return server;
+  return DEFAULT_BRAND_LOGO_URL;
+}
+
+/**
+ * Displays the full team name on all landscape/wide screens, and shows the
+ * compact team code name on portrait screens.
+ */
+export function resolveScoreboardTeamName(
+  fullName: string,
+  shortCode: string,
+  isPortrait = false
+): string {
+  const safeFull = (fullName || '').trim() || (shortCode || '').trim() || 'TEAM';
+  const safeShort = (shortCode || '').trim() || safeFull;
+  return isPortrait ? safeShort : safeFull;
+}
+
+export function hexToRgba(hex: string, alpha = 1): string {
+  const safe = sanitizeHexColor(hex, '#090D1A');
+  const r = parseInt(safe.slice(1, 3), 16);
+  const g = parseInt(safe.slice(3, 5), 16);
+  const b = parseInt(safe.slice(5, 7), 16);
+  const a = Math.min(1, Math.max(0, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 export function clampScaleNumber(val: unknown, min: number, max: number, fallback: number): number {
   const num = typeof val === 'number' ? val : typeof val === 'string' && val.trim() !== '' ? Number(val) : NaN;
   if (!Number.isFinite(num)) return fallback;
   const clamped = Math.min(max, Math.max(min, num));
   return Math.round(clamped * 100) / 100;
+}
+
+export function normalizeCustomScoreboardDesign(
+  raw?: Partial<CustomScoreboardDesign> | Record<string, unknown> | null
+): CustomScoreboardDesign {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<CustomScoreboardDesign>;
+  const bool = (val: unknown, def: boolean): boolean => (typeof val === 'boolean' ? val : def);
+
+  const layoutVariant: CustomScoreboardLayoutVariant = CUSTOM_LAYOUT_VARIANTS.includes(
+    src.layoutVariant as CustomScoreboardLayoutVariant
+  )
+    ? (src.layoutVariant as CustomScoreboardLayoutVariant)
+    : DEFAULT_CUSTOM_SCOREBOARD_DESIGN.layoutVariant;
+
+  const fontFamily: CustomScoreboardFontFamily = CUSTOM_FONT_FAMILIES.includes(
+    src.fontFamily as CustomScoreboardFontFamily
+  )
+    ? (src.fontFamily as CustomScoreboardFontFamily)
+    : DEFAULT_CUSTOM_SCOREBOARD_DESIGN.fontFamily;
+
+  const fontWeight: CustomScoreboardFontWeight = CUSTOM_FONT_WEIGHTS.includes(
+    src.fontWeight as CustomScoreboardFontWeight
+  )
+    ? (src.fontWeight as CustomScoreboardFontWeight)
+    : DEFAULT_CUSTOM_SCOREBOARD_DESIGN.fontWeight;
+
+  return {
+    layoutVariant,
+    primaryColor: sanitizeHexColor(src.primaryColor, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.primaryColor),
+    secondaryColor: sanitizeHexColor(
+      src.secondaryColor,
+      DEFAULT_CUSTOM_SCOREBOARD_DESIGN.secondaryColor
+    ),
+    backgroundColor: sanitizeHexColor(
+      src.backgroundColor,
+      DEFAULT_CUSTOM_SCOREBOARD_DESIGN.backgroundColor
+    ),
+    backgroundOpacity: clampScaleNumber(
+      src.backgroundOpacity,
+      CUSTOM_DESIGN_BOUNDS.backgroundOpacity.min,
+      CUSTOM_DESIGN_BOUNDS.backgroundOpacity.max,
+      DEFAULT_CUSTOM_SCOREBOARD_DESIGN.backgroundOpacity
+    ),
+    accentColor: sanitizeHexColor(src.accentColor, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.accentColor),
+    textColor: sanitizeHexColor(src.textColor, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.textColor),
+    subStripColor: sanitizeHexColor(
+      src.subStripColor,
+      DEFAULT_CUSTOM_SCOREBOARD_DESIGN.subStripColor
+    ),
+    borderColor: sanitizeHexColor(src.borderColor, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.borderColor),
+    borderWidth: Math.round(
+      clampScaleNumber(
+        src.borderWidth,
+        CUSTOM_DESIGN_BOUNDS.borderWidth.min,
+        CUSTOM_DESIGN_BOUNDS.borderWidth.max,
+        DEFAULT_CUSTOM_SCOREBOARD_DESIGN.borderWidth
+      )
+    ),
+    glowColor: sanitizeHexColor(src.glowColor, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.glowColor),
+    glowIntensity: Math.round(
+      clampScaleNumber(
+        src.glowIntensity,
+        CUSTOM_DESIGN_BOUNDS.glowIntensity.min,
+        CUSTOM_DESIGN_BOUNDS.glowIntensity.max,
+        DEFAULT_CUSTOM_SCOREBOARD_DESIGN.glowIntensity
+      )
+    ),
+    borderRadius: Math.round(
+      clampScaleNumber(
+        src.borderRadius,
+        CUSTOM_DESIGN_BOUNDS.borderRadius.min,
+        CUSTOM_DESIGN_BOUNDS.borderRadius.max,
+        DEFAULT_CUSTOM_SCOREBOARD_DESIGN.borderRadius
+      )
+    ),
+    fontFamily,
+    fontWeight,
+    showBorders: bool(src.showBorders, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.showBorders),
+    showGradient: bool(src.showGradient, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.showGradient),
+    showShadow: bool(src.showShadow, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.showShadow),
+    showDivider: bool(src.showDivider, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.showDivider),
+    showTelemetryBar: bool(src.showTelemetryBar, DEFAULT_CUSTOM_SCOREBOARD_DESIGN.showTelemetryBar),
+  };
 }
 
 export function normalizeOverlayConfig(
@@ -230,6 +582,12 @@ export function normalizeOverlayConfig(
   const position: OverlayPosition = OVERLAY_POSITIONS.includes(src.position as OverlayPosition)
     ? (src.position as OverlayPosition)
     : DEFAULT_OVERLAY_CONFIG.position;
+
+  const brandLogoPosition: OverlayPosition = OVERLAY_POSITIONS.includes(
+    src.brandLogoPosition as OverlayPosition
+  )
+    ? (src.brandLogoPosition as OverlayPosition)
+    : DEFAULT_OVERLAY_CONFIG.brandLogoPosition;
 
   const scale: OverlayScale = OVERLAY_SCALES.includes(src.scale as OverlayScale)
     ? (src.scale as OverlayScale)
@@ -303,6 +661,40 @@ export function normalizeOverlayConfig(
       OVERLAY_SLIDER_BOUNDS.metaScale.max,
       DEFAULT_OVERLAY_CONFIG.metaScale
     ),
+    showBrandLogo: bool(src.showBrandLogo, DEFAULT_OVERLAY_CONFIG.showBrandLogo),
+    brandLogoUrl: sanitizeBrandLogoUrl(src.brandLogoUrl),
+    brandLogoPosition,
+    brandLogoSize: Math.round(
+      clampScaleNumber(
+        src.brandLogoSize,
+        BRAND_LOGO_BOUNDS.brandLogoSize.min,
+        BRAND_LOGO_BOUNDS.brandLogoSize.max,
+        DEFAULT_OVERLAY_CONFIG.brandLogoSize
+      )
+    ),
+    brandLogoOpacity: clampScaleNumber(
+      src.brandLogoOpacity,
+      BRAND_LOGO_BOUNDS.brandLogoOpacity.min,
+      BRAND_LOGO_BOUNDS.brandLogoOpacity.max,
+      DEFAULT_OVERLAY_CONFIG.brandLogoOpacity
+    ),
+    brandLogoOffsetX: Math.round(
+      clampScaleNumber(
+        src.brandLogoOffsetX,
+        BRAND_LOGO_BOUNDS.brandLogoOffsetX.min,
+        BRAND_LOGO_BOUNDS.brandLogoOffsetX.max,
+        DEFAULT_OVERLAY_CONFIG.brandLogoOffsetX
+      )
+    ),
+    brandLogoOffsetY: Math.round(
+      clampScaleNumber(
+        src.brandLogoOffsetY,
+        BRAND_LOGO_BOUNDS.brandLogoOffsetY.min,
+        BRAND_LOGO_BOUNDS.brandLogoOffsetY.max,
+        DEFAULT_OVERLAY_CONFIG.brandLogoOffsetY
+      )
+    ),
+    customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
   };
 }
 
@@ -312,7 +704,10 @@ export function applyOverlayQueryParams(
 ): BroadcastOverlayConfig {
   if (!search) return base;
   const params = new URLSearchParams(search);
-  const next: BroadcastOverlayConfig = { ...base };
+  const next: BroadcastOverlayConfig = {
+    ...base,
+    customScoreboardDesign: { ...base.customScoreboardDesign },
+  };
 
   const mode = params.get('mode');
   if (mode && OVERLAY_MODES.includes(mode as OverlayMode)) {
@@ -323,6 +718,11 @@ export function applyOverlayQueryParams(
   const position = params.get('position');
   if (position && OVERLAY_POSITIONS.includes(position as OverlayPosition)) {
     next.position = position as OverlayPosition;
+  }
+
+  const brandLogoPosition = params.get('brandLogoPosition');
+  if (brandLogoPosition && OVERLAY_POSITIONS.includes(brandLogoPosition as OverlayPosition)) {
+    next.brandLogoPosition = brandLogoPosition as OverlayPosition;
   }
 
   const scale = params.get('scale');
@@ -363,6 +763,7 @@ export function applyOverlayQueryParams(
     'showRecentOver',
     'showLiveIndicator',
     'showMatchStatus',
+    'showBrandLogo',
   ] as const;
 
   for (const key of boolKeys) {
@@ -384,6 +785,21 @@ export function applyOverlayQueryParams(
     const raw = params.get(key);
     if (raw !== null) {
       const bounds = OVERLAY_SLIDER_BOUNDS[key];
+      next[key] = clampScaleNumber(raw, bounds.min, bounds.max, next[key]);
+    }
+  }
+
+  const logoNumKeys = [
+    'brandLogoSize',
+    'brandLogoOpacity',
+    'brandLogoOffsetX',
+    'brandLogoOffsetY',
+  ] as const;
+
+  for (const key of logoNumKeys) {
+    const raw = params.get(key);
+    if (raw !== null) {
+      const bounds = BRAND_LOGO_BOUNDS[key];
       next[key] = clampScaleNumber(raw, bounds.min, bounds.max, next[key]);
     }
   }

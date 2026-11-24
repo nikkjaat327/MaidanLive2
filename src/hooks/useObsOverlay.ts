@@ -5,12 +5,24 @@ import { extractApiError } from '../services/api/httpClient.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 import { DEFAULT_OVERLAY_CONFIG, normalizeOverlayConfig } from '../utils/overlayConfig.ts';
 import type { BroadcastGraphicsStateData } from '../types/broadcastGraphics.ts';
+import type { ObsLayoutType, PipPosition, PipSize } from '../utils/obsLayoutGeometry.ts';
+
+export interface ObsOverlayLayoutState {
+  activeLayoutType: ObsLayoutType;
+  activeCameraId: string;
+  activeCameraIds: string[];
+  activePipPosition: PipPosition;
+  activePipSize: PipSize;
+  activeObsScene: string;
+}
 
 export function useObsOverlay(matchId?: string) {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [score, setScore] = useState<LiveScoreData | null>(null);
   const [overlayConfig, setOverlayConfig] = useState<BroadcastOverlayConfig>(DEFAULT_OVERLAY_CONFIG);
   const [graphicsState, setGraphicsState] = useState<BroadcastGraphicsStateData | null>(null);
+  const [obsLayout, setObsLayout] = useState<ObsOverlayLayoutState | null>(null);
+  const [brandLogoUrl, setBrandLogoUrl] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(() => getSocketClient().connected);
@@ -43,6 +55,21 @@ export function useObsOverlay(matchId?: string) {
       if (res.graphicsState) {
         setGraphicsState(res.graphicsState);
       }
+      if (res.obsLayout) {
+        setObsLayout({
+          activeLayoutType: (res.obsLayout.activeLayoutType as ObsLayoutType) || 'SINGLE',
+          activeCameraId: res.obsLayout.activeCameraId || '',
+          activeCameraIds: Array.isArray(res.obsLayout.activeCameraIds)
+            ? res.obsLayout.activeCameraIds
+            : [],
+          activePipPosition: res.obsLayout.activePipPosition || 'bottom-right',
+          activePipSize: res.obsLayout.activePipSize || 'medium',
+          activeObsScene: res.obsLayout.activeObsScene || '',
+        });
+      }
+      if (typeof res.brandLogoUrl === 'string' && res.brandLogoUrl.trim()) {
+        setBrandLogoUrl(res.brandLogoUrl.trim());
+      }
     } catch (err) {
       setError(extractApiError(err, 'Unable to load match broadcast overlay.'));
     } finally {
@@ -58,6 +85,7 @@ export function useObsOverlay(matchId?: string) {
       setStream(null);
       setScore(null);
       setGraphicsState(null);
+      setObsLayout(null);
       setLoading(false);
       return;
     }
@@ -185,6 +213,43 @@ export function useObsOverlay(matchId?: string) {
       }
     };
 
+    const handleObsLayoutUpdated = (payload: {
+      matchId?: string;
+      layoutType?: ObsLayoutType;
+      activeLayoutType?: ObsLayoutType;
+      cameraId?: string;
+      cameraIds?: string[];
+      activeCameraId?: string;
+      activeCameraIds?: string[];
+      pipPosition?: PipPosition;
+      pipSize?: PipSize;
+      sceneName?: string;
+      activeObsScene?: string;
+      eventId?: string;
+      serverNowIso?: string;
+      emittedAt?: string;
+    }) => {
+      if (payload?.matchId !== matchId) return;
+      if (!shouldAcceptEvent(payload, false)) return;
+      syncServerClock(payload.serverNowIso || payload.emittedAt);
+      const nextLayout = payload.layoutType || payload.activeLayoutType || 'SINGLE';
+      const nextCamIds = Array.isArray(payload.activeCameraIds)
+        ? payload.activeCameraIds
+        : Array.isArray(payload.cameraIds)
+          ? payload.cameraIds
+          : payload.activeCameraId || payload.cameraId
+            ? [String(payload.activeCameraId || payload.cameraId)]
+            : [];
+      setObsLayout((prev) => ({
+        activeLayoutType: nextLayout,
+        activeCameraId: payload.activeCameraId || payload.cameraId || prev?.activeCameraId || nextCamIds[0] || '',
+        activeCameraIds: nextCamIds,
+        activePipPosition: payload.pipPosition || prev?.activePipPosition || 'bottom-right',
+        activePipSize: payload.pipSize || prev?.activePipSize || 'medium',
+        activeObsScene: payload.activeObsScene || payload.sceneName || prev?.activeObsScene || '',
+      }));
+    };
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('score:updated', handleScorePayload);
@@ -209,6 +274,7 @@ export function useObsOverlay(matchId?: string) {
     socket.on('live:ended', handleStreamEnded);
     socket.on('overlay:config_updated', handleOverlayConfigUpdated);
     socket.on('graphics:state_updated', handleGraphicsStateUpdated);
+    socket.on('obs:layout_updated', handleObsLayoutUpdated);
 
     return () => {
       socket.off('connect', handleConnect);
@@ -235,6 +301,7 @@ export function useObsOverlay(matchId?: string) {
       socket.off('live:ended', handleStreamEnded);
       socket.off('overlay:config_updated', handleOverlayConfigUpdated);
       socket.off('graphics:state_updated', handleGraphicsStateUpdated);
+      socket.off('obs:layout_updated', handleObsLayoutUpdated);
       socket.emit('match:leave', matchId);
     };
   }, [matchId, fetchOverlay, syncServerClock]);
@@ -258,6 +325,8 @@ export function useObsOverlay(matchId?: string) {
     setOverlayConfig,
     graphicsState,
     setGraphicsState,
+    obsLayout,
+    brandLogoUrl,
     serverClockOffsetMs,
     loading,
     error,

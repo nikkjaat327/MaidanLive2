@@ -30,6 +30,8 @@ import {
   type DetectedFrameContentInfo,
 } from '../../utils/obsTransformGeometry.ts';
 import { HotstarBroadcastOverlay } from '../obs/HotstarBroadcastOverlay.tsx';
+import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
 import type { ProgramMonitorMode } from './ProgramAndCompositionWorkspace.tsx';
 
@@ -131,6 +133,7 @@ function ScaledScoreboardOverlayLayer({
         }}
         className="shrink-0 relative pointer-events-none"
       >
+        <BroadcastBrandLogoBug config={config} variant="canvas" zIndex={24} />
         <HotstarBroadcastOverlay
           stream={normalizedStream}
           score={score}
@@ -351,12 +354,17 @@ export function ControlRoomMonitors({
                       height: `${(box.height / 1080) * 100}%`,
                       zIndex: box.slotIndex + 1,
                     }}
-                    className="absolute overflow-hidden bg-black border border-white/5"
+                    className="absolute overflow-hidden bg-black"
                   >
                     {renderFeedSurface(cam, 'prog', programBoxes.length === 1)}
                   </div>
                 );
               })}
+              <MultiCamSplitBorders
+                layoutType={obsConnected ? profile.activeLayoutType || 'SINGLE' : 'SINGLE'}
+                boxes={programBoxes}
+                zIndex={15}
+              />
             </div>
           ) : obsConnected && programSnapshot ? (
             <img
@@ -499,7 +507,7 @@ export function ControlRoomMonitors({
                       height: `${(box.height / 1080) * 100}%`,
                       zIndex: box.slotIndex + 1,
                     }}
-                    className="absolute overflow-hidden bg-black border border-purple-500/35"
+                    className="absolute overflow-hidden bg-black"
                   >
                     {renderFeedSurface(cam, 'prev', false)}
                     <span className="pointer-events-none absolute bottom-1 left-1 z-10 px-1.5 py-0.5 rounded bg-black/80 border border-purple-500/40 font-mono text-[9px] font-bold text-purple-200">
@@ -508,6 +516,11 @@ export function ControlRoomMonitors({
                   </div>
                 );
               })}
+              <MultiCamSplitBorders
+                layoutType={stagedLayoutType}
+                boxes={stagedBoxes}
+                zIndex={15}
+              />
             </div>
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center space-y-1.5 bg-[#060911]">

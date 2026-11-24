@@ -16,6 +16,12 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import {
+  getStickyMatchId,
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+  subscribeStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 export function AdminModerationPage() {
   const [flaggedMessages, setFlaggedMessages] = useState<ChatMessageData[]>([]);
@@ -31,7 +37,7 @@ export function AdminModerationPage() {
     }>
   >([]);
   const [streams, setStreams] = useState<LiveStreamData[]>([]);
-  const [selectedStreamId, setSelectedStreamId] = useState('');
+  const [selectedStreamId, setSelectedStreamId] = useState(() => getStickyMatchId());
   const [polls, setPolls] = useState<PollData[]>([]);
 
   // Create Poll form
@@ -54,15 +60,22 @@ export function AdminModerationPage() {
       setRecentMessages(queue.recentMessages || []);
       setMutedUsers(queue.mutedUsers || []);
       setStreams(allStreams);
-      if (allStreams.length > 0 && !selectedStreamId) {
-        setSelectedStreamId(allStreams[0].id);
+      if (allStreams.length > 0) {
+        setSelectedStreamId((prev) => {
+          const resolved = resolveStickyOrPreferredMatch(
+            prev && allStreams.some((s) => s.id === prev) ? prev : undefined,
+            allStreams
+          );
+          if (resolved) setStickyMatchId(resolved);
+          return resolved;
+        });
       }
     } catch (err) {
       setError(extractApiError(err, 'Failed to load chat moderation queue.'));
     } finally {
       setLoading(false);
     }
-  }, [selectedStreamId]);
+  }, []);
 
   const loadPolls = useCallback(async (streamId: string) => {
     if (!streamId) return;
@@ -77,6 +90,14 @@ export function AdminModerationPage() {
   useEffect(() => {
     loadModeration();
   }, [loadModeration]);
+
+  useEffect(() => {
+    return subscribeStickyMatchId((nextId) => {
+      if (nextId && streams.some((s) => s.id === nextId)) {
+        setSelectedStreamId(nextId);
+      }
+    });
+  }, [streams]);
 
   useEffect(() => {
     if (selectedStreamId) {
@@ -318,7 +339,11 @@ export function AdminModerationPage() {
                     </label>
                     <select
                       value={selectedStreamId}
-                      onChange={(e) => setSelectedStreamId(e.target.value)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setSelectedStreamId(next);
+                        setStickyMatchId(next);
+                      }}
                       className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
                     >
                       {streams.map((s) => (

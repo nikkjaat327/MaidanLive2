@@ -15,6 +15,7 @@ import { Fixture } from '../models/Fixture.ts';
 import { Team } from '../models/Team.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Venue } from '../models/Venue.ts';
+import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
 import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
 import {
   buildPublicStreamVisibilityQuery,
@@ -741,10 +742,15 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
       return;
     }
 
-    const [score, venue, graphicsState] = await Promise.all([
+    const [score, venue, graphicsState, obsProfile] = await Promise.all([
       LiveScore.findOne({ liveStreamId: stream._id }).lean(),
       stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
       getGraphicsStateForMatch(id),
+      ObsControllerProfile.findOne({ matchId: stream._id })
+        .select(
+          'activeLayoutType activeCameraId activeCameraIds activePipPosition activePipSize activeObsScene connectionStatus'
+        )
+        .lean(),
     ]);
 
     const overlayConfig = normalizeOverlayConfig((stream as any).overlayConfig);
@@ -775,6 +781,22 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
     delete (safeStream as any).mediamtxPlaybackWebrtcUrl;
     delete (safeStream as any).mediamtxHlsUrl;
 
+    const obsLayout = obsProfile
+      ? {
+          activeLayoutType: (obsProfile as any).activeLayoutType || 'SINGLE',
+          activeCameraId: (obsProfile as any).activeCameraId || '',
+          activeCameraIds: Array.isArray((obsProfile as any).activeCameraIds)
+            ? (obsProfile as any).activeCameraIds
+            : [],
+          activePipPosition: (obsProfile as any).activePipPosition || 'bottom-right',
+          activePipSize: (obsProfile as any).activePipSize || 'medium',
+          activeObsScene: (obsProfile as any).activeObsScene || '',
+        }
+      : null;
+
+    const brandLogoUrl =
+      (process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL || '').trim();
+
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -783,6 +805,8 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
       score: score || null,
       overlayConfig,
       graphicsState,
+      obsLayout,
+      brandLogoUrl,
       serverNowIso: new Date().toISOString(),
     });
   } catch (err) {
@@ -829,7 +853,17 @@ router.patch(
           : req.body;
 
       const currentConfig = normalizeOverlayConfig((stream as any).overlayConfig);
-      const mergedRaw: Record<string, unknown> = { ...currentConfig, ...incoming };
+      const mergedRaw: Record<string, unknown> = {
+        ...currentConfig,
+        ...incoming,
+        customScoreboardDesign:
+          incoming.customScoreboardDesign && typeof incoming.customScoreboardDesign === 'object'
+            ? {
+                ...currentConfig.customScoreboardDesign,
+                ...incoming.customScoreboardDesign,
+              }
+            : currentConfig.customScoreboardDesign,
+      };
 
       // Keep visible & mode coherent
       if (typeof incoming.mode === 'string') {

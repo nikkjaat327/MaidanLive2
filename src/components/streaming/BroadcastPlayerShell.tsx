@@ -16,6 +16,8 @@ import { YouTubePlayer } from './YouTubePlayer.tsx';
 import { BroadcastScoreboardOverlay } from '../scoreboard/broadcast/BroadcastScoreboardOverlay.tsx';
 import { StartingSoonGraphic } from './StartingSoonGraphic.tsx';
 import { SponsorOverlayBanner } from './SponsorOverlayBanner.tsx';
+import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
+import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 
 interface BroadcastPlayerShellProps {
   stream: LiveStreamData;
@@ -291,6 +293,13 @@ export function BroadcastPlayerShell({
               </div>
             </div>
           )}
+
+          {/* Admin-Configured Brand Logo Bug */}
+          <BroadcastBrandLogoBug
+            config={normalizeOverlayConfig(stream.overlayConfig)}
+            variant="responsive"
+            zIndex={22}
+          />
 
           {/* Active Sponsor Overlay Strip (positioned away from scoreboard when possible) */}
           {sponsorOverlays.length > 0 && (

@@ -5,9 +5,12 @@ import { useObsOverlay } from '../../hooks/useObsOverlay.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { authService } from '../../services/auth/authService.ts';
 import { applyOverlayQueryParams } from '../../utils/overlayConfig.ts';
+import { computeObsLayoutBoxes } from '../../utils/obsLayoutGeometry.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
+import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
+import { MultiCamSplitBorders } from '../../components/obsStudio/MultiCamSplitBorders.tsx';
 
 export function ObsOverlayViewerPage() {
   const { matchId } = useParams<{ matchId: string }>();
@@ -20,6 +23,8 @@ export function ObsOverlayViewerPage() {
     overlayConfig,
     setOverlayConfig,
     graphicsState,
+    obsLayout,
+    brandLogoUrl,
     serverClockOffsetMs,
     loading,
     refetch,
@@ -27,6 +32,7 @@ export function ObsOverlayViewerPage() {
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const obsForced = searchParams.get('obs') === '1' || searchParams.get('controls') === '0';
+  const sbOff = searchParams.get('sb') === '0';
   const isAdminAuthenticated =
     !adminLoading && Boolean(adminUser) && Boolean(authService.getAdminToken());
   const canShowAdminControls = isAdminAuthenticated && !obsForced;
@@ -50,7 +56,7 @@ export function ObsOverlayViewerPage() {
   // Ensure OBS Studio Browser Source never runs under a stale cached PWA Service Worker
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-    let hadController = Boolean(navigator.serviceWorker.controller);
+    const hadController = Boolean(navigator.serviceWorker.controller);
     navigator.serviceWorker
       .getRegistrations()
       .then(async (regs) => {
@@ -113,6 +119,27 @@ export function ObsOverlayViewerPage() {
     };
   }, [viewport, isPortrait]);
 
+  const multiCamBoxes = useMemo(() => {
+    if (!obsLayout || obsLayout.activeLayoutType === 'SINGLE') return [];
+    const ids = obsLayout.activeCameraIds.length
+      ? obsLayout.activeCameraIds
+      : obsLayout.activeCameraId
+        ? [obsLayout.activeCameraId]
+        : [];
+    if (ids.length <= 1) return [];
+    return computeObsLayoutBoxes(
+      obsLayout.activeLayoutType,
+      ids,
+      obsLayout.activeCameraId || ids[0],
+      canvasWidth,
+      canvasHeight,
+      {
+        pipPosition: obsLayout.activePipPosition,
+        pipSize: obsLayout.activePipSize,
+      }
+    );
+  }, [obsLayout, canvasWidth, canvasHeight]);
+
   if (loading || !stream) {
     return <div className="w-screen h-screen bg-transparent overflow-hidden" />;
   }
@@ -132,7 +159,26 @@ export function ObsOverlayViewerPage() {
         }}
         className="shrink-0 relative bg-transparent overflow-hidden pointer-events-none"
       >
-        {showScoreboardOnYoutube && (
+        {/* Multi-Camera 2px White + Neon Accent Split Borders rendered in actual OBS Program output */}
+        {obsLayout && obsLayout.activeLayoutType !== 'SINGLE' && multiCamBoxes.length > 1 && (
+          <MultiCamSplitBorders
+            layoutType={obsLayout.activeLayoutType}
+            boxes={multiCamBoxes}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+            zIndex={10}
+          />
+        )}
+
+        {/* Positioned Brand Logo Overlay */}
+        <BroadcastBrandLogoBug
+          config={effectiveConfig}
+          serverLogoUrl={brandLogoUrl}
+          variant="canvas"
+          zIndex={24}
+        />
+
+        {showScoreboardOnYoutube && !sbOff && (
           <HotstarBroadcastOverlay
             stream={stream}
             score={score}
@@ -150,9 +196,11 @@ export function ObsOverlayViewerPage() {
         />
       </div>
 
-      {canShowAdminControls && !showScoreboardOnYoutube && (
+      {canShowAdminControls && (!showScoreboardOnYoutube || sbOff) && (
         <div className="fixed top-4 left-4 z-50 pointer-events-none px-3.5 py-2 rounded-lg border border-amber-500/40 bg-slate-950/90 text-xs font-semibold text-amber-200 shadow-lg backdrop-blur-md">
-          Scoreboard on YouTube is OFF — overlay hidden in OBS; visible only inside MaidanLive video player.
+          {sbOff
+            ? 'Scoreboard hidden via ?sb=0 — multi-cam split borders & brand logo remain active.'
+            : 'Scoreboard on YouTube is OFF — overlay hidden in OBS; visible only inside MaidanLive video player.'}
         </div>
       )}
 

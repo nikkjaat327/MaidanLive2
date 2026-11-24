@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, powerMonitor } = require('electron');
 const { BridgeEngine } = require('./bridgeEngine.cjs');
 const { startLocalBridgeServer } = require('./localServer.cjs');
 const { launchObsStudio } = require('./obsDetector.cjs');
@@ -247,6 +247,21 @@ if (!gotSingleLock) {
 
     await engine.start();
     updateTrayMenu();
+
+    try {
+      powerMonitor.on('suspend', () => {
+        if (typeof engine.handleSystemSuspend === 'function') {
+          engine.handleSystemSuspend('windows_power_suspend');
+        }
+      });
+      powerMonitor.on('resume', () => {
+        if (typeof engine.handleSystemResume === 'function') {
+          engine.handleSystemResume('windows_power_resume');
+        }
+      });
+    } catch {
+      // Ignore powerMonitor unavailable in headless tests
+    }
   });
 }
 

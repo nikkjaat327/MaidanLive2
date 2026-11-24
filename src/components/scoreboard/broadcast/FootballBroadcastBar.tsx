@@ -55,8 +55,8 @@ export function FootballBroadcastBar({ stream, score }: FootballBroadcastBarProp
         <div className="flex items-center justify-center gap-2 sm:gap-3 min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0 justify-end flex-1">
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate text-right">
-              <span className="sm:hidden">{shortA}</span>
-              <span className="hidden sm:inline">{nameA}</span>
+              <span className="hidden portrait:inline">{shortA}</span>
+              <span className="portrait:hidden">{nameA}</span>
             </span>
             <BroadcastLogo logoUrl={stream.teamALogo} alt={shortA} />
           </div>
@@ -70,8 +70,8 @@ export function FootballBroadcastBar({ stream, score }: FootballBroadcastBarProp
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             <BroadcastLogo logoUrl={stream.teamBLogo} alt={shortB} />
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate">
-              <span className="sm:hidden">{shortB}</span>
-              <span className="hidden sm:inline">{nameB}</span>
+              <span className="hidden portrait:inline">{shortB}</span>
+              <span className="portrait:hidden">{nameB}</span>
             </span>
           </div>
         </div>

@@ -102,6 +102,7 @@ import {
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
+import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
 import {
   getLayoutSlotCount,
   MAX_CONTROL_ROOM_CAMERAS,
@@ -1339,6 +1340,7 @@ export function AdminObsBroadcastStudioPage() {
         else if (next.length === 4 && stagedLayoutType === 'SPLIT_3') setStagedLayoutType('GRID_4');
         else if (next.length === 5 && stagedLayoutType === 'GRID_4') setStagedLayoutType('GRID_5');
         else if (next.length === 6 && stagedLayoutType === 'GRID_5') setStagedLayoutType('GRID_6');
+        else if (next.length === 8 && stagedLayoutType === 'GRID_6') setStagedLayoutType('GRID_8');
       } else if (next.length <= 1 && stagedLayoutType !== 'SINGLE' && stagedLayoutType !== 'SPORT_BROADCAST') {
         setStagedLayoutType('SINGLE');
       }
@@ -2160,6 +2162,12 @@ export function AdminObsBroadcastStudioPage() {
     else if (patch.mode && patch.visible === undefined) apiPatch.visible = true;
     if (patch.visible === true && (patch.mode ?? current.mode) === 'hidden') {
       apiPatch.mode = 'full';
+    }
+    if (patch.customScoreboardDesign && typeof patch.customScoreboardDesign === 'object') {
+      apiPatch.customScoreboardDesign = {
+        ...current.customScoreboardDesign,
+        ...(patch.customScoreboardDesign as Record<string, unknown>),
+      };
     }
     const next = normalizeOverlayConfig({ ...current, ...apiPatch });
 
@@ -3999,11 +4007,11 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 </div>
 
-                {/* 10 Scoreboard Layout Styles */}
+                {/* 25 Scoreboard Layout Styles + Custom Designer */}
                 <div className="pt-3 border-t border-slate-200 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-xs font-semibold text-slate-700">
-                      Scoreboard Design Style (10 Broadcast Themes)
+                      Scoreboard Design Style (25 Themes + Custom Designer)
                     </label>
                     <span className="text-[11px] font-mono text-purple-600 font-bold">
                       {currentOverlay.style}
@@ -4015,6 +4023,15 @@ export function AdminObsBroadcastStudioPage() {
                     darkSurface={false}
                     compact
                     onChange={(style) => void handleUpdateOverlay({ style })}
+                  />
+                </div>
+
+                <div className="pt-3 border-t border-slate-200">
+                  <CustomScoreboardDesigner
+                    config={currentOverlay}
+                    disabled={savingOverlay}
+                    darkSurface={false}
+                    onChange={(patch) => void handleUpdateOverlay(patch)}
                   />
                 </div>
 

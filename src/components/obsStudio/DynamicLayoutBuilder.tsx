@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Grid2x2, Layers, LayoutGrid, Play, Plus, Tv } from 'lucide-react';
 import {
   computeObsLayoutBoxes,
+  getLayoutSlotCount,
   LAYOUT_METADATA,
   ObsLayoutType,
 } from '../../utils/obsLayoutGeometry.ts';
 import type { BroadcastCameraData } from '../../types/obs.ts';
+import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 
 interface DynamicLayoutBuilderProps {
   cameras: BroadcastCameraData[];
@@ -62,16 +64,7 @@ export function DynamicLayoutBuilder({
     setSelectedIds((prev) => {
       const valid = prev.filter((id) => enabledCameras.some((c) => c.cameraId === id));
       if (valid.length > 0) return valid;
-      const defaultTake =
-        layoutType === 'SINGLE'
-          ? 1
-          : layoutType === 'SPLIT_2_H' || layoutType === 'SPLIT_2_V'
-            ? 2
-            : layoutType === 'SPLIT_3'
-              ? 3
-              : layoutType === 'GRID_4'
-                ? 4
-                : enabledCameras.length;
+      const defaultTake = getLayoutSlotCount(layoutType, enabledCameras.length);
       return enabledCameras.slice(0, defaultTake).map((c) => c.cameraId);
     });
     setMainCameraId((prev) =>
@@ -95,16 +88,7 @@ export function DynamicLayoutBuilder({
     setLayoutType(nextType);
     const meta = LAYOUT_METADATA[nextType];
     if (enabledCameras.length > 0) {
-      const targetCount =
-        nextType === 'SINGLE'
-          ? 1
-          : nextType === 'SPLIT_2_H' || nextType === 'SPLIT_2_V'
-            ? 2
-            : nextType === 'SPLIT_3'
-              ? 3
-              : nextType === 'GRID_4'
-                ? 4
-                : enabledCameras.length;
+      const targetCount = getLayoutSlotCount(nextType, enabledCameras.length);
       setSelectedIds(enabledCameras.slice(0, Math.min(targetCount, enabledCameras.length)).map((c) => c.cameraId));
     }
     if (!customSceneName.trim()) {
@@ -259,7 +243,10 @@ export function DynamicLayoutBuilder({
             )}
 
             {includeScoreboardOverlay && boxes.length > 0 && (
-              <div className="absolute bottom-2.5 left-3 right-3 h-7 rounded border border-emerald-500/40 bg-emerald-500/15 px-2.5 flex items-center justify-between pointer-events-none">
+              <div
+                style={{ zIndex: 20 }}
+                className="absolute bottom-2.5 left-3 right-3 h-7 rounded border border-emerald-500/40 bg-emerald-500/15 px-2.5 flex items-center justify-between pointer-events-none"
+              >
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-300">
                   <Tv className="w-3 h-3" />
                   MaidanLive Scoreboard Overlay Layer (Top)
@@ -267,6 +254,7 @@ export function DynamicLayoutBuilder({
                 <span className="font-mono text-[9px] text-emerald-200">1920×1080 Transparent</span>
               </div>
             )}
+            <MultiCamSplitBorders layoutType={layoutType} boxes={boxes} zIndex={15} />
           </div>
         </div>
 

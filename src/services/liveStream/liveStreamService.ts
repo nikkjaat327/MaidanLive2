@@ -205,6 +205,15 @@ export const liveStreamService = {
     score: LiveScoreData | null;
     overlayConfig: BroadcastOverlayConfig;
     graphicsState?: BroadcastGraphicsStateData;
+    obsLayout?: {
+      activeLayoutType?: string;
+      activeCameraId?: string;
+      activeCameraIds?: string[];
+      activePipPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+      activePipSize?: 'small' | 'medium' | 'large';
+      activeObsScene?: string;
+    } | null;
+    brandLogoUrl?: string;
     serverNowIso?: string;
   }> {
     const { data } = await publicApi.get<{
@@ -212,6 +221,15 @@ export const liveStreamService = {
       score: LiveScoreData | null;
       overlayConfig: BroadcastOverlayConfig;
       graphicsState?: BroadcastGraphicsStateData;
+      obsLayout?: {
+        activeLayoutType?: string;
+        activeCameraId?: string;
+        activeCameraIds?: string[];
+        activePipPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+        activePipSize?: 'small' | 'medium' | 'large';
+        activeObsScene?: string;
+      } | null;
+      brandLogoUrl?: string;
       serverNowIso?: string;
     }>(`/live/${id}/overlay`, {
       params: { _t: Date.now() },

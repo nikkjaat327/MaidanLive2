@@ -44,8 +44,10 @@ import {
 import { computeCricketChaseState, formatCricketOvers, normalizeCricketDetails } from '../../utils/cricketScoring.ts';
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
+import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { FloatingOverlayScorePanel } from '../../components/obs/FloatingOverlayScorePanel.tsx';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
+import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import { TeamAvatar } from '../../components/common/TeamAvatar.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
@@ -158,6 +160,7 @@ export function BroadcastOverlayConfigPage() {
     setScore,
     overlayConfig,
     setOverlayConfig,
+    brandLogoUrl,
     serverClockOffsetMs,
     loading,
     error,
@@ -249,6 +252,12 @@ export function BroadcastOverlayConfigPage() {
     else if (partial.mode && partial.visible === undefined) apiPatch.visible = true;
     if (partial.visible === true && (partial.mode ?? effectiveOverlayConfig.mode) === 'hidden') {
       apiPatch.mode = 'full';
+    }
+    if (partial.customScoreboardDesign) {
+      apiPatch.customScoreboardDesign = {
+        ...effectiveOverlayConfig.customScoreboardDesign,
+        ...partial.customScoreboardDesign,
+      };
     }
 
     const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...apiPatch });
@@ -794,6 +803,12 @@ export function BroadcastOverlayConfigPage() {
                         }}
                         className="absolute top-0 left-0 pointer-events-none"
                       >
+                        <BroadcastBrandLogoBug
+                          config={effectiveOverlayConfig}
+                          serverLogoUrl={brandLogoUrl}
+                          variant="canvas"
+                          zIndex={24}
+                        />
                         <HotstarBroadcastOverlay
                           stream={stream}
                           score={score}
@@ -996,11 +1011,11 @@ export function BroadcastOverlayConfigPage() {
                   </span>
                 </label>
 
-                {/* Scoreboard Style (10 Layouts) */}
+                {/* Scoreboard Style (25 Layouts + Custom Designer) */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                      Scoreboard Style (10 Distinct Layouts)
+                      Scoreboard Style (25 Layouts + Custom Designer)
                     </label>
                     <span className="text-[10px] font-mono text-purple-300">
                       {overlayConfig.style || 'broadcast_classic'}
@@ -1013,6 +1028,15 @@ export function BroadcastOverlayConfigPage() {
                     onChange={(style) => persistOverlayPatch({ style })}
                   />
                 </div>
+
+                {/* Brand Logo Position/Size & Custom Scoreboard Builder */}
+                <CustomScoreboardDesigner
+                  config={effectiveOverlayConfig}
+                  serverLogoUrl={brandLogoUrl}
+                  disabled={saving}
+                  darkSurface
+                  onChange={(patch) => void persistOverlayPatch(patch)}
+                />
 
                 {/* Display Mode */}
                 <div className="space-y-2">

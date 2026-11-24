@@ -78,6 +78,7 @@ const MULTI_VIEW_OPTIONS: ObsLayoutType[] = [
   'GRID_4',
   'GRID_5',
   'GRID_6',
+  'GRID_8',
 ];
 
 function isCameraInProgram(
@@ -121,7 +122,8 @@ function resolveSixCamGridClass(count: number): string {
   if (count === 3) return 'grid-cols-1 sm:grid-cols-2';
   if (count === 4) return 'grid-cols-1 sm:grid-cols-2';
   if (count === 5) return 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-6';
-  return 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3';
+  if (count === 6) return 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3';
+  return 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4';
 }
 
 function resolveTileSpanClass(count: number, index: number): string {
@@ -369,7 +371,7 @@ export function ControlRoomCameraGrid({
           <div className="space-y-1">
             <p className="text-xs font-bold text-slate-200">No cameras configured yet</p>
             <p className="text-[11px] text-slate-400 max-w-md mx-auto">
-              Add smartphone VDO.Ninja feeds, Larix RTMP/SRT cameras, or map OBS inputs (up to 6 simultaneous cameras in Control Room).
+              Add smartphone VDO.Ninja feeds, Larix RTMP/SRT cameras, or map OBS inputs (up to {MAX_CONTROL_ROOM_CAMERAS} simultaneous cameras in Control Room).
             </p>
           </div>
           {canManageCameras && (

@@ -984,8 +984,16 @@ export function initObsControllerBridge(): void {
         if (mediamtxPayload) {
           updateFields.mediamtxState = mediamtxPayload;
         }
+        const preservedStatus =
+          (status === 'RECONNECTING' || status === 'CONNECTION_LOST' || status === 'DISCONNECTED') &&
+          prev?.obsStreamActive &&
+          payload.obsStreamActive !== false
+            ? prev.obsStreamActive
+            : undefined;
         if (typeof payload.obsStreamActive === 'boolean' && (status === 'CONNECTED' || payload.obsStreamActive)) {
           updateFields.obsStreamActive = payload.obsStreamActive;
+        } else if (preservedStatus !== undefined) {
+          updateFields.obsStreamActive = preservedStatus;
         }
         if (typeof payload.obsStreamTimecode === 'string') {
           updateFields.obsStreamTimecode = payload.obsStreamTimecode;
@@ -1069,7 +1077,7 @@ export function initObsControllerBridge(): void {
 
         if (activeObsScene && status === 'CONNECTED') {
           await reconcileCameraActiveStates(mid, activeObsScene);
-        } else if (status !== 'CONNECTED' && status !== 'RECONNECTING' && status !== 'CONNECTING') {
+        } else if (status !== 'CONNECTED' && status !== 'RECONNECTING' && status !== 'CONNECTING' && status !== 'CONNECTION_LOST') {
           await reconcileCameraActiveStates(mid, '');
         }
 
@@ -1083,9 +1091,24 @@ export function initObsControllerBridge(): void {
           { bridgeId: context.bridgeId },
           {
             $set: {
-              obsStatus: 'ERROR',
+              obsStatus: 'RECONNECTING',
+              obsConnectionState: 'RECONNECTING',
               lastError: errorMessage.slice(0, 500),
               lastHeartbeatAt: new Date(),
+            },
+            $push: {
+              diagnosticLogs: {
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    level: 'warn',
+                    category: 'ws_error',
+                    message: errorMessage.slice(0, 400),
+                    reason: 'obs_error',
+                  },
+                ],
+                $slice: -30,
+              },
             },
           }
         );
@@ -1096,7 +1119,7 @@ export function initObsControllerBridge(): void {
           { matchId: mid },
           {
             $set: {
-              connectionStatus: 'ERROR',
+              connectionStatus: 'RECONNECTING',
               lastError: errorMessage.slice(0, 500),
               agentLastSeenAt: new Date(),
             },
@@ -1111,7 +1134,6 @@ export function initObsControllerBridge(): void {
           errorDetails: errorMessage,
         });
         emitBroadcastStudioEvent(mid, 'obs:error', { matchId: mid, message: errorMessage });
-        emitBroadcastStudioEvent(mid, 'OBS_DISCONNECTED', { matchId: mid, error: errorMessage });
         await emitFullStudioState(mid);
       }
     },
@@ -1463,6 +1485,8 @@ export function formatSafeProfile(profile: any) {
   } else if (profile.connectionMode === 'direct_ws') {
     if (direct?.connected) effectiveStatus = 'CONNECTED';
     else if (direct?.connecting) effectiveStatus = 'CONNECTING';
+    else if (profile.connectionStatus === 'RECONNECTING') effectiveStatus = 'RECONNECTING';
+    else if (profile.connectionStatus === 'CONNECTION_LOST') effectiveStatus = 'CONNECTION_LOST';
     else if (profile.connectionStatus === 'ERROR') effectiveStatus = 'ERROR';
     else effectiveStatus = 'DISCONNECTED';
   }
@@ -1854,6 +1878,19 @@ export async function connectDirectObs(
   const wsUrl = `${profile.obsProtocol === 'wss' ? 'wss' : 'ws'}://${profile.obsHost}:${profile.obsPort}`;
   const password = profile.obsPasswordEnc ? decryptObsSecret(profile.obsPasswordEnc) : undefined;
 
+  const handleWsError = async (err: unknown) => {
+    const errObj = err as { message?: string } | null | undefined;
+    const errMsg = String(errObj?.message || err || 'OBS WebSocket error');
+    console.warn(`[DirectOBS] WebSocket error on match ${matchId}: ${errMsg}`);
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId },
+      { $set: { lastError: errMsg.slice(0, 500) } }
+    ).catch(() => {});
+  };
+
+  obs.on('ConnectionError', handleWsError);
+  (obs as unknown as { on: (ev: string, fn: (err: unknown) => void) => void }).on('error', handleWsError);
+
   obs.on('ConnectionClosed', async (err: any) => {
     const cur = directSessions.get(matchId);
     if (!cur || cur.obs !== obs) return;
@@ -1885,6 +1922,7 @@ export async function connectDirectObs(
     });
     emitBroadcastStudioEvent(matchId, 'OBS_DISCONNECTED', {
       matchId,
+      connectionStatus: cur.manualDisconnect ? 'DISCONNECTED' : 'RECONNECTING',
       reason: reasonMsg,
     });
     await emitFullStudioState(matchId);
@@ -2000,10 +2038,18 @@ export async function connectDirectObs(
   } catch (err: any) {
     session.connected = false;
     session.connecting = false;
-    directSessions.delete(matchId);
 
     const errMsg = err?.message || `Failed to connect to OBS WebSocket at ${wsUrl}`;
-    profile.connectionStatus = 'ERROR';
+    const keepRetrying = isAutoReconnect && !session.manualDisconnect;
+    if (!keepRetrying) {
+      directSessions.delete(matchId);
+    }
+
+    profile.connectionStatus = keepRetrying
+      ? session.reconnectAttempts >= 3
+        ? 'CONNECTION_LOST'
+        : 'RECONNECTING'
+      : 'ERROR';
     profile.lastError = errMsg.slice(0, 500);
     await profile.save();
 
@@ -2016,6 +2062,10 @@ export async function connectDirectObs(
     });
     emitBroadcastStudioEvent(matchId, 'obs:error', { matchId, message: errMsg });
     await emitFullStudioState(matchId);
+
+    if (keepRetrying) {
+      scheduleDirectReconnect(matchId).catch(() => {});
+    }
     return { ok: false, profile: formatSafeProfile(profile), error: errMsg };
   }
 }
@@ -3257,9 +3307,12 @@ export async function applyDynamicLayoutToObs(
         ? { transitionDurationMs: params.transitionDurationMs }
         : {}),
       scoreboardOverlay: {
-        enabled: includeScoreboard,
+        // Always enable browser source for multi-camera layouts (>1 box) so 2px split borders render in OBS Program output
+        enabled: boxes.length > 1 ? Boolean(baseAppUrl) : includeScoreboard,
         sourceName: profile.scoreboardSourceName || 'MaidanLive_Scoreboard_Overlay',
-        url: baseAppUrl ? `${baseAppUrl}/broadcast/overlay/view/${matchId}?obs=1&controls=0` : '',
+        url: baseAppUrl
+          ? `${baseAppUrl}/broadcast/overlay/view/${matchId}?obs=1&controls=0${includeScoreboard ? '' : '&sb=0'}`
+          : '',
       },
     });
 

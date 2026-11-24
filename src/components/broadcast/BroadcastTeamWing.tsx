@@ -10,6 +10,7 @@ interface BroadcastTeamWingProps {
   secondaryText?: string;
   badgeText?: string;
   compact?: boolean;
+  isPortrait?: boolean;
 }
 
 export function BroadcastTeamWing({
@@ -21,11 +22,23 @@ export function BroadcastTeamWing({
   secondaryText,
   badgeText,
   compact = false,
+  isPortrait,
 }: BroadcastTeamWingProps) {
   const isLeft = side === 'left';
   const bgClass = isLeft
     ? 'bg-gradient-to-r from-[#0B3B8C] via-[#102E6B] to-[#0E1F47]'
     : 'bg-gradient-to-l from-[#991B1B] via-[#7A1822] to-[#3B1221]';
+
+  const renderTeamTitle = () => {
+    if (isPortrait === true) return shortName;
+    if (isPortrait === false) return name;
+    return (
+      <>
+        <span className="portrait:hidden">{name}</span>
+        <span className="hidden portrait:inline">{shortName}</span>
+      </>
+    );
+  };
 
   return (
     <div
@@ -48,7 +61,7 @@ export function BroadcastTeamWing({
                     compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
                   }`}
                 >
-                  {compact ? shortName : name}
+                  {renderTeamTitle()}
                 </span>
                 {badgeText && (
                   <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-white/15 text-[9px] font-bold uppercase tracking-wider text-amber-300 shrink-0">
@@ -99,7 +112,7 @@ export function BroadcastTeamWing({
                     compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
                   }`}
                 >
-                  {compact ? shortName : name}
+                  {renderTeamTitle()}
                 </span>
               </div>
               {secondaryText && (

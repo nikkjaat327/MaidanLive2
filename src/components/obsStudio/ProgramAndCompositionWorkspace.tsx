@@ -39,6 +39,7 @@ import {
 } from '../../utils/obsTransformGeometry.ts';
 import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.ts';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
+import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 
 export type ProgramMonitorMode = 'live_video' | 'obs_frame';
 
@@ -121,6 +122,7 @@ const LAYOUT_TYPES: ObsLayoutType[] = [
   'GRID_4',
   'GRID_5',
   'GRID_6',
+  'GRID_8',
   'PIP',
   'MAIN_PLUS_SECONDARY',
   'DYNAMIC_GRID',
@@ -190,6 +192,18 @@ function LayoutSchematicIcon({ type, active }: { type: ObsLayoutType; active: bo
           <rect x="3" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
           <rect x="14.7" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
           <rect x="26.5" y="12.5" width="10.5" height="8.5" rx="0.8" fill={stroke} opacity="0.35" />
+        </>
+      )}
+      {type === 'GRID_8' && (
+        <>
+          <rect x="3" y="3" width="7.8" height="8.5" rx="0.7" fill={accent} opacity="0.55" />
+          <rect x="11.7" y="3" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="20.5" y="3" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="29.2" y="3" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="3" y="12.5" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="11.7" y="12.5" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="20.5" y="12.5" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
+          <rect x="29.2" y="12.5" width="7.8" height="8.5" rx="0.7" fill={stroke} opacity="0.35" />
         </>
       )}
       {type === 'PIP' && (
@@ -617,6 +631,11 @@ export function ProgramAndCompositionWorkspace({
                   </div>
                 );
               })}
+              <MultiCamSplitBorders
+                layoutType={obsConnected ? profile.activeLayoutType || 'SINGLE' : layoutType || 'SINGLE'}
+                boxes={programBoxes}
+                zIndex={15}
+              />
             </div>
           ) : !obsConnected ? (
             <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2.5">
@@ -1327,6 +1346,8 @@ export function ProgramAndCompositionWorkspace({
                 );
               })
             )}
+
+            <MultiCamSplitBorders layoutType={layoutType} boxes={boxes} zIndex={15} />
 
             {includeScoreboardOverlay && boxes.length > 0 && (
               <div

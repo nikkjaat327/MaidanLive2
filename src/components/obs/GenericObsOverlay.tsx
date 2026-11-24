@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
-import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
+import { computeOverlayMetrics, resolveScoreboardTeamName } from '../../utils/overlayConfig.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
 import type { ObsThemeTokens } from './obsTheme.ts';
@@ -27,6 +27,8 @@ export function GenericObsOverlay({
   const nameB = stream.teamBName || 'Team B';
   const shortA = deriveShortTeamName(nameA, 'TMA');
   const shortB = deriveShortTeamName(nameB, 'TMB');
+  const displayA = resolveScoreboardTeamName(nameA, shortA, isPortrait);
+  const displayB = resolveScoreboardTeamName(nameB, shortB, isPortrait);
 
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
@@ -89,7 +91,7 @@ export function GenericObsOverlay({
               style={{ fontSize: m.teamNameFontPx }}
               className="font-display font-extrabold uppercase tracking-wide truncate"
             >
-              {config.mode === 'full' && !isPortrait ? nameA : shortA}
+              {displayA}
             </span>
           </div>
 
@@ -116,7 +118,7 @@ export function GenericObsOverlay({
               style={{ fontSize: m.teamNameFontPx }}
               className="font-display font-extrabold uppercase tracking-wide truncate"
             >
-              {config.mode === 'full' && !isPortrait ? nameB : shortB}
+              {displayB}
             </span>
             <ObsTeamBadge
               logoUrl={stream.teamBLogo}

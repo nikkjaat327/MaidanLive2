@@ -246,6 +246,71 @@ let obsConnecting = false;
 let lastError = '';
 let obsReconnectTimer = null;
 let bridgeRevoked = false;
+let obsStreamActiveCache = false;
+let lastObsScenesCache = [];
+let lastActiveObsSceneCache = '';
+let obsReconnectAttempts = 0;
+let serverReconnectAttempts = 0;
+let missedHeartbeats = 0;
+let serverDisconnectedAt = 0;
+let obsDisconnectedAt = 0;
+
+const HEARTBEAT_INTERVAL_MS = Math.max(2000, Number(process.env.OBS_BRIDGE_HEARTBEAT_INTERVAL_MS) || 5000);
+const HEARTBEAT_ACK_TIMEOUT_MS = Math.max(2500, Number(process.env.OBS_BRIDGE_HEARTBEAT_ACK_TIMEOUT_MS) || 6000);
+const HEARTBEAT_LOST_MS = Math.max(10000, Number(process.env.OBS_BRIDGE_HEARTBEAT_LOST_MS) || 20000);
+const HEARTBEAT_OFFLINE_MS = Math.max(20000, Number(process.env.OBS_BRIDGE_HEARTBEAT_OFFLINE_MS) || 45000);
+
+function computeBackoffMs(attempt, baseMs = 1500, maxMs = 30000, jitterRatio = 0.25) {
+  const exp = Math.min(maxMs, Math.round(baseMs * Math.pow(1.8, Math.max(0, attempt))));
+  const delta = exp * jitterRatio;
+  return Math.max(500, Math.round(exp + (Math.random() * 2 - 1) * delta));
+}
+
+function withTimeout(promise, timeoutMs, label = 'OBS call') {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+// Single-instance PID lockfile guard to prevent duplicate CLI Bridge processes
+const lockKey = (BRIDGE_ID || MATCH_ID || 'default').replace(/[^A-Za-z0-9_-]/g, '_');
+const lockFilePath = path.join(os.tmpdir(), `maidanlive-obs-agent-${lockKey}.lock`);
+try {
+  if (fs.existsSync(lockFilePath)) {
+    const existingPid = Number(fs.readFileSync(lockFilePath, 'utf8').trim());
+    if (Number.isFinite(existingPid) && existingPid > 0 && existingPid !== process.pid) {
+      let alive = false;
+      try {
+        process.kill(existingPid, 0);
+        alive = true;
+      } catch {
+        alive = false;
+      }
+      if (alive) {
+        logErr(`Another MaidanLive OBS Bridge instance (PID ${existingPid}) is already running for ${lockKey}. Exiting duplicate instance.`);
+        process.exit(0);
+      }
+    }
+  }
+  fs.writeFileSync(lockFilePath, String(process.pid), { encoding: 'utf8', mode: 0o600 });
+} catch {
+  // Non-fatal if temp lock cannot be written
+}
+function cleanupLockFile() {
+  try {
+    if (fs.existsSync(lockFilePath) && fs.readFileSync(lockFilePath, 'utf8').trim() === String(process.pid)) {
+      fs.unlinkSync(lockFilePath);
+    }
+  } catch {
+    // Ignore cleanup error
+  }
+}
 
 const socketAuth = useRegisteredBridgeAuth
   ? {
@@ -275,9 +340,32 @@ const socket = io(`${SERVER_URL}/obs-agent`, {
   auth: socketAuth,
   reconnection: true,
   reconnectionAttempts: Infinity,
-  reconnectionDelay: 2000,
-  reconnectionDelayMax: 15000,
+  reconnectionDelay: 1500,
+  reconnectionDelayMax: 30000,
+  randomizationFactor: 0.25,
+  timeout: 20000,
 });
+
+function emitDiagnostic(level, category, message, reason = '') {
+  const payload = {
+    timestamp: nowIso(),
+    level,
+    category,
+    message,
+    reason,
+    reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
+  };
+  if (level === 'error') logErr(`[${category}] ${message}`);
+  else if (level === 'warn') logWarn(`[${category}] ${message}`);
+  else logInfo(`[${category}] ${message}`);
+  if (socket.connected && !bridgeRevoked) {
+    try {
+      socket.emit('agent:diagnostic', payload);
+    } catch {
+      // Ignore while socket dropping
+    }
+  }
+}
 
 function formatObsConnectError(err) {
   const code = Number(err?.code);
@@ -584,16 +672,28 @@ async function emitObsSnapshot() {
   if (!socket.connected) return;
   const mtxStatus = await probeLocalMediaMTX();
   if (!obsConnected) {
+    const obsLostMs = obsDisconnectedAt ? Date.now() - obsDisconnectedAt : 0;
+    const obsState = obsConnecting
+      ? 'RECONNECTING'
+      : obsLostMs >= HEARTBEAT_OFFLINE_MS
+        ? 'OFFLINE'
+        : obsLostMs >= HEARTBEAT_LOST_MS || obsReconnectAttempts >= 3
+          ? 'CONNECTION_LOST'
+          : lastError
+            ? 'RECONNECTING'
+            : 'DISCONNECTED';
     socket.emit('agent:obs_state', {
       bridgeVersion: BRIDGE_VERSION,
       capabilities: BRIDGE_CAPABILITIES,
-      connectionStatus: obsConnecting ? 'CONNECTING' : lastError ? 'ERROR' : 'DISCONNECTED',
+      connectionStatus: obsState,
+      obsConnectionState: obsState === 'DISCONNECTED' ? 'OFFLINE' : obsState,
+      reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
       lastError,
-      obsScenes: [],
+      obsScenes: lastObsScenesCache,
       obsInputs: [],
       obsMediaStates: {},
-      activeObsScene: '',
-      obsStreamActive: false,
+      activeObsScene: lastActiveObsSceneCache,
+      obsStreamActive: obsStreamActiveCache,
       mediamtx: mtxStatus,
     });
     return;
@@ -601,15 +701,20 @@ async function emitObsSnapshot() {
 
   try {
     const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
-      obs.call('GetVersion'),
-      obs.call('GetSceneList'),
-      obs.call('GetInputList').catch(() => ({ inputs: [] })),
-      obs
-        .call('GetStreamStatus')
+      withTimeout(obs.call('GetVersion'), 6000, 'GetVersion'),
+      withTimeout(obs.call('GetSceneList'), 6000, 'GetSceneList'),
+      withTimeout(obs.call('GetInputList'), 6000, 'GetInputList').catch(() => ({ inputs: [] })),
+      withTimeout(obs.call('GetStreamStatus'), 6000, 'GetStreamStatus')
         .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
-      obs.call('GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
-      obs.call('GetStats').catch(() => null),
+      withTimeout(obs.call('GetRecordStatus'), 6000, 'GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+      withTimeout(obs.call('GetStats'), 6000, 'GetStats').catch(() => null),
     ]);
+
+    obsStreamActiveCache = Boolean(streamRes.outputActive);
+    lastActiveObsSceneCache = sceneRes.currentProgramSceneName || '';
+    lastObsScenesCache = Array.isArray(sceneRes.scenes)
+      ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
+      : [];
 
     const obsInputs = Array.isArray(inputRes?.inputs)
       ? inputRes.inputs
@@ -1225,7 +1330,7 @@ async function handleCommand(command, payload) {
   throw new Error(`Unsupported command: ${command}`);
 }
 
-function scheduleObsReconnect(delayMs = 4000) {
+function scheduleObsReconnect(delayMs = 3000) {
   if (obsReconnectTimer || bridgeRevoked) return;
   obsReconnectTimer = setTimeout(() => {
     obsReconnectTimer = null;
@@ -1238,11 +1343,27 @@ async function connectObsLoop() {
   obsConnecting = true;
   emitObsSnapshot().catch(() => {});
   try {
-    await obs.connect(OBS_URL, OBS_PASSWORD || undefined, { rpcVersion: 1 });
+    await withTimeout(
+      obs.connect(OBS_URL, OBS_PASSWORD || undefined, { rpcVersion: 1 }),
+      8000,
+      'OBS WebSocket connect'
+    );
+    const wasRetry = obsReconnectAttempts > 0 || Boolean(obsDisconnectedAt);
     obsConnected = true;
     obsConnecting = false;
+    obsReconnectAttempts = 0;
+    obsDisconnectedAt = 0;
     lastError = '';
-    logInfo(`Connected to local OBS Studio WebSocket v5 (${OBS_URL})`);
+    if (wasRetry) {
+      emitDiagnostic(
+        'info',
+        'reconnect_success',
+        `Reconnected cleanly to local OBS Studio (${OBS_URL}) without interrupting broadcast.`,
+        'obs_reconnected'
+      );
+    } else {
+      logInfo(`Connected to local OBS Studio WebSocket v5 (${OBS_URL})`);
+    }
     const sceneList = await obs.call('GetSceneList').catch(() => null);
     if (sceneList) {
       const count = Array.isArray(sceneList.scenes) ? sceneList.scenes.length : 0;
@@ -1254,23 +1375,44 @@ async function connectObsLoop() {
   } catch (err) {
     obsConnected = false;
     obsConnecting = false;
+    obsReconnectAttempts += 1;
+    if (!obsDisconnectedAt) obsDisconnectedAt = Date.now();
     lastError = formatObsConnectError(err);
-    logWarn(`${lastError} — retrying in 5s...`);
+    const nextDelay = computeBackoffMs(obsReconnectAttempts, 1500, 30000, 0.25);
+    emitDiagnostic(
+      'warn',
+      'reconnect_attempt',
+      `OBS connect attempt #${obsReconnectAttempts} failed: ${lastError} — retrying in ${Math.round(nextDelay / 1000)}s`,
+      lastError
+    );
     if (socket.connected) {
       socket.emit('agent:obs_error', { message: lastError });
     }
     await emitObsSnapshot();
-    scheduleObsReconnect(5000);
+    scheduleObsReconnect(nextDelay);
   }
 }
+
+obs.on('error', (err) => {
+  const msg = String(err?.message || err || 'OBS WebSocket error');
+  lastError = msg;
+  emitDiagnostic('warn', 'ws_error', `OBS WebSocket error event: ${msg}`, 'obs_ws_error');
+});
 
 obs.on('ConnectionClosed', (err) => {
   obsConnected = false;
   obsConnecting = false;
+  if (!obsDisconnectedAt) obsDisconnectedAt = Date.now();
   lastError = formatObsConnectError(err);
-  logWarn(`OBS WebSocket disconnected (${lastError}). Reconnecting in 4s...`);
+  const nextDelay = computeBackoffMs(obsReconnectAttempts, 1500, 30000, 0.25);
+  emitDiagnostic(
+    'warn',
+    'disconnect_reason',
+    `OBS WebSocket disconnected (${lastError}). Reconnecting in ${Math.round(nextDelay / 1000)}s while keeping OBS running...`,
+    lastError
+  );
   emitObsSnapshot().catch(() => {});
-  scheduleObsReconnect(4000);
+  scheduleObsReconnect(nextDelay);
 });
 
 obs.on('CurrentProgramSceneChanged', (ev) => {
@@ -1285,20 +1427,45 @@ obs.on('InputCreated', () => emitObsSnapshot().catch(() => {}));
 obs.on('InputRemoved', () => emitObsSnapshot().catch(() => {}));
 obs.on('InputNameChanged', () => emitObsSnapshot().catch(() => {}));
 obs.on('StreamStateChanged', (ev) => {
+  obsStreamActiveCache = Boolean(ev?.outputActive);
   logInfo(`OBS stream output state: ${ev?.outputActive ? 'LIVE STREAMING' : 'STOPPED'}`);
   emitObsSnapshot().catch(() => {});
 });
 obs.on('RecordStateChanged', () => emitObsSnapshot().catch(() => {}));
 
 socket.on('connect', () => {
-  logInfo(
-    `Authenticated outbound bridge to ${SERVER_URL}/obs-agent (${useRegisteredBridgeAuth ? `Bridge ${BRIDGE_ID}` : `Match ${MATCH_ID}`})`
-  );
+  const wasReconnect = serverReconnectAttempts > 0 || Boolean(serverDisconnectedAt);
+  serverReconnectAttempts = 0;
+  missedHeartbeats = 0;
+  serverDisconnectedAt = 0;
+  if (wasReconnect) {
+    emitDiagnostic(
+      'info',
+      'reconnect_success',
+      `Reconnected outbound bridge to ${SERVER_URL}/obs-agent without disrupting OBS.`,
+      'reconnected'
+    );
+  } else {
+    logInfo(
+      `Authenticated outbound bridge to ${SERVER_URL}/obs-agent (${useRegisteredBridgeAuth ? `Bridge ${BRIDGE_ID}` : `Match ${MATCH_ID}`})`
+    );
+  }
   emitObsSnapshot().catch(() => {});
 });
 
+socket.io.on('reconnect_attempt', (attempt) => {
+  serverReconnectAttempts = Number(attempt) || (serverReconnectAttempts + 1);
+  logInfo(`Reconnecting to MaidanLive backend (attempt #${serverReconnectAttempts})...`);
+});
+
 socket.on('disconnect', (reason) => {
-  logWarn(`Disconnected from MaidanLive backend (${reason}). Auto-reconnecting...`);
+  if (!serverDisconnectedAt) serverDisconnectedAt = Date.now();
+  emitDiagnostic(
+    'warn',
+    'disconnect_reason',
+    `Disconnected from MaidanLive backend (${reason}). Auto-reconnecting without interrupting OBS...`,
+    String(reason || 'transport closed')
+  );
 });
 
 socket.on('connect_error', (err) => {
@@ -1315,6 +1482,7 @@ socket.on('server:bridge_revoked', (payload) => {
   bridgeRevoked = true;
   socket.io.opts.reconnection = false;
   logErr(`Bridge revoked by Administrator: ${payload?.reason || 'Access revoked'}. Stopping bridge.`);
+  cleanupLockFile();
   obs.disconnect().catch(() => {});
   process.exit(2);
 });
@@ -1336,14 +1504,95 @@ socket.on('server:obs_command', async (req, ack) => {
   }
 });
 
-setInterval(() => {
-  if (socket.connected && !bridgeRevoked) {
-    emitObsSnapshot().catch(() => {});
+async function runHeartbeatTick() {
+  if (bridgeRevoked) return;
+  if (!socket.connected) {
+    missedHeartbeats += 1;
+    return;
   }
-}, 5000);
+  let acked = false;
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (acked) return;
+      missedHeartbeats += 1;
+      emitDiagnostic(
+        'warn',
+        'heartbeat_timeout',
+        `Server heartbeat ack timed out after ${HEARTBEAT_ACK_TIMEOUT_MS}ms (missed=${missedHeartbeats}).`,
+        'heartbeat_timeout'
+      );
+      if (missedHeartbeats >= 2) {
+        emitDiagnostic(
+          'warn',
+          'network_interruption',
+          'Half-open Socket.IO transport detected; refreshing server socket cleanly.',
+          'half_open_socket'
+        );
+        try {
+          socket.disconnect();
+          socket.connect();
+        } catch {
+          // ignore
+        }
+      }
+      resolve();
+    }, HEARTBEAT_ACK_TIMEOUT_MS);
 
-process.on('SIGINT', async () => {
+    socket.emit(
+      'agent:heartbeat',
+      {
+        bridgeId: BRIDGE_ID || undefined,
+        matchId: MATCH_ID || undefined,
+        obsConnected,
+        obsStreamActive: obsStreamActiveCache,
+        reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
+        sentAtMs: Date.now(),
+      },
+      () => {
+        acked = true;
+        clearTimeout(timer);
+        missedHeartbeats = 0;
+        serverDisconnectedAt = 0;
+        resolve();
+      }
+    );
+  });
+
+  if (socket.connected) {
+    await emitObsSnapshot().catch(() => {});
+  }
+}
+
+setInterval(() => {
+  runHeartbeatTick().catch(() => {});
+}, HEARTBEAT_INTERVAL_MS);
+
+let lastSleepCheckMs = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const drift = now - lastSleepCheckMs;
+  lastSleepCheckMs = now;
+  if (drift > 12000 && !bridgeRevoked) {
+    emitDiagnostic(
+      'info',
+      'network_interruption',
+      `System wake detected (${Math.round(drift / 1000)}s clock jump); verifying server & OBS sockets without touching stream.`,
+      'system_resume'
+    );
+    if (!socket.connected && !socket.active) {
+      socket.connect();
+    } else if (socket.connected) {
+      runHeartbeatTick().catch(() => {});
+    }
+    if (!obsConnected && !obsConnecting) {
+      connectObsLoop();
+    }
+  }
+}, 2000);
+
+async function shutdownCleanly() {
   logInfo('Shutting down Windows Local OBS Bridge cleanly...');
+  cleanupLockFile();
   try {
     await stopLocalMediaMTX().catch(() => {});
     socket.disconnect();
@@ -1352,6 +1601,10 @@ process.on('SIGINT', async () => {
     // Ignore close errors
   }
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdownCleanly);
+process.on('SIGTERM', shutdownCleanly);
+process.on('exit', cleanupLockFile);
 
 connectObsLoop();

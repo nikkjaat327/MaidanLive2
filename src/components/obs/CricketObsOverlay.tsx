@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
-import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
+import { computeOverlayMetrics, resolveScoreboardTeamName } from '../../utils/overlayConfig.ts';
 import {
   CricketDetails,
   computeCricketChaseState,
@@ -52,6 +52,9 @@ export function CricketObsOverlay({
   const bowlName = isBattingA ? nameB : nameA;
   const bowlLogo = isBattingA ? stream.teamBLogo : stream.teamALogo;
   const bowlAccent = isBattingA ? config.teamBColor : config.teamAColor;
+
+  const batDisplay = resolveScoreboardTeamName(batName, batShort, isPortrait);
+  const bowlDisplay = resolveScoreboardTeamName(bowlName, bowlShort, isPortrait);
 
   const runs = isBattingA ? details.teamARuns : details.teamBRuns;
   const wickets = isBattingA ? details.teamAWickets : details.teamBWickets;
@@ -195,9 +198,9 @@ export function CricketObsOverlay({
           />
           <span
             style={{ fontSize: m.teamNameFontPx }}
-            className="font-display font-extrabold tracking-wide uppercase truncate"
+            className="font-display font-extrabold tracking-wide uppercase truncate max-w-[340px]"
           >
-            {batShort}
+            {batDisplay}
           </span>
           <span
             key={pulseKey}
@@ -280,9 +283,9 @@ export function CricketObsOverlay({
             />
             <span
               style={{ fontSize: m.teamNameFontPx }}
-              className="font-display font-extrabold tracking-wide uppercase truncate"
+              className="font-display font-extrabold tracking-wide uppercase truncate max-w-[360px]"
             >
-              {batShort}
+              {batDisplay}
             </span>
 
             <div
@@ -446,9 +449,9 @@ export function CricketObsOverlay({
               <div className="flex items-center gap-1.5 min-w-0">
                 <span
                   style={{ fontSize: m.teamNameFontPx }}
-                  className="font-display font-extrabold tracking-wide uppercase leading-none truncate"
+                  className="font-display font-extrabold tracking-wide uppercase leading-none truncate max-w-[320px]"
                 >
-                  {batShort}
+                  {batDisplay}
                 </span>
                 <span
                   style={{ color: theme.accentPrimary, fontSize: m.metaLabelPx }}
@@ -457,12 +460,12 @@ export function CricketObsOverlay({
                   {details.innings === 2 ? '2ND' : '1ST'}
                 </span>
               </div>
-              {!isPortrait && (
+              {!isPortrait && batDisplay !== batShort && (
                 <p
                   style={{ color: theme.mutedText, fontSize: m.subTeamFontPx }}
-                  className="font-medium truncate max-w-[210px] mt-1 leading-none"
+                  className="font-mono font-semibold uppercase tracking-wider truncate max-w-[210px] mt-1 leading-none"
                 >
-                  {batName}
+                  {batShort}
                 </p>
               )}
             </div>
@@ -518,17 +521,19 @@ export function CricketObsOverlay({
             <div className="leading-tight min-w-0">
               <span
                 style={{ fontSize: m.subTeamFontPx }}
-                className="font-display font-bold tracking-wide uppercase block truncate"
+                className="font-display font-bold tracking-wide uppercase block truncate max-w-[240px]"
               >
-                {bowlShort}
+                {bowlDisplay}
               </span>
               <span
                 style={{ color: theme.mutedText, fontSize: m.metaLabelPx }}
-                className="font-mono tabular-nums block truncate max-w-[160px]"
+                className="font-mono tabular-nums block truncate max-w-[180px]"
               >
                 {chase.isSecondInnings || bowlBalls > 0 || bowlRuns > 0
                   ? `${bowlRuns}/${bowlWickets} (${formatCricketOvers(bowlBalls)})`
-                  : bowlName}
+                  : isPortrait
+                    ? 'Bowling'
+                    : bowlShort}
               </span>
             </div>
           </div>

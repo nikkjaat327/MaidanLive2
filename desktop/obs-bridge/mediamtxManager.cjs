@@ -333,6 +333,8 @@ function inspectMediaMTXYaml(configPath) {
   }
 }
 
+const activeProbePids = new Set();
+
 async function detectMediaMTXBinaryVersion(exePath) {
   if (!exePath || !isValidMediaMTXBinary(exePath)) return '';
   try {
@@ -341,11 +343,12 @@ async function detectMediaMTXBinaryVersion(exePath) {
       return cachedExeVersion.version;
     }
     const out = await new Promise((resolve) => {
-      execFile(
+      const child = execFile(
         exePath,
         ['--version'],
         { timeout: 1200, windowsHide: true },
         (err, stdout, stderr) => {
+          if (child?.pid) activeProbePids.delete(child.pid);
           if (err && !stdout && !stderr) {
             resolve('');
             return;
@@ -353,6 +356,9 @@ async function detectMediaMTXBinaryVersion(exePath) {
           resolve(String(stdout || stderr || '').trim());
         }
       );
+      if (child?.pid) {
+        activeProbePids.add(child.pid);
+      }
     });
     const match = out.match(/v?\d+\.\d+\.\d+(?:[-+._a-zA-Z0-9]+)?/);
     const version = match ? match[0] : out.split(/\r?\n/)[0]?.slice(0, 40) || '';
@@ -380,7 +386,7 @@ function findRunningMediaMTXPids() {
             const cols = line.split('","').map((c) => c.replace(/^"|"$/g, '').trim());
             if (cols[0]?.toLowerCase() === 'mediamtx.exe') {
               const pid = Number(cols[1]);
-              if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+              if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && !activeProbePids.has(pid)) {
                 pids.push(pid);
               }
             }
@@ -399,7 +405,7 @@ function findRunningMediaMTXPids() {
       const pids = String(stdout || '')
         .split(/\r?\n/)
         .map((s) => Number(s.trim()))
-        .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+        .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid && !activeProbePids.has(pid));
       resolve(Array.from(new Set(pids)));
     });
   });

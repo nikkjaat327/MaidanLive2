@@ -47,8 +47,8 @@ export function VolleyballBroadcastBar({
           <div className="flex items-center gap-1.5 min-w-0">
             <BroadcastLogo logoUrl={stream.teamALogo} alt={shortA} />
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate">
-              <span className="sm:hidden">{shortA}</span>
-              <span className="hidden sm:inline">{nameA}</span>
+              <span className="hidden portrait:inline">{shortA}</span>
+              <span className="portrait:hidden">{nameA}</span>
             </span>
             {d.servingTeam === 'A' && !d.matchCompleted && (
               <span
@@ -111,8 +111,8 @@ export function VolleyballBroadcastBar({
               />
             )}
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate text-right">
-              <span className="sm:hidden">{shortB}</span>
-              <span className="hidden sm:inline">{nameB}</span>
+              <span className="hidden portrait:inline">{shortB}</span>
+              <span className="portrait:hidden">{nameB}</span>
             </span>
             <BroadcastLogo logoUrl={stream.teamBLogo} alt={shortB} />
           </div>

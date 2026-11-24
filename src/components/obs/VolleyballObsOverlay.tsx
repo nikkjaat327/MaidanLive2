@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
-import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
+import { computeOverlayMetrics, resolveScoreboardTeamName } from '../../utils/overlayConfig.ts';
 import {
   VolleyballDetails,
   normalizeVolleyballDetails,
@@ -35,6 +35,8 @@ export function VolleyballObsOverlay({
   const nameB = stream.teamBName || 'Team B';
   const shortA = deriveShortTeamName(nameA, 'TMA');
   const shortB = deriveShortTeamName(nameB, 'TMB');
+  const displayA = resolveScoreboardTeamName(nameA, shortA, isPortrait);
+  const displayB = resolveScoreboardTeamName(nameB, shortB, isPortrait);
 
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
@@ -71,8 +73,8 @@ export function VolleyballObsOverlay({
         <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }} className="font-mono tabular-nums font-bold shrink-0">
           SET {d.currentSet}
         </span>
-        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-          {shortA}
+        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate max-w-[260px]">
+          {displayA}
         </span>
         <span
           key={pulseKey}
@@ -89,8 +91,8 @@ export function VolleyballObsOverlay({
         >
           {scoreA} - {scoreB}
         </span>
-        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-          {shortB}
+        <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate max-w-[260px]">
+          {displayB}
         </span>
       </div>
     );
@@ -156,7 +158,7 @@ export function VolleyballObsOverlay({
                 style={{ fontSize: m.teamNameFontPx }}
                 className="font-display font-extrabold uppercase tracking-wide truncate"
               >
-                {config.mode === 'compact' || isPortrait ? shortA : nameA}
+                {displayA}
               </span>
               {d.servingTeam === 'A' && !resultDeclared && (
                 <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" title="Serving" />
@@ -195,7 +197,7 @@ export function VolleyballObsOverlay({
                 style={{ fontSize: m.teamNameFontPx }}
                 className="font-display font-extrabold uppercase tracking-wide truncate"
               >
-                {config.mode === 'compact' || isPortrait ? shortB : nameB}
+                {displayB}
               </span>
               <ObsTeamBadge
                 logoUrl={stream.teamBLogo}

@@ -1,14 +1,23 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, safeStorage } = require('electron');
-
-function getConfigFilePath() {
-  return path.join(app.getPath('userData'), 'bridge-config.json');
+let app = null;
+let safeStorage = null;
+try {
+  ({ app, safeStorage } = require('electron'));
+} catch {
+  // Running outside Electron runtime (e.g., Node test runner)
 }
 
 function getUserDataDir() {
-  return app.getPath('userData');
+  if (app && typeof app.getPath === 'function') {
+    return app.getPath('userData');
+  }
+  return path.join(os.tmpdir(), 'maidanlive-obs-bridge');
+}
+
+function getConfigFilePath() {
+  return path.join(getUserDataDir(), 'bridge-config.json');
 }
 
 function defaultConfig() {
