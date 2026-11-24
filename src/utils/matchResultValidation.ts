@@ -227,13 +227,10 @@ export function validateMatchResult(input: ResultValidationInput): ResultValidat
   }
 
   if (sportType === 'Volleyball') {
-    const setsA = Number(sportSpecificDetails.teamASetsWon) || 0;
-    const setsB = Number(sportSpecificDetails.teamBSetsWon) || 0;
-
     if (resultType === 'DRAW' || resultType === 'TIE') {
       return {
         valid: false,
-        error: 'Volleyball matches must conclude with a set-based winner, No Result, or Abandoned.',
+        error: 'Volleyball matches must conclude with a winner, No Result, or Abandoned.',
         normalizedStatus: 'NOT_DECLARED',
         winnerSide: null,
         winnerName: '',
@@ -241,28 +238,10 @@ export function validateMatchResult(input: ResultValidationInput): ResultValidat
     }
 
     if (resultType === 'TEAM_A_WON') {
-      if (setsA <= setsB || setsA === 0) {
-        return {
-          valid: false,
-          error: `${labelA} must have more completed sets won than ${labelB} (currently ${setsA}-${setsB}). Complete the final set first.`,
-          normalizedStatus: 'NOT_DECLARED',
-          winnerSide: null,
-          winnerName: '',
-        };
-      }
       return { valid: true, normalizedStatus: 'DECLARED', winnerSide: 'A', winnerName: labelA };
     }
 
     if (resultType === 'TEAM_B_WON') {
-      if (setsB <= setsA || setsB === 0) {
-        return {
-          valid: false,
-          error: `${labelB} must have more completed sets won than ${labelA} (currently ${setsA}-${setsB}). Complete the final set first.`,
-          normalizedStatus: 'NOT_DECLARED',
-          winnerSide: null,
-          winnerName: '',
-        };
-      }
       return { valid: true, normalizedStatus: 'DECLARED', winnerSide: 'B', winnerName: labelB };
     }
   }

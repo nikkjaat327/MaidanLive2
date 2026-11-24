@@ -17,7 +17,7 @@ import {
 import { KabaddiCourtDots } from './kabaddi/KabaddiCourtDots.tsx';
 import { KabaddiAnimations } from './kabaddi/KabaddiAnimations.tsx';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
-import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
+import { VolleyballDetails, normalizeVolleyballDetails } from '../../utils/volleyballScoring.ts';
 
 interface LiveScoreboardViewProps {
   stream: LiveStreamData;
@@ -138,10 +138,7 @@ export function LiveScoreboardView({
             logoB={stream.teamBLogo}
             scoreA={score?.teamAScore ?? 0}
             scoreB={score?.teamBScore ?? 0}
-            details={{
-              ...createInitialVolleyballDetails(),
-              ...(details as Partial<VolleyballDetails>),
-            }}
+            details={normalizeVolleyballDetails(details as Partial<VolleyballDetails>)}
           />
         ) : (
           <GenericBoard
@@ -571,12 +568,15 @@ function VolleyballBoard({
           <div className="min-w-0">
             <p className="text-sm sm:text-base font-semibold truncate">
               {teamA}
-              {details.servingTeam === 'A' && (
+              {details.servingTeam === 'A' && !details.matchCompleted && (
                 <span className="text-[11px] text-amber-400 ml-1.5 font-medium">· Serving</span>
+              )}
+              {details.advantageTeam === 'A' && !details.matchCompleted && (
+                <span className="text-[11px] text-emerald-300 ml-1.5 font-bold">· ADV</span>
               )}
             </p>
             <p className="text-xs text-emerald-400 font-mono tabular-nums">
-              Sets Won: {details.teamASetsWon}
+              Sets Won: {details.teamASetsWon}/{details.winningThreshold}
             </p>
           </div>
         </div>
@@ -585,20 +585,27 @@ function VolleyballBoard({
             {scoreA} <span className="text-slate-600">-</span> {scoreB}
           </div>
           <div className="text-xs text-slate-300 mt-1">
-            Set {details.currentSet}/{details.bestOfSets || 5}
-            {details.currentSet === (details.bestOfSets || 5) ? ' · Decider' : ''}
+            Set {details.currentSet}/{details.bestOfSets}
+            {details.bestOfSets > 1 && details.currentSet === details.bestOfSets ? ' · Decider' : ''}
+            {details.isDeuce && !details.advantageTeam && !details.matchCompleted ? ' · DEUCE' : ''}
+            {details.advantageTeam && !details.matchCompleted
+              ? ` · ADV ${details.advantageTeam === 'A' ? teamA : teamB}`
+              : ''}
           </div>
         </div>
         <div className="flex items-center justify-end gap-2.5 min-w-0">
           <div className="min-w-0 text-right">
             <p className="text-sm sm:text-base font-semibold truncate">
-              {details.servingTeam === 'B' && (
+              {details.advantageTeam === 'B' && !details.matchCompleted && (
+                <span className="text-[11px] text-emerald-300 mr-1.5 font-bold">ADV ·</span>
+              )}
+              {details.servingTeam === 'B' && !details.matchCompleted && (
                 <span className="text-[11px] text-amber-400 mr-1.5 font-medium">Serving ·</span>
               )}
               {teamB}
             </p>
             <p className="text-xs text-emerald-400 font-mono tabular-nums">
-              Sets Won: {details.teamBSetsWon}
+              Sets Won: {details.teamBSetsWon}/{details.winningThreshold}
             </p>
           </div>
           <TeamAvatar name={teamB} logoUrl={logoB} />

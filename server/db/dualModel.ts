@@ -47,6 +47,10 @@ function refNameToCollection(refName: string): string {
     BroadcastScene: 'broadcastscenes',
     BroadcastAuditLog: 'broadcastauditlogs',
     BroadcastAssignment: 'broadcastassignments',
+    BroadcastAdDesign: 'broadcastaddesigns',
+    BroadcastGraphicsAsset: 'broadcastgraphicsassets',
+    BroadcastGraphicsState: 'broadcastgraphicsstates',
+    BroadcastAdSchedule: 'broadcastadschedules',
   };
   return map[refName] || `${refName.toLowerCase()}s`;
 }
@@ -343,6 +347,11 @@ class SqliteQuery {
   ): Promise<TResult1 | TResult2> {
     return this.exec().then(onfulfilled, onrejected);
   }
+  catch<TResult = never>(
+    onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null
+  ): Promise<any | TResult> {
+    return this.exec().catch(onrejected);
+  }
 }
 
 export function createDualModel<T extends mongoose.Document>(
@@ -416,6 +425,7 @@ export function createDualModel<T extends mongoose.Document>(
           return execUpdate();
         },
         then: (res: any, rej: any) => execUpdate().then(res, rej),
+        catch: (rej: any) => execUpdate().catch(rej),
       };
       return chain;
     },
@@ -450,6 +460,7 @@ export function createDualModel<T extends mongoose.Document>(
           return execUpdate();
         },
         then: (res: any, rej: any) => execUpdate().then(res, rej),
+        catch: (rej: any) => execUpdate().catch(rej),
       };
       return chain;
     },
@@ -481,6 +492,7 @@ export function createDualModel<T extends mongoose.Document>(
       return {
         session: () => Promise.resolve(deleted),
         then: (res: any, rej: any) => Promise.resolve(deleted).then(res, rej),
+        catch: (rej: any) => Promise.resolve(deleted).catch(rej),
       };
     },
     async deleteOne(query: Record<string, any>) {

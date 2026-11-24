@@ -15,7 +15,7 @@ import {
 } from '../../utils/cricketScoring.ts';
 import {
   applyVolleyballAction,
-  createInitialVolleyballDetails,
+  normalizeVolleyballDetails,
   VolleyballDetails,
   VolleyballEventType,
 } from '../../utils/volleyballScoring.ts';
@@ -31,6 +31,7 @@ interface AdvancedEventComposerProps {
   score: LiveScoreData | null;
   players: PlayerData[];
   saving: boolean;
+  locked?: boolean;
   onSubmitEvent: (payload: {
     clientEventId: string;
     sportType: string;
@@ -52,6 +53,7 @@ export function AdvancedEventComposer({
   score,
   players,
   saving,
+  locked = false,
   onSubmitEvent,
 }: AdvancedEventComposerProps) {
   const sport = score?.sportType || stream.gameName || 'Other';
@@ -166,10 +168,9 @@ export function AdvancedEventComposer({
     }
 
     if (sport === 'Volleyball') {
-      const details = {
-        ...createInitialVolleyballDetails(),
-        ...((score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>),
-      };
+      const details = normalizeVolleyballDetails(
+        (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+      );
       const action = {
         type: 'STRUCTURED_POINT' as const,
         team: vbTeam,
@@ -184,6 +185,7 @@ export function AdvancedEventComposer({
         label: applied.label,
         nextScoreA: applied.teamAScore,
         nextScoreB: applied.teamBScore,
+        blockedReason: applied.blockedReason,
       };
     }
 
@@ -857,10 +859,17 @@ export function AdvancedEventComposer({
                 Resulting Score: {teamA} {previewResult.nextScoreA} – {previewResult.nextScoreB}{' '}
                 {teamB}
               </p>
+              {(locked || previewResult.blockedReason) && (
+                <p className="text-xs font-semibold text-amber-700">
+                  {locked
+                    ? 'Match is completed and locked. Reopen the match to record new events.'
+                    : previewResult.blockedReason}
+                </p>
+              )}
             </div>
             <button
               type="button"
-              disabled={saving}
+              disabled={saving || locked || Boolean(previewResult.blockedReason)}
               onClick={handleConfirm}
               className="min-h-[42px] inline-flex items-center justify-center gap-2 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 disabled:opacity-50"
             >

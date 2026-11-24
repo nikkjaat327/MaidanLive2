@@ -10,6 +10,11 @@ import {
 } from '../../types/index.ts';
 import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { CRICKET_OVER_PRESETS } from '../../utils/cricketScoring.ts';
+import {
+  VOLLEYBALL_SET_PRESETS,
+  normalizeVolleyballDetails,
+  validateVolleyballRules,
+} from '../../utils/volleyballScoring.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
@@ -68,6 +73,14 @@ export function MatchSetupFormModal({
   const [highlightsEnabled, setHighlightsEnabled] = useState(true);
   const [oversLimit, setOversLimit] = useState('20');
   const [playersPerSide, setPlayersPerSide] = useState('11');
+  const [vbBestOfSets, setVbBestOfSets] = useState('5');
+  const [vbPointsPerSet, setVbPointsPerSet] = useState('25');
+  const [vbMinMargin, setVbMinMargin] = useState('2');
+  const [vbFinalSetPoints, setVbFinalSetPoints] = useState('15');
+  const [vbFinalSetMinMargin, setVbFinalSetMinMargin] = useState('2');
+  const [vbAutoCompleteSets, setVbAutoCompleteSets] = useState(true);
+  const [vbAllowManualWinner, setVbAllowManualWinner] = useState(true);
+  const [vbAllowMatchReopen, setVbAllowMatchReopen] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +144,15 @@ export function MatchSetupFormModal({
       >;
       setOversLimit(String(crkDetails.oversLimit || 20));
       setPlayersPerSide(String(crkDetails.playersPerSide || 11));
+      const vbNorm = normalizeVolleyballDetails(initialStream.score?.sportSpecificDetails);
+      setVbBestOfSets(String(vbNorm.rules.bestOfSets));
+      setVbPointsPerSet(String(vbNorm.rules.pointsPerSet));
+      setVbMinMargin(String(vbNorm.rules.minMargin));
+      setVbFinalSetPoints(String(vbNorm.rules.finalSetPoints));
+      setVbFinalSetMinMargin(String(vbNorm.rules.finalSetMinMargin));
+      setVbAutoCompleteSets(vbNorm.rules.autoCompleteSets);
+      setVbAllowManualWinner(vbNorm.rules.allowManualWinnerDeclaration);
+      setVbAllowMatchReopen(vbNorm.rules.allowMatchReopen);
     } else {
       setGameName('');
       setMatchTitle('');
@@ -154,6 +176,14 @@ export function MatchSetupFormModal({
       setHighlightsEnabled(true);
       setOversLimit('20');
       setPlayersPerSide('11');
+      setVbBestOfSets('5');
+      setVbPointsPerSet('25');
+      setVbMinMargin('2');
+      setVbFinalSetPoints('15');
+      setVbFinalSetMinMargin('2');
+      setVbAutoCompleteSets(true);
+      setVbAllowManualWinner(true);
+      setVbAllowMatchReopen(true);
     }
   }, [open, mode, initialStream]);
 
@@ -162,6 +192,26 @@ export function MatchSetupFormModal({
     try {
       setSubmitting(true);
       setError(null);
+
+      let vbRulesPayload: Record<string, unknown> | undefined;
+      if (gameName === 'Volleyball') {
+        const vbValidated = validateVolleyballRules({
+          bestOfSets: Number(vbBestOfSets),
+          pointsPerSet: Number(vbPointsPerSet),
+          minMargin: Number(vbMinMargin),
+          finalSetPoints: Number(vbFinalSetPoints),
+          finalSetMinMargin: Number(vbFinalSetMinMargin),
+          autoCompleteSets: vbAutoCompleteSets,
+          allowManualWinnerDeclaration: vbAllowManualWinner,
+          allowMatchReopen: vbAllowMatchReopen,
+        });
+        if (!vbValidated.valid) {
+          setError(vbValidated.error || 'Please enter valid Volleyball rules.');
+          setSubmitting(false);
+          return;
+        }
+        vbRulesPayload = vbValidated.rules as unknown as Record<string, unknown>;
+      }
 
       const payload: Record<string, unknown> = {
         gameName,
@@ -188,6 +238,12 @@ export function MatchSetupFormModal({
           ? {
               oversLimit: Math.max(1, Math.min(90, Math.floor(Number(oversLimit) || 20))),
               playersPerSide: Math.max(2, Math.min(15, Math.floor(Number(playersPerSide) || 11))),
+            }
+          : {}),
+        ...(gameName === 'Volleyball' && vbRulesPayload
+          ? {
+              bestOfSets: Number(vbBestOfSets),
+              volleyballRules: vbRulesPayload,
             }
           : {}),
       };
@@ -329,6 +385,132 @@ export function MatchSetupFormModal({
                     className="w-full min-h-[40px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
                   />
                 </div>
+              </div>
+            </div>
+          )}
+
+          {gameName === 'Volleyball' && (
+            <div className="sm:col-span-2 p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold text-slate-900">
+                  Volleyball Format &amp; Match Rules
+                </p>
+                <span className="text-[11px] font-mono text-amber-900 font-semibold">
+                  Best of {Math.max(1, Number(vbBestOfSets) || 5)} · Win Threshold:{' '}
+                  {Math.ceil(Math.max(1, Number(vbBestOfSets) || 5) / 2)} set
+                  {Math.ceil(Math.max(1, Number(vbBestOfSets) || 5) / 2) === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {VOLLEYBALL_SET_PRESETS.map((bo) => (
+                  <button
+                    key={bo}
+                    type="button"
+                    onClick={() => setVbBestOfSets(String(bo))}
+                    className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold border transition-colors whitespace-nowrap ${
+                      Number(vbBestOfSets) === bo
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    Best of {bo}
+                  </button>
+                ))}
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-700 ml-1">
+                  <span>Custom (Odd 1–15):</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={15}
+                    step={2}
+                    value={vbBestOfSets}
+                    onChange={(e) => setVbBestOfSets(e.target.value)}
+                    className="w-16 min-h-[30px] px-2 py-0.5 text-xs font-mono border border-slate-300 rounded bg-white"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Points / Set
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={99}
+                    value={vbPointsPerSet}
+                    onChange={(e) => setVbPointsPerSet(e.target.value)}
+                    className="w-full min-h-[38px] px-2.5 py-1 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Min Margin
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={vbMinMargin}
+                    onChange={(e) => setVbMinMargin(e.target.value)}
+                    className="w-full min-h-[38px] px-2.5 py-1 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Final Set Points
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={99}
+                    value={vbFinalSetPoints}
+                    onChange={(e) => setVbFinalSetPoints(e.target.value)}
+                    className="w-full min-h-[38px] px-2.5 py-1 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Final Margin
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={vbFinalSetMinMargin}
+                    onChange={(e) => setVbFinalSetMinMargin(e.target.value)}
+                    className="w-full min-h-[38px] px-2.5 py-1 text-sm font-mono border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-4 pt-1 text-xs text-slate-700">
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vbAutoCompleteSets}
+                    onChange={(e) => setVbAutoCompleteSets(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
+                  />
+                  <span>Auto-complete set on target + margin</span>
+                </label>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vbAllowManualWinner}
+                    onChange={(e) => setVbAllowManualWinner(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
+                  />
+                  <span>Allow manual winner anytime</span>
+                </label>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vbAllowMatchReopen}
+                    onChange={(e) => setVbAllowMatchReopen(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
+                  />
+                  <span>Allow reopen after completion</span>
+                </label>
               </div>
             </div>
           )}

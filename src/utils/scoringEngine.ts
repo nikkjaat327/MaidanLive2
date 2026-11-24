@@ -1,13 +1,21 @@
 import { createInitialCricketDetails } from './cricketScoring.ts';
 import { createInitialKabaddiDetails } from './kabaddiScoring.ts';
 import { createInitialFootballDetails } from './footballScoring.ts';
-import { createInitialVolleyballDetails } from './volleyballScoring.ts';
+import {
+  createInitialVolleyballDetails,
+  type VolleyballRules,
+} from './volleyballScoring.ts';
 
 export type SportType = 'Cricket' | 'Kabaddi' | 'Football' | 'Volleyball' | 'Other';
 
 export function getInitialSportDetails(
   sportType: SportType,
-  options?: { oversLimit?: number; playersPerSide?: number }
+  options?: {
+    oversLimit?: number;
+    playersPerSide?: number;
+    volleyballRules?: Partial<VolleyballRules> | null;
+    bestOfSets?: number;
+  }
 ): Record<string, unknown> {
   switch (sportType) {
     case 'Cricket':
@@ -20,7 +28,10 @@ export function getInitialSportDetails(
     case 'Football':
       return createInitialFootballDetails() as unknown as Record<string, unknown>;
     case 'Volleyball':
-      return createInitialVolleyballDetails() as unknown as Record<string, unknown>;
+      return createInitialVolleyballDetails({
+        ...(options?.volleyballRules || {}),
+        ...(options?.bestOfSets !== undefined ? { bestOfSets: options.bestOfSets } : {}),
+      }) as unknown as Record<string, unknown>;
     default:
       return { periodLabel: '', notes: '' };
   }

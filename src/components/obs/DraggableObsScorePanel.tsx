@@ -7,6 +7,7 @@ import {
   ExternalLink,
   GripHorizontal,
   LocateFixed,
+  Lock,
   Minus,
   Plus,
   RotateCcw,
@@ -38,7 +39,11 @@ import {
   isCricketScoringLocked,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
-import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
+import {
+  VolleyballDetails,
+  isVolleyballScoringLocked,
+  normalizeVolleyballDetails,
+} from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 
@@ -144,6 +149,13 @@ export function DraggableObsScorePanel({
   );
 
   const cricketLock = useMemo(() => isCricketScoringLocked(cricketDetails), [cricketDetails]);
+  const volleyballLock = useMemo(
+    () =>
+      sport === 'Volleyball'
+        ? isVolleyballScoringLocked(score?.sportSpecificDetails, score?.resultStatus)
+        : { locked: false, reason: '' },
+    [sport, score?.sportSpecificDetails, score?.resultStatus]
+  );
   const cricketChase = useMemo(
     () => computeCricketChaseState(cricketDetails, nameA, nameB),
     [cricketDetails, nameA, nameB]
@@ -586,13 +598,13 @@ export function DraggableObsScorePanel({
                 ? (score?.matchStatus || 'LIVE').toUpperCase()
                 : ''
             }
-            disabled={busy}
+            disabled={busy || volleyballLock.locked}
             onChange={(e) => {
               if (!e.target.value) return;
               submitPatch({
                 matchStatus: e.target.value,
                 action: `Status -> ${e.target.value}`,
-                allowLockedOverride: true,
+                allowLockedOverride: sport !== 'Volleyball',
               });
             }}
             aria-label="Match status"
@@ -858,6 +870,12 @@ export function DraggableObsScorePanel({
 
         {activeTab === 'manual' && sport !== 'Cricket' && (
           <div className="space-y-2.5">
+            {volleyballLock.locked && (
+              <div className="p-2 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center gap-1.5 text-[11px] text-amber-200 font-semibold">
+                <Lock className="w-3.5 h-3.5 shrink-0" />
+                <span>Match Completed &amp; Locked. Open Full Scorer to reopen.</span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2.5">
               {(
                 [
@@ -887,15 +905,16 @@ export function DraggableObsScorePanel({
                   <input
                     type="number"
                     min={0}
+                    disabled={busy || volleyballLock.locked}
                     value={tm.value}
                     onChange={(e) => tm.setter(Math.max(0, Number(e.target.value) || 0))}
                     aria-label={`${tm.label} score`}
-                    className="w-full min-h-[36px] px-2 py-1 text-base font-mono tabular-nums font-bold bg-slate-950 border border-slate-700 rounded text-white text-center"
+                    className="w-full min-h-[36px] px-2 py-1 text-base font-mono tabular-nums font-bold bg-slate-950 border border-slate-700 rounded text-white text-center disabled:opacity-50"
                   />
                   <div className="grid grid-cols-4 gap-1">
                     <button
                       type="button"
-                      disabled={busy || tm.value <= 0}
+                      disabled={busy || volleyballLock.locked || tm.value <= 0}
                       onClick={() =>
                         applyManualGenericScore(
                           tm.side === 'A' ? Math.max(0, manualTeamAScore - 1) : manualTeamAScore,
@@ -909,7 +928,7 @@ export function DraggableObsScorePanel({
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || volleyballLock.locked}
                       onClick={() =>
                         applyManualGenericScore(
                           tm.side === 'A' ? manualTeamAScore + 1 : manualTeamAScore,
@@ -917,13 +936,13 @@ export function DraggableObsScorePanel({
                           `${tm.label} +1`
                         )
                       }
-                      className={`min-h-[30px] rounded text-xs font-mono font-bold text-white ${tm.accent}`}
+                      className={`min-h-[30px] rounded text-xs font-mono font-bold text-white disabled:opacity-40 ${tm.accent}`}
                     >
                       +1
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || volleyballLock.locked}
                       onClick={() =>
                         applyManualGenericScore(
                           tm.side === 'A' ? manualTeamAScore + 2 : manualTeamAScore,
@@ -931,13 +950,13 @@ export function DraggableObsScorePanel({
                           `${tm.label} +2`
                         )
                       }
-                      className="min-h-[30px] rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono font-bold text-slate-100"
+                      className="min-h-[30px] rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono font-bold text-slate-100 disabled:opacity-40"
                     >
                       +2
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || volleyballLock.locked}
                       onClick={() =>
                         applyManualGenericScore(
                           tm.side === 'A' ? manualTeamAScore + 3 : manualTeamAScore,
@@ -945,7 +964,7 @@ export function DraggableObsScorePanel({
                           `${tm.label} +3`
                         )
                       }
-                      className="min-h-[30px] rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono font-bold text-slate-100"
+                      className="min-h-[30px] rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono font-bold text-slate-100 disabled:opacity-40"
                     >
                       +3
                     </button>
@@ -957,7 +976,7 @@ export function DraggableObsScorePanel({
             <div className="flex items-center justify-end">
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || volleyballLock.locked}
                 onClick={() => applyManualGenericScore(manualTeamAScore, manualTeamBScore)}
                 className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-40"
               >
@@ -1172,43 +1191,93 @@ export function DraggableObsScorePanel({
         )}
 
         {activeTab === 'events' && sport === 'Volleyball' && (() => {
-          const vd = {
-            ...createInitialVolleyballDetails(),
-            ...((score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>),
-          };
+          const vd = normalizeVolleyballDetails(
+            (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+          );
+          const disabled = busy || volleyballLock.locked;
           return (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => submitEvent({ type: 'POINT', team: 'A', delta: 1 }, `${shortA} +1`, 'Volleyball')}
-                className="flex-1 min-h-[36px] rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold whitespace-nowrap"
-              >
-                +1 {shortA}
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => submitEvent({ type: 'POINT', team: 'B', delta: 1 }, `${shortB} +1`, 'Volleyball')}
-                className="flex-1 min-h-[36px] rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold whitespace-nowrap"
-              >
-                +1 {shortB}
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  submitEvent(
-                    { type: 'SET_SERVING_TEAM', team: vd.servingTeam === 'A' ? 'B' : 'A' },
-                    'Switched Serve',
-                    'Volleyball'
-                  )
-                }
-                className="min-h-[36px] px-2.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1 whitespace-nowrap"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>{vd.servingTeam === 'A' ? shortA : shortB}</span>
-              </button>
+            <div className="space-y-2">
+              {volleyballLock.locked && (
+                <div className="p-2 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center gap-1.5 text-[11px] text-amber-200 font-semibold">
+                  <Lock className="w-3.5 h-3.5 shrink-0" />
+                  <span>Match Completed &amp; Locked. Open Full Scorer to reopen.</span>
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => submitEvent({ type: 'POINT', team: 'A', delta: 1 }, `${shortA} +1`, 'Volleyball')}
+                  className="flex-1 min-h-[36px] rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold whitespace-nowrap disabled:opacity-40"
+                >
+                  +1 {shortA}
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => submitEvent({ type: 'POINT', team: 'B', delta: 1 }, `${shortB} +1`, 'Volleyball')}
+                  className="flex-1 min-h-[36px] rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold whitespace-nowrap disabled:opacity-40"
+                >
+                  +1 {shortB}
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() =>
+                    submitEvent(
+                      { type: 'SET_SERVING_TEAM', team: vd.servingTeam === 'A' ? 'B' : 'A' },
+                      'Switched Serve',
+                      'Volleyball'
+                    )
+                  }
+                  className="min-h-[36px] px-2.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1 whitespace-nowrap disabled:opacity-40"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>{vd.servingTeam === 'A' ? shortA : shortB}</span>
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() =>
+                    submitEvent(
+                      { type: 'SET_ADVANTAGE', team: vd.advantageTeam === 'A' ? null : 'A' },
+                      `Advantage ${shortA}`,
+                      'Volleyball'
+                    )
+                  }
+                  className={`flex-1 min-h-[32px] px-2 rounded-lg border text-[11px] font-semibold whitespace-nowrap disabled:opacity-40 ${
+                    vd.advantageTeam === 'A'
+                      ? 'bg-emerald-600 text-white border-emerald-500'
+                      : 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  ADV {shortA}
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() =>
+                    submitEvent(
+                      { type: 'SET_ADVANTAGE', team: vd.advantageTeam === 'B' ? null : 'B' },
+                      `Advantage ${shortB}`,
+                      'Volleyball'
+                    )
+                  }
+                  className={`flex-1 min-h-[32px] px-2 rounded-lg border text-[11px] font-semibold whitespace-nowrap disabled:opacity-40 ${
+                    vd.advantageTeam === 'B'
+                      ? 'bg-emerald-600 text-white border-emerald-500'
+                      : 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  ADV {shortB}
+                </button>
+                <span className="text-[11px] font-mono tabular-nums text-slate-400 px-1.5 whitespace-nowrap">
+                  S{vd.currentSet}/{vd.bestOfSets}
+                  {vd.isDeuce && !vd.advantageTeam ? ' DEUCE' : ''}
+                </span>
+              </div>
             </div>
           );
         })()}

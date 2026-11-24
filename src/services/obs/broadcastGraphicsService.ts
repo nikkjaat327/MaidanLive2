@@ -1,13 +1,21 @@
 import { adminApi } from '../api/httpClient.ts';
 import type {
+  AdScheduleBridgePolicy,
+  AdScheduleConflictItem,
+  AdScheduleConflictPolicy,
+  AdScheduleEventRestriction,
+  AdScheduleRepeatRule,
+  AdScheduleSessionPolicy,
   BroadcastAdDesignData,
   BroadcastAdQueueItem,
+  BroadcastAdScheduleData,
   BroadcastGraphicEventRule,
   BroadcastGraphicEventTrigger,
   BroadcastGraphicsAssetData,
   BroadcastGraphicsStateData,
   GraphicsAnimationStyle,
   GraphicsAssetType,
+  GraphicsDesignGroupMeta,
   GraphicsDesignType,
   GraphicsElement,
   GraphicsOverlapPolicy,
@@ -114,9 +122,12 @@ export const broadcastGraphicsService = {
     canvasHeight: number;
     layoutPreset?: string;
     elements: GraphicsElement[];
+    groups?: GraphicsDesignGroupMeta[];
     entryAnimation: GraphicsAnimationStyle;
     exitAnimation: GraphicsAnimationStyle;
     defaultDurationSeconds: number;
+    timelineEnabled?: boolean;
+    totalDurationSeconds?: number;
     thumbnailDataUrl?: string;
   }): Promise<BroadcastAdDesignData> {
     const { data } = await adminApi.post<{ design: BroadcastAdDesignData }>(
@@ -139,9 +150,12 @@ export const broadcastGraphicsService = {
       canvasHeight: number;
       layoutPreset: string;
       elements: GraphicsElement[];
+      groups: GraphicsDesignGroupMeta[];
       entryAnimation: GraphicsAnimationStyle;
       exitAnimation: GraphicsAnimationStyle;
       defaultDurationSeconds: number;
+      timelineEnabled: boolean;
+      totalDurationSeconds: number;
       thumbnailDataUrl: string;
     }>
   ): Promise<BroadcastAdDesignData> {
@@ -180,6 +194,7 @@ export const broadcastGraphicsService = {
       canvasWidth: number;
       canvasHeight: number;
       elements: GraphicsElement[];
+      groups?: GraphicsDesignGroupMeta[];
       entryAnimation: GraphicsAnimationStyle;
       exitAnimation: GraphicsAnimationStyle;
       durationSeconds: number;
@@ -279,5 +294,125 @@ export const broadcastGraphicsService = {
       graphicsState: BroadcastGraphicsStateData;
     }>(`/obs/graphics/matches/${matchId}/event-rules/test`, { trigger });
     return data;
+  },
+
+  // Time-Based Advertisement Scheduler
+  async listSchedules(matchId: string): Promise<{
+    schedules: BroadcastAdScheduleData[];
+    serverNowIso: string;
+  }> {
+    const { data } = await adminApi.get<{
+      schedules: BroadcastAdScheduleData[];
+      serverNowIso: string;
+    }>(`/obs/graphics/matches/${matchId}/schedules`);
+    return {
+      schedules: data.schedules || [],
+      serverNowIso: data.serverNowIso || new Date().toISOString(),
+    };
+  },
+
+  async checkScheduleConflicts(
+    matchId: string,
+    payload: {
+      scheduledDate: string;
+      scheduledStartTime: string;
+      timezone: string;
+      durationSeconds: number;
+      excludeScheduleId?: string;
+    }
+  ): Promise<{
+    startAtUtc: string;
+    conflicts: AdScheduleConflictItem[];
+    hasConflict: boolean;
+  }> {
+    const { data } = await adminApi.post<{
+      startAtUtc: string;
+      conflicts: AdScheduleConflictItem[];
+      hasConflict: boolean;
+    }>(`/obs/graphics/matches/${matchId}/schedules/check-conflict`, payload);
+    return data;
+  },
+
+  async createSchedule(
+    matchId: string,
+    payload: {
+      designId: string;
+      scheduledDate: string;
+      scheduledStartTime: string;
+      timezone: string;
+      durationSeconds: number;
+      gracePeriodSeconds?: number;
+      priority?: number;
+      conflictPolicy?: AdScheduleConflictPolicy;
+      bridgePolicy?: AdScheduleBridgePolicy;
+      eventRestriction?: AdScheduleEventRestriction;
+      sessionPolicy?: AdScheduleSessionPolicy;
+      repeatRule?: AdScheduleRepeatRule;
+      repeatIntervalMinutes?: number;
+      repeatDailyTimes?: string[];
+      repeatWeekdays?: number[];
+      repeatStartDate?: string;
+      repeatEndDate?: string;
+      repeatEndTime?: string;
+      maxOccurrences?: number;
+    }
+  ): Promise<{
+    schedule: BroadcastAdScheduleData;
+    conflicts: AdScheduleConflictItem[];
+  }> {
+    const { data } = await adminApi.post<{
+      schedule: BroadcastAdScheduleData;
+      conflicts: AdScheduleConflictItem[];
+    }>(`/obs/graphics/matches/${matchId}/schedules`, payload);
+    return data;
+  },
+
+  async updateSchedule(
+    scheduleId: string,
+    payload: Partial<{
+      designId: string;
+      scheduledDate: string;
+      scheduledStartTime: string;
+      timezone: string;
+      durationSeconds: number;
+      gracePeriodSeconds: number;
+      priority: number;
+      conflictPolicy: AdScheduleConflictPolicy;
+      bridgePolicy: AdScheduleBridgePolicy;
+      eventRestriction: AdScheduleEventRestriction;
+      sessionPolicy: AdScheduleSessionPolicy;
+      repeatRule: AdScheduleRepeatRule;
+      repeatIntervalMinutes: number;
+      repeatDailyTimes: string[];
+      repeatWeekdays: number[];
+      repeatStartDate: string;
+      repeatEndDate: string;
+      repeatEndTime: string;
+      maxOccurrences: number;
+    }>
+  ): Promise<{
+    schedule: BroadcastAdScheduleData;
+    conflicts: AdScheduleConflictItem[];
+  }> {
+    const { data } = await adminApi.patch<{
+      schedule: BroadcastAdScheduleData;
+      conflicts: AdScheduleConflictItem[];
+    }>(`/obs/graphics/schedules/${scheduleId}`, payload);
+    return data;
+  },
+
+  async controlSchedule(
+    scheduleId: string,
+    action: 'pause' | 'resume' | 'cancel' | 'skip' | 'play_now' | 'retry'
+  ): Promise<{ ok: boolean; schedule: BroadcastAdScheduleData }> {
+    const { data } = await adminApi.post<{
+      ok: boolean;
+      schedule: BroadcastAdScheduleData;
+    }>(`/obs/graphics/schedules/${scheduleId}/action`, { action });
+    return data;
+  },
+
+  async deleteSchedule(scheduleId: string): Promise<void> {
+    await adminApi.delete(`/obs/graphics/schedules/${scheduleId}`);
   },
 };

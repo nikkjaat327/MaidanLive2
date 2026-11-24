@@ -6,6 +6,7 @@ import type {
   BroadcastAdQueueItem,
   BroadcastGraphicEventRule,
   GraphicsOverlapPolicy,
+  GraphicsQueuePhase,
   GraphicsQueueStatus,
 } from '../../src/types/broadcastGraphics.ts';
 
@@ -19,8 +20,12 @@ export interface IBroadcastGraphicsState extends Document {
   activeSlots: ActiveBroadcastGraphicSlot[];
   queue: BroadcastAdQueueItem[];
   queueStatus: GraphicsQueueStatus;
+  queuePhase?: GraphicsQueuePhase;
   currentQueueIndex: number;
   queueAutoAdvance: boolean;
+  queueItemStartedAt?: Date | null;
+  queueNextActionAt?: Date | null;
+  queuePausedRemainingMs?: number | null;
   eventRules: BroadcastGraphicEventRule[];
   lastUpdatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -52,8 +57,16 @@ const broadcastGraphicsStateSchema = new Schema<IBroadcastGraphicsState>(
       enum: ['idle', 'playing', 'paused'],
       default: 'idle',
     },
+    queuePhase: {
+      type: String,
+      enum: ['idle', 'showing', 'gap', 'paused'],
+      default: 'idle',
+    },
     currentQueueIndex: { type: Number, default: 0, min: 0 },
     queueAutoAdvance: { type: Boolean, default: false },
+    queueItemStartedAt: { type: Date, default: null },
+    queueNextActionAt: { type: Date, default: null },
+    queuePausedRemainingMs: { type: Number, default: null },
     eventRules: { type: Schema.Types.Mixed, default: [] },
     lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

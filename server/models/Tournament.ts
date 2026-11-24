@@ -54,6 +54,7 @@ export interface ITournament extends Document {
   status: 'UPCOMING' | 'ONGOING' | 'COMPLETED';
   description: string;
   rules: string;
+  volleyballRules?: Record<string, unknown> | null;
   prizeMoney: string;
   prizes?: ITournamentPrizes;
   registrationOpen: boolean;
@@ -114,6 +115,7 @@ const tournamentSchema = new Schema<ITournament>(
     },
     description: { type: String, trim: true, default: '', maxlength: 1500 },
     rules: { type: String, trim: true, default: '', maxlength: 2000 },
+    volleyballRules: { type: Schema.Types.Mixed, default: null },
     prizeMoney: { type: String, trim: true, default: '', maxlength: 120 },
     prizes: {
       type: {

@@ -22,6 +22,7 @@ import v1Routes from './server/routes/v1Routes.ts';
 import obsBroadcastRoutes from './server/routes/obsBroadcastRoutes.ts';
 import broadcastGraphicsRoutes from './server/routes/broadcastGraphicsRoutes.ts';
 import { initObsControllerBridge } from './server/services/obsControllerService.ts';
+import { initAdScheduleEngine, stopAdScheduleEngine } from './server/services/broadcastAdScheduleService.ts';
 import { User } from './server/models/User.ts';
 import { Tournament } from './server/models/Tournament.ts';
 import { LiveStream } from './server/models/LiveStream.ts';
@@ -343,6 +344,9 @@ async function startServer() {
   const httpServer = http.createServer(app);
   initObsControllerBridge();
   initSocketServer(httpServer);
+  initAdScheduleEngine().catch((err) => {
+    console.warn('[AdSchedule] Engine init warning:', err);
+  });
 
   app.use(
     helmet({
@@ -601,6 +605,7 @@ export class ErrorOverlay extends HTMLElement {}
   });
 
   const shutdown = async () => {
+    stopAdScheduleEngine();
     httpServer.close();
     await disconnectDatabase();
     process.exit(0);

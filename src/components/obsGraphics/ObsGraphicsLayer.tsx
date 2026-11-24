@@ -2,14 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type {
   ActiveBroadcastGraphicSlot,
   BroadcastGraphicsStateData,
+  GraphicsDesignGroupMeta,
   GraphicsElement,
 } from '../../types/broadcastGraphics.ts';
 import {
+  applyColorOpacity,
+  buildContinuousAnimationStyle,
   buildElementAnimationStyle,
   buildSlotContainerAnimationStyle,
+  formatLinearGradient,
+  getAnchorTransformOrigin,
+  getImageMaskStyles,
   isSafeGraphicsUrl,
 } from './graphicsStyleUtils.ts';
 import { GraphicsQrCode } from './GraphicsQrCode.tsx';
+import { GraphicsIconRenderer } from './GraphicsIconRenderer.tsx';
 
 interface ObsGraphicsLayerProps {
   graphicsState?: BroadcastGraphicsStateData | null;
@@ -20,6 +27,8 @@ interface ObsGraphicsLayerProps {
   matchId?: string;
   tournamentId?: string | null;
   className?: string;
+  previewPhase?: 'idle' | 'entry' | 'exit' | 'full';
+  timelinePlayheadMs?: number | null;
 }
 
 export const GraphicElementContent: React.FC<{
@@ -29,27 +38,31 @@ export const GraphicElementContent: React.FC<{
   isEditorPlaceholder?: boolean;
 }> = React.memo(({ element, matchId, tournamentId, isEditorPlaceholder }) => {
   const hasGradient = Boolean(element.gradient?.enabled);
+  const bgAlpha = typeof element.backgroundOpacity === 'number' ? element.backgroundOpacity : 1;
+  const solidBg = applyColorOpacity(element.backgroundColor || 'transparent', bgAlpha);
   const background = hasGradient
-    ? `linear-gradient(${element.gradient?.angle ?? 135}deg, ${element.gradient?.from || '#0f172a'}, ${element.gradient?.to || '#1e293b'})`
-    : element.backgroundColor || 'transparent';
+    ? formatLinearGradient(element.gradient, solidBg)
+    : solidBg;
 
   const borderRadius =
-    element.type === 'shape' && element.shapeKind === 'circle'
+    element.type === 'shape' &&
+    (element.shapeKind === 'circle' || element.shapeKind === 'ellipse')
       ? 9999
       : element.borderRadius ?? 0;
 
   const boxShadow = element.shadowEnabled
-    ? `0px ${element.shadowOffsetY ?? 6}px ${element.shadowBlur ?? 16}px ${element.shadowColor || 'rgba(0,0,0,0.45)'}`
+    ? `${element.shadowOffsetX ?? 0}px ${element.shadowOffsetY ?? 6}px ${element.shadowBlur ?? 16}px ${element.shadowColor || 'rgba(0,0,0,0.45)'}`
     : undefined;
 
-  const borderStyle =
+  const bStyle = element.borderStyle || 'solid';
+  const borderCss =
     element.borderWidth && element.borderWidth > 0
-      ? `${element.borderWidth}px solid ${element.borderColor || '#ffffff'}`
+      ? `${element.borderWidth}px ${bStyle} ${element.borderColor || '#ffffff'}`
       : element.type === 'shape' &&
           (element.shapeKind === 'line' || element.shapeKind === 'divider') &&
           element.strokeWidth &&
           element.strokeWidth > 0
-        ? `${element.strokeWidth}px solid ${element.borderColor || element.backgroundColor || '#ea580c'}`
+        ? `${element.strokeWidth}px ${bStyle} ${element.borderColor || element.backgroundColor || '#ea580c'}`
         : undefined;
 
   const commonContainerStyle: React.CSSProperties = {
@@ -57,12 +70,16 @@ export const GraphicElementContent: React.FC<{
     height: '100%',
     background,
     borderRadius,
-    border: borderStyle,
+    border: borderCss,
     boxShadow,
     paddingLeft: element.paddingX || 0,
     paddingRight: element.paddingX || 0,
     paddingTop: element.paddingY || 0,
     paddingBottom: element.paddingY || 0,
+    marginTop: element.marginTop || 0,
+    marginRight: element.marginRight || 0,
+    marginBottom: element.marginBottom || 0,
+    marginLeft: element.marginLeft || 0,
     overflow: 'hidden',
     boxSizing: 'border-box',
   };
@@ -75,8 +92,10 @@ export const GraphicElementContent: React.FC<{
             width: '100%',
             height: '100%',
             background: hasGradient
-              ? `linear-gradient(${element.gradient?.angle ?? 90}deg, ${element.gradient?.from || '#ea580c'}, ${element.gradient?.to || '#f97316'})`
-              : element.backgroundColor || '#ea580c',
+              ? formatLinearGradient(element.gradient, '#ea580c')
+              : solidBg !== 'transparent'
+                ? solidBg
+                : '#ea580c',
             borderRadius: 9999,
             boxShadow,
           }}
@@ -86,18 +105,49 @@ export const GraphicElementContent: React.FC<{
     return <div style={commonContainerStyle} />;
   }
 
+  if (element.type === 'icon') {
+    return (
+      <div
+        style={{
+          ...commonContainerStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <GraphicsIconRenderer
+          iconName={element.iconName || 'trophy'}
+          color={element.iconColor || '#ffffff'}
+          strokeWidth={element.iconStrokeWidth ?? 2}
+        />
+      </div>
+    );
+  }
+
   if (element.type === 'text') {
     const textGrad = element.gradientText?.enabled
-      ? `linear-gradient(${element.gradientText.angle ?? 90}deg, ${element.gradientText.from || '#ffffff'}, ${element.gradientText.to || '#fb923c'})`
+      ? formatLinearGradient(element.gradientText, '#ffffff')
       : null;
+
+    const decorations: string[] = [];
+    if (element.underline) decorations.push('underline');
+    if (element.strikethrough) decorations.push('line-through');
+
+    const computedTextShadow =
+      element.textShadow ||
+      (element.textShadowBlur && element.textShadowBlur > 0
+        ? `${element.textShadowX ?? 0}px ${element.textShadowY ?? 2}px ${element.textShadowBlur}px ${element.textShadowColor || 'rgba(0,0,0,0.65)'}`
+        : undefined);
 
     const textStyle: React.CSSProperties = {
       fontFamily: element.fontFamily || '"Outfit", sans-serif',
       fontSize: element.fontSize || 28,
       fontWeight: element.fontWeight || '700',
       fontStyle: element.italic ? 'italic' : 'normal',
-      textDecoration: element.underline ? 'underline' : 'none',
+      textDecoration: decorations.length > 0 ? decorations.join(' ') : 'none',
       textAlign: element.textAlign || 'center',
+      textTransform: element.textTransform || 'none',
+      direction: element.textDirection || 'ltr',
       letterSpacing:
         typeof element.letterSpacing === 'number' ? `${element.letterSpacing}px` : undefined,
       lineHeight: element.lineHeight || 1.2,
@@ -107,7 +157,7 @@ export const GraphicElementContent: React.FC<{
         element.textOutlineWidth && element.textOutlineWidth > 0
           ? `${element.textOutlineWidth}px ${element.textOutlineColor || '#000000'}`
           : undefined,
-      textShadow: element.textShadow || undefined,
+      textShadow: computedTextShadow,
       ...(textGrad
         ? {
             backgroundImage: textGrad,
@@ -126,12 +176,19 @@ export const GraphicElementContent: React.FC<{
           ? 'flex-end'
           : 'center';
 
+    const alignItems =
+      element.verticalAlign === 'top'
+        ? 'flex-start'
+        : element.verticalAlign === 'bottom'
+          ? 'flex-end'
+          : 'center';
+
     return (
       <div
         style={{
           ...commonContainerStyle,
           display: 'flex',
-          alignItems: 'center',
+          alignItems,
           justifyContent,
         }}
       >
@@ -152,8 +209,21 @@ export const GraphicElementContent: React.FC<{
 
   // Image or Sponsor Logo
   const safeSrc = isSafeGraphicsUrl(element.src) ? element.src : '';
-  const crop = element.crop || { top: 0, right: 0, bottom: 0, left: 0 };
-  const hasCrop = crop.top > 0 || crop.right > 0 || crop.bottom > 0 || crop.left > 0;
+  const maskStyle = getImageMaskStyles(element.imageMask, element.crop);
+  const flipTransform =
+    element.flipX || element.flipY
+      ? `scale(${element.flipX ? -1 : 1}, ${element.flipY ? -1 : 1})`
+      : undefined;
+  const objectPosition =
+    element.imageAlign === 'top'
+      ? 'center top'
+      : element.imageAlign === 'bottom'
+        ? 'center bottom'
+        : element.imageAlign === 'left'
+          ? 'left center'
+          : element.imageAlign === 'right'
+            ? 'right center'
+            : 'center center';
 
   return (
     <div
@@ -172,9 +242,9 @@ export const GraphicElementContent: React.FC<{
           className="w-full h-full select-none"
           style={{
             objectFit: element.objectFit || 'contain',
-            clipPath: hasCrop
-              ? `inset(${crop.top}% ${crop.right}% ${crop.bottom}% ${crop.left}%)`
-              : undefined,
+            objectPosition,
+            transform: flipTransform,
+            ...maskStyle,
           }}
         />
       ) : isEditorPlaceholder ? (
@@ -203,6 +273,8 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
     matchId,
     tournamentId,
     className = '',
+    previewPhase,
+    timelinePlayheadMs = null,
   }) => {
     const rawSlots = activeSlotsOverride ?? graphicsState?.activeSlots ?? [];
     const paused =
@@ -210,26 +282,36 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
         ? animationsPausedOverride
         : Boolean(graphicsState?.animationsPaused);
 
-    const hasTimedSlot = useMemo(
-      () => rawSlots.some((s) => s.visible && s.durationSeconds > 0 && Boolean(s.expiresAt)),
+    const needsClockTick = useMemo(
+      () =>
+        rawSlots.some(
+          (s) =>
+            s.visible &&
+            ((s.durationSeconds > 0 && Boolean(s.expiresAt)) ||
+              (s.elements || []).some(
+                (el) =>
+                  (el.animation?.startTimeMs || 0) > 0 ||
+                  (typeof el.animation?.endTimeMs === 'number' && el.animation.endTimeMs > 0)
+              ))
+        ),
       [rawSlots]
     );
 
     const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
     useEffect(() => {
-      if (!hasTimedSlot || paused) return;
+      if (!needsClockTick || paused || timelinePlayheadMs !== null) return;
       setNowMs(Date.now());
       const id = window.setInterval(() => {
         setNowMs(Date.now());
-      }, 250);
+      }, 200);
       return () => window.clearInterval(id);
-    }, [hasTimedSlot, paused]);
+    }, [needsClockTick, paused, timelinePlayheadMs]);
 
     const visibleSlots = useMemo(() => {
       return rawSlots.filter((slot) => {
         if (!slot.visible) return false;
-        if (paused) return true;
+        if (paused || timelinePlayheadMs !== null) return true;
         if (slot.durationSeconds > 0 && slot.expiresAt) {
           const exp = new Date(slot.expiresAt).getTime();
           if (Number.isFinite(exp) && nowMs > exp + 360) {
@@ -238,7 +320,7 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
         }
         return true;
       });
-    }, [rawSlots, paused, nowMs]);
+    }, [rawSlots, paused, nowMs, timelinePlayheadMs]);
 
     if (visibleSlots.length === 0) {
       return null;
@@ -262,21 +344,52 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
             slot.durationSeconds > 0 && slot.expiresAt
               ? new Date(slot.expiresAt).getTime()
               : null;
-          const exiting =
-            !paused &&
-            expMs !== null &&
-            Number.isFinite(expMs) &&
-            nowMs >= expMs - 320;
+          const slotExiting =
+            previewPhase === 'exit' ||
+            (!paused &&
+              timelinePlayheadMs === null &&
+              expMs !== null &&
+              Number.isFinite(expMs) &&
+              nowMs >= expMs - 340);
 
           const slotAnimStyle = buildSlotContainerAnimationStyle({
             entryAnimation: slot.entryAnimation,
             exitAnimation: slot.exitAnimation,
-            exiting,
+            exiting: slotExiting,
             paused,
           });
 
+          const groupMap = new Map<string, GraphicsDesignGroupMeta>();
+          for (const g of slot.groups || []) {
+            groupMap.set(g.groupId, g);
+          }
+
+          const slotElapsedMs =
+            timelinePlayheadMs !== null
+              ? timelinePlayheadMs
+              : slot.startedAt
+                ? Math.max(0, nowMs - new Date(slot.startedAt).getTime())
+                : 0;
+
           const sortedElements = [...(slot.elements || [])]
-            .filter((el) => el.visible !== false)
+            .filter((el) => {
+              if (el.visible === false) return false;
+              const grp = el.groupId ? groupMap.get(el.groupId) : undefined;
+              if (grp && grp.visible === false) return false;
+              const startMs = Math.max(0, Number(el.animation?.startTimeMs) || 0);
+              const endMs =
+                typeof el.animation?.endTimeMs === 'number' && el.animation.endTimeMs > 0
+                  ? el.animation.endTimeMs
+                  : null;
+              if (timelinePlayheadMs !== null) {
+                if (timelinePlayheadMs < startMs) return false;
+                if (endMs !== null && timelinePlayheadMs > endMs + 340) return false;
+              } else if (needsClockTick && !paused) {
+                if (startMs > 0 && slotElapsedMs < startMs) return false;
+                if (endMs !== null && slotElapsedMs > endMs + 340) return false;
+              }
+              return true;
+            })
             .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
 
           return (
@@ -292,10 +405,42 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
               }}
             >
               {sortedElements.map((el) => {
-                const elAnim = buildElementAnimationStyle(el.animation, {
+                const grp = el.groupId ? groupMap.get(el.groupId) : undefined;
+                const grpOpacity = typeof grp?.opacity === 'number' ? grp.opacity : 1;
+                const combinedOpacity =
+                  (typeof el.opacity === 'number' ? el.opacity : 1) * grpOpacity;
+
+                const endMs =
+                  typeof el.animation?.endTimeMs === 'number' && el.animation.endTimeMs > 0
+                    ? el.animation.endTimeMs
+                    : null;
+                const elExiting =
+                  slotExiting ||
+                  (endMs !== null &&
+                    slotElapsedMs >= endMs - (el.animation?.exitDurationMs || 340));
+
+                const effectiveAnim =
+                  grp?.animation && el.animation?.style === 'none'
+                    ? { ...el.animation, ...grp.animation }
+                    : el.animation;
+
+                const entryExitAnim = buildElementAnimationStyle(effectiveAnim, {
                   paused,
-                  exiting,
+                  exiting: elExiting,
+                  disableDelay: timelinePlayheadMs !== null,
                 });
+                const contAnim = buildContinuousAnimationStyle(effectiveAnim, {
+                  paused,
+                  exiting: elExiting,
+                });
+
+                const rot = el.rotation || 0;
+                const sx = el.scaleX ?? 1;
+                const sy = el.scaleY ?? 1;
+                const staticTransform =
+                  rot !== 0 || sx !== 1 || sy !== 1
+                    ? `rotate(${rot}deg) scale(${sx}, ${sy})`
+                    : undefined;
 
                 return (
                   <div
@@ -307,17 +452,20 @@ export const ObsGraphicsLayer: React.FC<ObsGraphicsLayerProps> = React.memo(
                       width: el.width,
                       height: el.height,
                       zIndex: el.zIndex || 1,
-                      opacity: typeof el.opacity === 'number' ? el.opacity : 1,
-                      transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
-                      transformOrigin: 'center center',
-                      ...elAnim,
+                      opacity: combinedOpacity,
+                      transform: staticTransform,
+                      transformOrigin: getAnchorTransformOrigin(el.anchorPoint),
                     }}
                   >
-                    <GraphicElementContent
-                      element={el}
-                      matchId={effectiveMatchId}
-                      tournamentId={effectiveTournamentId}
-                    />
+                    <div className="w-full h-full" style={entryExitAnim}>
+                      <div className="w-full h-full" style={contAnim}>
+                        <GraphicElementContent
+                          element={el}
+                          matchId={effectiveMatchId}
+                          tournamentId={effectiveTournamentId}
+                        />
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -378,4 +526,3 @@ export const ScaledGraphicsPreviewFrame: React.FC<{
     </div>
   );
 };
-

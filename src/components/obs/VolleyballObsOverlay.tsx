@@ -4,7 +4,7 @@ import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../.
 import { computeOverlayMetrics } from '../../utils/overlayConfig.ts';
 import {
   VolleyballDetails,
-  createInitialVolleyballDetails,
+  normalizeVolleyballDetails,
 } from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { resolveMatchStatus } from '../../utils/matchStatus.ts';
@@ -27,10 +27,9 @@ export function VolleyballObsOverlay({
   isPortrait = false,
 }: VolleyballObsOverlayProps) {
   const m = computeOverlayMetrics(config, isPortrait);
-  const d: VolleyballDetails = {
-    ...createInitialVolleyballDetails(),
-    ...((score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>),
-  };
+  const d: VolleyballDetails = normalizeVolleyballDetails(
+    (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+  );
 
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
@@ -127,12 +126,17 @@ export function VolleyballObsOverlay({
             isPortrait ? 'flex-wrap' : ''
           }`}
         >
-          {config.showMatchStatus && (
+            {config.showMatchStatus && (
             <span
               style={{ color: theme.accentPrimary, borderColor: theme.divider, fontSize: m.metaFontPx }}
               className="font-mono tabular-nums font-extrabold pr-3 border-r shrink-0"
             >
               SET {d.currentSet}/{d.bestOfSets}
+              {!resultDeclared && d.advantageTeam
+                ? ` · ADV ${d.advantageTeam === 'A' ? shortA : shortB}`
+                : !resultDeclared && d.isDeuce
+                  ? ' · DEUCE'
+                  : ''}
             </span>
           )}
 
@@ -216,7 +220,7 @@ export function VolleyballObsOverlay({
         </div>
       </div>
 
-      {config.mode === 'full' && (completedSets.length > 0 || resultDeclared || (config.showTournamentName && stream.tournamentName)) && (
+      {config.mode === 'full' && (completedSets.length > 0 || resultDeclared || d.advantageTeam || d.isDeuce || (config.showTournamentName && stream.tournamentName)) && (
         <div
           style={{
             background: theme.subStripBg,
@@ -240,6 +244,16 @@ export function VolleyballObsOverlay({
               <span className="inline-flex items-center gap-1 font-bold text-emerald-300 uppercase truncate">
                 <Trophy className="w-3.5 h-3.5 shrink-0" />
                 {score?.resultDescription || score?.winnerTeamName}
+              </span>
+            )}
+            {!resultDeclared && d.advantageTeam && (
+              <span className="font-bold text-emerald-300 uppercase">
+                ADVANTAGE: {d.advantageTeam === 'A' ? nameA : nameB}
+              </span>
+            )}
+            {!resultDeclared && !d.advantageTeam && d.isDeuce && (
+              <span className="font-bold text-amber-300 uppercase">
+                DEUCE ({scoreA}-{scoreB})
               </span>
             )}
           </div>

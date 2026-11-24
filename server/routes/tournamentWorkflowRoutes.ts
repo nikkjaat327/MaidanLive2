@@ -761,7 +761,14 @@ router.post(
         sportType: sport,
         teamAScore: 0,
         teamBScore: 0,
-        sportSpecificDetails: getInitialSportDetails(sport),
+        sportSpecificDetails: getInitialSportDetails(sport, {
+          volleyballRules:
+            (req.body.volleyballRules as any) ||
+            (tournament.volleyballRules as any) ||
+            undefined,
+          bestOfSets:
+            req.body.bestOfSets !== undefined ? Number(req.body.bestOfSets) : undefined,
+        }),
         matchStatus: requestedStatus === 'LIVE' ? 'Live' : 'Upcoming',
         lastUpdatedBy: req.user!._id,
         lastUpdatedAt: new Date(),

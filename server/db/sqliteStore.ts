@@ -47,6 +47,7 @@ const KNOWN_COLLECTIONS = [
   'broadcastaddesigns',
   'broadcastgraphicsassets',
   'broadcastgraphicsstates',
+  'broadcastadschedules',
 ];
 
 export function resolveSqliteDbPath(): string {

@@ -26,7 +26,13 @@ import {
   normalizeCricketDetails,
 } from '../../src/utils/cricketScoring.ts';
 import type { CricketDetails } from '../../src/utils/cricketScoring.ts';
-import { applyVolleyballAction } from '../../src/utils/volleyballScoring.ts';
+import {
+  applyVolleyballAction,
+  createInitialVolleyballDetails,
+  getVolleyballCompletionEligibility,
+  isVolleyballScoringLocked,
+  normalizeVolleyballDetails,
+} from '../../src/utils/volleyballScoring.ts';
 import type { VolleyballDetails } from '../../src/utils/volleyballScoring.ts';
 import { applyFootballAction } from '../../src/utils/footballScoring.ts';
 import type { FootballDetails } from '../../src/utils/footballScoring.ts';
@@ -46,6 +52,13 @@ import {
   handleKabaddiReopenRoute,
   handleKabaddiSettingsRoute,
 } from '../utils/kabaddiServerEngine.ts';
+import {
+  finalizeVolleyballMatchCompletion,
+  handleVolleyballCompleteRoute,
+  handleVolleyballReopenRoute,
+  handleVolleyballRulesRoute,
+  revertVolleyballFixtureOnReopenOrUndo,
+} from '../utils/volleyballServerEngine.ts';
 
 const router = Router();
 
@@ -329,12 +342,39 @@ router.patch(
         }
       }
 
+      const targetSport =
+        typeof req.body.sportType === 'string' &&
+        ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'].includes(req.body.sportType)
+          ? (req.body.sportType as SportType)
+          : score.sportType;
+
+      let volleyballAutoWinnerSide: 'A' | 'B' | null = null;
+      if (score.sportType === 'Volleyball' && targetSport === 'Volleyball') {
+        const vbLock = isVolleyballScoringLocked(score.sportSpecificDetails, score.resultStatus);
+        const mutatingVolleyballScore =
+          typeof req.body.teamAScore === 'number' ||
+          typeof req.body.teamBScore === 'number' ||
+          Boolean(req.body.sportSpecificDetails);
+        if (
+          vbLock.locked &&
+          mutatingVolleyballScore &&
+          req.body.allowPostCompletionOverride !== true
+        ) {
+          res.status(409).json({ message: vbLock.reason, locked: true });
+          return;
+        }
+      }
+
+      const streamDocForPrev =
+        score.sportType === 'Volleyball' ? await LiveStream.findById(id).lean() : null;
       const previousSnapshot = {
         sportType: score.sportType,
         teamAScore: score.teamAScore,
         teamBScore: score.teamBScore,
         sportSpecificDetails: score.sportSpecificDetails,
         matchStatus: score.matchStatus,
+        resultStatus: score.resultStatus,
+        ...(streamDocForPrev ? { streamStatus: streamDocForPrev.status } : {}),
       };
 
       if (typeof req.body.teamAScore === 'number' && Number.isFinite(req.body.teamAScore)) {
@@ -348,7 +388,25 @@ router.patch(
         typeof req.body.sportSpecificDetails === 'object' &&
         !Array.isArray(req.body.sportSpecificDetails)
       ) {
-        score.sportSpecificDetails = req.body.sportSpecificDetails;
+        if (targetSport === 'Volleyball') {
+          const prevVb = normalizeVolleyballDetails(score.sportSpecificDetails);
+          const normVb = normalizeVolleyballDetails(
+            req.body.sportSpecificDetails as Partial<VolleyballDetails>
+          );
+          if (!prevVb.matchCompleted && normVb.matchCompleted) {
+            const elig = getVolleyballCompletionEligibility(normVb);
+            volleyballAutoWinnerSide =
+              elig.thresholdWinnerSide ||
+              (normVb.teamASetsWon > normVb.teamBSetsWon
+                ? 'A'
+                : normVb.teamBSetsWon > normVb.teamASetsWon
+                  ? 'B'
+                  : null);
+          }
+          score.sportSpecificDetails = normVb as unknown as Record<string, unknown>;
+        } else {
+          score.sportSpecificDetails = req.body.sportSpecificDetails;
+        }
       }
       if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
         score.matchStatus = sanitizeText(req.body.matchStatus, 80);
@@ -368,6 +426,7 @@ router.patch(
 
       score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
       score.lastUpdatedAt = new Date();
+      score.markModified?.('sportSpecificDetails');
       await score.save();
 
       const updatedSnapshot = {
@@ -389,6 +448,26 @@ router.patch(
         action: actionLabel,
         updatedBy: req.user!._id,
       });
+
+      if (
+        score.sportType === 'Volleyball' &&
+        volleyballAutoWinnerSide &&
+        score.resultStatus === 'NOT_DECLARED'
+      ) {
+        const streamDoc = await LiveStream.findById(id);
+        if (streamDoc) {
+          const completionPayload = await finalizeVolleyballMatchCompletion({
+            stream: streamDoc,
+            score,
+            winnerSide: volleyballAutoWinnerSide,
+            actor: req.user!,
+            preCompletionSnapshot: previousSnapshot,
+            pairedScoreEventId: historyItem._id as mongoose.Types.ObjectId,
+          });
+          res.json(completionPayload);
+          return;
+        }
+      }
 
       const populatedHistory = await ScoreHistory.findById(historyItem._id)
         .populate('updatedBy', 'name role')
@@ -497,12 +576,21 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           }
         }
 
+        if (sport === 'Volleyball') {
+          const vbLock = isVolleyballScoringLocked(score.sportSpecificDetails, score.resultStatus);
+          if (vbLock.locked && req.body.allowPostCompletionOverride !== true) {
+            return { locked: true as const, reason: vbLock.reason };
+          }
+        }
+
         const previousSnapshot = {
           sportType: score.sportType,
           teamAScore: score.teamAScore,
           teamBScore: score.teamBScore,
           sportSpecificDetails: score.sportSpecificDetails,
           matchStatus: score.matchStatus,
+          resultStatus: score.resultStatus,
+          streamStatus: stream.status,
         };
 
         let nextDetails: Record<string, unknown> = (score.sportSpecificDetails || {}) as Record<
@@ -519,6 +607,7 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           actionPayload.team === 'A' || actionPayload.team === 'B' ? actionPayload.team : '';
         let autoCompletedInnings1 = false;
         let autoCompletedMatch = false;
+        let autoWinnerSide: 'A' | 'B' | null = null;
         let cricketWicketEvent = false;
 
         if (sport === 'Kabaddi') {
@@ -562,6 +651,9 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
             score.teamBScore,
             actionPayload
           );
+          if (applied.blockedReason) {
+            return { locked: true as const, reason: applied.blockedReason };
+          }
           nextDetails = applied.details as unknown as Record<string, unknown>;
           nextTeamAScore = applied.teamAScore;
           nextTeamBScore = applied.teamBScore;
@@ -569,6 +661,8 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           pointsAwarded = applied.pointsAwarded;
           eventCategory = applied.eventCategory;
           eventType = applied.eventType;
+          autoCompletedMatch = Boolean(applied.autoCompletedMatch);
+          autoWinnerSide = applied.autoWinnerSide || null;
         } else if (sport === 'Football') {
           const applied = applyFootballAction(
             nextDetails as unknown as FootballDetails,
@@ -598,15 +692,18 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         score.teamAScore = nextTeamAScore;
         score.teamBScore = nextTeamBScore;
         score.sportSpecificDetails = nextDetails;
+        score.markModified?.('sportSpecificDetails');
         if (autoCompletedInnings1) {
           score.matchStatus = 'INNINGS BREAK';
-        } else if (autoCompletedMatch) {
+        } else if (autoCompletedMatch && sport === 'Cricket') {
           const chaseEval = computeCricketChaseState(
             nextDetails as unknown as CricketDetails,
             stream.teamAName || 'Team A',
             stream.teamBName || 'Team B'
           );
           score.matchStatus = chaseEval.outcome === 'TIED' ? 'Tied' : 'Completed';
+        } else if (autoCompletedMatch && sport === 'Volleyball') {
+          score.matchStatus = 'Completed';
         } else if (typeof req.body.matchStatus === 'string' && req.body.matchStatus.trim()) {
           score.matchStatus = sanitizeText(req.body.matchStatus, 80);
         }
@@ -676,8 +773,10 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           locked: false as const,
           score,
           historyId: createdHistory[0]._id,
+          previousSnapshot,
           autoCompletedInnings1,
           autoCompletedMatch,
+          autoWinnerSide,
           cricketWicketEvent,
           eventType,
           actionLabel: label,
@@ -694,10 +793,30 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         return;
       }
 
-      // If 2nd innings auto-completed the match, officially declare result & sync linked fixture
+      // If 2nd innings (Cricket) or winning set threshold (Volleyball) auto-completed the match, officially declare result & sync linked fixture
       let finalScoreObj = txResult.score.toObject();
       let resultHistoryItem: any = null;
-      if (txResult.autoCompletedMatch && txResult.score.resultStatus === 'NOT_DECLARED') {
+      if (
+        txResult.autoCompletedMatch &&
+        txResult.score.sportType === 'Volleyball' &&
+        txResult.autoWinnerSide &&
+        txResult.score.resultStatus === 'NOT_DECLARED'
+      ) {
+        const vbPayload = await finalizeVolleyballMatchCompletion({
+          stream,
+          score: txResult.score,
+          winnerSide: txResult.autoWinnerSide,
+          actor: req.user!,
+          preCompletionSnapshot: txResult.previousSnapshot,
+          pairedScoreEventId: txResult.historyId as mongoose.Types.ObjectId,
+        });
+        finalScoreObj = vbPayload.score;
+        resultHistoryItem = vbPayload.historyItem;
+      } else if (
+        txResult.autoCompletedMatch &&
+        txResult.score.sportType === 'Cricket' &&
+        txResult.score.resultStatus === 'NOT_DECLARED'
+      ) {
         const d = normalizeCricketDetails(
           (txResult.score.sportSpecificDetails || {}) as Partial<CricketDetails>
         );
@@ -1462,11 +1581,20 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const latestHistory = await ScoreHistory.findOne({
-      liveStreamId: score.liveStreamId,
-      reverted: { $ne: true },
-      $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
-    }).sort({ createdAt: -1 });
+    const historyQuery =
+      score.sportType === 'Volleyball'
+        ? {
+            liveStreamId: score.liveStreamId,
+            reverted: { $ne: true },
+            $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: 'RESULT' }, { entryType: { $exists: false } }],
+          }
+        : {
+            liveStreamId: score.liveStreamId,
+            reverted: { $ne: true },
+            $or: [{ entryType: 'SCORE_UPDATE' }, { entryType: { $exists: false } }],
+          };
+
+    const latestHistory = (await ScoreHistory.findOne(historyQuery as any).sort({ createdAt: -1, _id: -1 })) as any;
 
     if (!latestHistory) {
       res.status(400).json({ message: 'No previous score update available to undo.' });
@@ -1474,20 +1602,31 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     }
 
     const previousSnapshot = {
+      sportType: score.sportType,
       teamAScore: score.teamAScore,
       teamBScore: score.teamBScore,
+      sportSpecificDetails: score.sportSpecificDetails,
+      matchStatus: score.matchStatus,
+      resultStatus: score.resultStatus,
     };
 
     const prev = latestHistory.previousScore as any;
     const prevWasDeclared = score.resultStatus !== 'NOT_DECLARED';
+    const prevWinnerName = score.winnerTeamName;
+    const prevWinnerTeamId = score.winnerTeamId;
+
     score.teamAScore = typeof prev.teamAScore === 'number' ? prev.teamAScore : 0;
     score.teamBScore = typeof prev.teamBScore === 'number' ? prev.teamBScore : 0;
     score.sportSpecificDetails =
-      prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
+      score.sportType === 'Volleyball'
+        ? (normalizeVolleyballDetails(prev.sportSpecificDetails) as unknown as Record<string, unknown>)
+        : prev.sportSpecificDetails || getInitialSportDetails(score.sportType);
     score.markModified?.('sportSpecificDetails');
     if (prev.matchStatus) score.matchStatus = prev.matchStatus;
 
     let revertedAutoResult = false;
+    let revertedVolleyballResult = false;
+
     if (score.sportType === 'Cricket' && prevWasDeclared) {
       const restoredPhase = (score.sportSpecificDetails as any)?.matchPhase;
       const restoredLocked2 = Boolean((score.sportSpecificDetails as any)?.innings2Locked);
@@ -1502,6 +1641,27 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
         score.declaredByName = '';
         score.declaredAt = null;
         revertedAutoResult = true;
+      }
+    } else if (score.sportType === 'Volleyball') {
+      const restoredVb = score.sportSpecificDetails as unknown as VolleyballDetails;
+      if (
+        prevWasDeclared &&
+        (!prev.resultStatus || prev.resultStatus === 'NOT_DECLARED') &&
+        !restoredVb.matchCompleted
+      ) {
+        score.resultStatus = 'NOT_DECLARED';
+        score.resultType = '';
+        score.winnerTeamId = null;
+        score.winnerTeamName = '';
+        score.winningMargin = '';
+        score.resultDescription = '';
+        score.declaredBy = null;
+        score.declaredByName = '';
+        score.declaredAt = null;
+        if (!prev.matchStatus || prev.matchStatus === 'Completed') {
+          score.matchStatus = 'Live';
+        }
+        revertedVolleyballResult = true;
       }
     }
 
@@ -1546,6 +1706,59 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
         action: `Undid: ${latestHistory.action}`.slice(0, 280),
         updatedBy: req.user!._id,
       });
+    } else if (score.sportType === 'Volleyball') {
+      // Preserve full audit history for Volleyball: mark original (and paired auto-completion event if any) reverted & create UNDO record
+      latestHistory.reverted = true;
+      await latestHistory.save();
+
+      const pairedId = (latestHistory.details as any)?.pairedScoreEventId;
+      if (pairedId && mongoose.Types.ObjectId.isValid(pairedId)) {
+        await ScoreHistory.findByIdAndUpdate(pairedId, { reverted: true }).catch(() => {});
+      }
+      if (revertedVolleyballResult) {
+        await ScoreHistory.updateMany(
+          {
+            liveStreamId: score.liveStreamId,
+            entryType: 'RESULT',
+            reverted: { $ne: true },
+          } as any,
+          { reverted: true } as any
+        ).catch(() => {});
+        const streamDoc = await LiveStream.findById(id);
+        if (streamDoc) {
+          if (streamDoc.status === 'ENDED') {
+            streamDoc.status = prev.streamStatus === 'UPCOMING' ? 'UPCOMING' : 'LIVE';
+            streamDoc.endedAt = null;
+            await streamDoc.save();
+          }
+          await revertVolleyballFixtureOnReopenOrUndo({
+            stream: streamDoc,
+            previousWinnerName: prevWinnerName,
+            previousWinnerTeamId: prevWinnerTeamId,
+            actorId: req.user!._id as mongoose.Types.ObjectId,
+          });
+        }
+      }
+
+      await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'UNDO',
+        sportType: 'Volleyball',
+        eventCategory: 'UNDO',
+        eventType: revertedVolleyballResult ? 'UNDO_MATCH_COMPLETION' : 'UNDO',
+        correctionOfId: latestHistory._id,
+        previousScore: previousSnapshot,
+        updatedScore: {
+          sportType: score.sportType,
+          teamAScore: score.teamAScore,
+          teamBScore: score.teamBScore,
+          sportSpecificDetails: score.sportSpecificDetails,
+          matchStatus: score.matchStatus,
+          resultStatus: score.resultStatus,
+        },
+        action: `Undid: ${latestHistory.action}`.slice(0, 280),
+        updatedBy: req.user!._id,
+      });
     } else {
       await ScoreHistory.deleteOne({ _id: latestHistory._id });
     }
@@ -1586,6 +1799,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     };
 
     emitStreamEvent(id, 'score:undo', payload);
+    emitStreamEvent(id, 'score:updated', payload);
     if (score.sportType === 'Kabaddi') {
       emitStreamEvent(id, 'kabaddi:state', {
         streamId: id,
@@ -1593,8 +1807,17 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
         serverNowIso: new Date().toISOString(),
       });
     }
-    if (revertedAutoResult) {
+    if (revertedAutoResult || revertedVolleyballResult) {
       emitStreamEvent(id, 'match:result:updated', { streamId: id, score: score.toObject(), isCorrection: true });
+      const streamForTourn = await LiveStream.findById(id).lean();
+      if (streamForTourn?.tournamentId) {
+        emitTournamentEvent(streamForTourn.tournamentId.toString(), 'tournament:points_updated', {
+          tournamentId: streamForTourn.tournamentId.toString(),
+          streamId: id,
+          resultStatus: score.resultStatus,
+          winnerTeamId: null,
+        });
+      }
     }
     emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
     res.json(payload);
@@ -1634,6 +1857,14 @@ router.post(
         return;
       }
 
+      if (score.sportType === 'Volleyball') {
+        const vbLock = isVolleyballScoringLocked(score.sportSpecificDetails, score.resultStatus);
+        if (vbLock.locked) {
+          res.status(409).json({ message: vbLock.reason, locked: true });
+          return;
+        }
+      }
+
       const previousSnapshot = {
         sportType: score.sportType,
         teamAScore: score.teamAScore,
@@ -1644,7 +1875,12 @@ router.post(
 
       score.teamAScore = 0;
       score.teamBScore = 0;
-      score.sportSpecificDetails = getInitialSportDetails(score.sportType);
+      score.sportSpecificDetails =
+        score.sportType === 'Volleyball'
+          ? (createInitialVolleyballDetails(
+              normalizeVolleyballDetails(score.sportSpecificDetails).rules
+            ) as unknown as Record<string, unknown>)
+          : getInitialSportDetails(score.sportType);
       score.markModified?.('sportSpecificDetails');
       score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
       score.lastUpdatedAt = new Date();
@@ -1709,7 +1945,7 @@ router.get('/:id/score/history', async (req: Request, res: Response) => {
 
     const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 100));
     const history = await ScoreHistory.find({ liveStreamId: id })
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
       .populate('updatedBy', 'name role')
       .lean();
@@ -1951,7 +2187,21 @@ router.post(
         matchStatus: score.matchStatus,
         resultStatus: score.resultStatus,
         winnerTeamName: score.winnerTeamName,
+        streamStatus: stream.status,
       };
+
+      if (score.sportType === 'Volleyball') {
+        const vbNorm = normalizeVolleyballDetails(score.sportSpecificDetails);
+        const vbElig = getVolleyballCompletionEligibility(vbNorm);
+        vbNorm.matchCompleted = true;
+        vbNorm.advantageTeam = null;
+        vbNorm.isDeuce = false;
+        vbNorm.completedReason = vbElig.thresholdReached ? 'THRESHOLD_REACHED' : 'MANUAL_DECISION';
+        vbNorm.manualWinnerSide = validation.winnerSide;
+        vbNorm.manualWinnerReason = customDescription || winningMargin || '';
+        score.sportSpecificDetails = vbNorm as unknown as Record<string, unknown>;
+        score.markModified?.('sportSpecificDetails');
+      }
 
       score.resultStatus = validation.normalizedStatus;
       score.resultType = resultType;
@@ -1983,6 +2233,13 @@ router.post(
       score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
       score.lastUpdatedAt = new Date();
       await score.save();
+
+      if (score.sportType === 'Volleyball' && stream.status !== 'ENDED') {
+        stream.status = 'ENDED';
+        stream.endedAt = new Date();
+        stream.endedBy = req.user!._id as mongoose.Types.ObjectId;
+        await stream.save();
+      }
 
       if (mvpPlayerId) {
         await PlayerMatchStat.findOneAndUpdate(
@@ -2135,6 +2392,11 @@ router.post('/:id/kabaddi/clock', authenticate, requireAdminPortal, handleKabadd
 router.patch('/:id/kabaddi/settings', authenticate, requireAdminPortal, handleKabaddiSettingsRoute);
 router.post('/:id/kabaddi/complete', authenticate, requireAdminPortal, handleKabaddiCompleteRoute);
 router.post('/:id/kabaddi/reopen', authenticate, requireAdminPortal, handleKabaddiReopenRoute);
+
+// Dedicated Volleyball Match Control, Rules, Completion & Reopen Routes
+router.patch('/:id/volleyball/rules', authenticate, requireAdminPortal, handleVolleyballRulesRoute);
+router.post('/:id/volleyball/complete', authenticate, requireAdminPortal, handleVolleyballCompleteRoute);
+router.post('/:id/volleyball/reopen', authenticate, requireAdminPortal, handleVolleyballReopenRoute);
 
 export default router;
 

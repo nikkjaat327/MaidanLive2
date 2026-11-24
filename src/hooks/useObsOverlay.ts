@@ -172,6 +172,9 @@ export function useObsOverlay(matchId?: string) {
     socket.on('cricket:innings_completed', handleScorePayload);
     socket.on('cricket:second_innings_started', handleScorePayload);
     socket.on('cricket:match_completed', handleScorePayload);
+    socket.on('volleyball:rules_updated', handleScorePayload);
+    socket.on('volleyball:match_completed', handleScorePayload);
+    socket.on('volleyball:match_reopened', handleScorePayload);
     socket.on('score:undo', handleScorePayload);
     socket.on('score:reset', handleScorePayload);
     socket.on('match:result:declared', handleScorePayload);
@@ -195,6 +198,9 @@ export function useObsOverlay(matchId?: string) {
       socket.off('cricket:innings_completed', handleScorePayload);
       socket.off('cricket:second_innings_started', handleScorePayload);
       socket.off('cricket:match_completed', handleScorePayload);
+      socket.off('volleyball:rules_updated', handleScorePayload);
+      socket.off('volleyball:match_completed', handleScorePayload);
+      socket.off('volleyball:match_reopened', handleScorePayload);
       socket.off('score:undo', handleScorePayload);
       socket.off('score:reset', handleScorePayload);
       socket.off('match:result:declared', handleScorePayload);

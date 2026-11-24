@@ -32,6 +32,16 @@ import {
   updateGraphicsQueue,
   updateGraphicsSettings,
 } from '../services/broadcastGraphicsService.ts';
+import {
+  controlAdSchedule,
+  createAdSchedule,
+  deleteAdSchedule,
+  detectScheduleConflicts,
+  listSchedulesForMatch,
+  updateAdSchedule,
+  zonedDateTimeToUtc,
+} from '../services/broadcastAdScheduleService.ts';
+import { BroadcastAdSchedule } from '../models/BroadcastAdSchedule.ts';
 import { writeBroadcastAudit } from '../services/obsControllerService.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import type {
@@ -535,9 +545,12 @@ router.post(
         canvasHeight: req.body.canvasHeight,
         layoutPreset: req.body.layoutPreset,
         elements: req.body.elements,
+        groups: req.body.groups,
         entryAnimation: req.body.entryAnimation,
         exitAnimation: req.body.exitAnimation,
         defaultDurationSeconds: req.body.defaultDurationSeconds,
+        timelineEnabled: req.body.timelineEnabled,
+        totalDurationSeconds: req.body.totalDurationSeconds,
         thumbnailDataUrl: req.body.thumbnailDataUrl,
         actor: req.user!,
       });
@@ -620,10 +633,17 @@ router.patch(
         canvasHeight: req.body.canvasHeight ?? existing.canvasHeight,
         layoutPreset: req.body.layoutPreset ?? existing.layoutPreset,
         elements: req.body.elements ?? existing.elements,
+        groups: req.body.groups ?? existing.groups,
         entryAnimation: req.body.entryAnimation ?? existing.entryAnimation,
         exitAnimation: req.body.exitAnimation ?? existing.exitAnimation,
         defaultDurationSeconds:
           req.body.defaultDurationSeconds ?? existing.defaultDurationSeconds,
+        timelineEnabled:
+          req.body.timelineEnabled !== undefined
+            ? Boolean(req.body.timelineEnabled)
+            : existing.timelineEnabled,
+        totalDurationSeconds:
+          req.body.totalDurationSeconds ?? existing.totalDurationSeconds,
         thumbnailDataUrl: req.body.thumbnailDataUrl ?? existing.thumbnailDataUrl,
         actor: req.user!,
       });
@@ -666,9 +686,12 @@ router.post(
         canvasHeight: existing.canvasHeight,
         layoutPreset: existing.layoutPreset,
         elements: existing.elements,
+        groups: existing.groups,
         entryAnimation: existing.entryAnimation,
         exitAnimation: existing.exitAnimation,
         defaultDurationSeconds: existing.defaultDurationSeconds,
+        timelineEnabled: existing.timelineEnabled,
+        totalDurationSeconds: existing.totalDurationSeconds,
         thumbnailDataUrl: existing.thumbnailDataUrl,
         actor: req.user!,
       });
@@ -762,6 +785,7 @@ router.post(
         canvasWidth: Number(req.body.canvasWidth) || 1920,
         canvasHeight: Number(req.body.canvasHeight) || 1080,
         elements: req.body.elements || [],
+        groups: req.body.groups || [],
         entryAnimation: req.body.entryAnimation || 'slide-bottom',
         exitAnimation: req.body.exitAnimation || 'fade-out',
         durationSeconds: Number(req.body.durationSeconds ?? 0),
@@ -972,6 +996,202 @@ router.post(
     } catch (err) {
       console.error('[BroadcastGraphics] Event test error:', err);
       res.status(500).json({ message: 'Failed to test event trigger.' });
+    }
+  }
+);
+
+// =========================================================================
+// TIME-BASED SCHEDULED ADVERTISEMENT QUEUE
+// =========================================================================
+
+// GET /api/obs/graphics/matches/:matchId/schedules
+router.get(
+  '/matches/:matchId/schedules',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeMatchGraphics(req, res, matchId))) return;
+      const result = await listSchedulesForMatch(matchId);
+      res.json(result);
+    } catch (err) {
+      console.error('[BroadcastGraphics] List schedules error:', err);
+      res.status(500).json({ message: 'Failed to load advertisement schedules.' });
+    }
+  }
+);
+
+// POST /api/obs/graphics/matches/:matchId/schedules/check-conflict
+router.post(
+  '/matches/:matchId/schedules/check-conflict',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeMatchGraphics(req, res, matchId))) return;
+      const startAtUtc = zonedDateTimeToUtc(
+        req.body?.scheduledDate,
+        req.body?.scheduledStartTime,
+        req.body?.timezone || 'Asia/Kolkata'
+      );
+      const durationSeconds = Math.max(1, Math.min(3600, Number(req.body?.durationSeconds) || 15));
+      const conflicts = await detectScheduleConflicts({
+        matchId,
+        startAtUtc,
+        durationSeconds,
+        excludeScheduleId:
+          typeof req.body?.excludeScheduleId === 'string' ? req.body.excludeScheduleId : undefined,
+      });
+      res.json({
+        startAtUtc: startAtUtc.toISOString(),
+        conflicts,
+        hasConflict: conflicts.length > 0,
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 400;
+      res.status(code).json({ message: err?.message || 'Failed to check schedule conflicts.' });
+    }
+  }
+);
+
+// POST /api/obs/graphics/matches/:matchId/schedules
+router.post(
+  '/matches/:matchId/schedules',
+  authenticate,
+  requireAdminPortal,
+  graphicsWriteLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeMatchGraphics(req, res, matchId))) return;
+
+      const result = await createAdSchedule({
+        matchId,
+        designId: req.body?.designId,
+        scheduledDate: req.body?.scheduledDate,
+        scheduledStartTime: req.body?.scheduledStartTime,
+        timezone: req.body?.timezone,
+        durationSeconds: req.body?.durationSeconds,
+        gracePeriodSeconds: req.body?.gracePeriodSeconds,
+        priority: req.body?.priority,
+        conflictPolicy: req.body?.conflictPolicy,
+        bridgePolicy: req.body?.bridgePolicy,
+        eventRestriction: req.body?.eventRestriction,
+        sessionPolicy: req.body?.sessionPolicy,
+        repeatRule: req.body?.repeatRule,
+        repeatIntervalMinutes: req.body?.repeatIntervalMinutes,
+        repeatDailyTimes: req.body?.repeatDailyTimes,
+        repeatWeekdays: req.body?.repeatWeekdays,
+        repeatStartDate: req.body?.repeatStartDate,
+        repeatEndDate: req.body?.repeatEndDate,
+        repeatEndTime: req.body?.repeatEndTime,
+        maxOccurrences: req.body?.maxOccurrences,
+        actor: req.user!,
+      });
+
+      res.status(201).json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({
+        message: err?.message || 'Failed to create scheduled advertisement.',
+        conflicts: err?.conflicts || [],
+      });
+    }
+  }
+);
+
+// PATCH /api/obs/graphics/schedules/:scheduleId
+router.patch(
+  '/schedules/:scheduleId',
+  authenticate,
+  requireAdminPortal,
+  graphicsWriteLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { scheduleId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(scheduleId)) {
+        res.status(400).json({ message: 'Invalid schedule ID.' });
+        return;
+      }
+      const existing = await BroadcastAdSchedule.findById(scheduleId).lean();
+      if (!existing) {
+        res.status(404).json({ message: 'Scheduled advertisement not found.' });
+        return;
+      }
+      if (!(await authorizeMatchGraphics(req, res, String(existing.matchId)))) return;
+
+      const result = await updateAdSchedule(scheduleId, req.body || {}, req.user!);
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({
+        message: err?.message || 'Failed to update scheduled advertisement.',
+        conflicts: err?.conflicts || [],
+      });
+    }
+  }
+);
+
+// POST /api/obs/graphics/schedules/:scheduleId/action
+router.post(
+  '/schedules/:scheduleId/action',
+  authenticate,
+  requireAdminPortal,
+  graphicsWriteLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { scheduleId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(scheduleId)) {
+        res.status(400).json({ message: 'Invalid schedule ID.' });
+        return;
+      }
+      const existing = await BroadcastAdSchedule.findById(scheduleId).lean();
+      if (!existing) {
+        res.status(404).json({ message: 'Scheduled advertisement not found.' });
+        return;
+      }
+      if (!(await authorizeMatchGraphics(req, res, String(existing.matchId)))) return;
+
+      const action = req.body?.action;
+      if (!['pause', 'resume', 'cancel', 'skip', 'play_now', 'retry'].includes(action)) {
+        res.status(400).json({ message: 'Invalid schedule control action.' });
+        return;
+      }
+      const schedule = await controlAdSchedule(scheduleId, action, req.user!);
+      res.json({ ok: true, schedule });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Schedule action failed.' });
+    }
+  }
+);
+
+// DELETE /api/obs/graphics/schedules/:scheduleId
+router.delete(
+  '/schedules/:scheduleId',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { scheduleId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(scheduleId)) {
+        res.status(400).json({ message: 'Invalid schedule ID.' });
+        return;
+      }
+      const existing = await BroadcastAdSchedule.findById(scheduleId).lean();
+      if (!existing) {
+        res.status(404).json({ message: 'Scheduled advertisement not found.' });
+        return;
+      }
+      if (!(await authorizeMatchGraphics(req, res, String(existing.matchId)))) return;
+
+      await deleteAdSchedule(scheduleId, req.user!);
+      res.json({ ok: true, id: scheduleId });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ message: err?.message || 'Failed to delete schedule.' });
     }
   }
 );

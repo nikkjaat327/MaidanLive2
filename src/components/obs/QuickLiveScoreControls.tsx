@@ -21,7 +21,11 @@ import {
 } from '../../utils/cricketScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
 import { normalizeKabaddiDetails } from '../../utils/kabaddiScoring.ts';
-import { VolleyballDetails, createInitialVolleyballDetails } from '../../utils/volleyballScoring.ts';
+import {
+  VolleyballDetails,
+  isVolleyballScoringLocked,
+  normalizeVolleyballDetails,
+} from '../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { Modal } from '../common/Modal.tsx';
@@ -84,6 +88,13 @@ export function QuickLiveScoreControls({
   );
 
   const cricketLock = useMemo(() => isCricketScoringLocked(cricketDetails), [cricketDetails]);
+  const volleyballLock = useMemo(
+    () =>
+      sport === 'Volleyball'
+        ? isVolleyballScoringLocked(score?.sportSpecificDetails, score?.resultStatus)
+        : { locked: false, reason: '' },
+    [sport, score?.sportSpecificDetails, score?.resultStatus]
+  );
   const cricketChase = useMemo(
     () => computeCricketChaseState(cricketDetails, nameA, nameB),
     [cricketDetails, nameA, nameB]
@@ -244,7 +255,7 @@ export function QuickLiveScoreControls({
                 ? (score?.matchStatus || 'LIVE').toUpperCase()
                 : ''
             }
-            disabled={busy}
+            disabled={busy || volleyballLock.locked}
             onChange={(e) => {
               if (!e.target.value) return;
               submitPatch({
@@ -644,94 +655,145 @@ export function QuickLiveScoreControls({
 
       {/* VOLLEYBALL QUICK CONTROLS */}
       {sport === 'Volleyball' && (
-        <div className="flex flex-wrap items-center gap-2">
-          {(() => {
-            const vd = {
-              ...createInitialVolleyballDetails(),
-              ...((score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>),
-            };
-            return (
-              <>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submitEvent(
-                      { type: 'POINT', team: 'A', delta: 1 },
-                      `${shortA} +1 Point`,
-                      'Volleyball'
-                    )
-                  }
-                  className="min-h-[42px] px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
-                >
-                  +1 {shortA} ({score?.teamAScore ?? 0})
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submitEvent(
-                      { type: 'POINT', team: 'A', delta: -1 },
-                      `${shortA} -1 Point`,
-                      'Volleyball'
-                    )
-                  }
-                  className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
-                >
-                  -1
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submitEvent(
-                      { type: 'POINT', team: 'B', delta: 1 },
-                      `${shortB} +1 Point`,
-                      'Volleyball'
-                    )
-                  }
-                  className="min-h-[42px] px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold"
-                >
-                  +1 {shortB} ({score?.teamBScore ?? 0})
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submitEvent(
-                      { type: 'POINT', team: 'B', delta: -1 },
-                      `${shortB} -1 Point`,
-                      'Volleyball'
-                    )
-                  }
-                  className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
-                >
-                  -1
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submitEvent(
-                      {
-                        type: 'SET_SERVING_TEAM',
-                        team: vd.servingTeam === 'A' ? 'B' : 'A',
-                      },
-                      'Switched Serve',
-                      'Volleyball'
-                    )
-                  }
-                  className={`min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Serve: {vd.servingTeam === 'A' ? shortA : shortB}</span>
-                </button>
-                <span className="font-mono text-xs px-2.5 py-1 rounded border border-slate-700/60">
-                  Set {vd.currentSet}/{vd.bestOfSets}
-                </span>
-              </>
-            );
-          })()}
+        <div className="space-y-2">
+          {volleyballLock.locked && (
+            <div className="p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-200 font-semibold">
+              <Lock className="w-3.5 h-3.5 shrink-0" />
+              <span>{volleyballLock.reason}</span>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {(() => {
+              const vd = normalizeVolleyballDetails(
+                (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+              );
+              const disabled = busy || volleyballLock.locked;
+              return (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      submitEvent(
+                        { type: 'POINT', team: 'A', delta: 1 },
+                        `${shortA} +1 Point`,
+                        'Volleyball'
+                      )
+                    }
+                    className="min-h-[42px] px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold disabled:opacity-40 whitespace-nowrap"
+                  >
+                    +1 {shortA} ({score?.teamAScore ?? 0})
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled || (score?.teamAScore ?? 0) <= 0}
+                    onClick={() =>
+                      submitEvent(
+                        { type: 'POINT', team: 'A', delta: -1 },
+                        `${shortA} -1 Point`,
+                        'Volleyball'
+                      )
+                    }
+                    className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 ${btnNeutral}`}
+                  >
+                    -1
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      submitEvent(
+                        { type: 'POINT', team: 'B', delta: 1 },
+                        `${shortB} +1 Point`,
+                        'Volleyball'
+                      )
+                    }
+                    className="min-h-[42px] px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold disabled:opacity-40 whitespace-nowrap"
+                  >
+                    +1 {shortB} ({score?.teamBScore ?? 0})
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled || (score?.teamBScore ?? 0) <= 0}
+                    onClick={() =>
+                      submitEvent(
+                        { type: 'POINT', team: 'B', delta: -1 },
+                        `${shortB} -1 Point`,
+                        'Volleyball'
+                      )
+                    }
+                    className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 ${btnNeutral}`}
+                  >
+                    -1
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      submitEvent(
+                        {
+                          type: 'SET_SERVING_TEAM',
+                          team: vd.servingTeam === 'A' ? 'B' : 'A',
+                        },
+                        'Switched Serve',
+                        'Volleyball'
+                      )
+                    }
+                    className={`min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 whitespace-nowrap ${btnNeutral}`}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Serve: {vd.servingTeam === 'A' ? shortA : shortB}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      submitEvent(
+                        {
+                          type: 'SET_ADVANTAGE',
+                          team: vd.advantageTeam === 'A' ? null : 'A',
+                        },
+                        `Advantage ${shortA}`,
+                        'Volleyball'
+                      )
+                    }
+                    className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 whitespace-nowrap ${
+                      vd.advantageTeam === 'A'
+                        ? 'bg-emerald-600 text-white border-emerald-500'
+                        : btnNeutral
+                    }`}
+                  >
+                    ADV {shortA}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      submitEvent(
+                        {
+                          type: 'SET_ADVANTAGE',
+                          team: vd.advantageTeam === 'B' ? null : 'B',
+                        },
+                        `Advantage ${shortB}`,
+                        'Volleyball'
+                      )
+                    }
+                    className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 whitespace-nowrap ${
+                      vd.advantageTeam === 'B'
+                        ? 'bg-emerald-600 text-white border-emerald-500'
+                        : btnNeutral
+                    }`}
+                  >
+                    ADV {shortB}
+                  </button>
+                  <span className="font-mono text-xs px-2.5 py-1 rounded border border-slate-700/60 whitespace-nowrap">
+                    Set {vd.currentSet}/{vd.bestOfSets}
+                    {vd.isDeuce && !vd.advantageTeam ? ' · DEUCE' : ''}
+                  </span>
+                </>
+              );
+            })()}
+          </div>
         </div>
       )}
 

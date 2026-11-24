@@ -188,6 +188,7 @@ export function AdminObsBroadcastStudioPage() {
     socketConnected,
     liveErrorToast,
     switchingSceneRequest,
+    scheduleRevision,
     clearLiveErrorToast,
     refetch,
   } = useObsStudio(matchId);
@@ -2870,6 +2871,8 @@ export function AdminObsBroadcastStudioPage() {
                       graphicsState={studio.graphicsState}
                       designs={savedAdDesigns}
                       loadingDesigns={loadingAdDesigns}
+                      bridgeOnline={Boolean(profile.agentOnline)}
+                      scheduleRevision={scheduleRevision}
                       onRefreshDesigns={loadSavedAdDesigns}
                       onGraphicsStateChange={handleGraphicsStateChange}
                       onOpenStudioNew={handleOpenGraphicsEditorNew}
@@ -2895,6 +2898,8 @@ export function AdminObsBroadcastStudioPage() {
                   graphicsState={studio.graphicsState}
                   designs={savedAdDesigns}
                   loadingDesigns={loadingAdDesigns}
+                  bridgeOnline={Boolean(profile.agentOnline)}
+                  scheduleRevision={scheduleRevision}
                   onRefreshDesigns={loadSavedAdDesigns}
                   onGraphicsStateChange={handleGraphicsStateChange}
                   onOpenStudioNew={handleOpenGraphicsEditorNew}

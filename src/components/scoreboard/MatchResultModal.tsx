@@ -80,7 +80,8 @@ export function MatchResultModal({
       }`;
     }
     if (sport === 'Volleyball') {
-      return `${teamA} ${details.teamASetsWon ?? 0} sets vs ${teamB} ${details.teamBSetsWon ?? 0} sets (Current Set ${details.currentSet ?? 1}: ${scoreA}-${scoreB})`;
+      const bestOf = details.bestOfSets ?? 5;
+      return `${teamA} ${details.teamASetsWon ?? 0} sets vs ${teamB} ${details.teamBSetsWon ?? 0} sets · Best of ${bestOf} (Set ${details.currentSet ?? 1}: ${scoreA}-${scoreB})`;
     }
     if (sport === 'Football' && (details.teamAPenalties > 0 || details.teamBPenalties > 0)) {
       return `${teamA} ${scoreA} - ${scoreB} ${teamB} (Pens: ${details.teamAPenalties}-${details.teamBPenalties})`;

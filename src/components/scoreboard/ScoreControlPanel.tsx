@@ -4,10 +4,13 @@ import {
   AlertTriangle,
   CloudOff,
   Edit3,
+  Lock,
   MessageSquarePlus,
+  Play,
   RefreshCw,
   RotateCcw,
   Send,
+  Settings2,
   Sparkles,
   Trophy,
   Undo2,
@@ -26,6 +29,7 @@ import { scoreboardService } from '../../services/scoreboard/scoreboardService.t
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx';
 import { FeedbackBanner } from '../common/FeedbackBanner.tsx';
+import { Modal } from '../common/Modal.tsx';
 import { MatchResultModal } from './MatchResultModal.tsx';
 import { AdvancedEventComposer } from './AdvancedEventComposer.tsx';
 import { EventCorrectionModal } from './EventCorrectionModal.tsx';
@@ -49,9 +53,15 @@ import {
   createInitialFootballDetails,
 } from '../../utils/footballScoring.ts';
 import {
+  VolleyballActionPayload,
   VolleyballDetails,
-  applyVolleyballAction,
-  createInitialVolleyballDetails,
+  VolleyballRules,
+  VOLLEYBALL_SET_PRESETS,
+  getVolleyballCompletionEligibility,
+  getVolleyballSetTargets,
+  isVolleyballScoringLocked,
+  normalizeVolleyballDetails,
+  validateVolleyballRules,
 } from '../../utils/volleyballScoring.ts';
 import { getInitialSportDetails } from '../../utils/scoringEngine.ts';
 
@@ -111,9 +121,19 @@ export function ScoreControlPanel({
   const teamB = stream.teamBName || 'Team B';
   const [matchStatusInput, setMatchStatusInput] = useState(score?.matchStatus || 'Live');
   const scoreUpdateCount = history.filter(
-    (h) => (!h.entryType || h.entryType === 'SCORE_UPDATE') && !h.reverted
+    (h) =>
+      (!h.entryType ||
+        h.entryType === 'SCORE_UPDATE' ||
+        h.entryType === 'RULES' ||
+        (sport === 'Volleyball' && h.entryType === 'RESULT')) &&
+      !h.reverted
   ).length;
   const resultDeclared = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
+  const volleyballLock =
+    sport === 'Volleyball'
+      ? isVolleyballScoringLocked(score?.sportSpecificDetails, score?.resultStatus)
+      : { locked: false, reason: '' };
+  const controlLocked = volleyballLock.locked;
 
   useEffect(() => {
     if (score?.matchStatus) setMatchStatusInput(score.matchStatus);
@@ -408,6 +428,78 @@ export function ScoreControlPanel({
     }
   }
 
+  async function handleVolleyballEvent(action: VolleyballActionPayload) {
+    await handleSubmitStructuredEvent({
+      clientEventId: `vb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      sportType: 'Volleyball',
+      action: action as unknown as Record<string, unknown>,
+    });
+  }
+
+  async function handleSaveVolleyballRules(rules: Partial<VolleyballRules>) {
+    try {
+      setSaving(true);
+      setError(null);
+      const res = await scoreboardService.saveVolleyballRules(stream.id, {
+        ...rules,
+        rules: rules as Record<string, unknown>,
+      });
+      onScoreChange(res.score);
+      onRefreshHistory();
+      setSuccessMsg(
+        res.historyItem?.action ||
+          `Volleyball format updated: Best of ${res.score.sportSpecificDetails?.bestOfSets ?? rules.bestOfSets ?? 5}`
+      );
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to update Volleyball match rules.'));
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCompleteVolleyballMatch(payload: {
+    winnerSide: 'A' | 'B';
+    reason?: string;
+    winningMargin?: string;
+    mvpPlayerId?: string;
+    mvpPlayerName?: string;
+  }) {
+    try {
+      setSaving(true);
+      setError(null);
+      const res = await scoreboardService.completeVolleyballMatch(stream.id, payload);
+      onScoreChange(res.score);
+      onRefreshHistory();
+      onRefreshStats?.();
+      setSuccessMsg(
+        `Match completed & locked. Official winner: ${res.score.winnerTeamName || (payload.winnerSide === 'A' ? teamA : teamB)}.`
+      );
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to complete Volleyball match.'));
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleReopenVolleyballMatch(reason?: string) {
+    try {
+      setSaving(true);
+      setError(null);
+      const res = await scoreboardService.reopenVolleyballMatch(stream.id, reason);
+      onScoreChange(res.score);
+      onRefreshHistory();
+      onRefreshStats?.();
+      setSuccessMsg('Match reopened and returned to active scoring state. All set scores preserved.');
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to reopen Volleyball match.'));
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const conflictItems = queuedItems.filter((q) => q.status === 'CONFLICT');
 
   return (
@@ -515,9 +607,10 @@ export function ScoreControlPanel({
               </label>
               <select
                 value={sport}
-                disabled={saving}
+                disabled={saving || controlLocked}
+                title={controlLocked ? volleyballLock.reason : undefined}
                 onChange={(e) => handleSportChange(e.target.value as SportOption)}
-                className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:opacity-50"
               >
                 {SPORT_OPTIONS.map((sp) => (
                   <option key={sp} value={sp}>
@@ -538,7 +631,7 @@ export function ScoreControlPanel({
                       ? matchStatusInput.toUpperCase()
                       : ''
                   }
-                  disabled={saving}
+                  disabled={saving || controlLocked}
                   onChange={(e) => {
                     if (!e.target.value) return;
                     setMatchStatusInput(e.target.value);
@@ -548,7 +641,7 @@ export function ScoreControlPanel({
                     });
                   }}
                   aria-label="Standardized match status preset"
-                  className="min-h-[42px] px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg"
+                  className="min-h-[42px] px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg disabled:opacity-50"
                 >
                   <option value="">Quick Status...</option>
                   {STANDARD_MATCH_STATUSES.map((st) => (
@@ -560,20 +653,21 @@ export function ScoreControlPanel({
                 <input
                   type="text"
                   value={matchStatusInput}
+                  disabled={saving || controlLocked}
                   onChange={(e) => setMatchStatusInput(e.target.value)}
                   placeholder="e.g. Live, Half Time"
-                  className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg w-36 sm:w-44 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg w-36 sm:w-44 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:opacity-50"
                 />
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || controlLocked}
                   onClick={() =>
                     commitUpdate({
                       matchStatus: matchStatusInput.trim() || 'Live',
                       action: `Match status: ${matchStatusInput.trim() || 'Live'}`,
                     })
                   }
-                  className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+                  className="min-h-[42px] px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap disabled:opacity-50"
                 >
                   Save Status
                 </button>
@@ -586,7 +680,7 @@ export function ScoreControlPanel({
               type="button"
               disabled={saving}
               onClick={() => setResultModalOpen(true)}
-              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold tracking-wide uppercase text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 whitespace-nowrap"
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold tracking-wide uppercase text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 whitespace-nowrap shrink-0"
             >
               <Trophy className="w-4 h-4" />
               <span>{resultDeclared ? 'Correct Result' : 'Declare Match Result'}</span>
@@ -595,16 +689,17 @@ export function ScoreControlPanel({
               type="button"
               disabled={saving || scoreUpdateCount === 0}
               onClick={() => setUndoOpen(true)}
-              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap shrink-0"
             >
               <Undo2 className="w-4 h-4" />
               <span>Undo Last</span>
             </button>
             <button
               type="button"
-              disabled={saving}
+              disabled={saving || controlLocked}
+              title={controlLocked ? volleyballLock.reason : undefined}
               onClick={() => setResetOpen(true)}
-              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 whitespace-nowrap"
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-40 whitespace-nowrap shrink-0"
             >
               <RotateCcw className="w-4 h-4" />
               <span>Reset</span>
@@ -708,6 +803,7 @@ export function ScoreControlPanel({
           score={score}
           players={players}
           saving={saving}
+          locked={controlLocked}
           onSubmitEvent={handleSubmitStructuredEvent}
         />
       )}
@@ -772,19 +868,18 @@ export function ScoreControlPanel({
           teamB={teamB}
           scoreA={score?.teamAScore ?? 0}
           scoreB={score?.teamBScore ?? 0}
-          details={{
-            ...createInitialVolleyballDetails(),
-            ...((score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>),
-          }}
+          details={normalizeVolleyballDetails(
+            (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+          )}
           saving={saving}
-          onApply={(next) =>
-            commitUpdate({
-              teamAScore: next.teamAScore,
-              teamBScore: next.teamBScore,
-              sportSpecificDetails: next.details as unknown as Record<string, unknown>,
-              action: next.label,
-            })
-          }
+          locked={controlLocked}
+          winnerName={score?.winnerTeamName || ''}
+          resultDescription={score?.resultDescription || ''}
+          players={players}
+          onEvent={handleVolleyballEvent}
+          onSaveRules={handleSaveVolleyballRules}
+          onCompleteMatch={handleCompleteVolleyballMatch}
+          onReopenMatch={handleReopenVolleyballMatch}
         />
       )}
 
@@ -819,22 +914,53 @@ export function ScoreControlPanel({
                   : 'Admin';
               const isCommentary = item.entryType === 'COMMENTARY';
               const isResult = item.entryType === 'RESULT';
+              const isUndo = item.entryType === 'UNDO';
+              const isRules = item.entryType === 'RULES';
+              const isCorrection = item.entryType === 'CORRECTION';
               return (
                 <div
                   key={item._id}
                   className={`px-4 py-2.5 flex items-center justify-between gap-3 text-xs ${
-                    isCommentary ? 'bg-emerald-50/40' : isResult ? 'bg-amber-50/50' : ''
+                    item.reverted
+                      ? 'bg-slate-50 text-slate-400'
+                      : isCommentary
+                        ? 'bg-emerald-50/40'
+                        : isResult
+                          ? 'bg-amber-50/50'
+                          : isUndo || isCorrection
+                            ? 'bg-sky-50/40'
+                            : isRules
+                              ? 'bg-slate-50/70'
+                              : ''
                   }`}
                 >
                   <div className="min-w-0">
-                    <p className="font-medium text-slate-800 break-words">
+                    <p
+                      className={`font-medium break-words ${
+                        item.reverted ? 'line-through text-slate-400' : 'text-slate-800'
+                      }`}
+                    >
                       {isCommentary && (
                         <span className="font-semibold text-emerald-700 mr-1.5">[Commentary]</span>
                       )}
                       {isResult && (
                         <span className="font-semibold text-amber-800 mr-1.5">[Result]</span>
                       )}
+                      {isUndo && (
+                        <span className="font-semibold text-sky-700 mr-1.5">[Undo]</span>
+                      )}
+                      {isRules && (
+                        <span className="font-semibold text-slate-700 mr-1.5">[Rules]</span>
+                      )}
+                      {isCorrection && (
+                        <span className="font-semibold text-indigo-700 mr-1.5">[Audit]</span>
+                      )}
                       {item.action}
+                      {item.reverted && (
+                        <span className="ml-1.5 no-underline inline-block font-semibold text-slate-500">
+                          [Reverted]
+                        </span>
+                      )}
                     </p>
                     <p className="text-slate-500 mt-0.5">
                       {actorName} · {new Date(item.createdAt).toLocaleTimeString()}
@@ -844,17 +970,19 @@ export function ScoreControlPanel({
                     <span className="font-mono tabular-nums font-semibold text-slate-700">
                       {item.updatedScore?.teamAScore ?? 0} - {item.updatedScore?.teamBScore ?? 0}
                     </span>
-                    {(!item.entryType || item.entryType === 'SCORE_UPDATE') && !item.reverted && (
-                      <button
-                        type="button"
-                        onClick={() => setCorrectionItem(item)}
-                        title="Correct this scoring event"
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 bg-white text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:border-slate-300"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                        <span>Correct</span>
-                      </button>
-                    )}
+                    {(!item.entryType || item.entryType === 'SCORE_UPDATE') &&
+                      !item.reverted &&
+                      !controlLocked && (
+                        <button
+                          type="button"
+                          onClick={() => setCorrectionItem(item)}
+                          title="Correct this scoring event"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 bg-white text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:border-slate-300"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>Correct</span>
+                        </button>
+                      )}
                   </div>
                 </div>
               );
@@ -1119,7 +1247,14 @@ function VolleyballControls({
   scoreB,
   details,
   saving,
-  onApply,
+  locked,
+  winnerName,
+  resultDescription,
+  players,
+  onEvent,
+  onSaveRules,
+  onCompleteMatch,
+  onReopenMatch,
 }: {
   teamA: string;
   teamB: string;
@@ -1127,176 +1262,774 @@ function VolleyballControls({
   scoreB: number;
   details: VolleyballDetails;
   saving: boolean;
-  onApply: (res: ReturnType<typeof applyVolleyballAction>) => void;
+  locked: boolean;
+  winnerName: string;
+  resultDescription: string;
+  players: PlayerData[];
+  onEvent: (action: VolleyballActionPayload) => Promise<void>;
+  onSaveRules: (rules: Partial<VolleyballRules>) => Promise<void>;
+  onCompleteMatch: (payload: {
+    winnerSide: 'A' | 'B';
+    reason?: string;
+    winningMargin?: string;
+    mvpPlayerId?: string;
+    mvpPlayerName?: string;
+  }) => Promise<void>;
+  onReopenMatch: (reason?: string) => Promise<void>;
 }) {
+  const eligibility = getVolleyballCompletionEligibility(details);
+  const targets = getVolleyballSetTargets(details.currentSet, details.rules);
+  const activeSet = details.setScores.find((s) => s.set === details.currentSet);
+  const currentSetAwarded = Boolean(activeSet?.winner);
+
+  const [rulesDrawerOpen, setRulesDrawerOpen] = useState(false);
+  const [customSetsInput, setCustomSetsInput] = useState(String(details.bestOfSets));
+  const [rulesDraft, setRulesDraft] = useState<VolleyballRules>(details.rules);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+
+  const [completeModalOpen, setCompleteModalOpen] = useState(false);
+  const [winnerSide, setWinnerSide] = useState<'A' | 'B'>(
+    eligibility.thresholdWinnerSide || (details.teamBSetsWon > details.teamASetsWon ? 'B' : 'A')
+  );
+  const [completeReason, setCompleteReason] = useState('');
+  const [mvpPlayerId, setMvpPlayerId] = useState('');
+  const [mvpPlayerName, setMvpPlayerName] = useState('');
+
+  const [reopenModalOpen, setReopenModalOpen] = useState(false);
+  const [reopenReason, setReopenReason] = useState('');
+
+  useEffect(() => {
+    setCustomSetsInput(String(details.bestOfSets));
+    setRulesDraft(details.rules);
+  }, [details.bestOfSets, details.rules]);
+
+  const openCompleteModal = () => {
+    setWinnerSide(
+      eligibility.thresholdWinnerSide ||
+        (details.teamBSetsWon > details.teamASetsWon
+          ? 'B'
+          : details.teamASetsWon > details.teamBSetsWon
+            ? 'A'
+            : scoreB > scoreA
+              ? 'B'
+              : 'A')
+    );
+    setCompleteReason(
+      eligibility.thresholdReached ? 'Winning set threshold reached' : 'Manual official match decision'
+    );
+    setCompleteModalOpen(true);
+  };
+
+  const completedSetsList = details.setScores.filter((s) => s.winner === 'A' || s.winner === 'B');
+  const minAllowedBestOf = Math.max(
+    1,
+    completedSetsList.length,
+    completedSetsList.reduce((acc, s) => Math.max(acc, s.set), 0)
+  );
+
+  const handleApplyCustomSets = async () => {
+    const parsed = Number(customSetsInput);
+    const check = validateVolleyballRules({ ...details.rules, bestOfSets: parsed });
+    if (!check.valid) {
+      setRulesError(check.error || 'Enter a valid odd number between 1 and 15.');
+      return;
+    }
+    if (parsed < minAllowedBestOf) {
+      setRulesError(
+        `Cannot reduce below Best of ${minAllowedBestOf} because ${completedSetsList.length} set(s) are already completed.`
+      );
+      return;
+    }
+    setRulesError(null);
+    await onSaveRules({ bestOfSets: parsed });
+  };
+
+  const handleSaveRulesDrawer = async () => {
+    const check = validateVolleyballRules(rulesDraft);
+    if (!check.valid) {
+      setRulesError(check.error || 'Invalid Volleyball rules.');
+      return;
+    }
+    if (check.rules.bestOfSets < minAllowedBestOf) {
+      setRulesError(
+        `Cannot reduce below Best of ${minAllowedBestOf} because ${completedSetsList.length} set(s) are already completed.`
+      );
+      return;
+    }
+    setRulesError(null);
+    await onSaveRules(check.rules);
+    setRulesDrawerOpen(false);
+  };
+
+  const advTeamName =
+    details.advantageTeam === 'A' ? teamA : details.advantageTeam === 'B' ? teamB : '';
+
   return (
     <div className="space-y-4">
-      {/* Serving Team, Match Format & Set Selector */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-slate-500 mr-1">Serving:</span>
-          {(['A', 'B'] as const).map((side) => (
+      {/* Match Completed & Locked Banner */}
+      {locked && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-lg bg-amber-400/30 text-amber-900 flex items-center justify-center shrink-0">
+              <Lock className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-sm font-bold text-slate-900">
+                Match Completed &amp; Locked
+                {winnerName ? ` · Winner: ${winnerName}` : ''}
+              </p>
+              <p className="text-xs text-slate-700 font-mono tabular-nums">
+                Final Sets: {teamA} {details.teamASetsWon} – {details.teamBSetsWon} {teamB}
+                {resultDescription ? ` · ${resultDescription}` : ''}
+              </p>
+              <p className="text-xs text-slate-600">
+                Scoring, set awards, advantage, and rule edits are locked until reopened or undone.
+              </p>
+            </div>
+          </div>
+          {details.rules.allowMatchReopen && (
             <button
-              key={side}
               type="button"
               disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyVolleyballAction(details, scoreA, scoreB, {
-                    type: 'SET_SERVING_TEAM',
-                    team: side,
-                  })
-                )
-              }
-              className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                details.servingTeam === side
-                  ? 'bg-amber-400 text-slate-950 border-amber-400'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
+              onClick={() => setReopenModalOpen(true)}
+              className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold whitespace-nowrap shrink-0 disabled:opacity-50"
             >
-              {side === 'A' ? teamA : teamB}
+              <Play className="w-3.5 h-3.5" />
+              <span>Resume / Reopen Match</span>
             </button>
-          ))}
+          )}
         </div>
+      )}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-slate-500">Format:</span>
-          {([3, 5] as const).map((bo) => (
-            <button
-              key={bo}
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                onApply(
-                  applyVolleyballAction(details, scoreA, scoreB, {
-                    type: 'SET_BEST_OF',
-                    bestOfSets: bo,
-                  })
-                )
-              }
-              className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                details.bestOfSets === bo
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              Best of {bo}
-            </button>
-          ))}
-          <select
-            value={details.currentSet}
-            disabled={saving}
-            aria-label="Active set"
-            onChange={(e) =>
-              onApply(
-                applyVolleyballAction(details, scoreA, scoreB, {
-                  type: 'SET_CURRENT_SET',
-                  setNumber: Number(e.target.value),
-                })
-              )
-            }
-            className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
-          >
-            {Array.from({ length: details.bestOfSets || 5 }, (_, idx) => idx + 1).map((n) => (
-              <option key={n} value={n}>
-                Set {n} {n === details.bestOfSets ? '(Decider)' : ''}
-              </option>
-            ))}
-          </select>
+      {/* Winning Threshold Reached Prompt (when active/reopened) */}
+      {!locked && eligibility.thresholdReached && (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-emerald-950 font-medium">
+            Winning threshold reached ({eligibility.winningThreshold} sets won by{' '}
+            <span className="font-bold">
+              {eligibility.thresholdWinnerSide === 'A' ? teamA : teamB}
+            </span>
+            ). Complete the match or adjust rules / reopen sets.
+          </div>
           <button
             type="button"
             disabled={saving}
-            onClick={() =>
-              onApply(
-                applyVolleyballAction(details, scoreA, scoreB, {
-                  type: 'SET_CUSTOM_MULTI_POINT',
-                  enabled: !details.allowCustomMultiPoint,
-                })
-              )
-            }
-            className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-              details.allowCustomMultiPoint
-                ? 'bg-amber-100 text-amber-900 border-amber-300'
-                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-            }`}
+            onClick={openCompleteModal}
+            className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold whitespace-nowrap shrink-0"
           >
-            {details.allowCustomMultiPoint ? 'Multi-Point Unlocked' : 'Unlock Multi-Point'}
+            <Trophy className="w-3.5 h-3.5" />
+            <span>Complete &amp; Lock Match</span>
           </button>
         </div>
+      )}
+
+      {/* Serving, Format Presets & Set Selector */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-slate-500 mr-1">Serving:</span>
+            {(['A', 'B'] as const).map((side) => (
+              <button
+                key={side}
+                type="button"
+                disabled={saving || locked}
+                onClick={() => onEvent({ type: 'SET_SERVING_TEAM', team: side })}
+                className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap shrink-0 disabled:opacity-45 ${
+                  details.servingTeam === side
+                    ? 'bg-amber-400 text-slate-950 border-amber-400'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                {side === 'A' ? teamA : teamB}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-slate-500">Format:</span>
+            {VOLLEYBALL_SET_PRESETS.map((bo) => (
+              <button
+                key={bo}
+                type="button"
+                disabled={saving || locked || bo < minAllowedBestOf}
+                onClick={() => onSaveRules({ bestOfSets: bo })}
+                className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap shrink-0 disabled:opacity-45 ${
+                  details.bestOfSets === bo
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Best of {bo}
+              </button>
+            ))}
+
+            <div className="inline-flex items-center gap-1">
+              <input
+                type="number"
+                min={1}
+                max={15}
+                step={2}
+                disabled={saving || locked}
+                value={customSetsInput}
+                onChange={(e) => setCustomSetsInput(e.target.value)}
+                aria-label="Custom total sets"
+                className="w-16 min-h-[38px] px-2 text-xs font-mono tabular-nums border border-slate-300 rounded-lg disabled:bg-slate-100"
+              />
+              <button
+                type="button"
+                disabled={saving || locked}
+                onClick={handleApplyCustomSets}
+                className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0 disabled:opacity-45"
+              >
+                Set Format
+              </button>
+            </div>
+
+            <button
+              type="button"
+              disabled={saving || locked}
+              onClick={() => setRulesDrawerOpen((v) => !v)}
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0 disabled:opacity-45"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              <span>Match Rules</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Active Set Selector, Advantage Controls & Declare Winner Action */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={details.currentSet}
+              disabled={saving || locked}
+              aria-label="Active set"
+              onChange={(e) =>
+                onEvent({
+                  type: 'SET_CURRENT_SET',
+                  setNumber: Number(e.target.value),
+                })
+              }
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white disabled:opacity-45"
+            >
+              {Array.from({ length: details.bestOfSets }, (_, idx) => idx + 1).map((n) => {
+                const alreadyExists = details.setScores.some((s) => s.set === n);
+                const disabledOption = eligibility.thresholdReached && !alreadyExists;
+                return (
+                  <option key={n} value={n} disabled={disabledOption}>
+                    Set {n} {details.bestOfSets > 1 && n === details.bestOfSets ? '(Decider)' : ''}
+                  </option>
+                );
+              })}
+            </select>
+
+            <span className="text-xs text-slate-600 font-mono tabular-nums">
+              Target {targets.targetPoints} pts · Min +{targets.requiredMargin}
+              {targets.isDecidingSet ? ' · Decider Set' : ''}
+            </span>
+
+            {details.isDeuce && !details.advantageTeam && (
+              <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-1 rounded">
+                DEUCE ({scoreA}-{scoreB})
+              </span>
+            )}
+            {details.advantageTeam && (
+              <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded">
+                ADVANTAGE: {advTeamName}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={saving || locked || currentSetAwarded}
+              onClick={() =>
+                onEvent({
+                  type: 'SET_ADVANTAGE',
+                  team: details.advantageTeam === 'A' ? null : 'A',
+                })
+              }
+              className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap shrink-0 disabled:opacity-45 ${
+                details.advantageTeam === 'A'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              Advantage {teamA}
+            </button>
+            <button
+              type="button"
+              disabled={saving || locked || currentSetAwarded}
+              onClick={() =>
+                onEvent({
+                  type: 'SET_ADVANTAGE',
+                  team: details.advantageTeam === 'B' ? null : 'B',
+                })
+              }
+              className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap shrink-0 disabled:opacity-45 ${
+                details.advantageTeam === 'B'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              Advantage {teamB}
+            </button>
+            {details.advantageTeam && (
+              <button
+                type="button"
+                disabled={saving || locked}
+                onClick={() => onEvent({ type: 'SET_ADVANTAGE', team: null })}
+                className="min-h-[38px] px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 whitespace-nowrap shrink-0 disabled:opacity-45"
+              >
+                Clear Advantage
+              </button>
+            )}
+
+            {(details.rules.allowManualWinnerDeclaration || eligibility.thresholdReached) && !locked && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={openCompleteModal}
+                className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 disabled:opacity-45"
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                <span>Declare Match Winner / Complete</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {rulesError && (
+          <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {rulesError}
+          </p>
+        )}
+
+        {/* Expandable Match Rules Drawer */}
+        {rulesDrawerOpen && (
+          <div className="pt-3 border-t border-slate-200 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Points Per Set
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={99}
+                  value={rulesDraft.pointsPerSet}
+                  onChange={(e) =>
+                    setRulesDraft((prev) => ({
+                      ...prev,
+                      pointsPerSet: Math.max(5, Math.min(99, Number(e.target.value) || 25)),
+                    }))
+                  }
+                  className="w-full min-h-[38px] px-2.5 text-xs font-mono tabular-nums border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Min Win Margin
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={rulesDraft.minMargin}
+                  onChange={(e) =>
+                    setRulesDraft((prev) => ({
+                      ...prev,
+                      minMargin: Math.max(1, Math.min(10, Number(e.target.value) || 2)),
+                    }))
+                  }
+                  className="w-full min-h-[38px] px-2.5 text-xs font-mono tabular-nums border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Final Set Points
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={99}
+                  value={rulesDraft.finalSetPoints}
+                  onChange={(e) =>
+                    setRulesDraft((prev) => ({
+                      ...prev,
+                      finalSetPoints: Math.max(5, Math.min(99, Number(e.target.value) || 15)),
+                    }))
+                  }
+                  className="w-full min-h-[38px] px-2.5 text-xs font-mono tabular-nums border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Final Set Min Margin
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={rulesDraft.finalSetMinMargin}
+                  onChange={(e) =>
+                    setRulesDraft((prev) => ({
+                      ...prev,
+                      finalSetMinMargin: Math.max(1, Math.min(10, Number(e.target.value) || 2)),
+                    }))
+                  }
+                  className="w-full min-h-[38px] px-2.5 text-xs font-mono tabular-nums border border-slate-300 rounded-lg"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700">
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rulesDraft.autoCompleteSets}
+                    onChange={(e) =>
+                      setRulesDraft((prev) => ({ ...prev, autoCompleteSets: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded border-slate-300"
+                  />
+                  <span>Auto-complete set on target + margin</span>
+                </label>
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rulesDraft.allowManualWinnerDeclaration}
+                    onChange={(e) =>
+                      setRulesDraft((prev) => ({
+                        ...prev,
+                        allowManualWinnerDeclaration: e.target.checked,
+                      }))
+                    }
+                    className="w-4 h-4 rounded border-slate-300"
+                  />
+                  <span>Allow manual winner anytime</span>
+                </label>
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rulesDraft.allowMatchReopen}
+                    onChange={(e) =>
+                      setRulesDraft((prev) => ({ ...prev, allowMatchReopen: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded border-slate-300"
+                  />
+                  <span>Allow reopen completed match</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={saving || locked}
+                  onClick={() =>
+                    onEvent({
+                      type: 'SET_CUSTOM_MULTI_POINT',
+                      enabled: !details.allowCustomMultiPoint,
+                    })
+                  }
+                  className={`min-h-[34px] px-2.5 py-1 text-xs font-semibold rounded-lg border whitespace-nowrap ${
+                    details.allowCustomMultiPoint
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                      : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  {details.allowCustomMultiPoint ? 'Multi-Point Unlocked' : 'Unlock Multi-Point'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={saving || locked}
+                onClick={handleSaveRulesDrawer}
+                className="min-h-[38px] px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold whitespace-nowrap shrink-0"
+              >
+                Save Match Rules
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Team Scoring Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[
           { team: 'A' as const, name: teamA, pts: scoreA, setsWon: details.teamASetsWon },
           { team: 'B' as const, name: teamB, pts: scoreB, setsWon: details.teamBSetsWon },
-        ].map((side) => (
-          <div
-            key={side.team}
-            className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                <h4 className="font-semibold text-slate-900 truncate">{side.name}</h4>
-                {details.servingTeam === side.team && (
-                  <span className="text-[11px] font-semibold text-amber-700">· Serving</span>
-                )}
+        ].map((side) => {
+          const hasAdvantage = details.advantageTeam === side.team;
+          const awardSetDisabled =
+            saving || locked || eligibility.thresholdReached || currentSetAwarded;
+          return (
+            <div
+              key={side.team}
+              className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h4 className="font-semibold text-slate-900 truncate">{side.name}</h4>
+                  {details.servingTeam === side.team && !locked && (
+                    <span className="text-[11px] font-semibold text-amber-700 shrink-0">
+                      · Serving
+                    </span>
+                  )}
+                  {hasAdvantage && !locked && (
+                    <span className="text-[11px] font-bold text-emerald-700 shrink-0">
+                      · ADVANTAGE
+                    </span>
+                  )}
+                </div>
+                <span className="font-mono text-base font-bold tabular-nums shrink-0 text-slate-900">
+                  Sets {side.setsWon}/{details.winningThreshold} · Pts {side.pts}
+                </span>
               </div>
-              <span className="font-mono text-lg font-bold tabular-nums shrink-0">
-                Sets {side.setsWon} · Pts {side.pts}
-              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={saving || locked || currentSetAwarded}
+                  onClick={() => onEvent({ type: 'POINT', team: side.team, delta: 1 })}
+                  className="min-h-[48px] rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
+                >
+                  +1 Point
+                </button>
+                <button
+                  type="button"
+                  disabled={saving || locked || side.pts <= 0 || currentSetAwarded}
+                  onClick={() => onEvent({ type: 'POINT', team: side.team, delta: -1 })}
+                  className="min-h-[48px] rounded-lg bg-slate-100 text-slate-800 text-sm font-semibold hover:bg-slate-200 disabled:opacity-40 whitespace-nowrap"
+                >
+                  -1 Point
+                </button>
+                <button
+                  type="button"
+                  disabled={awardSetDisabled}
+                  title={
+                    eligibility.thresholdReached
+                      ? `Winning threshold (${details.winningThreshold} sets) already reached`
+                      : currentSetAwarded
+                        ? `Set ${details.currentSet} already awarded`
+                        : undefined
+                  }
+                  onClick={() => onEvent({ type: 'COMPLETE_SET', winner: side.team })}
+                  className="col-span-2 min-h-[44px] rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-40 whitespace-nowrap"
+                >
+                  {currentSetAwarded
+                    ? `Set ${details.currentSet} Won by ${activeSet?.winner === 'A' ? teamA : teamB}`
+                    : `Award Set ${details.currentSet} to ${side.name}`}
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  onApply(
-                    applyVolleyballAction(details, scoreA, scoreB, {
-                      type: 'POINT',
-                      team: side.team,
-                      delta: 1,
-                    })
-                  )
-                }
-                className="min-h-[48px] rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
-              >
-                +1 Point
-              </button>
-              <button
-                type="button"
-                disabled={saving || side.pts <= 0}
-                onClick={() =>
-                  onApply(
-                    applyVolleyballAction(details, scoreA, scoreB, {
-                      type: 'POINT',
-                      team: side.team,
-                      delta: -1,
-                    })
-                  )
-                }
-                className="min-h-[48px] rounded-lg bg-slate-100 text-slate-800 text-sm font-semibold hover:bg-slate-200 disabled:opacity-40"
-              >
-                -1 Point
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  onApply(
-                    applyVolleyballAction(details, scoreA, scoreB, {
-                      type: 'COMPLETE_SET',
-                      winner: side.team,
-                    })
-                  )
-                }
-                className="col-span-2 min-h-[44px] rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-              >
-                Award Set {details.currentSet} to {side.name}
-              </button>
+          );
+        })}
+      </div>
+
+      {/* Set Breakdown Strip */}
+      {details.setScores.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 text-xs font-mono tabular-nums text-slate-700">
+          <span className="font-sans font-semibold text-slate-500">
+            Sets (Best of {details.bestOfSets} · First to {details.winningThreshold}):
+          </span>
+          {details.setScores.map((s) => (
+            <span
+              key={s.set}
+              className={`px-2 py-1 rounded border ${
+                s.set === details.currentSet
+                  ? 'border-slate-900 bg-slate-900 text-white font-semibold'
+                  : 'border-slate-200 bg-slate-50 text-slate-700'
+              }`}
+            >
+              S{s.set}: {s.teamA}-{s.teamB}
+              {s.winner ? ` (${s.winner === 'A' ? teamA : teamB})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Manual Winner Declaration & Match Completion Modal */}
+      <Modal
+        open={completeModalOpen}
+        onClose={() => setCompleteModalOpen(false)}
+        title="Declare Match Winner & Complete Match"
+        maxWidthClass="max-w-lg"
+        zIndexClass="z-[110]"
+      >
+        <div className="space-y-4">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1">
+            <p className="font-semibold text-slate-900">
+              {teamA} vs {teamB} · Best of {details.bestOfSets}
+            </p>
+            <p className="font-mono tabular-nums text-slate-600">
+              Current Sets: {details.teamASetsWon} - {details.teamBSetsWon} · Set {details.currentSet}{' '}
+              Points: {scoreA} - {scoreB}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-2">
+              Select Official Match Winner
+            </label>
+            <div className="grid grid-cols-2 gap-2.5">
+              {(['A', 'B'] as const).map((side) => {
+                const label = side === 'A' ? teamA : teamB;
+                const sets = side === 'A' ? details.teamASetsWon : details.teamBSetsWon;
+                return (
+                  <button
+                    key={side}
+                    type="button"
+                    onClick={() => setWinnerSide(side)}
+                    className={`min-h-[48px] px-3 py-2 rounded-lg border text-left transition-colors ${
+                      winnerSide === side
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="text-xs font-bold truncate">{label}</div>
+                    <div className="text-[11px] font-mono tabular-nums opacity-80">
+                      Sets Won: {sets}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
-        ))}
-      </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Decision Reason / Margin (Optional)
+            </label>
+            <input
+              type="text"
+              value={completeReason}
+              onChange={(e) => setCompleteReason(e.target.value)}
+              placeholder="e.g. Threshold reached, Opponent forfeit, Retired"
+              className="w-full min-h-[40px] px-3 py-2 text-xs border border-slate-300 rounded-lg"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Player of the Match (Optional)
+            </label>
+            <div className="flex gap-2">
+              {players.length > 0 && (
+                <select
+                  value={mvpPlayerId}
+                  onChange={(e) => {
+                    const pid = e.target.value;
+                    setMvpPlayerId(pid);
+                    const found = players.find((p) => (p.id || p._id) === pid);
+                    if (found) setMvpPlayerName(found.name);
+                  }}
+                  className="w-1/2 min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
+                >
+                  <option value="">-- Roster --</option>
+                  {players.map((p) => (
+                    <option key={p.id || p._id} value={p.id || p._id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="text"
+                value={mvpPlayerName}
+                onChange={(e) => setMvpPlayerName(e.target.value)}
+                placeholder="MVP player name"
+                className="flex-1 min-h-[40px] px-3 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            Completing the match preserves the real set scores and points without fabricating
+            unplayed set wins. All Volleyball scoring and rule controls will lock immediately until
+            reopened or undone.
+          </p>
+
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setCompleteModalOpen(false)}
+              className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={async () => {
+                await onCompleteMatch({
+                  winnerSide,
+                  reason: completeReason.trim() || undefined,
+                  mvpPlayerId: mvpPlayerId || undefined,
+                  mvpPlayerName: mvpPlayerName.trim() || undefined,
+                });
+                setCompleteModalOpen(false);
+              }}
+              className="min-h-[42px] px-4 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg whitespace-nowrap"
+            >
+              {saving
+                ? 'Completing...'
+                : `Confirm Winner: ${winnerSide === 'A' ? teamA : teamB}`}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reopen / Resume Completed Match Modal */}
+      <Modal
+        open={reopenModalOpen}
+        onClose={() => setReopenModalOpen(false)}
+        title="Resume / Reopen Completed Match"
+        maxWidthClass="max-w-md"
+        zIndexClass="z-[110]"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 leading-relaxed">
+            Reopening returns this Volleyball match to active Live status and unlocks score, set,
+            advantage, and rule controls. All existing set scores ({details.teamASetsWon}-
+            {details.teamBSetsWon}) and points ({scoreA}-{scoreB}) are preserved cleanly.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Reopen Reason (Optional Audit Note)
+            </label>
+            <input
+              type="text"
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              placeholder="e.g. Correcting final set score or resuming play"
+              className="w-full min-h-[40px] px-3 py-2 text-xs border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setReopenModalOpen(false)}
+              className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={async () => {
+                await onReopenMatch(reopenReason.trim() || undefined);
+                setReopenModalOpen(false);
+                setReopenReason('');
+              }}
+              className="min-h-[42px] px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg whitespace-nowrap"
+            >
+              {saving ? 'Reopening...' : 'Yes, Resume Match'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

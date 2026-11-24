@@ -2,11 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   BookmarkPlus,
+  Circle,
+  ClipboardPaste,
+  Clock,
+  Copy,
   CopyPlus,
   Eye,
   Image as ImageIcon,
   Layers,
   LayoutTemplate,
+  Maximize,
   Pause,
   Play,
   Plus,
@@ -14,10 +19,12 @@ import {
   Radio,
   Redo2,
   RefreshCw,
+  RotateCcw,
   Save,
   Shapes,
   Sparkles,
   Square,
+  Star,
   Trash2,
   Type,
   Undo2,
@@ -30,6 +37,7 @@ import type {
   BroadcastGraphicsAssetData,
   BroadcastGraphicsStateData,
   GraphicsAnimationStyle,
+  GraphicsDesignGroupMeta,
   GraphicsDesignType,
   GraphicsElement,
   GraphicsLayoutPresetId,
@@ -39,8 +47,9 @@ import { broadcastGraphicsService } from '../../services/obs/broadcastGraphicsSe
 import { extractApiError } from '../../services/api/httpClient.ts';
 import {
   BROADCAST_GRAPHICS_TEMPLATES,
-  GRAPHICS_ANIMATION_OPTIONS,
   GRAPHICS_DURATION_PRESETS,
+  GRAPHICS_ENTRY_ANIMATIONS,
+  GRAPHICS_EXIT_ANIMATIONS,
   GRAPHICS_LAYOUT_PRESETS,
   GRAPHICS_RESOLUTION_PRESETS,
   createDefaultElement,
@@ -50,6 +59,7 @@ import { generateDesignThumbnailDataUrl } from './canvasThumbnail.ts';
 import { CanvasPreviewBg, GraphicsCanvas } from './GraphicsCanvas.tsx';
 import { GraphicsLayersPanel } from './GraphicsLayersPanel.tsx';
 import { GraphicsPropertiesPanel } from './GraphicsPropertiesPanel.tsx';
+import { GraphicsTimelinePanel } from './GraphicsTimelinePanel.tsx';
 import { ObsGraphicsLayer, ScaledGraphicsPreviewFrame } from './ObsGraphicsLayer.tsx';
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx';
 import { Modal } from '../common/Modal.tsx';
@@ -85,10 +95,84 @@ function cloneElements(els: GraphicsElement[]): GraphicsElement[] {
   return els.map((e) => ({
     ...e,
     ...(e.crop ? { crop: { ...e.crop } } : {}),
-    ...(e.gradient ? { gradient: { ...e.gradient } } : {}),
-    ...(e.gradientText ? { gradientText: { ...e.gradientText } } : {}),
+    ...(e.gradient
+      ? {
+          gradient: {
+            ...e.gradient,
+            ...(e.gradient.stops ? { stops: e.gradient.stops.map((s) => ({ ...s })) } : {}),
+          },
+        }
+      : {}),
+    ...(e.gradientText
+      ? {
+          gradientText: {
+            ...e.gradientText,
+            ...(e.gradientText.stops
+              ? { stops: e.gradientText.stops.map((s) => ({ ...s })) }
+              : {}),
+          },
+        }
+      : {}),
     animation: { ...e.animation },
   }));
+}
+
+async function optimizeImageBeforeUpload(file: File): Promise<{
+  file: File;
+  width: number;
+  height: number;
+}> {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    return { file, width: 0, height: 0 };
+  }
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const origW = img.naturalWidth || 0;
+      const origH = img.naturalHeight || 0;
+      const maxDim = 1920;
+      if (origW <= maxDim && origH <= maxDim && file.size <= 1_800_000) {
+        URL.revokeObjectURL(objectUrl);
+        resolve({ file, width: origW, height: origH });
+        return;
+      }
+      const scale = Math.min(1, maxDim / Math.max(origW, origH, 1));
+      const targetW = Math.max(1, Math.round(origW * scale));
+      const targetH = Math.max(1, Math.round(origH * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        URL.revokeObjectURL(objectUrl);
+        resolve({ file, width: origW, height: origH });
+        return;
+      }
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+      const outputMime = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/webp';
+      canvas.toBlob(
+        (blob) => {
+          URL.revokeObjectURL(objectUrl);
+          if (!blob || blob.size >= file.size) {
+            resolve({ file, width: origW, height: origH });
+            return;
+          }
+          const ext = outputMime === 'image/jpeg' ? '.jpg' : '.webp';
+          const cleanBase = file.name.replace(/\.[^.]+$/, '');
+          const optimized = new File([blob], `${cleanBase}${ext}`, { type: outputMime });
+          resolve({ file: optimized, width: targetW, height: targetH });
+        },
+        outputMime,
+        0.9
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve({ file, width: 0, height: 0 });
+    };
+    img.src = objectUrl;
+  });
 }
 
 export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
@@ -131,6 +215,15 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
   const [defaultDurationSeconds, setDefaultDurationSeconds] = useState<number>(
     initialDesign?.defaultDurationSeconds ?? 10
   );
+  const [timelineEnabled, setTimelineEnabled] = useState<boolean>(
+    initialDesign?.timelineEnabled ?? false
+  );
+  const [totalDurationSeconds, setTotalDurationSeconds] = useState<number>(
+    initialDesign?.totalDurationSeconds ?? 10
+  );
+  const [groups, setGroups] = useState<GraphicsDesignGroupMeta[]>(
+    initialDesign?.groups || []
+  );
 
   const initialElements = useMemo(
     () =>
@@ -146,12 +239,14 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>(
     initialElements[0] ? [initialElements[0].id] : []
   );
+  const [clipboardElements, setClipboardElements] = useState<GraphicsElement[]>([]);
 
   // Canvas & Studio view state
   const [leftTab, setLeftTab] = useState<LeftRailTab>('elements');
   const [previewBg, setPreviewBg] = useState<CanvasPreviewBg>('stadium');
   const [customBgUrl, setCustomBgUrl] = useState<string>('');
   const [showGrid, setShowGrid] = useState(true);
+  const [gridSpacing, setGridSpacing] = useState(20);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showSafeMargins, setShowSafeMargins] = useState(true);
   const [showScoreboardSafeZone, setShowScoreboardSafeZone] = useState(true);
@@ -168,11 +263,32 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
   const replaceAssetInputRef = useRef<HTMLInputElement | null>(null);
   const replaceAssetIdRef = useRef<string | null>(null);
 
-  // Actions
+  // Isolated Preview Player & Timeline state
   const [savingDesign, setSavingDesign] = useState(false);
   const [pushingLive, setPushingLive] = useState(false);
   const [livePreviewOpen, setLivePreviewOpen] = useState(false);
+  const [fullscreenStage, setFullscreenStage] = useState(false);
   const [previewReplayKey, setPreviewReplayKey] = useState(0);
+  const [previewPhase, setPreviewPhase] = useState<'idle' | 'entry' | 'exit' | 'full'>('full');
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [playheadMs, setPlayheadMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!previewPlaying) return;
+    const totalMs = Math.max(1000, totalDurationSeconds * 1000);
+    const id = window.setInterval(() => {
+      setPlayheadMs((prev) => {
+        const cur = prev ?? 0;
+        const next = cur + 50;
+        if (next >= totalMs) {
+          setPreviewPlaying(false);
+          return totalMs;
+        }
+        return next;
+      });
+    }, 50);
+    return () => window.clearInterval(id);
+  }, [previewPlaying, totalDurationSeconds]);
 
   const loadAssets = useCallback(async () => {
     try {
@@ -233,7 +349,12 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
 
   const addElement = (
     type: GraphicsElement['type'],
-    opts?: { shapeKind?: GraphicsElement['shapeKind']; src?: string; layerName?: string }
+    opts?: {
+      shapeKind?: GraphicsElement['shapeKind'];
+      src?: string;
+      iconName?: string;
+      layerName?: string;
+    }
   ) => {
     const maxZ = elements.reduce((m, e) => Math.max(m, e.zIndex || 0), 0);
     const newEl = createDefaultElement(type, {
@@ -242,6 +363,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
       zIndex: maxZ + 1,
       shapeKind: opts?.shapeKind,
       src: opts?.src,
+      iconName: opts?.iconName,
       layerName: opts?.layerName,
       matchId,
       tournamentId: tournamentId || undefined,
@@ -249,6 +371,30 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
     commitElements([...elements, newEl]);
     setSelectedIds([newEl.id]);
   };
+
+  const handleCopySelected = useCallback(() => {
+    if (!selectedIds.length) return;
+    const picked = elements.filter((el) => selectedIds.includes(el.id));
+    if (picked.length > 0) {
+      setClipboardElements(cloneElements(picked));
+    }
+  }, [elements, selectedIds]);
+
+  const handlePasteClipboard = useCallback(() => {
+    if (!clipboardElements.length) return;
+    const maxZ = elements.reduce((m, e) => Math.max(m, e.zIndex || 0), 0);
+    const pasted = clipboardElements.map((el, idx) => ({
+      ...cloneElements([el])[0],
+      id: makeElementId(el.type),
+      layerName: `${el.layerName} Copy`,
+      groupId: undefined,
+      x: el.x + 28,
+      y: el.y + 28,
+      zIndex: maxZ + idx + 1,
+    }));
+    commitElements([...elements, ...pasted]);
+    setSelectedIds(pasted.map((p) => p.id));
+  }, [clipboardElements, elements, commitElements]);
 
   const duplicateIds = useCallback(
     (ids: string[]) => {
@@ -330,6 +476,9 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
       | 'canvasWidth'
       | 'canvasHeight'
       | 'elements'
+      | 'groups'
+      | 'timelineEnabled'
+      | 'totalDurationSeconds'
     >
   ) => {
     const cloned = cloneElements(tpl.elements).map((el) => ({
@@ -344,14 +493,20 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
     setExitAnimation(tpl.exitAnimation);
     setCanvasWidth(tpl.canvasWidth || 1920);
     setCanvasHeight(tpl.canvasHeight || 1080);
+    setGroups(tpl.groups || []);
+    if (typeof tpl.timelineEnabled === 'boolean') setTimelineEnabled(tpl.timelineEnabled);
+    if (typeof tpl.totalDurationSeconds === 'number') {
+      setTotalDurationSeconds(tpl.totalDurationSeconds);
+    }
     commitElements(cloned);
     setSelectedIds(cloned[0] ? [cloned[0].id] : []);
     onNotifySuccess(`Loaded template "${tpl.name}".`);
   };
 
-  const handleUploadAssetFile = async (file: File, targetElementId?: string | null) => {
+  const handleUploadAssetFile = async (rawFile: File, targetElementId?: string | null) => {
     try {
       setUploadingAsset(true);
+      const { file, width, height } = await optimizeImageBeforeUpload(rawFile);
       const uploaded = await broadcastGraphicsService.uploadAsset({
         file,
         name: file.name.replace(/\.[^.]+$/, ''),
@@ -359,6 +514,8 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         scope,
         matchId,
         tournamentId: tournamentId || undefined,
+        width: width || undefined,
+        height: height || undefined,
       });
       await loadAssets();
 
@@ -377,9 +534,10 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
     }
   };
 
-  const handleUploadCustomBackground = async (file: File) => {
+  const handleUploadCustomBackground = async (rawFile: File) => {
     try {
       setUploadingAsset(true);
+      const { file, width, height } = await optimizeImageBeforeUpload(rawFile);
       const uploaded = await broadcastGraphicsService.uploadAsset({
         file,
         name: `Stage BG: ${file.name}`,
@@ -387,6 +545,8 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         scope,
         matchId,
         tournamentId: tournamentId || undefined,
+        width: width || undefined,
+        height: height || undefined,
       });
       setCustomBgUrl(uploaded.url);
       setPreviewBg('custom');
@@ -399,18 +559,19 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
     }
   };
 
-  const handleReplaceExistingAssetFile = async (assetId: string, file: File) => {
+  const handleReplaceExistingAssetFile = async (assetId: string, rawFile: File) => {
     try {
       setUploadingAsset(true);
-      const updated = await broadcastGraphicsService.replaceAsset(assetId, file);
+      const { file, width, height } = await optimizeImageBeforeUpload(rawFile);
+      const updated = await broadcastGraphicsService.replaceAsset(assetId, file, {
+        width: width || undefined,
+        height: height || undefined,
+      });
       await loadAssets();
-      // Sync URL on any elements referencing that assetId without moving/resizing them
       const hasRef = elements.some((el) => el.assetId === assetId);
       if (hasRef) {
         commitElements(
-          elements.map((el) =>
-            el.assetId === assetId ? { ...el, src: updated.url } : el
-          )
+          elements.map((el) => (el.assetId === assetId ? { ...el, src: updated.url } : el))
         );
       }
       onNotifySuccess('Asset image replaced seamlessly.');
@@ -461,9 +622,12 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         canvasHeight,
         layoutPreset,
         elements,
+        groups,
         entryAnimation,
         exitAnimation,
         defaultDurationSeconds,
+        timelineEnabled,
+        totalDurationSeconds,
         thumbnailDataUrl,
       };
 
@@ -499,6 +663,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         canvasWidth,
         canvasHeight,
         elements,
+        groups,
         entryAnimation,
         exitAnimation,
         durationSeconds: defaultDurationSeconds,
@@ -554,34 +719,33 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
   const simulatedSlot: ActiveBroadcastGraphicSlot[] = useMemo(
     () => [
       {
-        instanceId: `sim_${previewReplayKey}`,
+        instanceId: `sim_${previewReplayKey}_${previewPhase}`,
         designId,
         name: designName,
         canvasWidth,
         canvasHeight,
         elements,
+        groups,
         entryAnimation,
         exitAnimation,
-        durationSeconds: defaultDurationSeconds,
+        durationSeconds: 0,
         startedAt: new Date().toISOString(),
-        expiresAt:
-          defaultDurationSeconds > 0
-            ? new Date(Date.now() + defaultDurationSeconds * 1000).toISOString()
-            : null,
+        expiresAt: null,
         visible: true,
         triggerSource: 'live_edit',
       },
     ],
     [
       previewReplayKey,
+      previewPhase,
       designId,
       designName,
       canvasWidth,
       canvasHeight,
       elements,
+      groups,
       entryAnimation,
       exitAnimation,
-      defaultDurationSeconds,
     ]
   );
 
@@ -590,16 +754,25 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
     [designs]
   );
 
+  const openIsolatedPreview = (phase: 'entry' | 'exit' | 'full') => {
+    setPreviewPhase(phase);
+    setPreviewReplayKey((k) => k + 1);
+    setPreviewPlaying(phase === 'full');
+    if (phase === 'full') setPlayheadMs(0);
+    else setPlayheadMs(null);
+    setLivePreviewOpen(true);
+  };
+
   return (
     <div className="space-y-4">
       {/* STUDIO TOP CONTROL BAR */}
       <section className="rounded-xl border border-slate-200 bg-white p-3.5 sm:p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={onBackToLibrary}
-              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Saved Ads Library</span>
@@ -610,48 +783,26 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               value={designName}
               onChange={(e) => setDesignName(e.target.value)}
               placeholder="Graphic Title (e.g. Hydration Partner Banner)"
-              className="min-h-[36px] px-3 text-sm font-bold text-slate-900 border border-slate-300 rounded-lg bg-white w-64 sm:w-72"
+              className="min-h-[36px] px-3 text-sm font-bold text-slate-900 border border-slate-300 rounded-lg bg-white w-60 sm:w-72"
             />
 
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-              <span
-                className={`px-2 py-1 rounded-md border ${
-                  obsConnected
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border-slate-200'
-                }`}
-              >
-                OBS {obsConnected ? 'Connected' : 'Standby'}
-              </span>
-              <span
-                className={`px-2 py-1 rounded-md border ${
-                  bridgeOnline
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border-slate-200'
-                }`}
-              >
-                Bridge {bridgeOnline ? 'Online' : 'Offline'}
-              </span>
-              <span
-                className={`px-2 py-1 rounded-md border ${
-                  socketConnected
-                    ? 'bg-sky-50 text-sky-700 border-sky-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200'
-                }`}
-              >
-                Socket {socketConnected ? 'Synced' : 'Reconnecting'}
-              </span>
+            <div className="flex items-center gap-2 text-xs text-slate-500 whitespace-nowrap shrink-0">
+              <span>OBS: {obsConnected ? 'Connected' : 'Standby'}</span>
+              <span aria-hidden="true">·</span>
+              <span>Bridge: {bridgeOnline ? 'Online' : 'Offline'}</span>
+              <span aria-hidden="true">·</span>
+              <span>Socket: {socketConnected ? 'Synced' : 'Reconnecting'}</span>
             </div>
           </div>
 
-          {/* Undo/Redo + Live Broadcast Controls */}
+          {/* Undo/Redo + Copy/Paste + Isolated Preview + Save + Live Broadcast Controls */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               disabled={historyIndex <= 0}
               onClick={handleUndo}
               title="Undo (Ctrl+Z)"
-              className="min-h-[34px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1"
+              className="min-h-[34px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
             >
               <Undo2 className="w-3.5 h-3.5" />
               <span>Undo</span>
@@ -661,29 +812,58 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               disabled={historyIndex >= history.length - 1}
               onClick={handleRedo}
               title="Redo (Ctrl+Y)"
-              className="min-h-[34px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1"
+              className="min-h-[34px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
             >
               <Redo2 className="w-3.5 h-3.5" />
               <span>Redo</span>
             </button>
+            <button
+              type="button"
+              disabled={selectedIds.length === 0}
+              onClick={handleCopySelected}
+              title="Copy Selected (Ctrl+C)"
+              className="min-h-[34px] px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={clipboardElements.length === 0}
+              onClick={handlePasteClipboard}
+              title="Paste (Ctrl+V)"
+              className="min-h-[34px] px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-35 inline-flex items-center gap-1"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" />
+            </button>
 
             <button
               type="button"
-              onClick={() => {
-                setPreviewReplayKey((k) => k + 1);
-                setLivePreviewOpen(true);
-              }}
-              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800"
+              onClick={() => setTimelineEnabled((v) => !v)}
+              title="Toggle Timeline Sequencing Mode (Simple Mode vs Timeline)"
+              className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+                timelineEnabled
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>{timelineEnabled ? 'Timeline: On' : 'Simple Mode'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openIsolatedPreview('full')}
+              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 whitespace-nowrap shrink-0"
             >
               <Eye className="w-3.5 h-3.5" />
-              <span>Preview</span>
+              <span>Preview Studio</span>
             </button>
 
             <button
               type="button"
               disabled={savingDesign || elements.length === 0}
               onClick={() => handleSaveDesign('save')}
-              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-bold text-white disabled:opacity-45"
+              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-bold text-white disabled:opacity-45 whitespace-nowrap shrink-0"
             >
               <Save className="w-3.5 h-3.5" />
               <span>{savingDesign ? 'Saving...' : designId ? 'Save Changes' : 'Save Ad'}</span>
@@ -694,7 +874,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                 type="button"
                 disabled={savingDesign}
                 onClick={() => handleSaveDesign('save_new')}
-                className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700"
+                className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0"
               >
                 <CopyPlus className="w-3.5 h-3.5" />
                 <span>Save As New</span>
@@ -705,7 +885,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               type="button"
               disabled={savingDesign || elements.length === 0}
               onClick={() => handleSaveDesign('save_template')}
-              className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700"
+              className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0"
             >
               <BookmarkPlus className="w-3.5 h-3.5" />
               <span>Save Template</span>
@@ -715,7 +895,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               type="button"
               disabled={pushingLive || elements.length === 0}
               onClick={handleApplyLive}
-              className="min-h-[34px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-xs font-bold text-white shadow-xs disabled:opacity-45"
+              className="min-h-[34px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-xs font-bold text-white shadow-xs disabled:opacity-45 whitespace-nowrap shrink-0"
             >
               <Radio className="w-3.5 h-3.5" />
               <span>{pushingLive ? 'Applying...' : 'APPLY LIVE'}</span>
@@ -726,24 +906,24 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                 <button
                   type="button"
                   onClick={handlePauseToggle}
-                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-amber-50 text-xs font-semibold text-amber-800"
+                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-amber-50 text-xs font-semibold text-amber-800 whitespace-nowrap shrink-0"
                 >
                   {graphicsState?.animationsPaused ? (
                     <>
                       <Play className="w-3.5 h-3.5" />
-                      <span>Resume</span>
+                      <span>Resume Live</span>
                     </>
                   ) : (
                     <>
                       <Pause className="w-3.5 h-3.5" />
-                      <span>Pause</span>
+                      <span>Pause Live</span>
                     </>
                   )}
                 </button>
                 <button
                   type="button"
                   onClick={handleHideLive}
-                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-xs font-bold text-white"
+                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-xs font-bold text-white whitespace-nowrap shrink-0"
                 >
                   <Square className="w-3 h-3" />
                   <span>Hide Live</span>
@@ -751,17 +931,17 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                 <button
                   type="button"
                   onClick={handleClearLive}
-                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 text-xs font-semibold"
+                  className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 text-xs font-semibold whitespace-nowrap shrink-0"
                 >
                   <X className="w-3.5 h-3.5" />
-                  <span>Clear All ({activeSlots.length})</span>
+                  <span>Clear ({activeSlots.length})</span>
                 </button>
               </>
             )}
           </div>
         </div>
 
-        {/* Design Metadata Row: Resolution, Layout Preset, Scope, Duration, Design Entry/Exit Animation */}
+        {/* Design Metadata Row */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-2 border-t border-slate-200 text-xs">
           <label className="space-y-0.5">
             <span className="text-[10px] font-bold uppercase text-slate-500">Resolution</span>
@@ -785,7 +965,9 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
           </label>
 
           <label className="space-y-0.5">
-            <span className="text-[10px] font-bold uppercase text-slate-500">Layout Position Preset</span>
+            <span className="text-[10px] font-bold uppercase text-slate-500">
+              Layout Position Preset
+            </span>
             <select
               value={layoutPreset}
               onChange={(e) => applyLayoutPreset(e.target.value as GraphicsLayoutPresetId)}
@@ -800,7 +982,9 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
           </label>
 
           <label className="space-y-0.5">
-            <span className="text-[10px] font-bold uppercase text-slate-500">Ad Category &amp; Scope</span>
+            <span className="text-[10px] font-bold uppercase text-slate-500">
+              Ad Category &amp; Scope
+            </span>
             <div className="flex gap-1">
               <select
                 value={designType}
@@ -860,7 +1044,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                   setDefaultDurationSeconds(Math.max(0, Number(e.target.value) || 0))
                 }
                 title="Seconds (0 = Permanent)"
-                className="w-14 min-h-[32px] px-1.5 font-mono border border-slate-300 rounded-md"
+                className="w-14 min-h-[32px] px-1.5 font-mono tabular-nums border border-slate-300 rounded-md"
               />
             </div>
           </label>
@@ -872,7 +1056,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               onChange={(e) => setEntryAnimation(e.target.value as GraphicsAnimationStyle)}
               className="w-full min-h-[32px] px-2 border border-slate-300 rounded-md bg-white font-semibold"
             >
-              {GRAPHICS_ANIMATION_OPTIONS.map((a) => (
+              {GRAPHICS_ENTRY_ANIMATIONS.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.label}
                 </option>
@@ -887,7 +1071,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               onChange={(e) => setExitAnimation(e.target.value as GraphicsAnimationStyle)}
               className="w-full min-h-[32px] px-2 border border-slate-300 rounded-md bg-white font-semibold"
             >
-              {GRAPHICS_ANIMATION_OPTIONS.map((a) => (
+              {GRAPHICS_EXIT_ANIMATIONS.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.label}
                 </option>
@@ -933,7 +1117,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Insert Promotional Elements
+                  Insert Elements
                 </p>
                 <div className="grid grid-cols-2 gap-1.5 text-xs">
                   <button
@@ -941,15 +1125,15 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                     onClick={() => addElement('text')}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <Type className="w-3.5 h-3.5 text-[#EA580C]" />
-                    <span>Add Text</span>
+                    <Type className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
+                    <span>Text</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => addElement('image')}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <ImageIcon className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <ImageIcon className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
                     <span>Image Ad</span>
                   </button>
                   <button
@@ -957,7 +1141,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                     onClick={() => addElement('logo')}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <Sparkles className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
                     <span>Sponsor Logo</span>
                   </button>
                   <button
@@ -965,24 +1149,48 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                     onClick={() => addElement('qr')}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <QrCode className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <QrCode className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
                     <span>QR Code</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addElement('icon', { iconName: 'trophy' })}
+                    className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
+                  >
+                    <Star className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
+                    <span>Vector Icon</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => addElement('shape', { shapeKind: 'rounded_rect' })}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <Shapes className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <Shapes className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
                     <span>Card Box</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => addElement('shape', { shapeKind: 'line' })}
+                    onClick={() => addElement('shape', { shapeKind: 'ellipse' })}
                     className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
                   >
-                    <Square className="w-3.5 h-3.5 text-[#EA580C]" />
-                    <span>Divider Line</span>
+                    <Circle className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
+                    <span>Circle / Oval</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addElement('shape', { shapeKind: 'container' })}
+                    className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
+                  >
+                    <Layers className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
+                    <span>Container</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addElement('shape', { shapeKind: 'line' })}
+                    className="col-span-2 min-h-[36px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-[#EA580C] hover:bg-orange-50/40 font-semibold text-slate-800"
+                  >
+                    <Square className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
+                    <span>Divider / Accent Line</span>
                   </button>
                 </div>
               </div>
@@ -1031,7 +1239,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
           )}
 
           {leftTab === 'templates' && (
-            <div className="space-y-2 max-h-[520px] overflow-y-auto pr-0.5">
+            <div className="space-y-2 max-h-[540px] overflow-y-auto pr-0.5">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                 Built-In Broadcast Templates ({BROADCAST_GRAPHICS_TEMPLATES.length})
               </p>
@@ -1044,7 +1252,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-slate-900">{tpl.name}</span>
-                    <span className="text-[10px] font-mono text-slate-500">
+                    <span className="text-[10px] font-mono text-slate-500 tabular-nums">
                       {tpl.defaultDurationSeconds === 0 ? 'Perm' : `${tpl.defaultDurationSeconds}s`}
                     </span>
                   </div>
@@ -1087,7 +1295,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
                   className="flex-1 min-h-[34px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-xs font-bold text-white disabled:opacity-50"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>{uploadingAsset ? 'Uploading...' : 'Upload PNG / JPG / WebP'}</span>
+                  <span>{uploadingAsset ? 'Optimizing & Uploading...' : 'Upload Image'}</span>
                 </button>
                 <button
                   type="button"
@@ -1125,7 +1333,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
 
               {assets.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-6 border border-dashed border-slate-300 rounded-lg">
-                  Upload sponsor logos, transparent banners, or promo artwork (max 8 MB).
+                  Upload sponsor logos, transparent banners, or promo artwork (auto-resized up to 1920px, max 5 MB).
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-2 max-h-[440px] overflow-y-auto pr-0.5">
@@ -1184,9 +1392,11 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
           {leftTab === 'layers' && (
             <GraphicsLayersPanel
               elements={elements}
+              groups={groups}
               selectedIds={selectedIds}
               onSelect={setSelectedIds}
               onUpdateElements={(next) => commitElements(next)}
+              onUpdateGroups={setGroups}
               onDuplicateIds={duplicateIds}
               onDeleteIds={deleteIds}
             />
@@ -1199,18 +1409,22 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
             elements={elements}
+            groups={groups}
             selectedIds={selectedIds}
             matchId={matchId}
             tournamentId={tournamentId}
             previewBg={previewBg}
             customBgUrl={customBgUrl}
             showGrid={showGrid}
+            gridSpacing={gridSpacing}
             snapToGrid={snapToGrid}
             showSafeMargins={showSafeMargins}
             showScoreboardSafeZone={showScoreboardSafeZone}
             zoomMode={zoomMode}
+            timelinePlayheadMs={timelineEnabled ? playheadMs : null}
             onChangePreviewBg={setPreviewBg}
             onChangeShowGrid={setShowGrid}
+            onChangeGridSpacing={setGridSpacing}
             onChangeSnapToGrid={setSnapToGrid}
             onChangeShowSafeMargins={setShowSafeMargins}
             onChangeShowScoreboardSafeZone={setShowScoreboardSafeZone}
@@ -1221,6 +1435,8 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
             onElementsCommit={(next) => commitElements(next)}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            onCopySelected={handleCopySelected}
+            onPasteClipboard={handlePasteClipboard}
             onDuplicateSelected={() => duplicateIds(selectedIds)}
             onDeleteSelected={() => deleteIds(selectedIds)}
           />
@@ -1241,7 +1457,40 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         </aside>
       </div>
 
-      {/* ASSET PICKER / IMAGE REPLACE MODAL (preserves layout) */}
+      {/* TOGGLEABLE BOTTOM TIMELINE DOCK (Hidden / Simple Mode by Default) */}
+      {timelineEnabled && (
+        <GraphicsTimelinePanel
+          elements={elements}
+          selectedIds={selectedIds}
+          totalDurationSeconds={totalDurationSeconds}
+          playheadMs={playheadMs}
+          isPlaying={previewPlaying}
+          onSelectElements={setSelectedIds}
+          onChangeTotalDurationSeconds={setTotalDurationSeconds}
+          onChangePlayheadMs={(ms) => {
+            setPreviewPlaying(false);
+            setPlayheadMs(ms);
+          }}
+          onTogglePlay={() => {
+            if (playheadMs === null || playheadMs >= totalDurationSeconds * 1000) {
+              setPlayheadMs(0);
+            }
+            setPreviewPlaying((p) => !p);
+          }}
+          onStopPlayback={() => {
+            setPreviewPlaying(false);
+            setPlayheadMs(null);
+          }}
+          onReplayPlayback={() => {
+            setPlayheadMs(0);
+            setPreviewPlaying(true);
+          }}
+          onElementsLiveChange={setElements}
+          onElementsCommit={(next) => commitElements(next)}
+        />
+      )}
+
+      {/* ASSET PICKER / IMAGE REPLACE MODAL */}
       <Modal
         open={Boolean(pickerTargetElementId)}
         onClose={() => setPickerTargetElementId(null)}
@@ -1253,7 +1502,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
           <label className="block">
             <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-xs font-bold text-white cursor-pointer">
               <Upload className="w-3.5 h-3.5" />
-              <span>{uploadingAsset ? 'Uploading...' : 'Upload New Image File'}</span>
+              <span>{uploadingAsset ? 'Optimizing & Uploading...' : 'Upload New Image File'}</span>
             </span>
             <input
               type="file"
@@ -1296,13 +1545,17 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
         </div>
       </Modal>
 
-      {/* LIVE SIMULATION PREVIEW MODAL */}
+      {/* ISOLATED ANIMATION PREVIEW & 1920x1080 SIMULATION MODAL */}
       <Modal
         open={livePreviewOpen}
-        onClose={() => setLivePreviewOpen(false)}
-        title={`Live Animation Simulation · ${designName}`}
-        subtitle="Exact GPU-composited OBS Browser Source preview before applying live."
-        maxWidthClass="max-w-4xl"
+        onClose={() => {
+          setPreviewPlaying(false);
+          setLivePreviewOpen(false);
+          setFullscreenStage(false);
+        }}
+        title={`Isolated Animation Preview · ${designName}`}
+        subtitle="Preview entry, continuous loop, timeline sequence, and exit transitions safely before pushing live to OBS."
+        maxWidthClass={fullscreenStage ? 'max-w-[96vw]' : 'max-w-5xl'}
       >
         <div className="space-y-4">
           <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950 border border-slate-700">
@@ -1312,8 +1565,13 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               className="w-full h-full"
             >
               <ObsGraphicsLayer
-                key={previewReplayKey}
+                key={`${previewReplayKey}_${previewPhase}`}
                 activeSlotsOverride={simulatedSlot}
+                animationsPausedOverride={
+                  previewPhase === 'full' ? !previewPlaying && playheadMs !== null : false
+                }
+                previewPhase={previewPhase}
+                timelinePlayheadMs={timelineEnabled && previewPhase === 'full' ? playheadMs : null}
                 canvasWidth={canvasWidth}
                 canvasHeight={canvasHeight}
                 matchId={matchId}
@@ -1321,19 +1579,73 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               />
             </ScaledGraphicsPreviewFrame>
           </div>
+
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setPreviewReplayKey((k) => k + 1)}
-              className="min-h-[36px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg hover:bg-slate-50"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Replay Entry Animation</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => openIsolatedPreview('entry')}
+                className={`min-h-[34px] px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                  previewPhase === 'entry'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Preview Entry
+              </button>
+              <button
+                type="button"
+                onClick={() => openIsolatedPreview('full')}
+                className={`min-h-[34px] px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                  previewPhase === 'full'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Preview Full Motion
+              </button>
+              <button
+                type="button"
+                onClick={() => openIsolatedPreview('exit')}
+                className={`min-h-[34px] px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                  previewPhase === 'exit'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Preview Exit
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewReplayKey((k) => k + 1);
+                  if (previewPhase === 'full') {
+                    setPlayheadMs(0);
+                    setPreviewPlaying(true);
+                  }
+                }}
+                className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Replay</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFullscreenStage((v) => !v)}
+                className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                <Maximize className="w-3.5 h-3.5" />
+                <span>{fullscreenStage ? 'Standard Size' : 'Expand 16:9'}</span>
+              </button>
+            </div>
+
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setLivePreviewOpen(false)}
+                onClick={() => {
+                  setPreviewPlaying(false);
+                  setLivePreviewOpen(false);
+                }}
                 className="min-h-[36px] px-4 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg"
               >
                 Close
@@ -1341,6 +1653,7 @@ export const GraphicsStudioEditor: React.FC<GraphicsStudioEditorProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  setPreviewPlaying(false);
                   setLivePreviewOpen(false);
                   handleApplyLive();
                 }}

@@ -280,5 +280,59 @@ export const scoreboardService = {
     const { data } = await adminApi.post(`/live/${streamId}/kabaddi/reopen`, { reason });
     return data;
   },
+
+  async saveVolleyballRules(
+    streamId: string,
+    payload: {
+      bestOfSets?: number;
+      pointsPerSet?: number;
+      minMargin?: number;
+      finalSetPoints?: number;
+      finalSetMinMargin?: number;
+      autoCompleteSets?: boolean;
+      allowManualWinnerDeclaration?: boolean;
+      allowMatchReopen?: boolean;
+      rules?: Record<string, unknown>;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.patch(`/live/${streamId}/volleyball/rules`, payload);
+    return data;
+  },
+
+  async completeVolleyballMatch(
+    streamId: string,
+    payload: {
+      winnerSide: 'A' | 'B';
+      reason?: string;
+      winningMargin?: string;
+      resultDescription?: string;
+      mvpPlayerId?: string;
+      mvpPlayerName?: string;
+      finalSummary?: string;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/volleyball/complete`, payload);
+    return data;
+  },
+
+  async reopenVolleyballMatch(
+    streamId: string,
+    reason?: string
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.post(`/live/${streamId}/volleyball/reopen`, { reason });
+    return data;
+  },
 };
 

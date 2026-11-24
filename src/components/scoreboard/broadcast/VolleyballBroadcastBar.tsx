@@ -1,7 +1,7 @@
 import { LiveScoreData, LiveStreamData } from '../../../types/index.ts';
 import {
   VolleyballDetails,
-  createInitialVolleyballDetails,
+  normalizeVolleyballDetails,
 } from '../../../utils/volleyballScoring.ts';
 import { deriveShortTeamName } from '../../../utils/matchResultValidation.ts';
 import { BroadcastLogo } from './BroadcastLogo.tsx';
@@ -17,18 +17,26 @@ export function VolleyballBroadcastBar({
   score,
   compact = false,
 }: VolleyballBroadcastBarProps) {
-  const d: VolleyballDetails = {
-    ...createInitialVolleyballDetails(),
-    ...(score.sportSpecificDetails || {}),
-  };
+  const d: VolleyballDetails = normalizeVolleyballDetails(
+    (score.sportSpecificDetails || {}) as Partial<VolleyballDetails>
+  );
 
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
   const shortA = deriveShortTeamName(nameA, 'TMA');
   const shortB = deriveShortTeamName(nameB, 'TMB');
 
-  const isDecidingSet = d.currentSet === d.bestOfSets;
+  const isDecidingSet = d.bestOfSets > 1 && d.currentSet === d.bestOfSets;
   const completedSets = (d.setScores || []).filter((s) => s.winner === 'A' || s.winner === 'B');
+  const centerSubLabel = d.matchCompleted
+    ? 'FINAL'
+    : d.advantageTeam
+      ? `ADV ${d.advantageTeam === 'A' ? shortA : shortB}`
+      : d.isDeuce
+        ? 'DEUCE'
+        : isDecidingSet
+          ? 'DECIDER'
+          : `BO${d.bestOfSets}`;
 
   return (
     <div className="w-full max-w-[740px] bg-slate-950/90 backdrop-blur-md text-white rounded-md shadow-xl overflow-hidden border border-white/10">
@@ -42,12 +50,17 @@ export function VolleyballBroadcastBar({
               <span className="sm:hidden">{shortA}</span>
               <span className="hidden sm:inline">{nameA}</span>
             </span>
-            {d.servingTeam === 'A' && (
+            {d.servingTeam === 'A' && !d.matchCompleted && (
               <span
                 title="Serving"
                 aria-label="Serving"
                 className="w-2 h-2 rounded-full bg-amber-400 shrink-0"
               />
+            )}
+            {d.advantageTeam === 'A' && !d.matchCompleted && (
+              <span className="text-[9px] font-extrabold text-emerald-300 uppercase shrink-0">
+                ADV
+              </span>
             )}
           </div>
           <div className="flex items-baseline gap-2 shrink-0 font-mono tabular-nums">
@@ -65,8 +78,12 @@ export function VolleyballBroadcastBar({
           <span className="text-[11px] font-mono tabular-nums font-bold text-white leading-tight">
             SET {d.currentSet}/{d.bestOfSets}
           </span>
-          <span className="text-[9px] font-semibold uppercase tracking-wider text-amber-300 leading-tight">
-            {isDecidingSet ? 'DECIDER' : `BO${d.bestOfSets}`}
+          <span
+            className={`text-[9px] font-semibold uppercase tracking-wider leading-tight ${
+              d.advantageTeam ? 'text-emerald-300' : 'text-amber-300'
+            }`}
+          >
+            {centerSubLabel}
           </span>
         </div>
 
@@ -81,7 +98,12 @@ export function VolleyballBroadcastBar({
             </span>
           </div>
           <div className="flex items-center gap-1.5 min-w-0 justify-end">
-            {d.servingTeam === 'B' && (
+            {d.advantageTeam === 'B' && !d.matchCompleted && (
+              <span className="text-[9px] font-extrabold text-emerald-300 uppercase shrink-0">
+                ADV
+              </span>
+            )}
+            {d.servingTeam === 'B' && !d.matchCompleted && (
               <span
                 title="Serving"
                 aria-label="Serving"

@@ -252,7 +252,7 @@ export interface NormalizedBroadcast {
 export interface ScoreHistoryItem {
   _id: string;
   liveStreamId: string;
-  entryType?: 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION' | 'UNDO';
+  entryType?: 'SCORE_UPDATE' | 'COMMENTARY' | 'RESULT' | 'CORRECTION' | 'UNDO' | 'RULES';
   sportType?: SportOption;
   teamSide?: 'A' | 'B' | '';
   eventCategory?: string;
@@ -328,6 +328,7 @@ export interface TournamentData {
   status: 'UPCOMING' | 'ONGOING' | 'COMPLETED';
   description: string;
   rules?: string;
+  volleyballRules?: Record<string, unknown> | null;
   groupCount?: number;
   qualificationRules?: string;
   organizerName: string;

@@ -42,6 +42,7 @@ import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { verifyMediaMTXStreamHealth } from './mediamtxService.ts';
 import { clearLiveGraphics, getGraphicsStateForMatch } from './broadcastGraphicsService.ts';
+import { handleMatchSessionEndedForSchedules } from './broadcastAdScheduleService.ts';
 
 interface DirectObsSession {
   matchId: string;
@@ -133,7 +134,7 @@ async function resolveAgentSocketForMatch(
   return null;
 }
 
-async function isMatchBridgeOnline(matchId: string): Promise<boolean> {
+export async function isMatchBridgeOnline(matchId: string): Promise<boolean> {
   const resolved = await resolveAgentSocketForMatch(matchId);
   return Boolean(resolved);
 }
@@ -3228,6 +3229,9 @@ export async function manageBroadcastSession(
   });
   if (mode === 'start') {
     await clearLiveGraphics(matchId, actor, profile.broadcastSessionId).catch(() => {});
+  } else if (mode === 'end') {
+    await clearLiveGraphics(matchId, actor).catch(() => {});
+    await handleMatchSessionEndedForSchedules(matchId).catch(() => {});
   }
   await emitFullStudioState(matchId);
   return formatSafeProfile(profile);

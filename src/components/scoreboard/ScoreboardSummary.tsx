@@ -18,7 +18,7 @@ import {
 } from '../../utils/footballScoring.ts';
 import {
   VolleyballDetails,
-  createInitialVolleyballDetails,
+  normalizeVolleyballDetails,
 } from '../../utils/volleyballScoring.ts';
 import { SportOption } from '../../constants/sports.ts';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
@@ -388,39 +388,48 @@ export function ScoreboardSummary({
   };
 
   const renderVolleyballSummary = () => {
-    const details: VolleyballDetails = {
-      ...createInitialVolleyballDetails(),
-      ...(rawDetails as Partial<VolleyballDetails>),
-    };
-    const setScores = Array.isArray(details.setScores) ? details.setScores : [];
+    const details = normalizeVolleyballDetails(rawDetails as Partial<VolleyballDetails>);
+    const setScores = details.setScores;
 
     return (
       <div className="space-y-3">
         <div className="grid grid-cols-3 items-center gap-2 rounded-lg bg-slate-900 text-white p-3">
           <div className="min-w-0">
             <p className="text-xs text-slate-300 truncate">
-              {teamA} {details.servingTeam === 'A' ? '●' : ''}
+              {teamA} {details.servingTeam === 'A' && !details.matchCompleted ? '●' : ''}
+              {details.advantageTeam === 'A' && !details.matchCompleted ? ' · ADV' : ''}
             </p>
             <div className="flex items-baseline gap-2 font-mono tabular-nums mt-0.5">
               <span className="text-2xl font-bold">{scoreA}</span>
-              <span className="text-xs text-slate-400">({details.teamASetsWon} sets)</span>
+              <span className="text-xs text-slate-400">
+                ({details.teamASetsWon}/{details.winningThreshold} sets)
+              </span>
             </div>
           </div>
           <div className="text-center">
             <p className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
-              Set {details.currentSet || 1}
+              Set {details.currentSet}/{details.bestOfSets}
             </p>
             <p className="text-[11px] text-slate-300 mt-0.5">
-              Best of {details.bestOfSets || 5}
+              {details.matchCompleted
+                ? 'Match Final'
+                : details.advantageTeam
+                  ? `ADV ${details.advantageTeam === 'A' ? teamA : teamB}`
+                  : details.isDeuce
+                    ? 'DEUCE'
+                    : `Best of ${details.bestOfSets}`}
             </p>
           </div>
           <div className="min-w-0 text-right">
             <p className="text-xs text-slate-300 truncate">
-              {details.servingTeam === 'B' ? '● ' : ''}
+              {details.advantageTeam === 'B' && !details.matchCompleted ? 'ADV · ' : ''}
+              {details.servingTeam === 'B' && !details.matchCompleted ? '● ' : ''}
               {teamB}
             </p>
             <div className="flex items-baseline justify-end gap-2 font-mono tabular-nums mt-0.5">
-              <span className="text-xs text-slate-400">({details.teamBSetsWon} sets)</span>
+              <span className="text-xs text-slate-400">
+                ({details.teamBSetsWon}/{details.winningThreshold} sets)
+              </span>
               <span className="text-2xl font-bold">{scoreB}</span>
             </div>
           </div>

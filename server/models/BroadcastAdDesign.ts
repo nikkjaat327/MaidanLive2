@@ -3,6 +3,7 @@ import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
 import type {
   GraphicsAnimationStyle,
+  GraphicsDesignGroupMeta,
   GraphicsDesignType,
   GraphicsElement,
   GraphicsLayoutPresetId,
@@ -21,9 +22,12 @@ export interface IBroadcastAdDesign extends Document {
   canvasHeight: number;
   layoutPreset: GraphicsLayoutPresetId;
   elements: GraphicsElement[];
+  groups?: GraphicsDesignGroupMeta[];
   entryAnimation: GraphicsAnimationStyle;
   exitAnimation: GraphicsAnimationStyle;
   defaultDurationSeconds: number;
+  timelineEnabled?: boolean;
+  totalDurationSeconds?: number;
   thumbnailDataUrl: string;
   usageCount: number;
   lastUsedAt?: Date | null;
@@ -56,9 +60,12 @@ const broadcastAdDesignSchema = new Schema<IBroadcastAdDesign>(
     canvasHeight: { type: Number, default: 1080, min: 320, max: 3840 },
     layoutPreset: { type: String, trim: true, default: 'custom_position', maxlength: 60 },
     elements: { type: Schema.Types.Mixed, default: [] },
+    groups: { type: Schema.Types.Mixed, default: [] },
     entryAnimation: { type: String, trim: true, default: 'slide-bottom', maxlength: 40 },
     exitAnimation: { type: String, trim: true, default: 'fade-out', maxlength: 40 },
     defaultDurationSeconds: { type: Number, default: 10, min: 0, max: 86400 },
+    timelineEnabled: { type: Boolean, default: false },
+    totalDurationSeconds: { type: Number, default: 12, min: 1, max: 86400 },
     thumbnailDataUrl: { type: String, default: '', maxlength: 90000 },
     usageCount: { type: Number, default: 0, min: 0 },
     lastUsedAt: { type: Date, default: null },

@@ -12,7 +12,7 @@ import {
   normalizeKabaddiDetails,
 } from './kabaddiScoring.ts';
 import { FootballDetails, createInitialFootballDetails } from './footballScoring.ts';
-import { VolleyballDetails, createInitialVolleyballDetails } from './volleyballScoring.ts';
+import { VolleyballDetails, normalizeVolleyballDetails } from './volleyballScoring.ts';
 
 function shortCode(name: string, explicit?: string): string {
   if (explicit && explicit.trim()) return explicit.trim().toUpperCase().slice(0, 6);
@@ -322,14 +322,27 @@ export function normalizeBroadcast(
       });
     }
   } else if (sport === 'Volleyball') {
-    const vd = { ...createInitialVolleyballDetails(), ...(details as Partial<VolleyballDetails>) };
-    teamASecondary = `Sets: ${vd.teamASetsWon}`;
-    teamBSecondary = `Sets: ${vd.teamBSetsWon}`;
-    if (stream.status === 'LIVE') {
-      teamABadge = vd.servingTeam === 'A' ? 'SERVING' : '';
-      teamBBadge = vd.servingTeam === 'B' ? 'SERVING' : '';
+    const vd = normalizeVolleyballDetails(details as Partial<VolleyballDetails>);
+    teamASecondary = `Sets: ${vd.teamASetsWon}/${vd.winningThreshold}`;
+    teamBSecondary = `Sets: ${vd.teamBSetsWon}/${vd.winningThreshold}`;
+    if (stream.status === 'LIVE' && !vd.matchCompleted) {
+      teamABadge =
+        vd.advantageTeam === 'A'
+          ? 'ADVANTAGE'
+          : vd.servingTeam === 'A'
+            ? 'SERVING'
+            : '';
+      teamBBadge =
+        vd.advantageTeam === 'B'
+          ? 'ADVANTAGE'
+          : vd.servingTeam === 'B'
+            ? 'SERVING'
+            : '';
     }
-    periodLabel = `Set ${vd.currentSet} of ${vd.bestOfSets || 5}`;
+    periodLabel =
+      vd.isDeuce && !vd.advantageTeam && !vd.matchCompleted
+        ? `Set ${vd.currentSet} of ${vd.bestOfSets} · DEUCE`
+        : `Set ${vd.currentSet} of ${vd.bestOfSets}`;
     timerOrClock = `Sets ${vd.teamASetsWon}-${vd.teamBSetsWon}`;
 
     if (Array.isArray(vd.setScores)) {

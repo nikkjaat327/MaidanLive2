@@ -45,6 +45,7 @@ import { formatSlotRemainingLabel } from './graphicsStyleUtils.ts';
 import { ObsGraphicsLayer, ScaledGraphicsPreviewFrame } from './ObsGraphicsLayer.tsx';
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx';
 import { Modal } from '../common/Modal.tsx';
+import { AdSchedulerPanel } from './AdSchedulerPanel.tsx';
 
 interface SavedAdsLibraryPanelProps {
   matchId: string;
@@ -52,6 +53,8 @@ interface SavedAdsLibraryPanelProps {
   graphicsState?: BroadcastGraphicsStateData | null;
   designs: BroadcastAdDesignData[];
   loadingDesigns: boolean;
+  bridgeOnline?: boolean;
+  scheduleRevision?: number;
   onRefreshDesigns: () => Promise<void> | void;
   onGraphicsStateChange: (next: BroadcastGraphicsStateData) => void;
   onOpenStudioNew: () => void;
@@ -67,6 +70,8 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
   graphicsState,
   designs,
   loadingDesigns,
+  bridgeOnline = false,
+  scheduleRevision = 0,
   onRefreshDesigns,
   onGraphicsStateChange,
   onOpenStudioNew,
@@ -95,17 +100,31 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
   const [rulesDraft, setRulesDraft] = useState<BroadcastGraphicEventRule[]>([]);
   const [rulesDirty, setRulesDirty] = useState(false);
 
-  // Live countdown ticker when active slots have timers
+  // Live countdown ticker when active slots or manual queue have active timers
   const activeSlots = graphicsState?.activeSlots || [];
   const hasTimedLive = activeSlots.some((s) => s.visible && s.durationSeconds > 0);
+  const queuePlaying = graphicsState?.queueStatus === 'playing';
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
 
   useEffect(() => {
-    if (!hasTimedLive || graphicsState?.animationsPaused) return;
+    if (!graphicsState?.serverNowIso) return;
+    const srv = new Date(graphicsState.serverNowIso).getTime();
+    if (!Number.isNaN(srv)) {
+      setServerOffsetMs(srv - Date.now());
+    }
+  }, [graphicsState?.serverNowIso]);
+
+  useEffect(() => {
+    if ((!hasTimedLive && !queuePlaying) || (graphicsState?.animationsPaused && !queuePlaying)) {
+      return;
+    }
     setNowMs(Date.now());
     const t = window.setInterval(() => setNowMs(Date.now()), 250);
     return () => window.clearInterval(t);
-  }, [hasTimedLive, graphicsState?.animationsPaused]);
+  }, [hasTimedLive, queuePlaying, graphicsState?.animationsPaused]);
+
+  const syncedNowMs = nowMs + serverOffsetMs;
 
   // Sync event rules draft when state updates from backend
   useEffect(() => {
@@ -418,6 +437,7 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
         canvasWidth: previewDesign.canvasWidth || 1920,
         canvasHeight: previewDesign.canvasHeight || 1080,
         elements: previewDesign.elements,
+        groups: previewDesign.groups,
         entryAnimation: previewDesign.entryAnimation,
         exitAnimation: previewDesign.exitAnimation,
         durationSeconds: 0,
@@ -427,6 +447,23 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
       },
     ];
   }, [previewDesign]);
+
+  const queueTimerLabel = useMemo(() => {
+    if (!graphicsState || graphicsState.queueStatus === 'idle') return '';
+    if (graphicsState.queueStatus === 'paused') {
+      const rem = Math.max(0, Math.ceil((graphicsState.queuePausedRemainingMs ?? 0) / 1000));
+      return `Paused (${rem}s left)`;
+    }
+    if (graphicsState.queueNextActionAt) {
+      const remMs = new Date(graphicsState.queueNextActionAt).getTime() - syncedNowMs;
+      const remSec = Math.max(0, Math.ceil(remMs / 1000));
+      if (graphicsState.queuePhase === 'gap') {
+        return `Gap · ${remSec}s until next`;
+      }
+      return `Showing · ${remSec}s left`;
+    }
+    return graphicsState.queuePhase === 'gap' ? 'Gap' : 'Showing';
+  }, [graphicsState, syncedNowMs]);
 
   return (
     <div className="space-y-4">
@@ -530,7 +567,7 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
                 slot.durationSeconds,
                 slot.expiresAt,
                 slot.pausedRemainingMs,
-                nowMs
+                syncedNowMs
               );
               return (
                 <div
@@ -715,7 +752,7 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
                             liveSlot.durationSeconds,
                             liveSlot.expiresAt,
                             liveSlot.pausedRemainingMs,
-                            nowMs
+                            syncedNowMs
                           )}
                         </span>
                       </div>
@@ -967,20 +1004,25 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5">
+                {queueTimerLabel && (
+                  <span className="px-2 py-1 rounded bg-slate-100 border border-slate-200 text-[11px] font-mono text-slate-800 tabular-nums whitespace-nowrap">
+                    {queueTimerLabel}
+                  </span>
+                )}
                 <button
                   type="button"
                   disabled={!graphicsState?.queue?.length || busyAction === 'queue:start'}
                   onClick={() => handleControlQueue('start')}
-                  className="min-h-[32px] inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-40"
+                  className="min-h-[32px] inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-40 whitespace-nowrap"
                 >
                   <Play className="w-3 h-3" />
-                  <span>Start Queue</span>
+                  <span>{graphicsState?.queueStatus === 'paused' ? 'Resume Queue' : 'Start Queue'}</span>
                 </button>
                 <button
                   type="button"
                   disabled={!graphicsState?.queue?.length || busyAction === 'queue:play_next'}
                   onClick={() => handleControlQueue('play_next')}
-                  className="min-h-[32px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 disabled:opacity-40"
+                  className="min-h-[32px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 disabled:opacity-40 whitespace-nowrap"
                 >
                   <SkipForward className="w-3.5 h-3.5" />
                   <span>Next</span>
@@ -1014,26 +1056,28 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
               <div className="space-y-2">
                 {graphicsState.queue.map((item, idx) => {
                   const isCurrent =
-                    graphicsState.queueStatus === 'playing' &&
+                    (graphicsState.queueStatus === 'playing' || graphicsState.queueStatus === 'paused') &&
                     graphicsState.currentQueueIndex === idx;
                   return (
                     <div
                       key={item.queueItemId}
                       className={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg border text-xs ${
                         isCurrent
-                          ? 'border-emerald-500 bg-emerald-50/50'
+                          ? graphicsState.queueStatus === 'paused'
+                            ? 'border-amber-400 bg-amber-50/60'
+                            : 'border-emerald-500 bg-emerald-50/50'
                           : 'border-slate-200 bg-slate-50'
                       }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-[11px] font-bold flex items-center justify-center shrink-0">
+                        <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums">
                           {idx + 1}
                         </span>
                         <div className="min-w-0">
                           <p className="font-bold text-slate-900 truncate">{item.name}</p>
-                          <p className="text-[11px] text-slate-500 capitalize">
+                          <p className="text-[11px] text-slate-500 capitalize tabular-nums">
                             {item.designType.replace('_', ' ')}
-                            {isCurrent ? ' · Playing Now' : ''}
+                            {isCurrent && queueTimerLabel ? ` · ${queueTimerLabel}` : ''}
                           </p>
                         </div>
                       </div>
@@ -1101,6 +1145,18 @@ export const SavedAdsLibraryPanel: React.FC<SavedAdsLibraryPanelProps> = ({
           </div>
         )}
       </section>
+
+      {/* TIME-BASED SCHEDULED ADVERTISEMENT QUEUE */}
+      {!compactMode && (
+        <AdSchedulerPanel
+          matchId={matchId}
+          designs={designs}
+          bridgeOnline={bridgeOnline}
+          scheduleRevision={scheduleRevision}
+          onNotifySuccess={onNotifySuccess}
+          onNotifyError={onNotifyError}
+        />
+      )}
 
       {/* EVENT-TRIGGERED SPONSOR RULES */}
       <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">

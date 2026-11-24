@@ -29,6 +29,7 @@ import {
   getGraphicsStateForMatch,
   triggerBroadcastGraphicEvent,
 } from '../services/broadcastGraphicsService.ts';
+import { handleMatchSessionEndedForSchedules } from '../services/broadcastAdScheduleService.ts';
 import {
   authenticate,
   canManageStream,
@@ -49,6 +50,11 @@ import {
   verifyMediaMTXStreamHealth,
 } from '../services/mediamtxService.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
+import {
+  applyVolleyballAction,
+  validateVolleyballRules,
+} from '../../src/utils/volleyballScoring.ts';
+import type { VolleyballRules } from '../../src/utils/volleyballScoring.ts';
 import { normalizeOverlayConfig } from '../../src/utils/overlayConfig.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import {
@@ -295,6 +301,26 @@ async function createMatchOrStreamSession(
         ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
         : undefined;
 
+    let parsedVolleyballRules: Partial<VolleyballRules> | undefined = undefined;
+    if (scoreSport === 'Volleyball') {
+      const rawVbInput = {
+        ...(req.body.volleyballRules && typeof req.body.volleyballRules === 'object'
+          ? req.body.volleyballRules
+          : {}),
+        ...(req.body.bestOfSets !== undefined && req.body.bestOfSets !== ''
+          ? { bestOfSets: Number(req.body.bestOfSets) }
+          : {}),
+      };
+      if (Object.keys(rawVbInput).length > 0) {
+        const vbValidated = validateVolleyballRules(rawVbInput);
+        if (!vbValidated.valid) {
+          res.status(400).json({ message: vbValidated.error || 'Invalid Volleyball match rules.' });
+          return;
+        }
+        parsedVolleyballRules = vbValidated.rules;
+      }
+    }
+
     const matchDate = req.body.matchDate ? new Date(req.body.matchDate) : null;
     const validMatchDate = matchDate && !isNaN(matchDate.getTime()) ? matchDate : null;
 
@@ -383,6 +409,7 @@ async function createMatchOrStreamSession(
       sportSpecificDetails: getInitialSportDetails(scoreSport, {
         oversLimit: parsedOversLimit,
         playersPerSide: parsedPlayersPerSide,
+        volleyballRules: parsedVolleyballRules,
       }),
       matchStatus: initializeOnly ? 'Prepared' : requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
       resultStatus: 'NOT_DECLARED',
@@ -1503,6 +1530,21 @@ router.patch(
           ? Math.max(2, Math.min(15, Math.floor(Number(req.body.playersPerSide) || 11)))
           : undefined;
 
+      const reqVolleyballRulesInput =
+        req.body.volleyballRules && typeof req.body.volleyballRules === 'object'
+          ? (req.body.volleyballRules as Partial<VolleyballRules>)
+          : req.body.bestOfSets !== undefined && req.body.bestOfSets !== ''
+            ? ({ bestOfSets: Number(req.body.bestOfSets) } as Partial<VolleyballRules>)
+            : undefined;
+
+      if (reqVolleyballRulesInput && (sportChangedTo === 'Volleyball' || stream.gameName === 'Volleyball')) {
+        const vbCheck = validateVolleyballRules(reqVolleyballRulesInput);
+        if (!vbCheck.valid) {
+          res.status(400).json({ message: vbCheck.error || 'Invalid Volleyball match rules.' });
+          return;
+        }
+      }
+
       if (sportChangedTo) {
         const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
         if (existingScore && existingScore.sportType !== sportChangedTo) {
@@ -1510,6 +1552,7 @@ router.patch(
           existingScore.sportSpecificDetails = getInitialSportDetails(sportChangedTo, {
             oversLimit: reqOversLimit,
             playersPerSide: reqPlayersPerSide,
+            volleyballRules: reqVolleyballRulesInput,
           });
           existingScore.lastUpdatedAt = new Date();
           existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
@@ -1534,6 +1577,29 @@ router.patch(
             streamId: stream._id.toString(),
             score: existingScore.toObject(),
           });
+        }
+      } else if (stream.gameName === 'Volleyball' && reqVolleyballRulesInput) {
+        const existingScore = await LiveScore.findOne({ liveStreamId: stream._id });
+        if (existingScore && existingScore.resultStatus === 'NOT_DECLARED') {
+          const applied = applyVolleyballAction(
+            existingScore.sportSpecificDetails,
+            existingScore.teamAScore,
+            existingScore.teamBScore,
+            { type: 'UPDATE_RULES', rules: reqVolleyballRulesInput }
+          );
+          if (!applied.blockedReason) {
+            existingScore.teamAScore = applied.teamAScore;
+            existingScore.teamBScore = applied.teamBScore;
+            existingScore.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+            existingScore.markModified?.('sportSpecificDetails');
+            existingScore.lastUpdatedAt = new Date();
+            existingScore.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+            await existingScore.save();
+            emitStreamEvent(stream._id.toString(), 'score:updated', {
+              streamId: stream._id.toString(),
+              score: existingScore.toObject(),
+            });
+          }
         }
       }
 
@@ -1978,6 +2044,7 @@ router.patch(
 
       const payload = formatPublicStream(stream.toObject(), { score }, true);
       await clearLiveGraphics(stream._id.toString(), req.user!).catch(() => {});
+      await handleMatchSessionEndedForSchedules(stream._id.toString()).catch(() => {});
       emitStreamEvent(stream._id.toString(), 'live:ended', payload);
       await emitFullStudioState(stream._id.toString());
 

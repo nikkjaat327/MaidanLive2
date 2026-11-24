@@ -17,6 +17,7 @@ export function useObsStudio(matchId?: string) {
   const [liveErrorToast, setLiveErrorToast] = useState<string | null>(null);
   const [switchingSceneRequest, setSwitchingSceneRequest] =
     useState<SceneSwitchRequestState | null>(null);
+  const [scheduleRevision, setScheduleRevision] = useState(0);
   const matchIdRef = useRef(matchId);
   matchIdRef.current = matchId;
 
@@ -341,6 +342,11 @@ export function useObsStudio(matchId?: string) {
       );
     };
 
+    const onScheduleUpdated = (payload: any) => {
+      if (payload?.matchId !== matchIdRef.current) return;
+      setScheduleRevision((n) => n + 1);
+    };
+
     if (socket.connected) joinStudio();
 
     socket.on('connect', joinStudio);
@@ -364,6 +370,7 @@ export function useObsStudio(matchId?: string) {
     socket.on('CURRENT_SCENE_CHANGED', onSceneChanged);
     socket.on('overlay:config_updated', onOverlayConfigUpdated);
     socket.on('graphics:state_updated', onGraphicsStateUpdated);
+    socket.on('graphics:schedule_updated', onScheduleUpdated);
 
     return () => {
       socket.emit('broadcast-studio:leave', matchId);
@@ -387,6 +394,7 @@ export function useObsStudio(matchId?: string) {
       socket.off('CURRENT_SCENE_CHANGED', onSceneChanged);
       socket.off('overlay:config_updated', onOverlayConfigUpdated);
       socket.off('graphics:state_updated', onGraphicsStateUpdated);
+      socket.off('graphics:schedule_updated', onScheduleUpdated);
     };
   }, [matchId]);
 
@@ -398,6 +406,7 @@ export function useObsStudio(matchId?: string) {
     socketConnected,
     liveErrorToast,
     switchingSceneRequest,
+    scheduleRevision,
     clearLiveErrorToast: () => setLiveErrorToast(null),
     refetch,
   };
