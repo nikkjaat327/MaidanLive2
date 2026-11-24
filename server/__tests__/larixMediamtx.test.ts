@@ -420,5 +420,26 @@ describe('Larix Broadcaster + MediaMTX + VDO.Ninja Dual Workflow', () => {
     assert.ok(cfgRes.json.yamlConfig.includes('/api/v1/mediamtx/auth'));
     assert.equal(cfgRes.json.cameras.length, 1);
     assert.equal(cfgRes.json.cameras[0].protocol, 'srt');
+
+    const yamlRes = await fetch(`${baseUrl}/api/obs/matches/${matchBId}/mediamtx/yaml`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(yamlRes.status, 200);
+    const yamlText = await yamlRes.text();
+    assert.ok(yamlText.includes('authHTTPAddress:'));
+    assert.ok(yamlRes.headers.get('content-disposition')?.includes('mediamtx.yml'));
+  });
+
+  it('returns structured BRIDGE_OFFLINE code when /mediamtx/control is invoked without a connected bridge', async () => {
+    const ctrlRes = await apiJson(
+      'POST',
+      `/api/obs/matches/${matchBId}/mediamtx/control`,
+      { action: 'sync_config' },
+      { Authorization: `Bearer ${adminToken}` }
+    );
+    assert.equal(ctrlRes.status, 503);
+    assert.equal(ctrlRes.json.ok, false);
+    assert.equal(ctrlRes.json.code, 'BRIDGE_OFFLINE');
+    assert.ok(ctrlRes.json.message.includes('Download mediamtx.yml'));
   });
 });

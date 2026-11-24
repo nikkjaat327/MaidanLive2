@@ -243,6 +243,8 @@ export function AdminObsBroadcastStudioPage() {
   const [assigningObsCamId, setAssigningObsCamId] = useState<string | null>(null);
   const [mediamtxConfig, setMediamtxConfig] = useState<MediaMTXConfigPayload | null>(null);
   const [busyMediamtxAction, setBusyMediamtxAction] = useState<string | null>(null);
+  const [mediamtxControlError, setMediamtxControlError] = useState<string | null>(null);
+  const [mediamtxControlSuccess, setMediamtxControlSuccess] = useState<string | null>(null);
   const [deleteCameraTarget, setDeleteCameraTarget] = useState<BroadcastCameraData | null>(null);
   const [deletingCamera, setDeletingCamera] = useState(false);
   const [scaffoldingCount, setScaffoldingCount] = useState<number | null>(null);
@@ -696,23 +698,98 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
+  async function handleDownloadMediaMTXYaml() {
+    if (!matchId) return;
+    try {
+      setMediamtxControlError(null);
+      let yaml = mediamtxConfig?.yamlConfig || '';
+      if (!yaml) {
+        const fresh = await obsStudioService.getMediaMTXConfig(matchId);
+        setMediamtxConfig(fresh);
+        yaml = fresh?.yamlConfig || '';
+      }
+      if (!yaml) {
+        setMediamtxControlError('Unable to load mediamtx.yml from the server. Please retry.');
+        return;
+      }
+      const blob = new Blob([yaml], { type: 'text/yaml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'mediamtx.yml';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMediamtxControlSuccess('Downloaded mediamtx.yml — run "mediamtx.exe mediamtx.yml" on your PC.');
+    } catch (err) {
+      setMediamtxControlError(extractApiError(err, 'Failed to download mediamtx.yml.'));
+    }
+  }
+
   async function handleControlMediaMTX(action: 'status' | 'start' | 'stop' | 'sync_config') {
     if (!matchId) return;
+    const successLabels: Record<typeof action, string> = {
+      status: 'Checked local MediaMTX status via OBS Bridge.',
+      start: 'Started local MediaMTX receiver via OBS Bridge.',
+      stop: 'Stopped local MediaMTX receiver.',
+      sync_config: 'Synced mediamtx.yml configuration on your PC.',
+    };
     try {
       setBusyMediamtxAction(action);
       setActionError(null);
+      setMediamtxControlError(null);
+      setMediamtxControlSuccess(null);
       await obsStudioService.controlMediaMTX(matchId, action);
-      const labels: Record<typeof action, string> = {
-        status: 'Checked local MediaMTX status via OBS Bridge.',
-        start: 'Started local MediaMTX receiver via OBS Bridge.',
-        stop: 'Stopped local MediaMTX receiver.',
-        sync_config: 'Synced MediaMTX configuration from server.',
-      };
-      notifySuccess(labels[action]);
+      setMediamtxControlSuccess(successLabels[action]);
+      notifySuccess(successLabels[action]);
       await refetch();
       await loadMediaMTXConfig();
-    } catch (err) {
-      setActionError(extractApiError(err, `MediaMTX action (${action}) failed.`));
+    } catch (err: any) {
+      const status = Number(err?.response?.status || 0);
+      const code = String(err?.response?.data?.code || '');
+
+      // If this browser is on the same PC as the running Electron OBS Bridge, attempt direct loopback control on 127.0.0.1:44691
+      if ((status === 503 || code === 'BRIDGE_OFFLINE') && localBridgeProbe?.running) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 5000);
+          const localRes = await fetch('http://127.0.0.1:44691/mediamtx/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action,
+              serverUrl: window.location.origin,
+            }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(timer);
+          const localJson = await localRes.json().catch(() => ({}));
+          if (localRes.ok && localJson?.ok) {
+            setMediamtxControlSuccess(`${successLabels[action]} (via local bridge)`);
+            notifySuccess(successLabels[action]);
+            await refetch();
+            await loadMediaMTXConfig();
+            return;
+          }
+          if (localJson?.message) {
+            setMediamtxControlError(String(localJson.message));
+            setActionError(String(localJson.message));
+            return;
+          }
+        } catch {
+          // Fall through to standard extracted backend error message
+        }
+      }
+
+      const message = extractApiError(
+        err,
+        status === 503
+          ? 'Windows OBS Bridge is offline or unreachable for this match. Open the Bridge on your PC, or click "Download mediamtx.yml" to start MediaMTX manually.'
+          : `MediaMTX action (${action}) failed.`
+      );
+      setMediamtxControlError(message);
+      setActionError(message);
     } finally {
       setBusyMediamtxAction(null);
     }
@@ -4656,22 +4733,65 @@ export function AdminObsBroadcastStudioPage() {
                         <span>{busyMediamtxAction === 'start' ? 'Starting...' : 'Start MediaMTX'}</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadMediaMTXYaml()}
+                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download mediamtx.yml</span>
+                    </button>
                     {mediamtxConfig?.yamlConfig && (
                       <button
                         type="button"
                         onClick={() => copyText('mtxYaml', mediamtxConfig.yamlConfig)}
-                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200"
+                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
                       >
                         {copiedKey === 'mtxYaml' ? (
                           <Check className="w-3.5 h-3.5 text-emerald-600" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
                         )}
-                        <span>Copy mediamtx.yml</span>
+                        <span>Copy YAML</span>
                       </button>
                     )}
                   </div>
                 </div>
+
+                {!profile.agentOnline && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                    <strong>Bridge Offline:</strong> Remote buttons (Check Status / Sync / Start) need the Windows OBS Bridge online. You can still click <strong>Download mediamtx.yml</strong> above and run MediaMTX directly on your PC.
+                  </div>
+                )}
+
+                {mediamtxControlError && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-900 flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="font-bold text-red-800">MediaMTX Remote Control Notice</p>
+                      <p>{mediamtxControlError}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMediamtxControlError(null)}
+                      className="text-[11px] font-semibold text-red-700 hover:underline shrink-0"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {mediamtxControlSuccess && (
+                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-3">
+                    <span>{mediamtxControlSuccess}</span>
+                    <button
+                      type="button"
+                      onClick={() => setMediamtxControlSuccess(null)}
+                      className="text-[11px] font-semibold text-emerald-700 hover:underline shrink-0"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
@@ -4712,8 +4832,16 @@ export function AdminObsBroadcastStudioPage() {
                       Active Ingest Streams
                     </p>
                     <p className="font-mono text-[11px] text-slate-900 mt-1">
-                      {profile.mediamtxState?.activePathCount ?? 0} active path(s)
+                      {profile.mediamtxState?.activePathCount ??
+                        profile.mediamtxState?.activePaths?.length ??
+                        0}{' '}
+                      active path(s)
                     </p>
+                    {profile.mediamtxState?.executablePath && (
+                      <p className="text-[10px] font-mono text-slate-500 truncate mt-0.5" title={profile.mediamtxState.executablePath}>
+                        Bin: {profile.mediamtxState.executablePath}
+                      </p>
+                    )}
                     {profile.mediamtxState?.lastError && (
                       <p className="text-[10px] text-red-600 truncate mt-0.5" title={profile.mediamtxState.lastError}>
                         {profile.mediamtxState.lastError}
@@ -4721,6 +4849,20 @@ export function AdminObsBroadcastStudioPage() {
                     )}
                   </div>
                 </div>
+
+                {!profile.mediamtxState?.running && (
+                  <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1">
+                    <p className="font-bold text-slate-900">
+                      Quick Manual Start (Works even without Bridge remote-start):
+                    </p>
+                    <p>
+                      1. Click <strong>Download mediamtx.yml</strong> above and place it in the same folder as <span className="font-mono font-semibold">mediamtx.exe</span> (e.g. <span className="font-mono">C:\mediamtx\</span>).
+                    </p>
+                    <p>
+                      2. Run <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">.\mediamtx.exe .\mediamtx.yml</span> (or with Docker: <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">docker compose -f deploy/mediamtx/docker-compose.yml up -d</span>).
+                    </p>
+                  </div>
+                )}
               </section>
 
               {/* Beginner-Friendly Windows Setup & Verification Checklist */}

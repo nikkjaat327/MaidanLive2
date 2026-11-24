@@ -135,6 +135,14 @@ async function resolveAgentSocketForMatch(
     }
   }
 
+  for (const [bridgeId, sock] of bridgeSockets.entries()) {
+    if (!sock.connected) continue;
+    const ctx = (sock.data as any)?.obsContext as ObsAgentContext | undefined;
+    if (ctx?.matchIds?.includes(matchId) || ctx?.matchId === matchId) {
+      return { socket: sock, bridgeId };
+    }
+  }
+
   return null;
 }
 
@@ -972,7 +980,17 @@ export function formatSafeProfile(profile: any) {
     selectedSponsorIds: Array.isArray(profile.selectedSponsorIds)
       ? profile.selectedSponsorIds
       : [],
-    mediamtxState: profile.mediamtxState || null,
+    mediamtxState: profile.mediamtxState
+      ? {
+          ...profile.mediamtxState,
+          activePathCount:
+            typeof profile.mediamtxState.activePathCount === 'number'
+              ? profile.mediamtxState.activePathCount
+              : Array.isArray(profile.mediamtxState.activePaths)
+                ? profile.mediamtxState.activePaths.length
+                : 0,
+        }
+      : null,
     lastSyncedAt: profile.lastSyncedAt || null,
     updatedAt: profile.updatedAt || null,
   };
@@ -4446,16 +4464,26 @@ export async function controlBridgeMediaMTX(
   };
   const resolved = await resolveAgentSocketForMatch(matchId);
   if (!resolved) {
+    await ObsControllerProfile.updateOne(
+      { matchId, agentOnline: true },
+      { $set: { agentOnline: false } }
+    ).catch(() => {});
     const err: any = new Error(
-      'Windows Local OBS Bridge is offline. Open MaidanLive OBS Bridge on the broadcasting PC or run MediaMTX manually.'
+      'Windows Local OBS Bridge is not connected to this match right now. Open MaidanLive OBS Bridge on your broadcasting PC, or click "Download mediamtx.yml" below to run MediaMTX manually.'
     );
     err.statusCode = 503;
+    err.code = 'BRIDGE_OFFLINE';
     throw err;
   }
 
   const data = await new Promise<any>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Bridge MediaMTX command "${action}" timed out.`));
+      const timeoutErr: any = new Error(
+        `Windows Local OBS Bridge timed out while executing MediaMTX "${action}". Retry or use "Download mediamtx.yml" below.`
+      );
+      timeoutErr.statusCode = 504;
+      timeoutErr.code = 'BRIDGE_TIMEOUT';
+      reject(timeoutErr);
     }, 10_000);
     resolved.socket.emit(
       'server:obs_command',
@@ -4463,7 +4491,23 @@ export async function controlBridgeMediaMTX(
       (ack: any) => {
         clearTimeout(timer);
         if (!ack || !ack.ok) {
-          reject(new Error(ack?.error || `MediaMTX ${action} command failed on bridge.`));
+          const rawErr = String(ack?.error || `MediaMTX ${action} command failed on bridge.`);
+          const isUnsupported =
+            /rejected unauthorized bridge command|unsupported command/i.test(rawErr);
+          const isMissingExe =
+            /mediamtx executable|mediamtx\.exe.*not found|was not found/i.test(rawErr);
+          const cmdErr: any = new Error(
+            isUnsupported
+              ? 'Your connected Windows OBS Bridge version does not support remote MediaMTX control yet. Restart/update your Windows OBS Bridge (or use "Download mediamtx.yml" below and run MediaMTX directly on your PC).'
+              : rawErr
+          );
+          cmdErr.statusCode = 422;
+          cmdErr.code = isUnsupported
+            ? 'BRIDGE_UPGRADE_REQUIRED'
+            : isMissingExe
+              ? 'MEDIAMTX_BINARY_MISSING'
+              : 'MEDIAMTX_CONTROL_FAILED';
+          reject(cmdErr);
           return;
         }
         resolve(ack.data || {});

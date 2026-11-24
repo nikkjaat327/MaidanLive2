@@ -20,10 +20,11 @@ function isTrustedOrigin(originHeader, savedServerUrl, candidateServerUrl = '') 
       if (originUrl.origin === candidateOrigin) return true;
     }
 
-    // Verified MaidanLive Cloud Run / custom hosting origins during initial pairing probe
+    // Verified MaidanLive Cloud Run / AI Studio / custom hosting origins during initial pairing probe
     if (
       originUrl.protocol === 'https:' &&
       (originUrl.hostname.endsWith('.asia-east1.run.app') ||
+        originUrl.hostname.endsWith('.ai.studio') ||
         originUrl.hostname.endsWith('.maidanlive.com') ||
         originUrl.hostname === 'maidanlive.com')
     ) {
@@ -120,6 +121,7 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
           sceneCount: Array.isArray(st.obsScenes) ? st.obsScenes.length : 0,
           obsDetected: Boolean(st.obsEnv?.installed),
           obsRunning: Boolean(st.obsEnv?.running),
+          mediamtx: st.mediamtx || null,
         })
       );
       return;
@@ -161,6 +163,51 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
         res.statusCode = 400;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ ok: false, message: err?.message || 'Bridge activation failed.' }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && reqUrl.pathname === '/mediamtx/control') {
+      try {
+        const body = await readJsonBody(req);
+        const action = typeof body.action === 'string' ? body.action.trim() : '';
+        const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : '';
+        const executablePath =
+          typeof body.executablePath === 'string' ? body.executablePath.trim() : '';
+        const trusted = isTrustedOrigin(originHeader, cfg.serverUrl, serverUrl);
+        if (originHeader && !trusted) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Forbidden origin for MediaMTX control.' }));
+          return;
+        }
+        writeCorsHeaders(req, res, originHeader || undefined);
+        res.setHeader('Content-Type', 'application/json');
+
+        const cmdMap = {
+          status: 'mediamtx_status',
+          sync_config: 'mediamtx_sync_config',
+          start: 'mediamtx_start',
+          stop: 'mediamtx_stop',
+        };
+        const command = cmdMap[action];
+        if (!command) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, message: 'Invalid MediaMTX action.' }));
+          return;
+        }
+
+        const result = await engine.handleCommand(command, {
+          ...(serverUrl ? { serverUrl } : {}),
+          ...(executablePath ? { executablePath } : {}),
+        });
+        res.statusCode = 200;
+        res.end(JSON.stringify({ ok: true, result }));
+      } catch (err) {
+        writeCorsHeaders(req, res, originHeader || undefined);
+        res.statusCode = 422;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: false, message: err?.message || 'MediaMTX command failed.' }));
       }
       return;
     }

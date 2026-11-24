@@ -237,6 +237,7 @@ async function getMediaMTXStatus({ configuredPath = '', userDataDir = '', apiBas
     apiPortOpen,
     apiReachable: apiResult.reachable,
     activePaths: apiResult.paths,
+    activePathCount: apiResult.paths.length,
     lanIps: detectLanIps(),
     configPath: configPath && fs.existsSync(configPath) ? configPath : '',
     lastStartedAt,
@@ -254,7 +255,7 @@ async function startMediaMTX({
   const exePath = findMediaMTXExecutable(configuredPath, userDataDir);
   if (!exePath) {
     const msg =
-      'MediaMTX executable was not found on this PC. Install MediaMTX or set its path in OBS Bridge.';
+      'MediaMTX executable (mediamtx.exe) was not found on this PC. Install/place mediamtx.exe in C:\\mediamtx\\ or set its path in OBS Bridge (or download mediamtx.yml and run MediaMTX manually).';
     lastError = msg;
     throw new Error(msg);
   }

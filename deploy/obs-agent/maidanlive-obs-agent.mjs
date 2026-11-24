@@ -9,8 +9,10 @@
  */
 
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
 import OBSWebSocket from 'obs-websocket-js';
@@ -34,6 +36,10 @@ const APPROVED_COMMANDS = new Set([
   'set_scene_item_enabled',
   'get_input_list',
   'reconnect_obs',
+  'mediamtx_status',
+  'mediamtx_start',
+  'mediamtx_stop',
+  'mediamtx_sync_config',
 ]);
 
 function buildCenterBoxTransform(box) {
@@ -262,7 +268,151 @@ function formatObsConnectError(err) {
   return raw || `Unable to reach OBS at ${OBS_URL}`;
 }
 
-async function probeLocalMediaMTX() {
+let managedMtxChild = null;
+let managedMtxPid = null;
+let lastMtxError = '';
+let lastMtxStartedAt = null;
+const MANAGED_MTX_CONFIG_PATH = path.join(scriptDir, 'mediamtx.yml');
+
+function isValidMediaMTXBinary(candidate) {
+  if (!candidate || typeof candidate !== 'string') return false;
+  const trimmed = candidate.trim();
+  if (!trimmed) return false;
+  const base = path.basename(trimmed).toLowerCase();
+  if (base !== 'mediamtx' && base !== 'mediamtx.exe') return false;
+  try {
+    return fs.existsSync(trimmed) && fs.statSync(trimmed).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findMediaMTXExecutable(configuredPath = '') {
+  const candidates = [];
+  if (configuredPath) candidates.push(configuredPath);
+  if (process.env.MEDIAMTX_BIN) candidates.push(process.env.MEDIAMTX_BIN);
+  if (fileConfig.mediamtxPath) candidates.push(String(fileConfig.mediamtxPath));
+
+  const binName = process.platform === 'win32' ? 'mediamtx.exe' : 'mediamtx';
+  candidates.push(path.join(scriptDir, binName));
+  candidates.push(path.join(scriptDir, 'mediamtx', binName));
+  candidates.push(path.resolve(scriptDir, '..', 'mediamtx', binName));
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const userProfile = process.env.USERPROFILE || '';
+    const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+    if (localAppData) {
+      candidates.push(path.join(localAppData, 'Programs', 'mediamtx', 'mediamtx.exe'));
+      candidates.push(path.join(localAppData, 'mediamtx', 'mediamtx.exe'));
+    }
+    if (userProfile) {
+      candidates.push(path.join(userProfile, 'Downloads', 'mediamtx.exe'));
+      candidates.push(path.join(userProfile, 'mediamtx', 'mediamtx.exe'));
+    }
+    candidates.push(path.join(programFiles, 'mediamtx', 'mediamtx.exe'));
+    candidates.push('C:\\mediamtx\\mediamtx.exe');
+    candidates.push('C:\\MaidanLive\\mediamtx\\mediamtx.exe');
+  } else {
+    candidates.push('/usr/local/bin/mediamtx', '/usr/bin/mediamtx', '/opt/homebrew/bin/mediamtx');
+  }
+
+  for (const c of candidates) {
+    if (isValidMediaMTXBinary(c)) return path.resolve(c);
+  }
+
+  try {
+    const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
+    const out = execFileSync(cmd, [binName], { encoding: 'utf8', timeout: 1500, windowsHide: true });
+    const first = String(out || '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .find(Boolean);
+    if (first && isValidMediaMTXBinary(first)) return path.resolve(first);
+  } catch {
+    // ignore missing binary in PATH
+  }
+  return '';
+}
+
+function checkLocalTcpPort(host, port, timeoutMs = 450) {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try {
+        sock.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => finish(true));
+    sock.once('timeout', () => finish(false));
+    sock.once('error', () => finish(false));
+    sock.connect(port, host);
+  });
+}
+
+function buildMediaMTXYamlText(targetServerUrl) {
+  const cleanServer = String(targetServerUrl || SERVER_URL || 'http://127.0.0.1:3000')
+    .trim()
+    .replace(/\/+$/, '');
+  const parsed = new URL(cleanServer);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Server URL must start with http:// or https://');
+  }
+  return `# Auto-generated MaidanLive Local MediaMTX Configuration
+logLevel: info
+logDestinations: [stdout]
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+authMethod: http
+authHTTPAddress: ${cleanServer}/api/v1/mediamtx/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: "no"
+
+srt: yes
+srtAddress: :8890
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAllowOrigin: '*'
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigin: '*'
+
+paths:
+  all_others:
+    source: publisher
+    sourceOnDemand: no
+    readTimeout: 15s
+    writeTimeout: 15s
+    record: no
+`;
+}
+
+function writeManagedMediaMTXConfig(targetServerUrl) {
+  const yaml = buildMediaMTXYamlText(targetServerUrl);
+  fs.writeFileSync(MANAGED_MTX_CONFIG_PATH, yaml, { encoding: 'utf8', mode: 0o600 });
+  return { configPath: MANAGED_MTX_CONFIG_PATH, yaml };
+}
+
+async function probeLocalMediaMTX(configuredPath = '') {
   const apiBase = (process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997').trim().replace(/\/+$/, '');
   const lanIps = [];
   try {
@@ -274,26 +424,135 @@ async function probeLocalMediaMTX() {
   } catch {
     // ignore
   }
-  try {
-    const res = await fetch(`${apiBase}/v3/paths/list`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(1000),
-    });
-    if (!res.ok) return { running: false, apiReachable: false, activePaths: [], lanIps };
-    const json = await res.json().catch(() => ({}));
-    const activePaths = Array.isArray(json?.items)
-      ? json.items
-          .map((item) => ({
-            name: String(item?.name || '').trim(),
-            ready: Boolean(item?.ready),
-            sourceType: String(item?.source?.type || '').trim(),
-          }))
-          .filter((p) => Boolean(p.name))
-      : [];
-    return { running: true, apiReachable: true, activePaths, lanIps };
-  } catch {
-    return { running: false, apiReachable: false, activePaths: [], lanIps };
+  const executablePath = findMediaMTXExecutable(configuredPath);
+  const [rtmpPortOpen, srtPortOpen, apiPortOpen, apiResult] = await Promise.all([
+    checkLocalTcpPort('127.0.0.1', 1935),
+    checkLocalTcpPort('127.0.0.1', 8890),
+    checkLocalTcpPort('127.0.0.1', 9997),
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/v3/paths/list`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(1000),
+        });
+        if (!res.ok) return { reachable: false, paths: [] };
+        const json = await res.json().catch(() => ({}));
+        const activePaths = Array.isArray(json?.items)
+          ? json.items
+              .map((item) => ({
+                name: String(item?.name || '').trim(),
+                ready: Boolean(item?.ready),
+                sourceType: String(item?.source?.type || '').trim(),
+                bytesReceived: Number(item?.bytesReceived || 0),
+                readersCount: Array.isArray(item?.readers) ? item.readers.length : 0,
+              }))
+              .filter((p) => Boolean(p.name))
+          : [];
+        return { reachable: true, paths: activePaths };
+      } catch {
+        return { reachable: false, paths: [] };
+      }
+    })(),
+  ]);
+
+  const managedRunning = Boolean(
+    managedMtxChild && managedMtxChild.exitCode === null && !managedMtxChild.killed
+  );
+  const running = Boolean(managedRunning || apiResult.reachable || rtmpPortOpen);
+
+  return {
+    installed: Boolean(executablePath),
+    executablePath,
+    running,
+    managedByBridge: managedRunning,
+    managedPid: managedMtxPid,
+    rtmpPortOpen,
+    srtPortOpen,
+    apiPortOpen,
+    apiReachable: apiResult.reachable,
+    activePaths: apiResult.paths,
+    activePathCount: apiResult.paths.length,
+    lanIps: Array.from(new Set(lanIps)),
+    configPath: fs.existsSync(MANAGED_MTX_CONFIG_PATH) ? MANAGED_MTX_CONFIG_PATH : '',
+    lastStartedAt: lastMtxStartedAt,
+    lastError: lastMtxError,
+  };
+}
+
+async function startLocalMediaMTX(targetServerUrl, configuredPath = '') {
+  const exePath = findMediaMTXExecutable(configuredPath);
+  if (!exePath) {
+    const msg =
+      'MediaMTX executable (mediamtx.exe) was not found on this PC. Place mediamtx.exe in C:\\mediamtx\\ or deploy/obs-agent/, OR download mediamtx.yml from MaidanLive and run mediamtx.exe manually.';
+    lastMtxError = msg;
+    throw new Error(msg);
   }
+  const current = await probeLocalMediaMTX(exePath);
+  if (current.running) {
+    return current;
+  }
+  const { configPath } = writeManagedMediaMTXConfig(targetServerUrl || SERVER_URL);
+  lastMtxError = '';
+  const child = spawn(exePath, [configPath], {
+    cwd: path.dirname(configPath),
+    windowsHide: true,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  managedMtxChild = child;
+  managedMtxPid = child.pid || null;
+  lastMtxStartedAt = new Date().toISOString();
+
+  child.stdout?.on('data', (chunk) => {
+    const line = String(chunk || '').trim();
+    if (line) logInfo(`[MediaMTX] ${line.slice(0, 240)}`);
+  });
+  child.stderr?.on('data', (chunk) => {
+    const line = String(chunk || '').trim();
+    if (line) {
+      lastMtxError = line.slice(0, 240);
+      logWarn(`[MediaMTX] ${lastMtxError}`);
+    }
+  });
+  child.on('exit', (code) => {
+    logInfo(`[MediaMTX] Process exited (code ${code ?? 'null'}).`);
+    if (managedMtxChild === child) {
+      managedMtxChild = null;
+      managedMtxPid = null;
+    }
+  });
+  child.on('error', (err) => {
+    lastMtxError = err?.message || 'Failed to launch MediaMTX.';
+    logErr(`[MediaMTX] ${lastMtxError}`);
+    if (managedMtxChild === child) {
+      managedMtxChild = null;
+      managedMtxPid = null;
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  return await probeLocalMediaMTX(exePath);
+}
+
+async function stopLocalMediaMTX() {
+  if (managedMtxChild && managedMtxChild.exitCode === null && !managedMtxChild.killed) {
+    try {
+      managedMtxChild.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (managedMtxChild && managedMtxChild.exitCode === null && !managedMtxChild.killed) {
+      try {
+        managedMtxChild.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+    }
+  }
+  managedMtxChild = null;
+  managedMtxPid = null;
+  return await probeLocalMediaMTX();
 }
 
 async function emitObsSnapshot() {
@@ -452,6 +711,41 @@ async function handleCommand(command, payload) {
       lastError: obsConnected ? '' : lastError,
     };
   }
+
+  if (command === 'mediamtx_status') {
+    const mtx = await probeLocalMediaMTX(
+      typeof payload.executablePath === 'string' ? payload.executablePath : ''
+    );
+    await emitObsSnapshot().catch(() => {});
+    return { mediamtx: mtx };
+  }
+
+  if (command === 'mediamtx_sync_config') {
+    const targetServer = String(payload.serverUrl || SERVER_URL || '').trim();
+    const written = writeManagedMediaMTXConfig(targetServer);
+    logInfo(`Generated local MediaMTX config at ${written.configPath}`);
+    const mtx = await probeLocalMediaMTX(
+      typeof payload.executablePath === 'string' ? payload.executablePath : ''
+    );
+    await emitObsSnapshot().catch(() => {});
+    return { configPath: written.configPath, mediamtx: mtx };
+  }
+
+  if (command === 'mediamtx_start') {
+    const targetServer = String(payload.serverUrl || SERVER_URL || '').trim();
+    const customExe =
+      typeof payload.executablePath === 'string' ? payload.executablePath.trim() : '';
+    const mtx = await startLocalMediaMTX(targetServer, customExe);
+    await emitObsSnapshot().catch(() => {});
+    return { mediamtx: mtx };
+  }
+
+  if (command === 'mediamtx_stop') {
+    const mtx = await stopLocalMediaMTX();
+    await emitObsSnapshot().catch(() => {});
+    return { mediamtx: mtx };
+  }
+
   if (!obsConnected) {
     throw new Error(`OBS Studio is offline on ${OBS_URL}. Open OBS Studio and enable WebSocket v5 on port 4455.`);
   }
@@ -1014,7 +1308,7 @@ socket.on('server:obs_command', async (req, ack) => {
 });
 
 setInterval(() => {
-  if (obsConnected && socket.connected && !bridgeRevoked) {
+  if (socket.connected && !bridgeRevoked) {
     emitObsSnapshot().catch(() => {});
   }
 }, 5000);
@@ -1022,6 +1316,7 @@ setInterval(() => {
 process.on('SIGINT', async () => {
   logInfo('Shutting down Windows Local OBS Bridge cleanly...');
   try {
+    await stopLocalMediaMTX().catch(() => {});
     socket.disconnect();
     await obs.disconnect();
   } catch {

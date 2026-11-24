@@ -2754,6 +2754,27 @@ router.get(
   }
 );
 
+// GET /api/obs/matches/:matchId/mediamtx/yaml - Direct mediamtx.yml file download
+router.get(
+  '/matches/:matchId/mediamtx/yaml',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const yaml = generateMediaMTXYamlConfig(resolveBaseAppUrl(req));
+      res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="mediamtx.yml"');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(yaml);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to generate mediamtx.yml.' });
+    }
+  }
+);
+
 // POST /api/obs/matches/:matchId/mediamtx/control - Control local MediaMTX via paired OBS Bridge
 router.post(
   '/matches/:matchId/mediamtx/control',
@@ -2790,6 +2811,7 @@ router.post(
       const code = Number(err?.statusCode) || 503;
       res.status(code).json({
         ok: false,
+        code: typeof err?.code === 'string' ? err.code : 'MEDIAMTX_CONTROL_ERROR',
         message: err?.message || 'Failed to control local MediaMTX receiver.',
       });
     }

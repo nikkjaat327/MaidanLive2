@@ -66,11 +66,12 @@ export interface MediaMTXBridgeState {
   running: boolean;
   executablePath?: string;
   managedConfigPath?: string;
+  configPath?: string;
   rtmpPortOpen?: boolean;
   srtPortOpen?: boolean;
   apiReachable?: boolean;
   activePathCount?: number;
-  activePaths?: string[];
+  activePaths?: Array<string | { name: string; ready?: boolean; sourceType?: string }>;
   lanIps?: string[];
   pid?: number | null;
   lastError?: string;

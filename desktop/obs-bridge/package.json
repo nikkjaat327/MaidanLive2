@@ -30,6 +30,7 @@
       "preload.cjs",
       "store.cjs",
       "obsDetector.cjs",
+      "mediamtxManager.cjs",
       "bridgeEngine.cjs",
       "localServer.cjs",
       "renderer/**/*",
