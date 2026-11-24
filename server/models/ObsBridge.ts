@@ -31,6 +31,8 @@ export interface IObsBridge extends Document {
   lastHeartbeatAt?: Date | null;
   lastError: string;
   platform: string;
+  bridgeVersion: string;
+  bridgeCapabilities: string[];
   mediamtxState?: Record<string, any> | null;
   revokedAt?: Date | null;
   revokedBy?: mongoose.Types.ObjectId | null;
@@ -102,6 +104,8 @@ const obsBridgeSchema = new Schema<IObsBridge>(
     lastHeartbeatAt: { type: Date, default: null },
     lastError: { type: String, default: '', maxlength: 500 },
     platform: { type: String, default: 'win32', maxlength: 40 },
+    bridgeVersion: { type: String, default: '', maxlength: 40 },
+    bridgeCapabilities: [{ type: String, maxlength: 64 }],
     mediamtxState: { type: Schema.Types.Mixed, default: null },
     revokedAt: { type: Date, default: null },
     revokedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },

@@ -1687,8 +1687,15 @@ router.post(
       const result = await exchangeBridgePairingCode({
         code,
         deviceName: sanitizeText(req.body.deviceName, 120) || 'Windows OBS Bridge',
-        deviceLabel: sanitizeText(req.body.deviceLabel, 140) || sanitizeText(req.body.deviceName, 120) || 'Windows OBS Bridge',
+        deviceLabel:
+          sanitizeText(req.body.deviceLabel, 140) ||
+          sanitizeText(req.body.deviceName, 120) ||
+          'Windows OBS Bridge',
         platform: sanitizeText(req.body.platform, 40) || 'win32',
+        bridgeVersion: sanitizeText(req.body.bridgeVersion, 40) || undefined,
+        capabilities: Array.isArray(req.body.capabilities)
+          ? req.body.capabilities.filter((c: unknown): c is string => typeof c === 'string')
+          : undefined,
         baseAppUrl: resolveBaseAppUrl(req),
       });
 
@@ -1827,6 +1834,10 @@ router.post(
           sanitizeText(req.body.deviceName, 120) ||
           'Windows OBS Bridge',
         platform: sanitizeText(req.body.platform, 40) || 'win32',
+        bridgeVersion: sanitizeText(req.body.bridgeVersion, 40) || undefined,
+        capabilities: Array.isArray(req.body.capabilities)
+          ? req.body.capabilities.filter((c: unknown): c is string => typeof c === 'string')
+          : undefined,
         baseAppUrl: resolveBaseAppUrl(req),
       });
 
@@ -2820,8 +2831,10 @@ router.post(
       if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
 
       const action = req.body?.action;
-      if (!['status', 'start', 'stop', 'sync_config'].includes(action)) {
-        res.status(400).json({ message: 'action must be status, start, stop, or sync_config.' });
+      if (!['status', 'start', 'stop', 'restart', 'sync_config', 'logs'].includes(action)) {
+        res.status(400).json({
+          message: 'action must be status, start, stop, restart, sync_config, or logs.',
+        });
         return;
       }
 
@@ -2829,12 +2842,19 @@ router.post(
         typeof req.body?.executablePath === 'string'
           ? sanitizeText(req.body.executablePath, 400)
           : '';
+      const configPath =
+        typeof req.body?.configPath === 'string'
+          ? sanitizeText(req.body.configPath, 400)
+          : '';
+      const limit = Number(req.body?.limit);
       const result = await controlBridgeMediaMTX(
         matchId,
         action,
         {
           serverUrl: resolveBaseAppUrl(req),
           ...(executablePath ? { executablePath } : {}),
+          ...(configPath ? { configPath } : {}),
+          ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.min(200, Math.floor(limit)) } : {}),
         },
         req.user!
       );

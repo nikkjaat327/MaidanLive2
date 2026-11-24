@@ -44,6 +44,8 @@ export interface IObsControllerProfile extends Document {
   agentOnline: boolean;
   agentLastSeenAt?: Date | null;
   agentLabel: string;
+  bridgeVersion: string;
+  bridgeCapabilities: string[];
   connectionStatus: ObsConnectionStatus;
   lastError: string;
   obsVersion: string;
@@ -113,6 +115,8 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     agentOnline: { type: Boolean, default: false },
     agentLastSeenAt: { type: Date, default: null },
     agentLabel: { type: String, trim: true, default: '', maxlength: 120 },
+    bridgeVersion: { type: String, trim: true, default: '', maxlength: 40 },
+    bridgeCapabilities: [{ type: String, maxlength: 64 }],
     connectionStatus: {
       type: String,
       enum: ['DISCONNECTED', 'CONNECTING', 'CONNECTED', 'ERROR'],

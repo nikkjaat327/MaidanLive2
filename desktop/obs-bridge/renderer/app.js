@@ -76,8 +76,32 @@ function renderScenes(state) {
   }
 }
 
+function renderMtxLogs(entries) {
+  const container = $('mtx-log-container');
+  if (!container) return;
+  container.textContent = '';
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No MediaMTX output captured yet.';
+    container.appendChild(empty);
+    return;
+  }
+  for (const item of list.slice(0, 60)) {
+    const row = document.createElement('div');
+    row.className = `log-line log-${item.level || 'info'}`;
+    const time = item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : '';
+    row.textContent = `[${time}] ${item.message}`;
+    container.appendChild(row);
+  }
+}
+
 function renderState(state) {
   currentState = state;
+  if ($('lbl-bridge-version') && state.bridgeVersion) {
+    $('lbl-bridge-version').textContent = `v${state.bridgeVersion}`;
+  }
 
   // Topbar status pills
   if (!state.paired) {
@@ -181,20 +205,24 @@ function renderState(state) {
 
 function renderMediaMTX(state) {
   const mtx = state.mediamtx || {};
+  const verLabel = mtx.version ? ` (${mtx.version})` : '';
   if (mtx.running) {
-    setPill($('badge-mtx'), 'MediaMTX: Running', 'pill-ok');
+    setPill($('badge-mtx'), `MediaMTX${verLabel}: Running`, 'pill-ok');
   } else if (mtx.installed) {
-    setPill($('badge-mtx'), 'MediaMTX: Installed (Stopped)', 'pill-warn');
+    setPill($('badge-mtx'), `MediaMTX${verLabel}: Installed (Stopped)`, 'pill-warn');
   } else {
     setPill($('badge-mtx'), 'MediaMTX: Not Detected', 'pill-muted');
   }
 
   $('mtx-installed').textContent = mtx.installed
-    ? mtx.executablePath || 'Detected'
+    ? `${mtx.executablePath || 'Detected'}${mtx.version ? ` (${mtx.version})` : ''}`
     : 'Not Installed (Optional)';
+  $('mtx-config-path').textContent = mtx.configPath
+    ? `${mtx.configPath} (${mtx.configSource || 'detected'})`
+    : 'Not Found (Click Sync to create)';
   $('mtx-ports').textContent = `${mtx.rtmpPortOpen ? 'RTMP OK' : 'RTMP Off'} / ${
     mtx.srtPortOpen ? 'SRT OK' : 'SRT Off'
-  }`;
+  } / ${mtx.apiReachable ? 'API OK' : mtx.apiPortOpen ? 'API Open' : 'API Off'}`;
   const activeCount = Array.isArray(mtx.activePaths)
     ? mtx.activePaths.filter((p) => p.ready).length
     : 0;
@@ -206,9 +234,18 @@ function renderMediaMTX(state) {
   if (input && document.activeElement !== input && state.mediamtxPath && !input.value) {
     input.value = state.mediamtxPath;
   }
+  const cfgInput = $('mtx-config-input');
+  if (cfgInput && document.activeElement !== cfgInput && state.mediamtxConfigPath && !cfgInput.value) {
+    cfgInput.value = state.mediamtxConfigPath;
+  }
 
   $('btn-mtx-start').disabled = Boolean(mtx.running);
   $('btn-mtx-stop').disabled = !mtx.running;
+  $('btn-mtx-restart').disabled = !mtx.installed;
+
+  if (Array.isArray(mtx.recentLogs)) {
+    renderMtxLogs(mtx.recentLogs);
+  }
 
   if (mtx.lastError && !mtx.running) {
     $('mtx-alert').textContent = mtx.lastError;
@@ -303,17 +340,38 @@ $('btn-mtx-start').addEventListener('click', async () => {
   $('mtx-alert').classList.add('hidden');
   try {
     const customPath = $('mtx-path-input').value.trim();
-    if (customPath) await window.bridgeApi.updateMediaMTXPath(customPath);
-    await window.bridgeApi.startMediaMTX();
+    const customCfg = $('mtx-config-input').value.trim();
+    if (customPath || customCfg) {
+      await window.bridgeApi.updateMediaMTXPath(customPath, customCfg || undefined);
+    }
+    const res = await window.bridgeApi.startMediaMTX();
+    if (Array.isArray(res?.logs)) renderMtxLogs(res.logs);
   } catch (err) {
     $('mtx-alert').textContent = err?.message || 'Failed to start MediaMTX.';
     $('mtx-alert').classList.remove('hidden');
   }
 });
 
+$('btn-mtx-restart').addEventListener('click', async () => {
+  $('mtx-alert').classList.add('hidden');
+  try {
+    const customPath = $('mtx-path-input').value.trim();
+    const customCfg = $('mtx-config-input').value.trim();
+    if (customPath || customCfg) {
+      await window.bridgeApi.updateMediaMTXPath(customPath, customCfg || undefined);
+    }
+    const res = await window.bridgeApi.restartMediaMTX();
+    if (Array.isArray(res?.logs)) renderMtxLogs(res.logs);
+  } catch (err) {
+    $('mtx-alert').textContent = err?.message || 'Failed to restart MediaMTX.';
+    $('mtx-alert').classList.remove('hidden');
+  }
+});
+
 $('btn-mtx-stop').addEventListener('click', async () => {
   try {
-    await window.bridgeApi.stopMediaMTX();
+    const res = await window.bridgeApi.stopMediaMTX();
+    if (Array.isArray(res?.logs)) renderMtxLogs(res.logs);
   } catch (err) {
     $('mtx-alert').textContent = err?.message || 'Failed to stop MediaMTX.';
     $('mtx-alert').classList.remove('hidden');
@@ -323,8 +381,12 @@ $('btn-mtx-stop').addEventListener('click', async () => {
 $('btn-mtx-sync').addEventListener('click', async () => {
   $('mtx-alert').classList.add('hidden');
   try {
-    await window.bridgeApi.updateMediaMTXPath($('mtx-path-input').value.trim());
-    await window.bridgeApi.syncMediaMTXConfig();
+    await window.bridgeApi.updateMediaMTXPath(
+      $('mtx-path-input').value.trim(),
+      $('mtx-config-input').value.trim()
+    );
+    const res = await window.bridgeApi.syncMediaMTXConfig();
+    if (Array.isArray(res?.logs)) renderMtxLogs(res.logs);
   } catch (err) {
     $('mtx-alert').textContent = err?.message || 'Failed to sync MediaMTX configuration.';
     $('mtx-alert').classList.remove('hidden');
@@ -332,6 +394,15 @@ $('btn-mtx-sync').addEventListener('click', async () => {
 });
 
 $('btn-mtx-refresh').addEventListener('click', () => window.bridgeApi.refreshMediaMTX());
+$('btn-mtx-logs').addEventListener('click', async () => {
+  try {
+    const res = await window.bridgeApi.getMediaMTXLogs();
+    if (Array.isArray(res?.logs)) renderMtxLogs(res.logs);
+  } catch (err) {
+    $('mtx-alert').textContent = err?.message || 'Failed to load MediaMTX logs.';
+    $('mtx-alert').classList.remove('hidden');
+  }
+});
 
 $('chk-autostart').addEventListener('change', (e) => {
   window.bridgeApi.setAutoStart(Boolean(e.target.checked));

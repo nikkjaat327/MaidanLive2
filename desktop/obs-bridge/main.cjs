@@ -86,9 +86,9 @@ function updateTrayMenu() {
         ? 'MaidanLive Online · Waiting for OBS'
         : 'Reconnecting to MaidanLive...';
 
-  tray.setToolTip(`MaidanLive OBS Bridge — ${statusLabel}`);
+  tray.setToolTip(`MaidanLive OBS Bridge v${st.bridgeVersion || '1.1.0'} — ${statusLabel}`);
   const menu = Menu.buildFromTemplate([
-    { label: 'MaidanLive OBS Bridge', enabled: false },
+    { label: `MaidanLive OBS Bridge v${st.bridgeVersion || '1.1.0'}`, enabled: false },
     { label: statusLabel, enabled: false },
     { type: 'separator' },
     { label: 'Open Bridge Window', click: () => showMainWindow() },
@@ -279,13 +279,17 @@ ipcMain.handle('bridge:bootstrap', async () => {
   )
     .trim()
     .replace(/\/+$/, '');
+  const st = engine.getState();
   return {
-    state: engine.getState(),
+    bridgeVersion: st.bridgeVersion,
+    capabilities: st.capabilities,
+    state: st,
     logs: engine.getLogs(),
     obsUrl: cfg.obsUrl || 'ws://127.0.0.1:4455',
     hasObsPassword: Boolean(cfg.obsPassword),
     autoStart: Boolean(cfg.autoStart),
     mediamtxPath: cfg.mediamtxPath || '',
+    mediamtxConfigPath: cfg.mediamtxConfigPath || '',
     defaultServerUrl: cfg.serverUrl || envServerUrl || '',
   };
 });
@@ -371,8 +375,14 @@ ipcMain.handle('bridge:clear-logs', async () => {
   return { ok: true };
 });
 
-ipcMain.handle('bridge:mediamtx-path', async (_ev, executablePath) => {
-  return engine.updateMediaMTXPath(String(executablePath || '').trim());
+ipcMain.handle('bridge:mediamtx-path', async (_ev, payload) => {
+  if (payload && typeof payload === 'object') {
+    return engine.updateMediaMTXPath(
+      String(payload.executablePath || '').trim(),
+      payload.configPath !== undefined ? String(payload.configPath || '').trim() : undefined
+    );
+  }
+  return engine.updateMediaMTXPath(String(payload || '').trim());
 });
 
 ipcMain.handle('bridge:mediamtx-refresh', async () => {
@@ -389,4 +399,12 @@ ipcMain.handle('bridge:mediamtx-start', async () => {
 
 ipcMain.handle('bridge:mediamtx-stop', async () => {
   return engine.handleCommand('mediamtx_stop', {});
+});
+
+ipcMain.handle('bridge:mediamtx-restart', async () => {
+  return engine.handleCommand('mediamtx_restart', {});
+});
+
+ipcMain.handle('bridge:mediamtx-logs', async () => {
+  return engine.handleCommand('mediamtx_logs', {});
 });

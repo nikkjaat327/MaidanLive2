@@ -109,6 +109,9 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
         JSON.stringify({
           running: true,
           app: 'MaidanLive OBS Bridge',
+          version: st.bridgeVersion || null,
+          bridgeVersion: st.bridgeVersion || null,
+          capabilities: Array.isArray(st.capabilities) ? st.capabilities : [],
           paired: st.paired,
           bridgeId: st.bridgeId || null,
           serverUrl: st.serverUrl || null,
@@ -174,6 +177,8 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
         const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : '';
         const executablePath =
           typeof body.executablePath === 'string' ? body.executablePath.trim() : '';
+        const configPath =
+          typeof body.configPath === 'string' ? body.configPath.trim() : '';
         const trusted = isTrustedOrigin(originHeader, cfg.serverUrl, serverUrl);
         if (originHeader && !trusted) {
           res.statusCode = 403;
@@ -189,6 +194,8 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
           sync_config: 'mediamtx_sync_config',
           start: 'mediamtx_start',
           stop: 'mediamtx_stop',
+          restart: 'mediamtx_restart',
+          logs: 'mediamtx_logs',
         };
         const command = cmdMap[action];
         if (!command) {
@@ -200,6 +207,7 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
         const result = await engine.handleCommand(command, {
           ...(serverUrl ? { serverUrl } : {}),
           ...(executablePath ? { executablePath } : {}),
+          ...(configPath ? { configPath } : {}),
         });
         res.statusCode = 200;
         res.end(JSON.stringify({ ok: true, result }));

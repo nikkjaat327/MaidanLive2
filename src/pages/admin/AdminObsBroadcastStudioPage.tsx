@@ -76,6 +76,7 @@ import type {
   CameraPreviewFit,
   LocalBridgeProbeStatus,
   MediaMTXConfigPayload,
+  MediaMTXLogEntry,
   ObsBridgeData,
   ObsBridgeInstallerStatus,
   ObsBridgePairingResponse,
@@ -245,6 +246,8 @@ export function AdminObsBroadcastStudioPage() {
   const [busyMediamtxAction, setBusyMediamtxAction] = useState<string | null>(null);
   const [mediamtxControlError, setMediamtxControlError] = useState<string | null>(null);
   const [mediamtxControlSuccess, setMediamtxControlSuccess] = useState<string | null>(null);
+  const [mediamtxLogs, setMediamtxLogs] = useState<MediaMTXLogEntry[]>([]);
+  const [showMediamtxLogs, setShowMediamtxLogs] = useState(false);
   const [deleteCameraTarget, setDeleteCameraTarget] = useState<BroadcastCameraData | null>(null);
   const [deletingCamera, setDeletingCamera] = useState(false);
   const [scaffoldingCount, setScaffoldingCount] = useState<number | null>(null);
@@ -727,20 +730,35 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  async function handleControlMediaMTX(action: 'status' | 'start' | 'stop' | 'sync_config') {
+  async function handleControlMediaMTX(
+    action: 'status' | 'start' | 'stop' | 'restart' | 'sync_config' | 'logs'
+  ) {
     if (!matchId) return;
     const successLabels: Record<typeof action, string> = {
       status: 'Checked local MediaMTX status via OBS Bridge.',
       start: 'Started local MediaMTX receiver via OBS Bridge.',
       stop: 'Stopped local MediaMTX receiver.',
+      restart: 'Restarted local MediaMTX receiver via OBS Bridge.',
       sync_config: 'Synced mediamtx.yml configuration on your PC.',
+      logs: 'Loaded recent MediaMTX logs from OBS Bridge.',
     };
     try {
       setBusyMediamtxAction(action);
       setActionError(null);
       setMediamtxControlError(null);
       setMediamtxControlSuccess(null);
-      await obsStudioService.controlMediaMTX(matchId, action);
+      const res = await obsStudioService.controlMediaMTX(matchId, action);
+      const nextLogs = Array.isArray(res?.result?.logs)
+        ? (res.result.logs as MediaMTXLogEntry[])
+        : Array.isArray(res?.result?.mediamtx?.recentLogs)
+          ? (res.result.mediamtx.recentLogs as MediaMTXLogEntry[])
+          : null;
+      if (nextLogs) {
+        setMediamtxLogs(nextLogs);
+      }
+      if (action === 'logs') {
+        setShowMediamtxLogs(true);
+      }
       setMediamtxControlSuccess(successLabels[action]);
       notifySuccess(successLabels[action]);
       await refetch();
@@ -753,7 +771,7 @@ export function AdminObsBroadcastStudioPage() {
       if ((status === 503 || code === 'BRIDGE_OFFLINE') && localBridgeProbe?.running) {
         try {
           const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 5000);
+          const timer = setTimeout(() => ctrl.abort(), 7000);
           const localRes = await fetch('http://127.0.0.1:44691/mediamtx/control', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -766,6 +784,13 @@ export function AdminObsBroadcastStudioPage() {
           clearTimeout(timer);
           const localJson = await localRes.json().catch(() => ({}));
           if (localRes.ok && localJson?.ok) {
+            const localLogs = Array.isArray(localJson?.result?.logs)
+              ? (localJson.result.logs as MediaMTXLogEntry[])
+              : Array.isArray(localJson?.result?.mediamtx?.recentLogs)
+                ? (localJson.result.mediamtx.recentLogs as MediaMTXLogEntry[])
+                : null;
+            if (localLogs) setMediamtxLogs(localLogs);
+            if (action === 'logs') setShowMediamtxLogs(true);
             setMediamtxControlSuccess(`${successLabels[action]} (via local bridge)`);
             notifySuccess(successLabels[action]);
             await refetch();
@@ -3873,7 +3898,11 @@ export function AdminObsBroadcastStudioPage() {
                     <p className="text-[11px] text-slate-500 mt-1">
                       {localBridgeProbe?.running
                         ? localBridgeProbe.paired
-                          ? `Paired (${localBridgeProbe.bridgeId || 'Active'})`
+                          ? `Paired (${localBridgeProbe.bridgeId || 'Active'})${
+                              localBridgeProbe.bridgeVersion || localBridgeProbe.version
+                                ? ` · v${localBridgeProbe.bridgeVersion || localBridgeProbe.version}`
+                                : ''
+                            }`
                           : 'Ready to pair in 1 click'
                         : 'Download & launch setup if not installed'}
                     </p>
@@ -3895,7 +3924,17 @@ export function AdminObsBroadcastStudioPage() {
                       )}
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      Outbound secure tunnel (zero router ports)
+                      {bridgeIsOnline
+                        ? `${
+                            profile.bridgeVersion || activeMatchBridge?.bridgeVersion
+                              ? `Bridge v${profile.bridgeVersion || activeMatchBridge?.bridgeVersion} · `
+                              : 'Legacy Bridge · '
+                          }${
+                            profile.mediamtxControlSupported || activeMatchBridge?.mediamtxControlSupported
+                              ? 'MediaMTX Remote Ready'
+                              : 'MediaMTX Remote Upgrade Needed'
+                          }`
+                        : 'Outbound secure tunnel (zero router ports)'}
                     </p>
                   </div>
 
@@ -4308,6 +4347,23 @@ export function AdminObsBroadcastStudioPage() {
                             <p>
                               Token: {br.tokenPrefix || '—'} · Matches: {br.assignedMatchIds.length}
                               {br.obsVersion ? ` · OBS ${br.obsVersion}` : ''}
+                              {br.bridgeVersion ? ` · Bridge v${br.bridgeVersion}` : ''}
+                            </p>
+                            <p
+                              className={
+                                br.mediamtxControlSupported
+                                  ? 'text-emerald-700 font-semibold'
+                                  : isOnline
+                                    ? 'text-amber-700 font-semibold'
+                                    : 'text-slate-500'
+                              }
+                            >
+                              MediaMTX Remote:{' '}
+                              {br.mediamtxControlSupported
+                                ? 'Supported'
+                                : isOnline
+                                  ? 'Unsupported (Upgrade Bridge)'
+                                  : 'Unknown until Bridge connects'}
                             </p>
                             {br.activeObsScene && isOnline && (
                               <p className="text-[#EA580C] font-semibold">
@@ -4682,11 +4738,24 @@ export function AdminObsBroadcastStudioPage() {
                         }`}
                       >
                         {profile.mediamtxState?.running
-                          ? 'MEDIAMTX RUNNING'
+                          ? `MEDIAMTX RUNNING${profile.mediamtxState?.version ? ` (${profile.mediamtxState.version})` : ''}`
                           : profile.mediamtxState?.installed
-                            ? 'INSTALLED (STOPPED)'
+                            ? `INSTALLED (STOPPED)${profile.mediamtxState?.version ? ` · ${profile.mediamtxState.version}` : ''}`
                             : 'NOT DETECTED (OPTIONAL)'}
                       </span>
+                      {profile.agentOnline && (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                            profile.mediamtxControlSupported
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-200'
+                          }`}
+                        >
+                          {profile.mediamtxControlSupported
+                            ? `REMOTE CONTROL READY${profile.bridgeVersion ? ` · BRIDGE v${profile.bridgeVersion}` : ''}`
+                            : `REMOTE CONTROL UNSUPPORTED${profile.bridgeVersion ? ` (v${profile.bridgeVersion})` : ' (LEGACY BRIDGE)'}`}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
                       Receives direct RTMP/SRT mobile streams from Larix Broadcaster on your broadcasting PC. VDO.Ninja cameras continue working independently even if MediaMTX is stopped.
@@ -4713,15 +4782,26 @@ export function AdminObsBroadcastStudioPage() {
                       <span>Sync mediamtx.yml</span>
                     </button>
                     {profile.mediamtxState?.running ? (
-                      <button
-                        type="button"
-                        disabled={!profile.agentOnline || busyMediamtxAction !== null}
-                        onClick={() => handleControlMediaMTX('stop')}
-                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-45"
-                      >
-                        <Square className="w-3.5 h-3.5" />
-                        <span>{busyMediamtxAction === 'stop' ? 'Stopping...' : 'Stop MediaMTX'}</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          disabled={!profile.agentOnline || busyMediamtxAction !== null}
+                          onClick={() => handleControlMediaMTX('restart')}
+                          className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-45"
+                        >
+                          <RotateCcw className={`w-3.5 h-3.5 ${busyMediamtxAction === 'restart' ? 'animate-spin' : ''}`} />
+                          <span>{busyMediamtxAction === 'restart' ? 'Restarting...' : 'Restart'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!profile.agentOnline || busyMediamtxAction !== null}
+                          onClick={() => handleControlMediaMTX('stop')}
+                          className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-45"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          <span>{busyMediamtxAction === 'stop' ? 'Stopping...' : 'Stop MediaMTX'}</span>
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"
@@ -4733,6 +4813,15 @@ export function AdminObsBroadcastStudioPage() {
                         <span>{busyMediamtxAction === 'start' ? 'Starting...' : 'Start MediaMTX'}</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      disabled={!profile.agentOnline || busyMediamtxAction !== null}
+                      onClick={() => handleControlMediaMTX('logs')}
+                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-45"
+                    >
+                      <Terminal className="w-3.5 h-3.5" />
+                      <span>{busyMediamtxAction === 'logs' ? 'Loading Logs...' : 'View Logs'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleDownloadMediaMTXYaml()}
@@ -4761,6 +4850,29 @@ export function AdminObsBroadcastStudioPage() {
                 {!profile.agentOnline && (
                   <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
                     <strong>Bridge Offline:</strong> Remote buttons (Check Status / Sync / Start) need the Windows OBS Bridge online. You can still click <strong>Download mediamtx.yml</strong> above and run MediaMTX directly on your PC.
+                  </div>
+                )}
+
+                {profile.agentOnline && !profile.mediamtxControlSupported && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-amber-900">
+                        Connected Windows OBS Bridge Does Not Report Remote MediaMTX Support
+                      </p>
+                      <p className="text-amber-800">
+                        Your connected Bridge ({profile.bridgeVersion ? `v${profile.bridgeVersion}` : 'legacy build'}) does not advertise remote MediaMTX control. Install the updated Windows OBS Bridge{installerStatus?.version ? ` (v${installerStatus.version})` : ''} to upgrade in place while keeping your existing pairing.
+                      </p>
+                    </div>
+                    {installerStatus?.available && (
+                      <a
+                        href="/api/obs/bridge/installer/download"
+                        download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
+                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#EA580C]" />
+                        <span>Download Updated Bridge{installerStatus.version ? ` v${installerStatus.version}` : ''}</span>
+                      </a>
+                    )}
                   </div>
                 )}
 
@@ -4807,13 +4919,23 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      Local Ports
+                      Local Ports &amp; Control API
                     </p>
                     <p className="font-mono text-[11px] text-slate-900 mt-1">
-                      1935 (RTMP): {profile.mediamtxState?.rtmpPortOpen ? 'OPEN' : 'IDLE'}
+                      {profile.mediamtxState?.rtmpPort || 1935} (RTMP):{' '}
+                      {profile.mediamtxState?.rtmpPortOpen ? 'OPEN' : 'IDLE'}
                     </p>
                     <p className="font-mono text-[11px] text-slate-700">
-                      8890 (SRT): {profile.mediamtxState?.srtPortOpen ? 'OPEN' : 'IDLE'}
+                      {profile.mediamtxState?.srtPort || 8890} (SRT):{' '}
+                      {profile.mediamtxState?.srtPortOpen ? 'OPEN' : 'IDLE'}
+                    </p>
+                    <p className="font-mono text-[10px] text-slate-500 mt-0.5">
+                      API :{profile.mediamtxState?.apiPort || 9997}{' '}
+                      {profile.mediamtxState?.apiReachable
+                        ? 'REACHABLE'
+                        : profile.mediamtxState?.apiConfigured === false
+                          ? 'DISABLED IN YAML'
+                          : 'OFFLINE'}
                     </p>
                   </div>
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
@@ -4826,6 +4948,15 @@ export function AdminObsBroadcastStudioPage() {
                         : mediamtxConfig?.lanIps || []
                       ).join(', ') || 'No LAN IP detected'}
                     </p>
+                    {profile.mediamtxState?.configPath && (
+                      <p
+                        className="text-[10px] font-mono text-slate-500 truncate mt-1"
+                        title={profile.mediamtxState.configPath}
+                      >
+                        YAML ({profile.mediamtxState.configSource || 'local'}):{' '}
+                        {profile.mediamtxState.configPath}
+                      </p>
+                    )}
                   </div>
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -4836,6 +4967,10 @@ export function AdminObsBroadcastStudioPage() {
                         profile.mediamtxState?.activePaths?.length ??
                         0}{' '}
                       active path(s)
+                      {Array.isArray(profile.mediamtxState?.detectedPids) &&
+                      profile.mediamtxState.detectedPids.length > 0
+                        ? ` · PID ${profile.mediamtxState.detectedPids.join(', ')}`
+                        : ''}
                     </p>
                     {profile.mediamtxState?.executablePath && (
                       <p className="text-[10px] font-mono text-slate-500 truncate mt-0.5" title={profile.mediamtxState.executablePath}>
@@ -4850,13 +4985,70 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 </div>
 
+                {showMediamtxLogs && (
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 text-slate-200 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                      <span className="text-xs font-mono font-bold text-slate-100">
+                        Recent MediaMTX Output &amp; Errors (Secrets Redacted)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={!profile.agentOnline || busyMediamtxAction !== null}
+                          onClick={() => handleControlMediaMTX('logs')}
+                          className="text-[11px] font-semibold text-orange-400 hover:underline disabled:opacity-50"
+                        >
+                          Refresh
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowMediamtxLogs(false)}
+                          className="text-[11px] font-semibold text-slate-400 hover:text-white"
+                        >
+                          Hide
+                        </button>
+                      </div>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto font-mono text-[11px] space-y-1">
+                      {(mediamtxLogs.length > 0
+                        ? mediamtxLogs
+                        : profile.mediamtxState?.recentLogs || []
+                      ).length === 0 ? (
+                        <p className="text-slate-400 py-2">No MediaMTX log entries recorded yet.</p>
+                      ) : (
+                        (mediamtxLogs.length > 0
+                          ? mediamtxLogs
+                          : profile.mediamtxState?.recentLogs || []
+                        ).map((entry) => (
+                          <div
+                            key={entry.id}
+                            className={`break-words ${
+                              entry.level === 'error'
+                                ? 'text-red-300'
+                                : entry.level === 'warn'
+                                  ? 'text-amber-300'
+                                  : 'text-slate-300'
+                            }`}
+                          >
+                            <span className="text-slate-500">
+                              [{new Date(entry.timestamp).toLocaleTimeString()}]
+                            </span>{' '}
+                            <span className="uppercase font-bold">{entry.level}</span>{' '}
+                            {entry.message}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {!profile.mediamtxState?.running && (
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1">
                     <p className="font-bold text-slate-900">
                       Quick Manual Start (Works even without Bridge remote-start):
                     </p>
                     <p>
-                      1. Click <strong>Download mediamtx.yml</strong> above and place it in the same folder as <span className="font-mono font-semibold">mediamtx.exe</span> (e.g. <span className="font-mono">C:\mediamtx\</span>).
+                      1. Click <strong>Download mediamtx.yml</strong> above and place it in the same folder as <span className="font-mono font-semibold">mediamtx.exe</span> (e.g. <span className="font-mono">C:\MediaMTX\</span>).
                     </p>
                     <p>
                       2. Run <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">.\mediamtx.exe .\mediamtx.yml</span> (or with Docker: <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">docker compose -f deploy/mediamtx/docker-compose.yml up -d</span>).

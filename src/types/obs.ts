@@ -61,21 +61,43 @@ export interface LarixCameraConfig {
   usesLocalhostIngest: boolean;
 }
 
+export interface MediaMTXLogEntry {
+  id: string;
+  timestamp: string;
+  level: string;
+  source?: string;
+  message: string;
+}
+
 export interface MediaMTXBridgeState {
   installed: boolean;
   running: boolean;
   executablePath?: string;
+  version?: string;
+  managedByBridge?: boolean;
+  managedPid?: number | null;
+  detectedPids?: number[];
   managedConfigPath?: string;
   configPath?: string;
+  configExists?: boolean;
+  configSource?: 'custom' | 'colocated' | 'bridge_managed' | 'none' | string;
+  rtmpPort?: number;
+  srtPort?: number;
+  apiPort?: number;
   rtmpPortOpen?: boolean;
   srtPortOpen?: boolean;
+  apiPortOpen?: boolean;
   apiReachable?: boolean;
+  apiConfigured?: boolean;
+  authConfigured?: boolean;
   activePathCount?: number;
   activePaths?: Array<string | { name: string; ready?: boolean; sourceType?: string }>;
   lanIps?: string[];
   pid?: number | null;
+  lastStartedAt?: string | null;
   lastError?: string;
   checkedAt?: string;
+  recentLogs?: MediaMTXLogEntry[];
 }
 
 export interface MediaMTXConfigPayload {
@@ -134,6 +156,9 @@ export interface ObsControllerProfileData {
   agentOnline: boolean;
   agentLastSeenAt?: string | null;
   agentLabel: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
+  mediamtxControlSupported?: boolean;
   connectionStatus: ObsConnectionStatus;
   lastError: string;
   obsVersion: string;
@@ -506,6 +531,10 @@ export interface ObsBridgeData {
   lastHeartbeatAt?: string | null;
   lastError: string;
   platform: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
+  mediamtxControlSupported?: boolean;
+  mediamtxState?: MediaMTXBridgeState | null;
   revokedAt?: string | null;
   revokeReason: string;
   createdAt?: string | null;
@@ -540,6 +569,9 @@ export interface ObsBridgeInstallerStatus {
 export interface LocalBridgeProbeStatus {
   running: boolean;
   app?: string;
+  version?: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
   paired?: boolean;
   bridgeId?: string | null;
   serverUrl?: string | null;

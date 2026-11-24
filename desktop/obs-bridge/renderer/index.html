@@ -16,8 +16,10 @@
         <div class="brand">
           <img src="../assets/icon.png" alt="MaidanLive" class="brand-logo" />
           <div>
-            <div class="brand-title">MaidanLive OBS Bridge</div>
-            <div class="brand-sub">Local Windows Controller for OBS Studio WebSocket v5</div>
+            <div class="brand-title">
+              MaidanLive OBS Bridge <span id="lbl-bridge-version" class="mono muted">v1.1.0</span>
+            </div>
+            <div class="brand-sub">Local Windows Controller for OBS Studio WebSocket v5 &amp; MediaMTX</div>
           </div>
         </div>
         <div class="topbar-badges">
@@ -283,10 +285,14 @@
             <div class="check-list">
               <div class="check-row">
                 <span>MediaMTX Binary</span>
-                <strong id="mtx-installed">Checking...</strong>
+                <strong id="mtx-installed" class="mono">Checking...</strong>
               </div>
               <div class="check-row">
-                <span>RTMP Port 1935 / SRT Port 8890</span>
+                <span>Active Config (mediamtx.yml)</span>
+                <strong id="mtx-config-path" class="mono">—</strong>
+              </div>
+              <div class="check-row">
+                <span>RTMP / SRT / API Ports</span>
                 <strong id="mtx-ports">—</strong>
               </div>
               <div class="check-row">
@@ -305,18 +311,29 @@
                 <input
                   id="mtx-path-input"
                   type="text"
-                  placeholder="C:\mediamtx\mediamtx.exe (leave blank for auto-detect)"
+                  placeholder="C:\MediaMTX\mediamtx.exe (leave blank for auto-detect)"
+                />
+              </div>
+              <div class="field">
+                <label for="mtx-config-input">Optional Custom mediamtx.yml Path</label>
+                <input
+                  id="mtx-config-input"
+                  type="text"
+                  placeholder="C:\MediaMTX\mediamtx.yml (leave blank to auto-detect)"
                 />
               </div>
               <div class="btn-row">
                 <button type="button" id="btn-mtx-start" class="btn btn-primary">
-                  Start Local MediaMTX
+                  Start MediaMTX
+                </button>
+                <button type="button" id="btn-mtx-restart" class="btn btn-accent">
+                  Restart
                 </button>
                 <button type="button" id="btn-mtx-stop" class="btn btn-danger-outline">
-                  Stop MediaMTX
+                  Stop
                 </button>
                 <button type="button" id="btn-mtx-sync" class="btn btn-secondary">
-                  Save Path &amp; Sync Config
+                  Save Paths &amp; Sync Config
                 </button>
                 <button type="button" id="btn-mtx-refresh" class="btn btn-secondary">
                   Refresh
@@ -324,6 +341,16 @@
               </div>
               <div id="mtx-alert" class="alert alert-warn hidden"></div>
             </div>
+          </div>
+
+          <div class="top-gap stack-tight">
+            <div class="section-head">
+              <span class="hint">Recent MediaMTX Output &amp; Errors</span>
+              <button type="button" id="btn-mtx-logs" class="btn btn-sm btn-secondary">
+                Refresh MediaMTX Logs
+              </button>
+            </div>
+            <div id="mtx-log-container" class="log-box"></div>
           </div>
         </section>
 

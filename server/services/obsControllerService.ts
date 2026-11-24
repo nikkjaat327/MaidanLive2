@@ -65,6 +65,26 @@ const activeSceneSwitchLocks = new Map<string, { inFlight: boolean; lastSwitchAt
 const HEARTBEAT_STALE_MS = 45_000;
 const SCENE_SWITCH_COOLDOWN_MS = 350;
 
+function normalizeBridgeCapabilities(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const clean = item.trim().slice(0, 64);
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= 32) break;
+  }
+  return out;
+}
+
+function hasMediaMTXControlCapability(capabilities: unknown): boolean {
+  const list = normalizeBridgeCapabilities(capabilities);
+  return list.includes('mediamtx_control') || list.includes('mediamtx_start');
+}
+
 function acquireSceneSwitchGuard(matchId: string): void {
   const now = Date.now();
   const state = activeSceneSwitchLocks.get(matchId);
@@ -250,6 +270,8 @@ export function initObsControllerBridge(): void {
             matchIds,
             label: auth.label || bridge.label || bridge.name,
             platform: auth.platform || bridge.platform || 'win32',
+            bridgeVersion: typeof auth.bridgeVersion === 'string' ? auth.bridgeVersion.trim().slice(0, 40) : '',
+            capabilities: normalizeBridgeCapabilities(auth.capabilities),
           },
         };
       }
@@ -274,6 +296,8 @@ export function initObsControllerBridge(): void {
             matchIds: [auth.matchId],
             label: auth.label || 'Local OBS Agent',
             platform: auth.platform || 'win32',
+            bridgeVersion: typeof auth.bridgeVersion === 'string' ? auth.bridgeVersion.trim().slice(0, 40) : '',
+            capabilities: normalizeBridgeCapabilities(auth.capabilities),
           },
         };
       }
@@ -281,6 +305,8 @@ export function initObsControllerBridge(): void {
       return { ok: false, reason: 'Provide bridgeId + bridgeToken or matchId + agentToken.' };
     },
     onAgentConnected: async (socket: IoSocket, context: ObsAgentContext) => {
+      const normalizedCaps = normalizeBridgeCapabilities(context.capabilities);
+      const normalizedVer = typeof context.bridgeVersion === 'string' ? context.bridgeVersion.trim().slice(0, 40) : '';
       if (context.bridgeId) {
         bridgeSockets.set(context.bridgeId, socket);
         await ObsBridge.findOneAndUpdate(
@@ -292,6 +318,8 @@ export function initObsControllerBridge(): void {
               lastHeartbeatAt: new Date(),
               lastError: '',
               platform: context.platform || 'win32',
+              bridgeVersion: normalizedVer,
+              bridgeCapabilities: normalizedCaps,
               ...(context.label ? { label: context.label } : {}),
             },
           }
@@ -312,6 +340,8 @@ export function initObsControllerBridge(): void {
               agentOnline: true,
               agentLastSeenAt: new Date(),
               agentLabel: context.label || 'Local OBS Bridge',
+              bridgeVersion: normalizedVer,
+              bridgeCapabilities: normalizedCaps,
               lastError: '',
             },
           },
@@ -420,6 +450,13 @@ export function initObsControllerBridge(): void {
         payload.obsMediaStates && typeof payload.obsMediaStates === 'object'
           ? (payload.obsMediaStates as Record<string, string>)
           : null;
+      const reportedBridgeVersion =
+        typeof payload.bridgeVersion === 'string'
+          ? payload.bridgeVersion.trim().slice(0, 40)
+          : undefined;
+      const reportedCapabilities = Array.isArray(payload.capabilities)
+        ? normalizeBridgeCapabilities(payload.capabilities)
+        : undefined;
 
       if (context.bridgeId) {
         const br = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
@@ -433,6 +470,12 @@ export function initObsControllerBridge(): void {
           lastHeartbeatAt: new Date(),
           lastError: typeof payload.lastError === 'string' ? payload.lastError.slice(0, 500) : '',
         };
+        if (reportedBridgeVersion !== undefined) {
+          bridgeUpdate.bridgeVersion = reportedBridgeVersion;
+        }
+        if (reportedCapabilities !== undefined) {
+          bridgeUpdate.bridgeCapabilities = reportedCapabilities;
+        }
         if (typeof payload.obsVersion === 'string') bridgeUpdate.obsVersion = payload.obsVersion;
         if (typeof payload.obsWebSocketVersion === 'string') {
           bridgeUpdate.obsWebSocketVersion = payload.obsWebSocketVersion;
@@ -464,6 +507,12 @@ export function initObsControllerBridge(): void {
           lastSyncedAt: new Date(),
         };
         if (context.label) updateFields.agentLabel = context.label;
+        if (reportedBridgeVersion !== undefined) {
+          updateFields.bridgeVersion = reportedBridgeVersion;
+        }
+        if (reportedCapabilities !== undefined) {
+          updateFields.bridgeCapabilities = reportedCapabilities;
+        }
         if (typeof payload.obsVersion === 'string') updateFields.obsVersion = payload.obsVersion;
         if (typeof payload.obsWebSocketVersion === 'string') {
           updateFields.obsWebSocketVersion = payload.obsWebSocketVersion;
@@ -928,6 +977,9 @@ export function formatSafeProfile(profile: any) {
     agentOnline: realAgentOnline,
     agentLastSeenAt: profile.agentLastSeenAt || null,
     agentLabel: profile.agentLabel || '',
+    bridgeVersion: profile.bridgeVersion || '',
+    capabilities: normalizeBridgeCapabilities(profile.bridgeCapabilities),
+    mediamtxControlSupported: hasMediaMTXControlCapability(profile.bridgeCapabilities),
     connectionStatus: effectiveStatus,
     lastError: profile.lastError || '',
     obsVersion: profile.obsVersion || '',
@@ -3489,6 +3541,9 @@ export function formatSafeBridge(bridge: any) {
     lastHeartbeatAt: bridge.lastHeartbeatAt || null,
     lastError: bridge.lastError || '',
     platform: bridge.platform || 'win32',
+    bridgeVersion: bridge.bridgeVersion || '',
+    capabilities: normalizeBridgeCapabilities(bridge.bridgeCapabilities),
+    mediamtxControlSupported: hasMediaMTXControlCapability(bridge.bridgeCapabilities),
     mediamtxState: bridge.mediamtxState || null,
     revokedAt: bridge.revokedAt || null,
     revokeReason: bridge.revokeReason || '',
@@ -3571,12 +3626,15 @@ async function syncBridgeLiveStateToMatches(bridge: any) {
           agentOnline: true,
           agentLastSeenAt: new Date(),
           agentLabel: bridge.label || bridge.name,
+          bridgeVersion: bridge.bridgeVersion || '',
+          bridgeCapabilities: normalizeBridgeCapabilities(bridge.bridgeCapabilities),
           connectionStatus: bridge.obsStatus || 'DISCONNECTED',
           obsVersion: bridge.obsVersion || '',
           obsWebSocketVersion: bridge.obsWebSocketVersion || '',
           obsScenes: Array.isArray(bridge.obsScenes) ? bridge.obsScenes : [],
           activeObsScene: bridge.activeObsScene || '',
           obsStreamActive: Boolean(bridge.obsStreamActive),
+          ...(bridge.mediamtxState ? { mediamtxState: bridge.mediamtxState } : {}),
           lastSyncedAt: new Date(),
         },
       }
@@ -3591,6 +3649,9 @@ export async function registerObsBridge(params: {
   ownerUserId?: string;
   tournamentId?: string;
   assignedMatchIds?: string[];
+  platform?: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
   actor: IUser;
   baseAppUrl: string;
 }) {
@@ -3636,6 +3697,9 @@ export async function registerObsBridge(params: {
     status: 'ACTIVE',
     connectionStatus: 'OFFLINE',
     obsStatus: 'DISCONNECTED',
+    platform: params.platform ? String(params.platform).trim().slice(0, 40) : 'win32',
+    bridgeVersion: params.bridgeVersion ? String(params.bridgeVersion).trim().slice(0, 40) : '',
+    bridgeCapabilities: normalizeBridgeCapabilities(params.capabilities),
     createdBy: params.actor._id,
   });
 
@@ -4016,6 +4080,8 @@ export async function exchangeBridgePairingCode(params: {
   deviceName?: string;
   deviceLabel?: string;
   platform?: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
   baseAppUrl: string;
 }) {
   const normalized = normalizePairingCode(params.code);
@@ -4068,9 +4134,11 @@ export async function exchangeBridgePairingCode(params: {
     .slice(0, 120);
   const cleanLabel = (params.deviceLabel || cleanDeviceName).trim().slice(0, 140);
   const cleanPlatform = (params.platform || 'win32').trim().slice(0, 40);
+  const cleanBridgeVersion = (params.bridgeVersion || '').trim().slice(0, 40);
+  const cleanCapabilities = normalizeBridgeCapabilities(params.capabilities);
 
   let bridge: IObsBridge | null = null;
-  let tokenPair = generateScopedToken('mlbrg');
+  const tokenPair = generateScopedToken('mlbrg');
 
   if (pairing.bridgeId) {
     bridge = await ObsBridge.findOne({ bridgeId: pairing.bridgeId });
@@ -4081,6 +4149,8 @@ export async function exchangeBridgePairingCode(params: {
     bridge.tokenPrefix = tokenPair.displayPrefix;
     bridge.label = cleanLabel || bridge.label;
     bridge.platform = cleanPlatform;
+    bridge.bridgeVersion = cleanBridgeVersion;
+    bridge.bridgeCapabilities = cleanCapabilities;
     if (pairing.matchId) {
       const midStr = String(pairing.matchId);
       const existingIds = (bridge.assignedMatchIds || []).map(String);
@@ -4113,6 +4183,8 @@ export async function exchangeBridgePairingCode(params: {
       connectionStatus: 'OFFLINE',
       obsStatus: 'DISCONNECTED',
       platform: cleanPlatform,
+      bridgeVersion: cleanBridgeVersion,
+      bridgeCapabilities: cleanCapabilities,
       createdBy: owner._id,
     });
   }
@@ -4167,6 +4239,8 @@ export async function pairBridgeViaUserAccount(params: {
   deviceName?: string;
   deviceLabel?: string;
   platform?: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
   baseAppUrl: string;
 }) {
   if (
@@ -4188,6 +4262,9 @@ export async function pairBridgeViaUserAccount(params: {
     label: params.deviceLabel || params.deviceName || 'Windows OBS Bridge',
     assignedMatchIds:
       params.matchId && mongoose.Types.ObjectId.isValid(params.matchId) ? [params.matchId] : [],
+    platform: params.platform,
+    bridgeVersion: params.bridgeVersion,
+    capabilities: params.capabilities,
     actor: params.actor,
     baseAppUrl: params.baseAppUrl,
   });
@@ -4452,7 +4529,7 @@ export async function removeCameraObsSource(matchId: string, inputName: string):
 
 export async function controlBridgeMediaMTX(
   matchId: string,
-  action: 'status' | 'start' | 'stop' | 'sync_config',
+  action: 'status' | 'start' | 'stop' | 'restart' | 'sync_config' | 'logs',
   payload: Record<string, any> = {},
   actor?: IUser | null
 ) {
@@ -4460,7 +4537,9 @@ export async function controlBridgeMediaMTX(
     status: 'mediamtx_status',
     start: 'mediamtx_start',
     stop: 'mediamtx_stop',
+    restart: 'mediamtx_restart',
     sync_config: 'mediamtx_sync_config',
+    logs: 'mediamtx_logs',
   };
   const resolved = await resolveAgentSocketForMatch(matchId);
   if (!resolved) {
@@ -4484,7 +4563,7 @@ export async function controlBridgeMediaMTX(
       timeoutErr.statusCode = 504;
       timeoutErr.code = 'BRIDGE_TIMEOUT';
       reject(timeoutErr);
-    }, 10_000);
+    }, 12_000);
     resolved.socket.emit(
       'server:obs_command',
       { command: cmdMap[action], payload },
@@ -4498,7 +4577,7 @@ export async function controlBridgeMediaMTX(
             /mediamtx executable|mediamtx\.exe.*not found|was not found/i.test(rawErr);
           const cmdErr: any = new Error(
             isUnsupported
-              ? 'Your connected Windows OBS Bridge version does not support remote MediaMTX control yet. Restart/update your Windows OBS Bridge (or use "Download mediamtx.yml" below and run MediaMTX directly on your PC).'
+              ? 'Your connected Windows OBS Bridge version does not support remote MediaMTX control yet. Install the updated Windows OBS Bridge installer (or use "Download mediamtx.yml" below and run MediaMTX directly on your PC).'
               : rawErr
           );
           cmdErr.statusCode = 422;
@@ -4515,17 +4594,27 @@ export async function controlBridgeMediaMTX(
     );
   });
 
+  const profilePatch: Record<string, any> = {};
+  const bridgePatch: Record<string, any> = {};
   if (data?.mediamtx) {
-    await ObsControllerProfile.findOneAndUpdate(
-      { matchId },
-      { $set: { mediamtxState: data.mediamtx } }
-    );
-    if (resolved.bridgeId) {
-      await ObsBridge.findOneAndUpdate(
-        { bridgeId: resolved.bridgeId },
-        { $set: { mediamtxState: data.mediamtx } }
-      );
-    }
+    profilePatch.mediamtxState = data.mediamtx;
+    bridgePatch.mediamtxState = data.mediamtx;
+  }
+  if (typeof data?.bridgeVersion === 'string' && data.bridgeVersion.trim()) {
+    profilePatch.bridgeVersion = data.bridgeVersion.trim().slice(0, 40);
+    bridgePatch.bridgeVersion = data.bridgeVersion.trim().slice(0, 40);
+  }
+  if (Array.isArray(data?.capabilities)) {
+    const caps = normalizeBridgeCapabilities(data.capabilities);
+    profilePatch.bridgeCapabilities = caps;
+    bridgePatch.bridgeCapabilities = caps;
+  }
+
+  if (Object.keys(profilePatch).length > 0) {
+    await ObsControllerProfile.findOneAndUpdate({ matchId }, { $set: profilePatch });
+  }
+  if (resolved.bridgeId && Object.keys(bridgePatch).length > 0) {
+    await ObsBridge.findOneAndUpdate({ bridgeId: resolved.bridgeId }, { $set: bridgePatch });
   }
 
   if (actor) {

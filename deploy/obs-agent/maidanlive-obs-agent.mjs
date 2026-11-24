@@ -17,6 +17,25 @@ import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
 import OBSWebSocket from 'obs-websocket-js';
 
+const AGENT_PKG = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+  } catch {
+    return { version: '1.0.0' };
+  }
+})();
+const BRIDGE_VERSION = String(AGENT_PKG?.version || '1.0.0');
+const BRIDGE_CAPABILITIES = [
+  'obs_control',
+  'obs_scene_switching',
+  'obs_layout_control',
+  'mediamtx_control',
+  'mediamtx_detect',
+  'mediamtx_start',
+  'mediamtx_stop',
+  'mediamtx_sync_config',
+];
+
 const APPROVED_COMMANDS = new Set([
   'get_snapshot',
   'switch_scene',
@@ -234,12 +253,16 @@ const socketAuth = useRegisteredBridgeAuth
       bridgeToken: BRIDGE_TOKEN,
       label: AGENT_LABEL,
       platform: process.platform,
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: BRIDGE_CAPABILITIES,
     }
   : {
       matchId: MATCH_ID,
       agentToken: AGENT_TOKEN,
       label: AGENT_LABEL,
       platform: process.platform,
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: BRIDGE_CAPABILITIES,
     };
 
 logInfo(
@@ -309,8 +332,10 @@ function findMediaMTXExecutable(configuredPath = '') {
       candidates.push(path.join(userProfile, 'Downloads', 'mediamtx.exe'));
       candidates.push(path.join(userProfile, 'mediamtx', 'mediamtx.exe'));
     }
-    candidates.push(path.join(programFiles, 'mediamtx', 'mediamtx.exe'));
+    candidates.push('C:\\MediaMTX\\mediamtx.exe');
     candidates.push('C:\\mediamtx\\mediamtx.exe');
+    candidates.push(path.join(programFiles, 'MediaMTX', 'mediamtx.exe'));
+    candidates.push(path.join(programFiles, 'mediamtx', 'mediamtx.exe'));
     candidates.push('C:\\MaidanLive\\mediamtx\\mediamtx.exe');
   } else {
     candidates.push('/usr/local/bin/mediamtx', '/usr/bin/mediamtx', '/opt/homebrew/bin/mediamtx');
@@ -560,6 +585,8 @@ async function emitObsSnapshot() {
   const mtxStatus = await probeLocalMediaMTX();
   if (!obsConnected) {
     socket.emit('agent:obs_state', {
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: BRIDGE_CAPABILITIES,
       connectionStatus: obsConnecting ? 'CONNECTING' : lastError ? 'ERROR' : 'DISCONNECTED',
       lastError,
       obsScenes: [],
@@ -607,6 +634,8 @@ async function emitObsSnapshot() {
     }
 
     socket.emit('agent:obs_state', {
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: BRIDGE_CAPABILITIES,
       connectionStatus: 'CONNECTED',
       lastError: '',
       obsVersion: ver.obsVersion,

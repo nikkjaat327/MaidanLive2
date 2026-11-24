@@ -1,13 +1,13 @@
 {
   "name": "maidanlive-obs-bridge",
-  "version": "1.0.0",
-  "description": "MaidanLive OBS Bridge desktop companion for one-click Windows remote OBS Studio control.",
+  "version": "1.1.0",
+  "description": "MaidanLive OBS Bridge desktop companion for one-click Windows remote OBS Studio and MediaMTX control.",
   "author": "MaidanLive",
   "license": "MIT",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis --x64 --publish never"
+    "dist:win": "node scripts/build-win.cjs"
   },
   "dependencies": {
     "obs-websocket-js": "^5.0.6",

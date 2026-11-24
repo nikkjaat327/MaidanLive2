@@ -18,6 +18,8 @@ export interface ObsAgentContext {
   matchIds?: string[];
   label: string;
   platform?: string;
+  bridgeVersion?: string;
+  capabilities?: string[];
 }
 
 export interface ObsAgentRegistrationHandlers {
@@ -28,6 +30,8 @@ export interface ObsAgentRegistrationHandlers {
     agentToken?: string;
     label?: string;
     platform?: string;
+    bridgeVersion?: string;
+    capabilities?: string[];
   }) => Promise<{ ok: boolean; reason?: string; context?: ObsAgentContext }>;
   onAgentConnected: (socket: any, context: ObsAgentContext) => Promise<void>;
   onAgentDisconnected: (socket: any, context: ObsAgentContext, reason: string) => Promise<void>;
@@ -186,6 +190,7 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       broadcastViewerCounts(t.targetType, t.targetId).catch(() => {});
     }
   }, 20_000);
+  cleanupTimer.unref?.();
 
   io.on('connection', (socket) => {
     socket.on('feed:join', () => {
@@ -447,6 +452,14 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       const agentToken = typeof auth.agentToken === 'string' ? auth.agentToken.trim() : '';
       const label = typeof auth.label === 'string' ? auth.label.trim().slice(0, 120) : '';
       const platform = typeof auth.platform === 'string' ? auth.platform.trim().slice(0, 40) : '';
+      const bridgeVersion =
+        typeof auth.bridgeVersion === 'string' ? auth.bridgeVersion.trim().slice(0, 40) : '';
+      const capabilities = Array.isArray(auth.capabilities)
+        ? auth.capabilities
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim().slice(0, 64))
+            .slice(0, 32)
+        : [];
 
       if (!obsAgentHandlers) {
         next(new Error('OBS bridge handler unavailable.'));
@@ -460,6 +473,8 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
         agentToken: agentToken || bridgeToken,
         label,
         platform,
+        bridgeVersion,
+        capabilities,
       });
 
       if (!result.ok || !result.context) {

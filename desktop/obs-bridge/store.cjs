@@ -20,6 +20,7 @@ function defaultConfig() {
     obsUrl: 'ws://127.0.0.1:4455',
     obsPassword: '',
     mediamtxPath: '',
+    mediamtxConfigPath: '',
     autoStart: false,
     activeMatch: null,
     pairedAt: null,
@@ -87,6 +88,7 @@ function loadConfig() {
       obsUrl: String(parsed.obsUrl || base.obsUrl).trim() || 'ws://127.0.0.1:4455',
       obsPassword: String(obsPassword || ''),
       mediamtxPath: String(parsed.mediamtxPath || '').trim(),
+      mediamtxConfigPath: String(parsed.mediamtxConfigPath || '').trim(),
       autoStart: Boolean(parsed.autoStart),
       activeMatch: parsed.activeMatch || null,
       pairedAt: parsed.pairedAt || null,
@@ -107,6 +109,7 @@ function saveConfig(patch) {
   next.bridgeToken = String(next.bridgeToken || '').trim();
   next.obsUrl = String(next.obsUrl || 'ws://127.0.0.1:4455').trim() || 'ws://127.0.0.1:4455';
   next.mediamtxPath = String(next.mediamtxPath || '').trim();
+  next.mediamtxConfigPath = String(next.mediamtxConfigPath || '').trim();
   next.label = String(next.label || defaultConfig().label).trim();
   next.autoStart = Boolean(next.autoStart);
 
@@ -119,6 +122,7 @@ function saveConfig(patch) {
     obsUrl: next.obsUrl,
     obsPasswordEnc: encryptValue(next.obsPassword),
     mediamtxPath: next.mediamtxPath,
+    mediamtxConfigPath: next.mediamtxConfigPath,
     autoStart: next.autoStart,
     activeMatch: next.activeMatch || null,
     pairedAt: next.pairedAt || null,

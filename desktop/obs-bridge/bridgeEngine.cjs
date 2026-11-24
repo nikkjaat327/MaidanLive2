@@ -10,12 +10,29 @@ const {
   hasPairedCredentials,
 } = require('./store.cjs');
 const { detectObsEnvironment } = require('./obsDetector.cjs');
+const pkg = require('./package.json');
 const {
   writeManagedConfig: writeMediaMTXConfig,
   getMediaMTXStatus,
   startMediaMTX,
   stopMediaMTX,
+  restartMediaMTX,
+  getMediaMTXLogs,
 } = require('./mediamtxManager.cjs');
+
+const BRIDGE_VERSION = String(pkg.version || '1.1.0');
+const BRIDGE_CAPABILITIES = [
+  'obs_control',
+  'obs_scene_switching',
+  'obs_layout_control',
+  'mediamtx_control',
+  'mediamtx_detect',
+  'mediamtx_start',
+  'mediamtx_stop',
+  'mediamtx_restart',
+  'mediamtx_sync_config',
+  'mediamtx_logs',
+];
 
 const APPROVED_COMMANDS = new Set([
   'get_snapshot',
@@ -39,7 +56,9 @@ const APPROVED_COMMANDS = new Set([
   'mediamtx_status',
   'mediamtx_start',
   'mediamtx_stop',
+  'mediamtx_restart',
   'mediamtx_sync_config',
+  'mediamtx_logs',
 ]);
 
 function buildCenterBoxTransform(box) {
@@ -82,6 +101,8 @@ class BridgeEngine extends EventEmitter {
     this.envPollTimer = null;
 
     this.state = {
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: [...BRIDGE_CAPABILITIES],
       paired: false,
       bridgeId: '',
       serverUrl: '',
@@ -107,19 +128,29 @@ class BridgeEngine extends EventEmitter {
       hasObsPassword: false,
       autoStart: false,
       mediamtxPath: '',
+      mediamtxConfigPath: '',
       mediamtx: {
         installed: false,
         executablePath: '',
+        version: '',
         running: false,
         managedByBridge: false,
+        managedPid: null,
+        detectedPids: [],
         rtmpPortOpen: false,
         srtPortOpen: false,
         apiPortOpen: false,
         apiReachable: false,
+        apiConfigured: false,
+        authConfigured: false,
         activePaths: [],
+        activePathCount: 0,
         lanIps: [],
         configPath: '',
+        configExists: false,
+        configSource: 'none',
         lastError: '',
+        recentLogs: [],
       },
       obsEnv: {
         installed: false,
@@ -174,6 +205,8 @@ class BridgeEngine extends EventEmitter {
 
   _syncConfigToState(cfg) {
     this._setState({
+      bridgeVersion: BRIDGE_VERSION,
+      capabilities: [...BRIDGE_CAPABILITIES],
       paired: hasPairedCredentials(cfg),
       bridgeId: cfg.bridgeId || '',
       serverUrl: cfg.serverUrl || '',
@@ -183,6 +216,7 @@ class BridgeEngine extends EventEmitter {
       hasObsPassword: Boolean(cfg.obsPassword),
       autoStart: Boolean(cfg.autoStart),
       mediamtxPath: cfg.mediamtxPath || '',
+      mediamtxConfigPath: cfg.mediamtxConfigPath || '',
     });
   }
 
@@ -190,14 +224,19 @@ class BridgeEngine extends EventEmitter {
     const cfg = loadConfig();
     const mtx = await getMediaMTXStatus({
       configuredPath: cfg.mediamtxPath || '',
+      configuredConfigPath: cfg.mediamtxConfigPath || '',
       userDataDir: getUserDataDir(),
     }).catch(() => this.state.mediamtx);
     this._setState({ mediamtx: mtx });
     return mtx;
   }
 
-  async updateMediaMTXPath(executablePath) {
-    const cfg = saveConfig({ mediamtxPath: String(executablePath || '').trim() });
+  async updateMediaMTXPath(executablePath, configPath) {
+    const patch = { mediamtxPath: String(executablePath || '').trim() };
+    if (configPath !== undefined) {
+      patch.mediamtxConfigPath = String(configPath || '').trim();
+    }
+    const cfg = saveConfig(patch);
     this._syncConfigToState(cfg);
     await this.refreshMediaMTXStatus();
     return this.getState();
@@ -209,6 +248,7 @@ class BridgeEngine extends EventEmitter {
       detectObsEnvironment(cfg.obsUrl || 'ws://127.0.0.1:4455'),
       getMediaMTXStatus({
         configuredPath: cfg.mediamtxPath || '',
+        configuredConfigPath: cfg.mediamtxConfigPath || '',
         userDataDir: getUserDataDir(),
       }).catch(() => this.state.mediamtx),
     ]);
@@ -306,6 +346,8 @@ class BridgeEngine extends EventEmitter {
         deviceName: `${os.hostname()} OBS Bridge`,
         deviceLabel: `${os.hostname()} (${process.platform === 'win32' ? 'Windows' : process.platform})`,
         platform: process.platform,
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
       }),
     });
     const data = await resp.json().catch(() => ({}));
@@ -334,6 +376,8 @@ class BridgeEngine extends EventEmitter {
         deviceName: `${os.hostname()} OBS Bridge`,
         deviceLabel: `${os.hostname()} (${process.platform === 'win32' ? 'Windows' : process.platform})`,
         platform: process.platform,
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
       }),
     });
     const data = await resp.json().catch(() => ({}));
@@ -450,6 +494,8 @@ class BridgeEngine extends EventEmitter {
         bridgeToken: cfg.bridgeToken,
         label: cfg.label,
         platform: process.platform,
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
       },
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -669,6 +715,8 @@ class BridgeEngine extends EventEmitter {
     if (!this.state.obsConnected) {
       if (this.socket && this.socket.connected) {
         this.socket.emit('agent:obs_state', {
+          bridgeVersion: BRIDGE_VERSION,
+          capabilities: BRIDGE_CAPABILITIES,
           connectionStatus: this.state.obsConnecting
             ? 'CONNECTING'
             : this.state.obsError
@@ -745,6 +793,8 @@ class BridgeEngine extends EventEmitter {
 
       if (this.socket && this.socket.connected) {
         this.socket.emit('agent:obs_state', {
+          bridgeVersion: BRIDGE_VERSION,
+          capabilities: BRIDGE_CAPABILITIES,
           connectionStatus: 'CONNECTED',
           lastError: '',
           obsVersion: ver.obsVersion,
@@ -852,7 +902,23 @@ class BridgeEngine extends EventEmitter {
 
     if (command === 'mediamtx_status') {
       const mtx = await this.refreshMediaMTXStatus();
-      return { mediamtx: mtx };
+      await this.emitObsSnapshot().catch(() => {});
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(Number(payload.limit) || 80),
+      };
+    }
+
+    if (command === 'mediamtx_logs') {
+      const mtx = await this.refreshMediaMTXStatus();
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(Number(payload.limit) || 120),
+      };
     }
 
     if (command === 'mediamtx_sync_config') {
@@ -861,42 +927,100 @@ class BridgeEngine extends EventEmitter {
       if (!targetServer) {
         throw new Error('MaidanLive Server URL is not configured on this OBS Bridge.');
       }
-      if (payload.executablePath) {
-        saveConfig({ mediamtxPath: String(payload.executablePath).trim() });
+      const nextExe = payload.executablePath ? String(payload.executablePath).trim() : cfg.mediamtxPath;
+      const nextCfgPath = payload.configPath ? String(payload.configPath).trim() : cfg.mediamtxConfigPath;
+      if (payload.executablePath || payload.configPath) {
+        const updated = saveConfig({
+          ...(payload.executablePath ? { mediamtxPath: nextExe } : {}),
+          ...(payload.configPath ? { mediamtxConfigPath: nextCfgPath } : {}),
+        });
+        this._syncConfigToState(updated);
       }
-      const written = writeMediaMTXConfig(targetServer, getUserDataDir());
-      this.log('info', `Generated local MediaMTX config at ${written.configPath}`);
+      const written = writeMediaMTXConfig(targetServer, getUserDataDir(), {
+        configuredPath: nextExe,
+        configuredConfigPath: nextCfgPath,
+      });
+      this.log('info', `Synced MediaMTX config (${written.configSource}) at ${written.configPath}`);
       const mtx = await this.refreshMediaMTXStatus();
-      return { configPath: written.configPath, mediamtx: mtx };
+      await this.emitObsSnapshot().catch(() => {});
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        configPath: written.configPath,
+        configSource: written.configSource,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(60),
+      };
     }
 
     if (command === 'mediamtx_start') {
       const cfg = loadConfig();
       const targetServer = String(payload.serverUrl || cfg.serverUrl || '').trim();
       const customExe = payload.executablePath ? String(payload.executablePath).trim() : cfg.mediamtxPath;
-      if (payload.executablePath) {
-        saveConfig({ mediamtxPath: customExe });
+      const customCfgPath = payload.configPath ? String(payload.configPath).trim() : cfg.mediamtxConfigPath;
+      if (payload.executablePath || payload.configPath) {
+        const updated = saveConfig({
+          ...(payload.executablePath ? { mediamtxPath: customExe } : {}),
+          ...(payload.configPath ? { mediamtxConfigPath: customCfgPath } : {}),
+        });
+        this._syncConfigToState(updated);
       }
       const mtx = await startMediaMTX({
         serverUrl: targetServer,
         configuredPath: customExe,
+        configuredConfigPath: customCfgPath,
         userDataDir: getUserDataDir(),
         onLog: (lvl, msg) => this.log(lvl, msg),
       });
       this._setState({ mediamtx: mtx });
       await this.emitObsSnapshot().catch(() => {});
-      return { mediamtx: mtx };
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(60),
+      };
     }
 
     if (command === 'mediamtx_stop') {
       const cfg = loadConfig();
       const mtx = await stopMediaMTX({
         configuredPath: cfg.mediamtxPath || '',
+        configuredConfigPath: cfg.mediamtxConfigPath || '',
         userDataDir: getUserDataDir(),
+        onLog: (lvl, msg) => this.log(lvl, msg),
       });
       this._setState({ mediamtx: mtx });
       await this.emitObsSnapshot().catch(() => {});
-      return { mediamtx: mtx };
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(60),
+      };
+    }
+
+    if (command === 'mediamtx_restart') {
+      const cfg = loadConfig();
+      const targetServer = String(payload.serverUrl || cfg.serverUrl || '').trim();
+      const customExe = payload.executablePath ? String(payload.executablePath).trim() : cfg.mediamtxPath;
+      const customCfgPath = payload.configPath ? String(payload.configPath).trim() : cfg.mediamtxConfigPath;
+      const mtx = await restartMediaMTX({
+        serverUrl: targetServer,
+        configuredPath: customExe,
+        configuredConfigPath: customCfgPath,
+        userDataDir: getUserDataDir(),
+        onLog: (lvl, msg) => this.log(lvl, msg),
+      });
+      this._setState({ mediamtx: mtx });
+      await this.emitObsSnapshot().catch(() => {});
+      return {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        restarted: true,
+        mediamtx: mtx,
+        logs: getMediaMTXLogs(60),
+      };
     }
 
     if (!this.state.obsConnected) {
@@ -1344,11 +1468,14 @@ class BridgeEngine extends EventEmitter {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.envPollTimer) clearInterval(this.envPollTimer);
     this.disconnectServerSocket();
-    await stopMediaMTX().catch(() => {});
+    await stopMediaMTX({ onlyManaged: true }).catch(() => {});
     await this.obs.disconnect().catch(() => {});
   }
 }
 
 module.exports = {
   BridgeEngine,
+  BRIDGE_VERSION,
+  BRIDGE_CAPABILITIES,
+  APPROVED_COMMANDS,
 };

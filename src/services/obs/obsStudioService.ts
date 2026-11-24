@@ -314,12 +314,15 @@ export const obsStudioService = {
 
   async controlMediaMTX(
     matchId: string,
-    action: 'status' | 'start' | 'stop' | 'sync_config',
-    executablePath = ''
+    action: 'status' | 'start' | 'stop' | 'restart' | 'sync_config' | 'logs',
+    options?: string | { executablePath?: string; configPath?: string; limit?: number }
   ): Promise<{ ok: boolean; result?: any } & Partial<ObsStudioPayload>> {
+    const opts = typeof options === 'string' ? { executablePath: options } : options || {};
     const { data } = await adminApi.post(`/obs/matches/${matchId}/mediamtx/control`, {
       action,
-      ...(executablePath ? { executablePath } : {}),
+      ...(opts.executablePath ? { executablePath: opts.executablePath } : {}),
+      ...(opts.configPath ? { configPath: opts.configPath } : {}),
+      ...(opts.limit ? { limit: opts.limit } : {}),
     });
     return data;
   },

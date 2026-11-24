@@ -15,11 +15,14 @@ contextBridge.exposeInMainWorld('bridgeApi', {
   setAutoStart: (enabled) => ipcRenderer.invoke('bridge:set-autostart', Boolean(enabled)),
   minimizeToTray: () => ipcRenderer.invoke('bridge:minimize-tray'),
   clearLogs: () => ipcRenderer.invoke('bridge:clear-logs'),
-  updateMediaMTXPath: (executablePath) => ipcRenderer.invoke('bridge:mediamtx-path', executablePath),
+  updateMediaMTXPath: (executablePath, configPath) =>
+    ipcRenderer.invoke('bridge:mediamtx-path', { executablePath, configPath }),
   refreshMediaMTX: () => ipcRenderer.invoke('bridge:mediamtx-refresh'),
   syncMediaMTXConfig: () => ipcRenderer.invoke('bridge:mediamtx-sync'),
   startMediaMTX: () => ipcRenderer.invoke('bridge:mediamtx-start'),
   stopMediaMTX: () => ipcRenderer.invoke('bridge:mediamtx-stop'),
+  restartMediaMTX: () => ipcRenderer.invoke('bridge:mediamtx-restart'),
+  getMediaMTXLogs: () => ipcRenderer.invoke('bridge:mediamtx-logs'),
   onState: (cb) => {
     const handler = (_ev, data) => cb(data);
     ipcRenderer.on('bridge:state', handler);
