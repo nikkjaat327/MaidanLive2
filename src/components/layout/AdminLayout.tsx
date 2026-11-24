@@ -412,7 +412,9 @@ export function AdminLayout() {
       >
         {/* Compact Sticky Header */}
         <header
-          className={`sticky top-0 z-20 h-14 px-4 sm:px-6 flex items-center justify-between gap-4 border-b transition-colors ${
+          className={`sticky top-0 z-20 h-14 flex items-center justify-between gap-4 border-b transition-colors ${
+            sidebarCollapsed ? 'px-2.5' : 'px-4 sm:px-6'
+          } ${
             theme === 'dark'
               ? 'bg-slate-950/95 border-slate-800 text-slate-100'
               : 'bg-white border-slate-200 text-slate-900'
@@ -484,7 +486,15 @@ export function AdminLayout() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
+        <main
+          className={
+            sidebarCollapsed
+              ? 'flex-1 w-full max-w-none p-2'
+              : location.pathname.startsWith('/admin/broadcast-studio')
+                ? 'flex-1 w-full max-w-none p-2.5 sm:p-3'
+                : 'flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto'
+          }
+        >
           <MemoAdminOutlet />
         </main>
       </div>

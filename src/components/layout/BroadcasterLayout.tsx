@@ -1,34 +1,54 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
-import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity,
   ArrowLeft,
   Bell,
+  Camera,
   LayoutGrid,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
+  Settings,
   Shield,
-  Video,
+  Sparkles,
+  Tv,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { ROLE_LABELS } from '../../constants/roles.ts';
 
 const BROADCASTER_SIDEBAR_STORAGE_KEY = 'maidanlive_broadcaster_sidebar_collapsed';
+export const ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY = 'maidanlive_active_control_room_match_id';
+export const CONTROL_ROOM_STATUS_EVENT = 'maidanlive:control-room-status';
+
+export interface ControlRoomSidebarTelemetry {
+  matchId?: string;
+  bridgeOnline?: boolean;
+  connectionMode?: string;
+  obsConnected?: boolean;
+  obsVersion?: string;
+  mediamtxRunning?: boolean;
+  bridgeVersion?: string;
+  cameraCount?: number;
+  activeAdsCount?: number;
+}
 
 const MemoBroadcasterOutlet = memo(function MemoBroadcasterOutlet() {
   return <Outlet />;
 });
 
 interface BroadcasterNavItem {
+  id: string;
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
-  end: boolean;
+  isActive: boolean;
+  badge?: number;
+  badgeTone?: 'neutral' | 'emerald';
 }
 
 const ALLOWED_BROADCASTER_PORTAL_ROLES = new Set([
@@ -39,6 +59,26 @@ const ALLOWED_BROADCASTER_PORTAL_ROLES = new Set([
   'SCORER',
 ]);
 
+function normalizeTabParam(rawTab: string | null): string {
+  switch (rawTab) {
+    case 'scoreboard':
+    case 'dashboard':
+    case 'match_control':
+      return 'scoreboard';
+    case 'cameras':
+    case 'layouts':
+      return 'cameras';
+    case 'graphics':
+    case 'streaming':
+      return 'graphics';
+    case 'settings':
+    case 'audit':
+      return 'settings';
+    default:
+      return 'control_room';
+  }
+}
+
 function BroadcasterDesktopSidebar({
   navItems,
   collapsed,
@@ -46,6 +86,8 @@ function BroadcasterDesktopSidebar({
   canAccessAdminPortal,
   adminUser,
   onLogout,
+  telemetry,
+  showTelemetry,
 }: {
   navItems: BroadcasterNavItem[];
   collapsed: boolean;
@@ -53,8 +95,11 @@ function BroadcasterDesktopSidebar({
   canAccessAdminPortal: boolean;
   adminUser: { name: string; role: string } | null;
   onLogout: () => void;
+  telemetry: ControlRoomSidebarTelemetry | null;
+  showTelemetry: boolean;
 }) {
   const [tooltip, setTooltip] = useState<{ label: string; top: number } | null>(null);
+  const navigate = useNavigate();
 
   const showTooltip = (el: HTMLElement, label: string) => {
     if (!collapsed) return;
@@ -65,24 +110,24 @@ function BroadcasterDesktopSidebar({
   return (
     <aside
       aria-label="Broadcaster Navigation Sidebar"
-      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#0F172A] border-r border-slate-800/80 z-30 transition-[width] duration-200 ease-out overflow-hidden ${
-        collapsed ? 'lg:w-16' : 'lg:w-64'
+      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#090D16] border-r border-slate-800/90 z-30 transition-[width] duration-200 ease-out overflow-hidden ${
+        collapsed ? 'lg:w-16' : 'lg:w-60'
       }`}
     >
       <div
         className={`h-14 flex items-center border-b border-slate-800/80 shrink-0 ${
-          collapsed ? 'justify-center px-2' : 'justify-between px-4'
+          collapsed ? 'justify-center px-2' : 'justify-between px-3.5'
         }`}
       >
         {!collapsed && (
           <Link
             to="/broadcaster/dashboard"
-            className="font-display text-base font-bold tracking-tight text-white flex items-center gap-2.5 min-w-0"
+            className="font-display text-sm font-bold tracking-tight text-white flex items-center gap-2 min-w-0"
           >
-            <span className="w-7 h-7 rounded-lg bg-[#EA580C] text-white flex items-center justify-center shrink-0">
+            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600 text-white flex items-center justify-center shrink-0">
               <Radio className="w-4 h-4" />
             </span>
-            <span className="truncate">MaidanLive Broadcast</span>
+            <span className="truncate">MaidanLive Studio</span>
           </Link>
         )}
         <button
@@ -101,7 +146,7 @@ function BroadcasterDesktopSidebar({
           className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800/80 transition-colors shrink-0"
         >
           {collapsed ? (
-            <PanelLeftOpen className="w-4 h-4 text-[#EA580C]" />
+            <PanelLeftOpen className="w-4 h-4 text-purple-400" />
           ) : (
             <PanelLeftClose className="w-4 h-4" />
           )}
@@ -110,40 +155,57 @@ function BroadcasterDesktopSidebar({
 
       <nav
         aria-label="Broadcaster Sidebar"
-        className={`flex-1 py-4 space-y-1 overflow-y-auto overflow-x-hidden ${
-          collapsed ? 'px-2' : 'px-3'
+        className={`flex-1 py-3 space-y-1 overflow-y-auto overflow-x-hidden ${
+          collapsed ? 'px-2' : 'px-2.5'
         }`}
       >
         {navItems.map((item) => {
           const Icon = item.icon;
+          const isControlRoom = item.id === 'control_room';
           return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => navigate(item.to)}
               aria-label={item.label}
+              aria-current={item.isActive ? 'page' : undefined}
               onMouseEnter={(e) => showTooltip(e.currentTarget, item.label)}
               onMouseLeave={() => setTooltip(null)}
               onFocus={(e) => showTooltip(e.currentTarget, item.label)}
               onBlur={() => setTooltip(null)}
-              className={({ isActive }) =>
-                `relative flex items-center rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                  collapsed ? 'justify-center w-10 h-10 mx-auto px-0' : 'gap-3 px-3.5 py-2.5'
-                } ${
-                  isActive
-                    ? 'bg-[#EA580C] text-white'
-                    : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
-                }`
-              }
+              className={`relative w-full flex items-center rounded-lg text-[13px] font-semibold transition-colors whitespace-nowrap ${
+                collapsed ? 'justify-center w-10 h-10 mx-auto px-0' : 'justify-between gap-2 px-3 py-2'
+              } ${
+                item.isActive
+                  ? isControlRoom
+                    ? 'bg-gradient-to-r from-purple-600 to-violet-600 text-white shadow-lg shadow-purple-950/50'
+                    : 'bg-[#EA580C] text-white shadow-sm'
+                  : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
+              }`}
             >
-              <Icon className="w-4 h-4 shrink-0" />
-              {!collapsed && <span className="truncate">{item.label}</span>}
-            </NavLink>
+              <span className="flex items-center gap-2.5 min-w-0">
+                <Icon className="w-4 h-4 shrink-0" />
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </span>
+              {!collapsed && typeof item.badge === 'number' && item.badge > 0 && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums shrink-0 ${
+                    item.badgeTone === 'emerald'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : item.isActive
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {item.badge}
+                </span>
+              )}
+            </button>
           );
         })}
 
         {canAccessAdminPortal && (
-          <div className="pt-4 mt-4 border-t border-slate-800/80">
+          <div className="pt-3 mt-3 border-t border-slate-800/80">
             <Link
               to="/admin/dashboard"
               aria-label="Back to Admin Portal"
@@ -152,7 +214,7 @@ function BroadcasterDesktopSidebar({
               onFocus={(e) => showTooltip(e.currentTarget, 'Back to Admin Portal')}
               onBlur={() => setTooltip(null)}
               className={`flex items-center rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-colors ${
-                collapsed ? 'justify-center w-10 h-10 mx-auto px-0' : 'gap-2.5 px-3.5 py-2'
+                collapsed ? 'justify-center w-10 h-10 mx-auto px-0' : 'gap-2.5 px-3 py-2'
               }`}
             >
               <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
@@ -162,13 +224,68 @@ function BroadcasterDesktopSidebar({
         )}
       </nav>
 
+      {/* Live OBS Bridge / Studio / MediaMTX telemetry inside existing sidebar when expanded */}
+      {showTelemetry && telemetry && !collapsed && (
+        <div className="px-2.5 pb-2.5 shrink-0">
+          <div className="rounded-xl bg-[#0F1522] border border-slate-800/90 p-2.5 space-y-2 text-[11px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-slate-200 font-semibold truncate">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    telemetry.bridgeOnline ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.75)]' : 'bg-slate-600'
+                  }`}
+                />
+                OBS Bridge
+              </span>
+              <span className={telemetry.bridgeOnline ? 'text-emerald-400 font-medium' : 'text-slate-500'}>
+                {telemetry.bridgeOnline
+                  ? 'Connected'
+                  : telemetry.connectionMode === 'direct_ws'
+                    ? 'Direct WS'
+                    : 'Offline'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-slate-200 font-semibold truncate">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    telemetry.obsConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.75)]' : 'bg-amber-500/70'
+                  }`}
+                />
+                OBS Studio
+              </span>
+              <span className="text-slate-400 font-mono text-[10px] truncate">
+                {telemetry.obsConnected
+                  ? telemetry.obsVersion
+                    ? `v${telemetry.obsVersion.replace(/^v/i, '')}`
+                    : 'Connected'
+                  : 'Offline'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-slate-200 font-semibold truncate">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    telemetry.mediamtxRunning ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.75)]' : 'bg-slate-600'
+                  }`}
+                />
+                MediaMTX
+              </span>
+              <span className={telemetry.mediamtxRunning ? 'text-emerald-400 font-medium' : 'text-slate-500'}>
+                {telemetry.mediamtxRunning ? 'Running' : 'Standby'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div
         className={`border-t border-slate-800/80 shrink-0 ${
-          collapsed ? 'p-2 flex flex-col items-center space-y-2' : 'p-4 space-y-3'
+          collapsed ? 'p-2 flex flex-col items-center space-y-2' : 'p-3 space-y-2.5'
         }`}
       >
         {adminUser && !collapsed && (
-          <div className="text-xs">
+          <div className="text-xs px-0.5">
             <p className="font-semibold text-white truncate">{adminUser.name}</p>
             <p className="text-slate-400 font-mono text-[11px] truncate">
               {ROLE_LABELS[adminUser.role as keyof typeof ROLE_LABELS] || adminUser.role}
@@ -184,7 +301,7 @@ function BroadcasterDesktopSidebar({
           onBlur={() => setTooltip(null)}
           aria-label="Sign Out"
           className={`flex items-center justify-center text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700/80 rounded-lg hover:bg-slate-800 transition-colors ${
-            collapsed ? 'w-10 h-10 px-0' : 'w-full min-h-[38px] gap-2 px-3 py-2'
+            collapsed ? 'w-10 h-10 px-0' : 'w-full min-h-[36px] gap-2 px-3 py-1.5'
           }`}
         >
           <LogOut className="w-3.5 h-3.5 shrink-0" />
@@ -208,7 +325,9 @@ function BroadcasterDesktopSidebar({
 export function BroadcasterLayout() {
   const { adminUser, logoutAdmin, adminUnreadNotifications } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [telemetry, setTelemetry] = useState<ControlRoomSidebarTelemetry | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(BROADCASTER_SIDEBAR_STORAGE_KEY) === 'true';
@@ -216,6 +335,15 @@ export function BroadcasterLayout() {
       return false;
     }
   });
+
+  useEffect(() => {
+    const onTelemetry = (ev: Event) => {
+      const detail = (ev as CustomEvent<ControlRoomSidebarTelemetry>).detail;
+      if (detail) setTelemetry(detail);
+    };
+    window.addEventListener(CONTROL_ROOM_STATUS_EVENT, onTelemetry);
+    return () => window.removeEventListener(CONTROL_ROOM_STATUS_EVENT, onTelemetry);
+  }, []);
 
   const handleToggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -251,37 +379,97 @@ export function BroadcasterLayout() {
     adminUser?.role === 'ADMIN' ||
     adminUser?.role === 'TOURNAMENT_ORGANIZER';
 
+  const isControlRoomRoute = location.pathname.startsWith('/broadcaster/control-room');
+  const pathMatch = location.pathname.match(/^\/broadcaster\/control-room\/([^/?]+)/);
+  let rememberedMatchId = pathMatch?.[1] || telemetry?.matchId || '';
+  if (!rememberedMatchId) {
+    try {
+      rememberedMatchId = sessionStorage.getItem(ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY) || '';
+    } catch {
+      rememberedMatchId = '';
+    }
+  }
+  const controlRoomBase = rememberedMatchId
+    ? `/broadcaster/control-room/${rememberedMatchId}`
+    : '/broadcaster/control-room';
+
+  const activeControlTab = isControlRoomRoute
+    ? normalizeTabParam(new URLSearchParams(location.search).get('tab'))
+    : '';
+
   const navItems: BroadcasterNavItem[] = [
     {
+      id: 'broadcast_dashboard',
       to: '/broadcaster/dashboard',
       label: 'Broadcast Dashboard',
       icon: LayoutGrid,
-      end: true,
+      isActive: location.pathname === '/broadcaster/dashboard',
     },
     {
-      to: '/broadcaster/control-room',
+      id: 'control_room',
+      to: `${controlRoomBase}?tab=control_room`,
       label: 'Control Room',
-      icon: Video,
-      end: false,
+      icon: Radio,
+      isActive: isControlRoomRoute && activeControlTab === 'control_room',
+    },
+    {
+      id: 'scoreboard',
+      to: `${controlRoomBase}?tab=scoreboard`,
+      label: 'Match & Scoreboard',
+      icon: Tv,
+      isActive: isControlRoomRoute && activeControlTab === 'scoreboard',
+    },
+    {
+      id: 'cameras',
+      to: `${controlRoomBase}?tab=cameras`,
+      label: 'Cameras & Layouts',
+      icon: Camera,
+      isActive: isControlRoomRoute && activeControlTab === 'cameras',
+      badge: telemetry?.cameraCount,
+      badgeTone: 'neutral',
+    },
+    {
+      id: 'graphics',
+      to: `${controlRoomBase}?tab=graphics`,
+      label: 'Graphics & Stream',
+      icon: Sparkles,
+      isActive: isControlRoomRoute && activeControlTab === 'graphics',
+      badge: telemetry?.activeAdsCount,
+      badgeTone: 'emerald',
+    },
+    {
+      id: 'settings',
+      to: `${controlRoomBase}?tab=settings`,
+      label: 'Studio Settings',
+      icon: Settings,
+      isActive: isControlRoomRoute && activeControlTab === 'settings',
     },
     ...(canAccessAdminPortal
       ? [
           {
+            id: 'manage_broadcasters',
             to: '/admin/broadcasters',
             label: 'Manage Broadcasters',
             icon: Shield,
-            end: true,
+            isActive: location.pathname.startsWith('/admin/broadcasters'),
           },
         ]
       : []),
   ];
 
+  // Keep side gap <= 10px (p-2 = 8px) when main sidebar is collapsed, and remove max-w squeeze on Control Room
+  const mainPaddingClass = sidebarCollapsed
+    ? 'flex-1 w-full max-w-none p-2'
+    : isControlRoomRoute
+      ? 'flex-1 w-full max-w-none p-2.5 sm:p-3'
+      : 'flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto';
+
   return (
     <div
       data-admin-theme="dark"
-      className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col lg:flex-row overflow-x-hidden"
+      className="min-h-screen bg-[#070A10] text-slate-100 flex flex-col lg:flex-row overflow-x-hidden"
     >
-      {/* Desktop Sidebar */}
+      {/* Single Main Broadcaster Sidebar */}
       <BroadcasterDesktopSidebar
         navItems={navItems}
         collapsed={sidebarCollapsed}
@@ -289,15 +477,21 @@ export function BroadcasterLayout() {
         canAccessAdminPortal={canAccessAdminPortal}
         adminUser={adminUser ? { name: adminUser.name, role: adminUser.role } : null}
         onLogout={logoutAdmin}
+        telemetry={telemetry}
+        showTelemetry={isControlRoomRoute}
       />
 
       {/* Main Content Area */}
       <div
         className={`flex-1 flex flex-col min-w-0 transition-[padding] duration-200 ease-out ${
-          sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-64'
+          sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
         }`}
       >
-        <header className="sticky top-0 z-20 h-14 px-4 sm:px-6 flex items-center justify-between gap-4 border-b border-slate-800/80 bg-[#0B0F17]/95 backdrop-blur-xs">
+        <header
+          className={`sticky top-0 z-20 h-14 flex items-center justify-between gap-4 border-b border-slate-800/80 bg-[#0B0F17]/95 backdrop-blur-xs ${
+            sidebarCollapsed ? 'px-2.5' : 'px-4 sm:px-6'
+          }`}
+        >
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -338,7 +532,7 @@ export function BroadcasterLayout() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
+        <main className={mainPaddingClass}>
           <MemoBroadcasterOutlet />
         </main>
       </div>
@@ -351,11 +545,11 @@ export function BroadcasterLayout() {
             if (e.target === e.currentTarget) setDrawerOpen(false);
           }}
         >
-          <div className="w-72 max-w-[85vw] bg-[#0F172A] border-r border-slate-800 h-full flex flex-col">
+          <div className="w-72 max-w-[85vw] bg-[#090D16] border-r border-slate-800 h-full flex flex-col">
             <div className="h-14 px-4 flex items-center justify-between border-b border-slate-800">
               <span className="font-display font-bold text-white flex items-center gap-2">
                 <Radio className="w-4 h-4 text-[#EA580C]" />
-                <span>MaidanLive Broadcast</span>
+                <span>MaidanLive Studio</span>
               </span>
               <button
                 type="button"
@@ -366,24 +560,36 @@ export function BroadcasterLayout() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav className="flex-1 p-3 space-y-1">
+            <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
               {navItems.map((item) => {
                 const Icon = item.icon;
+                const isControlRoom = item.id === 'control_room';
                 return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    onClick={() => setDrawerOpen(false)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium ${
-                        isActive ? 'bg-[#EA580C] text-white' : 'text-slate-300 hover:bg-slate-800'
-                      }`
-                    }
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      navigate(item.to);
+                      setDrawerOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-lg text-sm font-medium ${
+                      item.isActive
+                        ? isControlRoom
+                          ? 'bg-gradient-to-r from-purple-600 to-violet-600 text-white'
+                          : 'bg-[#EA580C] text-white'
+                        : 'text-slate-300 hover:bg-slate-800'
+                    }`}
                   >
-                    <Icon className="w-4 h-4" />
-                    <span>{item.label}</span>
-                  </NavLink>
+                    <span className="flex items-center gap-3 min-w-0">
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </span>
+                    {typeof item.badge === 'number' && item.badge > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-mono">
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
                 );
               })}
               {canAccessAdminPortal && (

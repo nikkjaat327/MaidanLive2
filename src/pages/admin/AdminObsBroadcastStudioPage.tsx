@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
-  ClipboardList,
   Copy,
   Download,
   Edit3,
@@ -24,7 +23,6 @@ import {
   Layers,
   Loader2,
   Lock,
-  Menu,
   Mic,
   MicOff,
   Monitor,
@@ -123,9 +121,9 @@ import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoom
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
 import {
-  ControlRoomSidebar,
-  type ControlRoomNavId,
-} from '../../components/obsStudio/ControlRoomSidebar.tsx';
+  ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY,
+  CONTROL_ROOM_STATUS_EVENT,
+} from '../../components/layout/BroadcasterLayout.tsx';
 import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonitors.tsx';
 import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
 import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
@@ -143,7 +141,27 @@ const LazyGraphicsStudioEditor = React.lazy(
   () => import('../../components/obsGraphics/GraphicsStudioEditor.tsx')
 );
 
-type StudioTab = ControlRoomNavId;
+type StudioTab = 'control_room' | 'scoreboard' | 'cameras' | 'graphics' | 'settings';
+
+function normalizeStudioTab(raw?: string | null): StudioTab {
+  switch (raw) {
+    case 'scoreboard':
+    case 'dashboard':
+    case 'match_control':
+      return 'scoreboard';
+    case 'cameras':
+    case 'layouts':
+      return 'cameras';
+    case 'graphics':
+    case 'streaming':
+      return 'graphics';
+    case 'settings':
+    case 'audit':
+      return 'settings';
+    default:
+      return 'control_room';
+  }
+}
 
 function obsStatusBadgeClass(status: ObsConnectionStatus) {
   switch (status) {
@@ -186,6 +204,7 @@ export function AdminObsBroadcastStudioPage() {
   const { refreshStreams } = useLiveMonitor();
   const { score: liveMatchScore } = useScoreboard(matchId);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [matches, setMatches] = useState<
     Array<
       Pick<
@@ -195,8 +214,20 @@ export function AdminObsBroadcastStudioPage() {
     >
   >([]);
   const [loadingMatches, setLoadingMatches] = useState(true);
-  const [activeTab, setActiveTab] = useState<StudioTab>('control_room');
-  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  const activeTab: StudioTab = normalizeStudioTab(searchParams.get('tab'));
+  const setActiveTab = useCallback(
+    (nextTab: StudioTab) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('tab', nextTab);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const [autoFitEnabled, setAutoFitEnabled] = useState(true);
   const [transitioningMode, setTransitioningMode] = useState<'cut' | 'fade' | null>(null);
   const [refreshingCams, setRefreshingCams] = useState(false);
@@ -1224,7 +1255,7 @@ export function AdminObsBroadcastStudioPage() {
       !matchId ||
       !obsConnected ||
       !profile?.activeObsScene ||
-      (activeTab !== 'control_room' && activeTab !== 'layouts')
+      (activeTab !== 'control_room' && activeTab !== 'cameras')
     ) {
       return;
     }
@@ -1518,7 +1549,7 @@ export function AdminObsBroadcastStudioPage() {
       setActiveTab('settings');
       return;
     }
-    setActiveTab(target);
+    setActiveTab(normalizeStudioTab(target));
   }
 
   const loadSceneTransforms = useCallback(
@@ -1629,7 +1660,7 @@ export function AdminObsBroadcastStudioPage() {
   );
 
   useEffect(() => {
-    if (obsConnected && (activeTab === 'control_room' || activeTab === 'layouts' || activeTab === 'streaming')) {
+    if (obsConnected && (activeTab === 'control_room' || activeTab === 'cameras' || activeTab === 'graphics')) {
       loadSceneItems(profile?.activeObsScene || '');
       loadSceneTransforms(profile?.activeObsScene || '');
     } else if (!obsConnected) {
@@ -2214,6 +2245,41 @@ export function AdminObsBroadcastStudioPage() {
     return logs.filter((l) => l.actionType === auditFilter);
   }, [studio?.auditLogs, auditFilter]);
 
+  useEffect(() => {
+    if (matchId) {
+      try {
+        sessionStorage.setItem(ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY, matchId);
+      } catch {
+        // Ignore storage restrictions
+      }
+    }
+    window.dispatchEvent(
+      new CustomEvent(CONTROL_ROOM_STATUS_EVENT, {
+        detail: {
+          matchId,
+          bridgeOnline: Boolean(studio?.profile?.agentOnline),
+          connectionMode: studio?.profile?.connectionMode,
+          obsConnected: studio?.profile?.connectionStatus === 'CONNECTED',
+          obsVersion: studio?.profile?.obsVersion || '',
+          mediamtxRunning: Boolean(studio?.profile?.mediamtxState?.running),
+          bridgeVersion: studio?.profile?.bridgeVersion || '',
+          cameraCount: studio?.cameras?.length || 0,
+          activeAdsCount: studio?.graphicsState?.activeSlots?.length || 0,
+        },
+      })
+    );
+  }, [
+    matchId,
+    studio?.profile?.agentOnline,
+    studio?.profile?.connectionMode,
+    studio?.profile?.connectionStatus,
+    studio?.profile?.obsVersion,
+    studio?.profile?.mediamtxState?.running,
+    studio?.profile?.bridgeVersion,
+    studio?.cameras?.length,
+    studio?.graphicsState?.activeSlots?.length,
+  ]);
+
   const currentOverlay = normalizeOverlayConfig(studio?.match?.overlayConfig);
   const currentOverlayMetrics = computeOverlayMetrics(currentOverlay, false);
 
@@ -2259,20 +2325,11 @@ export function AdminObsBroadcastStudioPage() {
   return (
     <div
       data-admin-theme="dark"
-      className="rounded-2xl border border-slate-800 bg-[#070A10] text-slate-100 overflow-hidden shadow-2xl"
+      className="rounded-xl border border-slate-800 bg-[#070A10] text-slate-100 overflow-hidden shadow-2xl"
     >
       {/* Top Broadcast Control Room Header */}
-      <header className="bg-[#0B101B] border-b border-slate-800/90 px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5">
+      <header className="bg-[#0B101B] border-b border-slate-800/90 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            type="button"
-            onClick={() => setSidebarMobileOpen(true)}
-            aria-label="Open Control Room navigation"
-            className="lg:hidden p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:text-white"
-          >
-            <Menu className="w-4 h-4" />
-          </button>
-
           <div className="flex items-center gap-2 min-w-0">
             <span className="w-6 h-6 rounded-md bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600 flex items-center justify-center text-white font-black text-[11px] shrink-0 shadow">
               M
@@ -2285,7 +2342,15 @@ export function AdminObsBroadcastStudioPage() {
             </span>
             <span className="hidden sm:inline text-slate-600">|</span>
             <span className="hidden sm:inline font-display text-sm font-semibold text-slate-200 truncate">
-              Control Room
+              {activeTab === 'control_room'
+                ? 'Control Room'
+                : activeTab === 'scoreboard'
+                  ? 'Match & Scoreboard'
+                  : activeTab === 'cameras'
+                    ? 'Cameras & Layouts'
+                    : activeTab === 'graphics'
+                      ? 'Graphics & Stream'
+                      : 'Studio Settings'}
             </span>
           </div>
         </div>
@@ -2403,21 +2468,42 @@ export function AdminObsBroadcastStudioPage() {
         </div>
       </header>
 
-      {/* Main Sidebar + Viewport Body */}
-      <div className="flex flex-col lg:flex-row min-h-[780px]">
-        <ControlRoomSidebar
-          activeNav={activeTab}
-          onSelectNav={setActiveTab}
-          profile={profile}
-          obsConnected={obsConnected}
-          isBroadcasterRole={isBroadcasterRole}
-          activeAdsCount={studio?.graphicsState?.activeSlots?.length || 0}
-          cameraCount={cameras.length}
-          mobileOpen={sidebarMobileOpen}
-          onCloseMobile={() => setSidebarMobileOpen(false)}
-        />
+      {/* Admin-only horizontal tab strip (Broadcaster portal uses its main left sidebar directly) */}
+      {!isBroadcasterPortal && (
+        <div className="bg-[#0B101B] border-b border-slate-800/90 px-3 py-1.5 flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              { id: 'control_room', label: 'Control Room', icon: Radio },
+              { id: 'scoreboard', label: 'Match & Scoreboard', icon: Tv },
+              { id: 'cameras', label: 'Cameras & Layouts', icon: Camera },
+              { id: 'graphics', label: 'Graphics & Stream', icon: Sparkles },
+              { id: 'settings', label: 'Studio Settings', icon: Settings },
+            ] as const
+          ).map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                  active
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'bg-[#121826] text-slate-300 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-        <div className="flex-1 min-w-0 p-3 sm:p-4 space-y-3 bg-[#070A10]">
+      {/* Main Control Room Content (no duplicate sidebar) */}
+      <div className="min-h-[760px]">
+        <div className="p-2 space-y-2.5 bg-[#070A10]">
           {/* Banners */}
           <FeedbackBanner
             type="error"
@@ -2629,9 +2715,9 @@ export function AdminObsBroadcastStudioPage() {
               )}
 
               {/* ============================================================== */}
-              {/* DASHBOARD OVERVIEW & WORKFLOW CHECKLIST                        */}
+              {/* CLUBBED TAB: MATCH, WORKFLOW & SCOREBOARD                      */}
               {/* ============================================================== */}
-              {activeTab === 'dashboard' && (
+              {activeTab === 'scoreboard' && (
                 <div className="space-y-4 text-slate-900">
                   <ControlRoomWorkflowPanel
                     match={studio.match}
@@ -2821,9 +2907,9 @@ export function AdminObsBroadcastStudioPage() {
               )}
 
               {/* ============================================================== */}
-              {/* MATCH CONTROL & SCORING CONSOLE                                */}
+              {/* MATCH CONTROL & SCORING CONSOLE (IN MATCH & SCOREBOARD)        */}
               {/* ============================================================== */}
-              {activeTab === 'match_control' && (
+              {activeTab === 'scoreboard' && (
                 <div className="space-y-4">
                   <div className="rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
                     <div className="space-y-1 min-w-0">
@@ -2878,45 +2964,13 @@ export function AdminObsBroadcastStudioPage() {
                       </Link>
                     </div>
                   </div>
-
-                  <div className="text-slate-900">
-                    <ControlRoomWorkflowPanel
-                      match={studio.match}
-                      profile={profile}
-                      cameras={cameras}
-                      score={liveMatchScore}
-                      scoreboardOverlayUrl={studio.scoreboardOverlayUrl}
-                      isBroadcasterRole={isBroadcasterRole}
-                      ytInputDraft={ytInputDraft}
-                      ytProviderDraft={ytProviderDraft}
-                      onChangeYtInputDraft={setYtInputDraft}
-                      onChangeYtProviderDraft={setYtProviderDraft}
-                      savingYtOutput={savingYtOutput}
-                      verifyingYtOutput={verifyingYtOutput}
-                      ytVerification={ytVerification}
-                      onSaveYouTubeOutput={handleSaveYouTubeOutput}
-                      togglingScoreboardOnYoutube={togglingScoreboardOnYoutube}
-                      onToggleScoreboardOnYoutube={handleToggleScoreboardOnYoutube}
-                      activatingBroadcast={activatingBroadcast}
-                      endingBroadcast={endingBroadcast}
-                      onActivateBroadcast={handleActivateBroadcast}
-                      onRequestEndBroadcast={() => setEndConfirmOpen(true)}
-                      onOpenNextMatchSetup={openNewMatchSetupModal}
-                      onEditMatchSetup={openEditMatchSetupModal}
-                      onOpenConnection={() => setActiveTab('settings')}
-                      onOpenMapSources={() => setMapSourcesModalOpen(true)}
-                      onOpenCamerasTab={() => setActiveTab('cameras')}
-                      onOpenOverlayTab={() => setActiveTab('scoreboard')}
-                      onOpenGuide={() => setGuideOpen(true)}
-                    />
-                  </div>
                 </div>
               )}
 
               {/* ============================================================== */}
-              {/* LAYOUTS DESK: DETAILED MULTI-BOX INSPECTOR & ADVANCED SCENES   */}
+              {/* CAMERAS & LAYOUTS: MULTI-BOX INSPECTOR & ADVANCED SCENES       */}
               {/* ============================================================== */}
-              {activeTab === 'layouts' && (
+              {activeTab === 'cameras' && (
                 <div className="space-y-5 text-slate-900">
                   <ProgramAndCompositionWorkspace
                     cameras={cameras}
@@ -5471,7 +5525,7 @@ export function AdminObsBroadcastStudioPage() {
           {/* ============================================================== */}
           {/* STREAMING: YOUTUBE LIVE, OBS OUTPUT & MEDIAMTX INGEST          */}
           {/* ============================================================== */}
-          {activeTab === 'streaming' && (
+          {activeTab === 'graphics' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               <section className="lg:col-span-7 rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
