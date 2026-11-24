@@ -456,6 +456,30 @@ export const obsStudioService = {
     return data;
   },
 
+  async disconnectAllCameras(matchId: string) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/disconnect-all`);
+    return data;
+  },
+
+  async executeTransition(
+    matchId: string,
+    payload: {
+      mode: 'cut' | 'fade';
+      durationMs?: number;
+      layoutType?: ObsLayoutType;
+      cameraIds?: string[];
+      mainCameraId?: string;
+      pipPosition?: PipPosition;
+      pipSize?: PipSize;
+      sceneName?: string;
+      includeScoreboardOverlay?: boolean;
+      override?: boolean;
+    }
+  ) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/transition`, payload);
+    return data;
+  },
+
   async applyLayout(
     matchId: string,
     payload: {

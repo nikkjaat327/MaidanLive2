@@ -89,7 +89,7 @@ export const OVERLAY_SLIDER_BOUNDS = {
 export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   visible: true,
   mode: 'full',
-  position: 'bottom-left',
+  position: 'bottom-center',
   scale: 'medium',
   theme: 'maidan_dark',
   teamAColor: '#EA580C',

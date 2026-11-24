@@ -177,13 +177,13 @@ export function BroadcastPlayerShell({
   }, [isNativeFullscreen, isExpandedFallback]);
 
   const activeExpanded = isNativeFullscreen || isExpandedFallback;
-  const position: ScoreboardPosition = stream.scoreboardPosition || 'TOP';
+  const position: ScoreboardPosition = stream.scoreboardPosition || 'BOTTOM';
 
   const getScoreboardAnchorClass = () => {
     switch (position) {
       case 'BOTTOM':
-        // Sits cleanly above YouTube's bottom player control bar
-        return 'bottom-12 left-2 right-2 sm:left-3 sm:right-3 flex justify-start';
+        // Sits cleanly centered above YouTube's bottom player control bar
+        return 'bottom-12 left-2 right-2 sm:left-3 sm:right-3 flex justify-center';
       case 'LEFT':
         return 'top-12 left-2 sm:left-3 max-w-[85%] sm:max-w-[65%]';
       case 'RIGHT':

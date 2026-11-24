@@ -1077,6 +1077,11 @@ class BridgeEngine extends EventEmitter {
         }
       }
 
+      if (Number.isFinite(Number(payload.transitionDurationMs))) {
+        const dur = Math.max(0, Math.min(5000, Math.round(Number(payload.transitionDurationMs))));
+        await this.obs.call('SetCurrentSceneTransitionDuration', { transitionDuration: dur }).catch(() => {});
+      }
+
       this.log('info', `Switching OBS program scene -> "${sceneName}"`);
       await this.obs.call('SetCurrentProgramScene', { sceneName });
       const verified = await this.obs.call('GetCurrentProgramScene');
@@ -1183,6 +1188,11 @@ class BridgeEngine extends EventEmitter {
             })
             .catch(() => {});
         }
+      }
+
+      if (Number.isFinite(Number(payload.transitionDurationMs))) {
+        const dur = Math.max(0, Math.min(5000, Math.round(Number(payload.transitionDurationMs))));
+        await this.obs.call('SetCurrentSceneTransitionDuration', { transitionDuration: dur }).catch(() => {});
       }
 
       this.log('info', `Applying multi-camera layout -> "${sceneName}" (${boxes.length} sources)`);

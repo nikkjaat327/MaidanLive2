@@ -36,11 +36,13 @@ import {
   controlObsOutput,
   createBridgePairingCode,
   disconnectActiveBridgeByOperator,
+  disconnectAllCamerasByOperator,
   disconnectCameraByOperator,
   disconnectObs,
   emitFullStudioState,
   ensureObsProfileForMatch,
   exchangeBridgePairingCode,
+  executeBroadcastTransition,
   formatAuditLog,
   formatSafeCamera,
   formatSafeProfile,
@@ -2997,6 +2999,111 @@ router.post(
   }
 );
 
+// POST /api/obs/matches/:matchId/cameras/disconnect-all - Mark all enabled cameras disconnected cleanly
+router.post(
+  '/matches/:matchId/cameras/disconnect-all',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const result = await disconnectAllCamerasByOperator(matchId, req.user!);
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        disconnectedCount: result.disconnectedCount,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to disconnect all cameras.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/transition - Execute instant cut (0ms) or fade transition (500ms)
+router.post(
+  '/matches/:matchId/transition',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const mode = req.body.mode === 'cut' ? 'cut' : 'fade';
+      const durationMs = Number.isFinite(Number(req.body.durationMs))
+        ? Math.max(0, Math.min(3000, Number(req.body.durationMs)))
+        : mode === 'cut'
+          ? 0
+          : 500;
+
+      const cameraIds = Array.isArray(req.body.cameraIds)
+        ? req.body.cameraIds.filter((s: unknown): s is string => typeof s === 'string')
+        : [];
+      const sceneName = typeof req.body.sceneName === 'string' ? sanitizeText(req.body.sceneName, 120) : '';
+
+      if (cameraIds.length === 0 && sceneName) {
+        if (rejectBroadcasterAdminAction(req, res, 'native OBS scene switching')) return;
+      }
+
+      const layoutType: ObsLayoutType | undefined = VALID_LAYOUTS.includes(req.body.layoutType)
+        ? req.body.layoutType
+        : undefined;
+      const pipPosition: PipPosition | undefined = VALID_PIP_POSITIONS.includes(req.body.pipPosition)
+        ? req.body.pipPosition
+        : undefined;
+      const pipSize: PipSize | undefined = VALID_PIP_SIZES.includes(req.body.pipSize)
+        ? req.body.pipSize
+        : undefined;
+
+      const result = await executeBroadcastTransition(
+        matchId,
+        {
+          mode,
+          durationMs,
+          layoutType,
+          cameraIds,
+          mainCameraId: typeof req.body.mainCameraId === 'string' ? req.body.mainCameraId : undefined,
+          pipPosition,
+          pipSize,
+          sceneName: sceneName || undefined,
+          includeScoreboardOverlay: req.body.includeScoreboardOverlay !== false,
+          override: Boolean(req.body.override),
+          baseAppUrl: resolveBaseAppUrl(req),
+        },
+        req.user!
+      );
+
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        transitionMode: mode,
+        transitionDurationMs: durationMs,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to execute broadcast transition.',
+      });
+    }
+  }
+);
+
 // GET /api/obs/matches/:matchId/obs-inputs - Dynamically discover OBS inputs/sources
 router.get(
   '/matches/:matchId/obs-inputs',
@@ -3157,6 +3264,16 @@ router.post(
         overlayMode: ['full', 'compact', 'score_only', 'hidden'].includes(req.body.overlayMode)
           ? req.body.overlayMode
           : 'full',
+        overlayPosition: [
+          'top-left',
+          'top-center',
+          'top-right',
+          'bottom-left',
+          'bottom-center',
+          'bottom-right',
+        ].includes(req.body.overlayPosition)
+          ? req.body.overlayPosition
+          : 'bottom-center',
         isDefault: Boolean(req.body.isDefault),
         enabled: true,
         sortOrder: existingCount + 1,

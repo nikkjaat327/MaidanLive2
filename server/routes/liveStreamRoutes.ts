@@ -87,7 +87,7 @@ function normalizePosition(val: unknown): ScoreboardPosition {
   if (typeof val === 'string' && VALID_POSITIONS.includes(val.trim() as ScoreboardPosition)) {
     return val.trim() as ScoreboardPosition;
   }
-  return 'TOP';
+  return 'BOTTOM';
 }
 
 function normalizeProvider(val: unknown): StreamingProvider {

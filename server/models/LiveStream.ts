@@ -207,7 +207,7 @@ const liveStreamSchema = new Schema<ILiveStream>(
     scoreboardPosition: {
       type: String,
       enum: ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'],
-      default: 'TOP',
+      default: 'BOTTOM',
     },
     chatEnabled: { type: Boolean, default: true },
     highlightsEnabled: { type: Boolean, default: true },

@@ -33,7 +33,7 @@ export function HotstarBroadcastOverlay({
   className = '',
 }: HotstarBroadcastOverlayProps) {
   const isVisible = Boolean(config.visible) && config.mode !== 'hidden';
-  const position = config.position || 'bottom-left';
+  const position = config.position || 'bottom-center';
   const theme = resolveObsTheme(config);
   const sport = score?.sportType || stream.gameName || 'Other';
   const isFullWidthBar = config.mode === 'full' || config.mode === 'compact';

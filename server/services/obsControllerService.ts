@@ -1227,7 +1227,7 @@ export function formatSafeScene(scene: any) {
     pipSize: scene.pipSize || 'medium',
     includeScoreboardOverlay: scene.includeScoreboardOverlay !== false,
     overlayMode: scene.overlayMode || 'full',
-    overlayPosition: scene.overlayPosition || 'bottom-left',
+    overlayPosition: scene.overlayPosition || 'bottom-center',
     sponsorIds: Array.isArray(scene.sponsorIds) ? scene.sponsorIds : [],
     isDefault: Boolean(scene.isDefault),
     enabled: Boolean(scene.enabled),
@@ -1874,6 +1874,11 @@ export async function executeDirectObsCommand(
       }
     }
 
+    if (Number.isFinite(Number(payload.transitionDurationMs))) {
+      const dur = Math.max(0, Math.min(5000, Math.round(Number(payload.transitionDurationMs))));
+      await obs.call('SetCurrentSceneTransitionDuration', { transitionDuration: dur }).catch(() => {});
+    }
+
     await obs.call('SetCurrentProgramScene', { sceneName });
     const verified = await obs.call('GetCurrentProgramScene');
     if (verified.currentProgramSceneName !== sceneName) {
@@ -2007,6 +2012,11 @@ export async function executeDirectObsCommand(
             .catch(() => {});
         }
       }
+    }
+
+    if (Number.isFinite(Number(payload.transitionDurationMs))) {
+      const dur = Math.max(0, Math.min(5000, Math.round(Number(payload.transitionDurationMs))));
+      await obs.call('SetCurrentSceneTransitionDuration', { transitionDuration: dur }).catch(() => {});
     }
 
     await obs.call('SetCurrentProgramScene', { sceneName });
@@ -2442,7 +2452,7 @@ export async function switchCameraLive(
   matchId: string,
   cameraId: string,
   actor: IUser,
-  options: { override?: boolean; baseAppUrl?: string } = {}
+  options: { override?: boolean; baseAppUrl?: string; transitionDurationMs?: number } = {}
 ) {
   const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
   const camera = await BroadcastCamera.findOne({ matchId, cameraId });
@@ -2522,6 +2532,9 @@ export async function switchCameraLive(
       sceneName: targetSceneName,
       ensureInput,
       ensureTransform,
+      ...(typeof options.transitionDurationMs === 'number'
+        ? { transitionDurationMs: options.transitionDurationMs }
+        : {}),
       scoreboardOverlay:
         profile.autoSyncScoreboardSource && baseAppUrl
           ? {
@@ -2645,6 +2658,7 @@ export async function applyDynamicLayoutToObs(
     includeScoreboardOverlay?: boolean;
     override?: boolean;
     baseAppUrl?: string;
+    transitionDurationMs?: number;
   },
   actor: IUser
 ) {
@@ -2738,6 +2752,9 @@ export async function applyDynamicLayoutToObs(
       layoutType: params.layoutType,
       boxes: obsBoxes,
       allCameraInputs,
+      ...(typeof params.transitionDurationMs === 'number'
+        ? { transitionDurationMs: params.transitionDurationMs }
+        : {}),
       scoreboardOverlay: {
         enabled: includeScoreboard,
         sourceName: profile.scoreboardSourceName || 'MaidanLive_Scoreboard_Overlay',
@@ -2851,7 +2868,7 @@ export async function switchObsSceneByName(
   matchId: string,
   sceneName: string,
   actor: IUser,
-  options: { override?: boolean } = {}
+  options: { override?: boolean; transitionDurationMs?: number } = {}
 ) {
   const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
   try {
@@ -2878,7 +2895,12 @@ export async function switchObsSceneByName(
     requestedBy: actor.name,
   });
   try {
-    const rpcRes = await callObsRpc(matchId, 'switch_scene', { sceneName });
+    const rpcRes = await callObsRpc(matchId, 'switch_scene', {
+      sceneName,
+      ...(typeof options.transitionDurationMs === 'number'
+        ? { transitionDurationMs: options.transitionDurationMs }
+        : {}),
+    });
     const verifiedScene = String(rpcRes?.verifiedScene || sceneName);
 
     const mappedScene = await BroadcastScene.findOne({ matchId, obsSceneName: verifiedScene }).lean();
@@ -3361,6 +3383,101 @@ export async function disconnectCameraByOperator(
   await emitFullStudioState(matchId);
 
   return formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true });
+}
+
+export async function disconnectAllCamerasByOperator(
+  matchId: string,
+  actor: IUser
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  const cameras = await BroadcastCamera.find({ matchId, enabled: true });
+  let disconnectedCount = 0;
+
+  for (const cam of cameras) {
+    cam.status = 'DISCONNECTED';
+    cam.lastHeartbeatAt = null;
+    cam.mediamtxPublisherConnected = false;
+    cam.lastError = `Disconnected all cameras by ${actor.name}`;
+    await cam.save();
+    disconnectedCount += 1;
+  }
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_DISCONNECTED',
+    cameraName: `All Cameras (${disconnectedCount})`,
+    actor,
+    obsStatus: 'SUCCESS',
+    metadata: { disconnectedCount, disconnectAll: true },
+  });
+  await emitFullStudioState(matchId);
+
+  return { ok: true, disconnectedCount };
+}
+
+export async function executeBroadcastTransition(
+  matchId: string,
+  params: {
+    mode: 'cut' | 'fade';
+    durationMs?: number;
+    layoutType?: ObsLayoutType;
+    cameraIds?: string[];
+    mainCameraId?: string;
+    pipPosition?: PipPosition;
+    pipSize?: PipSize;
+    sceneName?: string;
+    includeScoreboardOverlay?: boolean;
+    override?: boolean;
+    baseAppUrl?: string;
+  },
+  actor: IUser
+) {
+  const transitionDurationMs =
+    params.mode === 'cut'
+      ? 0
+      : Math.max(100, Math.min(3000, Math.round(Number(params.durationMs) || 500)));
+
+  const cleanIds = Array.isArray(params.cameraIds)
+    ? params.cameraIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+    : [];
+
+  if (cleanIds.length > 0 && params.layoutType) {
+    if (params.layoutType === 'SINGLE' && cleanIds.length === 1 && !params.sceneName) {
+      return await switchCameraLive(matchId, cleanIds[0], actor, {
+        override: params.override,
+        baseAppUrl: params.baseAppUrl,
+        transitionDurationMs,
+      });
+    }
+    return await applyDynamicLayoutToObs(
+      matchId,
+      {
+        layoutType: params.layoutType,
+        cameraIds: cleanIds,
+        mainCameraId: params.mainCameraId,
+        pipPosition: params.pipPosition,
+        pipSize: params.pipSize,
+        sceneName: params.sceneName,
+        includeScoreboardOverlay: params.includeScoreboardOverlay,
+        override: params.override,
+        baseAppUrl: params.baseAppUrl,
+        transitionDurationMs,
+      },
+      actor
+    );
+  }
+
+  if (params.sceneName?.trim()) {
+    return await switchObsSceneByName(matchId, params.sceneName.trim(), actor, {
+      override: params.override,
+      transitionDurationMs,
+    });
+  }
+
+  const err: any = new Error('Select a camera, layout slot, or scene before executing a transition.');
+  err.statusCode = 400;
+  throw err;
 }
 
 export async function reconnectCameraSource(

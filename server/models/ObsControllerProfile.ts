@@ -10,6 +10,8 @@ export type MultiCameraLayoutType =
   | 'SPLIT_2_V'
   | 'SPLIT_3'
   | 'GRID_4'
+  | 'GRID_5'
+  | 'GRID_6'
   | 'PIP'
   | 'MAIN_PLUS_SECONDARY'
   | 'DYNAMIC_GRID'
@@ -136,6 +138,8 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
         'SPLIT_2_V',
         'SPLIT_3',
         'GRID_4',
+        'GRID_5',
+        'GRID_6',
         'PIP',
         'MAIN_PLUS_SECONDARY',
         'DYNAMIC_GRID',
