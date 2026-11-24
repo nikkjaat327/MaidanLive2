@@ -43,6 +43,10 @@ import { engagementService } from '../../services/engagement/engagementService.t
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
+import {
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
 import { StreamStatusIndicator } from '../../components/broadcast/StreamStatusIndicator.tsx';
@@ -101,17 +105,22 @@ export function AdminScoreboardPage() {
   const { score, setScore, history, connected, refetch } = useScoreboard(selectedId || undefined);
 
   useEffect(() => {
+    if (id) {
+      setStickyMatchId(id);
+    }
+  }, [id]);
+
+  useEffect(() => {
     liveStreamService
       .listStreams()
       .then((data) => {
         setStreams(data);
         if (!id && data.length > 0) {
-          const preferred =
-            data.find((s) => s.status === 'LIVE') ||
-            data.find((s) => isMatchPreparedDraft(s)) ||
-            data.find((s) => s.status === 'UPCOMING') ||
-            data[0];
-          navigate(`/admin/scoreboard/${preferred.id}`, { replace: true });
+          const targetId = resolveStickyOrPreferredMatch(id, data);
+          if (targetId) {
+            setStickyMatchId(targetId);
+            navigate(`/admin/scoreboard/${targetId}`, { replace: true });
+          }
         }
       })
       .catch((err) => setListError(extractApiError(err, 'Failed to load streams.')))
@@ -332,7 +341,11 @@ export function AdminScoreboardPage() {
           {streams.length > 0 && (
             <select
               value={selectedId}
-              onChange={(e) => navigate(`/admin/scoreboard/${e.target.value}`)}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                setStickyMatchId(e.target.value);
+                navigate(`/admin/scoreboard/${e.target.value}`);
+              }}
               aria-label="Select broadcast stream"
               className="min-h-[42px] px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg max-w-xs"
             >

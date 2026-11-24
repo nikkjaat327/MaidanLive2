@@ -20,9 +20,15 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { ROLE_LABELS } from '../../constants/roles.ts';
+import {
+  ACTIVE_MATCH_CHANGED_EVENT,
+  ACTIVE_MATCH_STORAGE_KEY,
+  getStickyMatchId,
+  setStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 const BROADCASTER_SIDEBAR_STORAGE_KEY = 'maidanlive_broadcaster_sidebar_collapsed';
-export const ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY = 'maidanlive_active_control_room_match_id';
+export const ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY = ACTIVE_MATCH_STORAGE_KEY;
 export const CONTROL_ROOM_STATUS_EVENT = 'maidanlive:control-room-status';
 
 export interface ControlRoomSidebarTelemetry {
@@ -336,13 +342,25 @@ export function BroadcasterLayout() {
     }
   });
 
+  const [stickyMatchId, setStickyMatchState] = useState<string>(() => getStickyMatchId());
+
   useEffect(() => {
     const onTelemetry = (ev: Event) => {
       const detail = (ev as CustomEvent<ControlRoomSidebarTelemetry>).detail;
       if (detail) setTelemetry(detail);
     };
+    const onStickyChanged = (ev: Event) => {
+      const next = (ev as CustomEvent<{ matchId?: string }>).detail?.matchId ?? getStickyMatchId();
+      setStickyMatchState(next);
+    };
     window.addEventListener(CONTROL_ROOM_STATUS_EVENT, onTelemetry);
-    return () => window.removeEventListener(CONTROL_ROOM_STATUS_EVENT, onTelemetry);
+    window.addEventListener(ACTIVE_MATCH_CHANGED_EVENT, onStickyChanged);
+    window.addEventListener('storage', onStickyChanged);
+    return () => {
+      window.removeEventListener(CONTROL_ROOM_STATUS_EVENT, onTelemetry);
+      window.removeEventListener(ACTIVE_MATCH_CHANGED_EVENT, onStickyChanged);
+      window.removeEventListener('storage', onStickyChanged);
+    };
   }, []);
 
   const handleToggleSidebar = () => {
@@ -381,14 +399,15 @@ export function BroadcasterLayout() {
 
   const isControlRoomRoute = location.pathname.startsWith('/broadcaster/control-room');
   const pathMatch = location.pathname.match(/^\/broadcaster\/control-room\/([^/?]+)/);
-  let rememberedMatchId = pathMatch?.[1] || telemetry?.matchId || '';
-  if (!rememberedMatchId) {
-    try {
-      rememberedMatchId = sessionStorage.getItem(ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY) || '';
-    } catch {
-      rememberedMatchId = '';
+  const pathMatchId = pathMatch?.[1] || '';
+
+  useEffect(() => {
+    if (pathMatchId) {
+      setStickyMatchId(pathMatchId);
     }
-  }
+  }, [pathMatchId]);
+
+  const rememberedMatchId = pathMatchId || stickyMatchId || telemetry?.matchId || getStickyMatchId();
   const controlRoomBase = rememberedMatchId
     ? `/broadcaster/control-room/${rememberedMatchId}`
     : '/broadcaster/control-room';

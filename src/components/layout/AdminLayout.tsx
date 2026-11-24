@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
 import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
@@ -38,6 +38,11 @@ import {
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useAdminTheme } from '../../context/AdminThemeContext.tsx';
 import { ROLE_LABELS } from '../../constants/roles.ts';
+import {
+  ACTIVE_MATCH_CHANGED_EVENT,
+  getStickyMatchId,
+  setStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 const ADMIN_SIDEBAR_STORAGE_KEY = 'maidanlive_admin_sidebar_collapsed';
 
@@ -269,6 +274,7 @@ export function AdminLayout() {
   const { theme, toggleTheme } = useAdminTheme();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [stickyMatchId, setStickyMatchState] = useState<string>(() => getStickyMatchId());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY) === 'true';
@@ -276,6 +282,30 @@ export function AdminLayout() {
       return false;
     }
   });
+
+  useEffect(() => {
+    const matchRoute = location.pathname.match(
+      /^\/(?:admin\/(?:scoreboard|broadcast-studio)|broadcast\/overlay)\/([^/?]+)/
+    );
+    const routeId = matchRoute?.[1];
+    if (routeId && routeId !== 'view') {
+      setStickyMatchId(routeId);
+      setStickyMatchState(routeId);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const onStickyChanged = (ev: Event) => {
+      const next = (ev as CustomEvent<{ matchId?: string }>).detail?.matchId ?? getStickyMatchId();
+      setStickyMatchState(next);
+    };
+    window.addEventListener(ACTIVE_MATCH_CHANGED_EVENT, onStickyChanged);
+    window.addEventListener('storage', onStickyChanged);
+    return () => {
+      window.removeEventListener(ACTIVE_MATCH_CHANGED_EVENT, onStickyChanged);
+      window.removeEventListener('storage', onStickyChanged);
+    };
+  }, []);
 
   const handleToggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -337,13 +367,18 @@ export function AdminLayout() {
     { to: '/admin/fixtures', label: 'Matches & Fixtures', icon: CalendarRange, show: !isBroadcaster },
     { to: '/admin/live-streams', label: 'Broadcasts', icon: Radio, show: !isBroadcaster },
     {
-      to: '/admin/broadcast-studio',
+      to: stickyMatchId ? `/admin/broadcast-studio/${stickyMatchId}` : '/admin/broadcast-studio',
       label: 'Multi-Cam OBS',
       icon: Video,
       show: isBroadcaster || isSuperOrAdmin || isOrganizer || Boolean(perms?.manageStreams),
     },
     { to: '/admin/match-health', label: 'Match Health', icon: HeartPulse, show: !isBroadcaster },
-    { to: '/admin/scoreboard', label: 'Live Score Control', icon: SlidersHorizontal, show: !isBroadcaster },
+    {
+      to: stickyMatchId ? `/admin/scoreboard/${stickyMatchId}` : '/admin/scoreboard',
+      label: 'Live Score Control',
+      icon: SlidersHorizontal,
+      show: !isBroadcaster,
+    },
     {
       to: '/admin/sponsors',
       label: 'Sponsors',
@@ -624,7 +659,7 @@ export function AdminLayout() {
           <span className="mt-0.5">Broadcasts</span>
         </NavLink>
         <NavLink
-          to="/admin/scoreboard"
+          to={stickyMatchId ? `/admin/scoreboard/${stickyMatchId}` : '/admin/scoreboard'}
           className={({ isActive }) =>
             `flex flex-col items-center justify-center h-full text-[11px] font-medium ${
               isActive ? 'text-[#EA580C]' : 'text-slate-500'

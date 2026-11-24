@@ -11,7 +11,26 @@ import type { BroadcastGraphicsStateData } from './broadcastGraphics.ts';
 export type { CameraOrientationMode, CameraPreviewFit, ObsSceneTransformItem };
 
 export type ObsConnectionMode = 'direct_ws' | 'local_agent';
-export type ObsConnectionStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
+export type ObsConnectionStatus =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'RECONNECTING'
+  | 'CONNECTION_LOST'
+  | 'CONNECTED'
+  | 'ERROR';
+export type BridgeExplicitConnectionState =
+  | 'CONNECTED'
+  | 'RECONNECTING'
+  | 'CONNECTION_LOST'
+  | 'OFFLINE';
+
+export interface ObsBridgeDiagnosticEvent {
+  timestamp: string;
+  level: string;
+  category: string;
+  message: string;
+  reason?: string;
+}
 
 export interface ObsDiscoveredInput {
   inputName: string;
@@ -159,6 +178,10 @@ export interface ObsControllerProfileData {
   bridgeVersion?: string;
   capabilities?: string[];
   mediamtxControlSupported?: boolean;
+  bridgeConnectionState?: BridgeExplicitConnectionState;
+  missedHeartbeats?: number;
+  lastDisconnectReason?: string;
+  reconnectAttempts?: number;
   connectionStatus: ObsConnectionStatus;
   lastError: string;
   obsVersion: string;
@@ -519,13 +542,20 @@ export interface ObsBridgeData {
   activeMatchId?: string | null;
   tokenPrefix: string;
   status: 'ACTIVE' | 'REVOKED';
-  connectionStatus: 'ONLINE' | 'OFFLINE';
+  connectionStatus: 'ONLINE' | 'RECONNECTING' | 'CONNECTION_LOST' | 'OFFLINE';
+  bridgeConnectionState?: BridgeExplicitConnectionState;
   obsStatus: ObsConnectionStatus;
+  obsConnectionState?: BridgeExplicitConnectionState;
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
   obsScenes: string[];
   obsStreamActive: boolean;
+  missedHeartbeats?: number;
+  lastDisconnectReason?: string;
+  reconnectAttempts?: number;
+  lastReconnectAttemptAt?: string | null;
+  diagnosticLogs?: ObsBridgeDiagnosticEvent[];
   lastConnectedAt?: string | null;
   lastDisconnectedAt?: string | null;
   lastHeartbeatAt?: string | null;
@@ -577,8 +607,11 @@ export interface LocalBridgeProbeStatus {
   serverUrl?: string | null;
   serverConnected?: boolean;
   serverStatus?: string;
+  bridgeConnectionState?: BridgeExplicitConnectionState;
   obsConnected?: boolean;
   obsStatus?: string;
+  obsConnectionState?: BridgeExplicitConnectionState;
+  missedHeartbeats?: number;
   obsVersion?: string;
   activeObsScene?: string;
   sceneCount?: number;

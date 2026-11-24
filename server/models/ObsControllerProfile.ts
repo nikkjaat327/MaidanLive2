@@ -3,7 +3,13 @@ import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
 
 export type ObsConnectionMode = 'direct_ws' | 'local_agent';
-export type ObsConnectionStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
+export type ObsConnectionStatus =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'RECONNECTING'
+  | 'CONNECTION_LOST'
+  | 'CONNECTED'
+  | 'ERROR';
 export type MultiCameraLayoutType =
   | 'SINGLE'
   | 'SPLIT_2_H'
@@ -12,6 +18,7 @@ export type MultiCameraLayoutType =
   | 'GRID_4'
   | 'GRID_5'
   | 'GRID_6'
+  | 'GRID_8'
   | 'PIP'
   | 'MAIN_PLUS_SECONDARY'
   | 'DYNAMIC_GRID'
@@ -48,6 +55,10 @@ export interface IObsControllerProfile extends Document {
   agentLabel: string;
   bridgeVersion: string;
   bridgeCapabilities: string[];
+  bridgeConnectionState?: 'CONNECTED' | 'RECONNECTING' | 'CONNECTION_LOST' | 'OFFLINE';
+  missedHeartbeats?: number;
+  lastDisconnectReason?: string;
+  reconnectAttempts?: number;
   connectionStatus: ObsConnectionStatus;
   lastError: string;
   obsVersion: string;
@@ -119,9 +130,17 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     agentLabel: { type: String, trim: true, default: '', maxlength: 120 },
     bridgeVersion: { type: String, trim: true, default: '', maxlength: 40 },
     bridgeCapabilities: [{ type: String, maxlength: 64 }],
+    bridgeConnectionState: {
+      type: String,
+      enum: ['CONNECTED', 'RECONNECTING', 'CONNECTION_LOST', 'OFFLINE'],
+      default: 'OFFLINE',
+    },
+    missedHeartbeats: { type: Number, default: 0 },
+    lastDisconnectReason: { type: String, default: '', maxlength: 300 },
+    reconnectAttempts: { type: Number, default: 0 },
     connectionStatus: {
       type: String,
-      enum: ['DISCONNECTED', 'CONNECTING', 'CONNECTED', 'ERROR'],
+      enum: ['DISCONNECTED', 'CONNECTING', 'RECONNECTING', 'CONNECTION_LOST', 'CONNECTED', 'ERROR'],
       default: 'DISCONNECTED',
     },
     lastError: { type: String, default: '', maxlength: 500 },
@@ -140,6 +159,7 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
         'GRID_4',
         'GRID_5',
         'GRID_6',
+        'GRID_8',
         'PIP',
         'MAIN_PLUS_SECONDARY',
         'DYNAMIC_GRID',

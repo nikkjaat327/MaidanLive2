@@ -121,9 +121,12 @@ import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoom
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
 import {
-  ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY,
   CONTROL_ROOM_STATUS_EVENT,
 } from '../../components/layout/BroadcasterLayout.tsx';
+import {
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonitors.tsx';
 import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
 import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
@@ -168,7 +171,9 @@ function obsStatusBadgeClass(status: ObsConnectionStatus) {
     case 'CONNECTED':
       return 'bg-emerald-50 text-emerald-700 border-emerald-200';
     case 'CONNECTING':
+    case 'RECONNECTING':
       return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'CONNECTION_LOST':
     case 'ERROR':
       return 'bg-red-50 text-red-700 border-red-200';
     default:
@@ -459,12 +464,11 @@ export function AdminObsBroadcastStudioPage() {
       }
       setMatches(list);
       if (!matchId && list.length > 0) {
-        const preferred =
-          list.find((s) => s.status === 'LIVE') ||
-          list.find((s) => isMatchPreparedDraft(s)) ||
-          list.find((s) => s.status === 'UPCOMING') ||
-          list[0];
-        navigate(`${studioBaseRoute}/${preferred.id}`, { replace: true });
+        const targetId = resolveStickyOrPreferredMatch(matchId, list);
+        if (targetId) {
+          setStickyMatchId(targetId);
+          navigate(`${studioBaseRoute}/${targetId}`, { replace: true });
+        }
       }
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to load matches list.'));
@@ -2247,11 +2251,7 @@ export function AdminObsBroadcastStudioPage() {
 
   useEffect(() => {
     if (matchId) {
-      try {
-        sessionStorage.setItem(ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY, matchId);
-      } catch {
-        // Ignore storage restrictions
-      }
+      setStickyMatchId(matchId);
     }
     window.dispatchEvent(
       new CustomEvent(CONTROL_ROOM_STATUS_EVENT, {
@@ -2381,7 +2381,10 @@ export function AdminObsBroadcastStudioPage() {
             value={matchId || ''}
             disabled={loadingMatches}
             onChange={(e) => {
-              if (e.target.value) navigate(`${studioBaseRoute}/${e.target.value}`);
+              if (e.target.value) {
+                setStickyMatchId(e.target.value);
+                navigate(`${studioBaseRoute}/${e.target.value}`);
+              }
             }}
             aria-label="Select broadcast match"
             title={`Match: ${currentMatchLabel}`}
@@ -4275,30 +4278,57 @@ export function AdminObsBroadcastStudioPage() {
                   <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
                     <p className="text-[11px] font-semibold text-slate-500">Bridge Connection</p>
                     <div className="mt-1 flex items-center gap-2">
-                      {bridgeIsOnline ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
-                          <Wifi className="w-4 h-4" />
-                          ONLINE ({activeMatchBridge?.bridgeId || profile.agentLabel || 'Connected'})
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                          <WifiOff className="w-4 h-4 text-slate-400" />
-                          OFFLINE
-                        </span>
-                      )}
+                      {(() => {
+                        const explicitState =
+                          activeMatchBridge?.bridgeConnectionState ||
+                          profile.bridgeConnectionState ||
+                          (bridgeIsOnline ? 'CONNECTED' : 'OFFLINE');
+                        if (explicitState === 'CONNECTED') {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                              <Wifi className="w-4 h-4" />
+                              CONNECTED ({activeMatchBridge?.bridgeId || profile.agentLabel || 'Connected'})
+                            </span>
+                          );
+                        }
+                        if (explicitState === 'RECONNECTING') {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700">
+                              <Wifi className="w-4 h-4 animate-pulse" />
+                              RECONNECTING...
+                            </span>
+                          );
+                        }
+                        if (explicitState === 'CONNECTION_LOST') {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-red-700">
+                              <WifiOff className="w-4 h-4" />
+                              CONNECTION LOST
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                            <WifiOff className="w-4 h-4 text-slate-400" />
+                            OFFLINE
+                          </span>
+                        );
+                      })()}
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      {bridgeIsOnline
-                        ? `${
-                            profile.bridgeVersion || activeMatchBridge?.bridgeVersion
-                              ? `Bridge v${profile.bridgeVersion || activeMatchBridge?.bridgeVersion} · `
-                              : 'Legacy Bridge · '
-                          }${
-                            profile.mediamtxControlSupported || activeMatchBridge?.mediamtxControlSupported
-                              ? 'MediaMTX Remote Ready'
-                              : 'MediaMTX Remote Upgrade Needed'
-                          }`
-                        : 'Outbound secure tunnel (zero router ports)'}
+                      {activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason
+                        ? `Last event: ${activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason}`
+                        : bridgeIsOnline
+                          ? `${
+                              profile.bridgeVersion || activeMatchBridge?.bridgeVersion
+                                ? `Bridge v${profile.bridgeVersion || activeMatchBridge?.bridgeVersion} · `
+                                : 'Legacy Bridge · '
+                            }${
+                              profile.mediamtxControlSupported || activeMatchBridge?.mediamtxControlSupported
+                                ? 'MediaMTX Remote Ready'
+                                : 'MediaMTX Remote Upgrade Needed'
+                            }`
+                          : 'Outbound secure tunnel (zero router ports)'}
                     </p>
                   </div>
 
@@ -4710,12 +4740,24 @@ export function AdminObsBroadcastStudioPage() {
                                 className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
                                   isRevoked
                                     ? 'bg-red-100 text-red-800 border-red-200'
-                                    : isOnline
+                                    : br.bridgeConnectionState === 'CONNECTED' || isOnline
                                       ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                      : 'bg-slate-200 text-slate-700 border-slate-300'
+                                      : br.bridgeConnectionState === 'RECONNECTING' || br.connectionStatus === 'RECONNECTING'
+                                        ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                        : br.bridgeConnectionState === 'CONNECTION_LOST' || br.connectionStatus === 'CONNECTION_LOST'
+                                          ? 'bg-red-100 text-red-800 border-red-200'
+                                          : 'bg-slate-200 text-slate-700 border-slate-300'
                                 }`}
                               >
-                                {isRevoked ? 'REVOKED' : isOnline ? 'ONLINE' : 'OFFLINE'}
+                                {isRevoked
+                                  ? 'REVOKED'
+                                  : br.bridgeConnectionState === 'RECONNECTING' || br.connectionStatus === 'RECONNECTING'
+                                    ? 'RECONNECTING'
+                                    : br.bridgeConnectionState === 'CONNECTION_LOST' || br.connectionStatus === 'CONNECTION_LOST'
+                                      ? 'CONNECTION LOST'
+                                      : isOnline
+                                        ? 'CONNECTED'
+                                        : 'OFFLINE'}
                               </span>
                               {!isRevoked && (
                                 <span
@@ -5031,12 +5073,22 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                      profile.agentOnline
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-slate-100 text-slate-700'
+                      profile.bridgeConnectionState === 'RECONNECTING'
+                        ? 'bg-amber-100 text-amber-800'
+                        : profile.bridgeConnectionState === 'CONNECTION_LOST'
+                          ? 'bg-red-100 text-red-800'
+                          : profile.agentOnline
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-100 text-slate-700'
                     }`}
                   >
-                    {profile.agentOnline ? 'BRIDGE ONLINE' : 'BROADCASTER BRIDGE OFFLINE'}
+                    {profile.bridgeConnectionState === 'RECONNECTING'
+                      ? 'BRIDGE RECONNECTING'
+                      : profile.bridgeConnectionState === 'CONNECTION_LOST'
+                        ? 'CONNECTION LOST'
+                        : profile.agentOnline
+                          ? 'BRIDGE CONNECTED'
+                          : 'BRIDGE OFFLINE'}
                   </span>
                 </div>
 
@@ -5044,9 +5096,13 @@ export function AdminObsBroadcastStudioPage() {
                   <p>
                     Status:{' '}
                     <strong className="text-slate-900">
-                      {profile.agentOnline
-                        ? `Connected (${profile.agentLabel || 'OBS Host'})`
-                        : 'BROADCASTER BRIDGE OFFLINE — Waiting for local agent handshake'}
+                      {profile.bridgeConnectionState === 'RECONNECTING'
+                        ? `Reconnecting automatically (${profile.lastDisconnectReason || 'network blip'})`
+                        : profile.bridgeConnectionState === 'CONNECTION_LOST'
+                          ? `Connection lost (${profile.missedHeartbeats || 0} missed heartbeats)`
+                          : profile.agentOnline
+                            ? `Connected (${profile.agentLabel || 'OBS Host'})`
+                            : 'BRIDGE OFFLINE — Waiting for local agent handshake'}
                     </strong>
                   </p>
                   {profile.obsVersion && (
@@ -5936,6 +5992,7 @@ export function AdminObsBroadcastStudioPage() {
             `Match "${created.matchTitle || created.teamAName || 'New Match'}" initialized cleanly (Unpublished Draft).`
           );
           await Promise.all([loadMatches(), refreshStreams()]);
+          setStickyMatchId(created.id);
           navigate(`${studioBaseRoute}/${created.id}`);
         }}
         onUpdated={async () => {

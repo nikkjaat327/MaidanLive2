@@ -52,6 +52,10 @@ import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import stadiumHeroImg from '../../assets/images/stadium_floodlight_hero_1795011087164.jpg';
 import arenaTurfImg from '../../assets/images/arena_turf_empty_1795011087551.jpg';
+import {
+  resolveStickyOrPreferredMatch,
+  setStickyMatchId,
+} from '../../utils/activeMatchSelection.ts';
 
 type PreviewBackdrop = 'stadium' | 'turf' | 'checker' | 'custom';
 
@@ -170,13 +174,22 @@ export function BroadcastOverlayConfigPage() {
   }, [stream?.id, stream?.status]);
 
   useEffect(() => {
+    if (matchId) {
+      setStickyMatchId(matchId);
+    }
+  }, [matchId]);
+
+  useEffect(() => {
     liveStreamService
       .listStreams()
       .then((list) => {
         setStreams(list);
         if (!matchId && list.length > 0) {
-          const liveFirst = list.find((s) => s.status === 'LIVE') || list[0];
-          navigate(`/broadcast/overlay/${liveFirst.id}`, { replace: true });
+          const targetId = resolveStickyOrPreferredMatch(matchId, list);
+          if (targetId) {
+            setStickyMatchId(targetId);
+            navigate(`/broadcast/overlay/${targetId}`, { replace: true });
+          }
         }
       })
       .catch(() => {});
@@ -448,7 +461,11 @@ export function BroadcastOverlayConfigPage() {
             {streams.length > 0 && (
               <select
                 value={matchId || ''}
-                onChange={(e) => navigate(`/broadcast/overlay/${e.target.value}`)}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  setStickyMatchId(e.target.value);
+                  navigate(`/broadcast/overlay/${e.target.value}`);
+                }}
                 aria-label="Switch broadcast match"
                 className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg max-w-[240px]"
               >

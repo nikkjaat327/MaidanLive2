@@ -36,6 +36,8 @@ export interface ObsAgentRegistrationHandlers {
   onAgentConnected: (socket: any, context: ObsAgentContext) => Promise<void>;
   onAgentDisconnected: (socket: any, context: ObsAgentContext, reason: string) => Promise<void>;
   onAgentStateUpdate: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
+  onAgentHeartbeat?: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
+  onAgentDiagnostic?: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
   onAgentError: (context: ObsAgentContext, errorMessage: string) => Promise<void>;
 }
 
@@ -162,6 +164,9 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     },
     transports: ['websocket', 'polling'],
+    pingInterval: 15_000,
+    pingTimeout: 45_000,
+    connectTimeout: 45_000,
   });
 
   if (cleanupTimer) clearInterval(cleanupTimer);
@@ -498,6 +503,23 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     socket.on('agent:obs_state', (payload: Record<string, any>) => {
       if (obsAgentHandlers && payload && typeof payload === 'object') {
         obsAgentHandlers.onAgentStateUpdate(context, payload).catch(() => {});
+      }
+    });
+
+    socket.on('agent:heartbeat', (payload: Record<string, any>, ack?: (res: any) => void) => {
+      if (typeof ack === 'function') {
+        ack({ ok: true, serverNowMs: Date.now() });
+      }
+      if (obsAgentHandlers?.onAgentHeartbeat) {
+        obsAgentHandlers
+          .onAgentHeartbeat(context, payload && typeof payload === 'object' ? payload : {})
+          .catch(() => {});
+      }
+    });
+
+    socket.on('agent:diagnostic', (payload: Record<string, any>) => {
+      if (obsAgentHandlers?.onAgentDiagnostic && payload && typeof payload === 'object') {
+        obsAgentHandlers.onAgentDiagnostic(context, payload).catch(() => {});
       }
     });
 

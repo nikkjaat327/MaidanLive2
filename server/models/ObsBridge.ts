@@ -3,8 +3,27 @@ import type { Document } from 'mongoose';
 import { createDualModel } from '../db/dualModel.ts';
 
 export type ObsBridgeLifecycleStatus = 'ACTIVE' | 'REVOKED';
-export type ObsBridgeConnectionStatus = 'ONLINE' | 'OFFLINE';
-export type ObsBridgeObsStatus = 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'ERROR';
+export type ObsBridgeConnectionStatus = 'ONLINE' | 'RECONNECTING' | 'CONNECTION_LOST' | 'OFFLINE';
+export type ObsBridgeObsStatus =
+  | 'CONNECTED'
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'RECONNECTING'
+  | 'CONNECTION_LOST'
+  | 'ERROR';
+export type BridgeExplicitConnectionState =
+  | 'CONNECTED'
+  | 'RECONNECTING'
+  | 'CONNECTION_LOST'
+  | 'OFFLINE';
+
+export interface IObsBridgeDiagnosticEvent {
+  timestamp: Date | string;
+  level: string;
+  category: string;
+  message: string;
+  reason?: string;
+}
 
 export interface IObsBridge extends Document {
   bridgeId: string;
@@ -20,12 +39,19 @@ export interface IObsBridge extends Document {
   tokenPrefix: string;
   status: ObsBridgeLifecycleStatus;
   connectionStatus: ObsBridgeConnectionStatus;
+  bridgeConnectionState?: BridgeExplicitConnectionState;
   obsStatus: ObsBridgeObsStatus;
+  obsConnectionState?: BridgeExplicitConnectionState;
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
   obsScenes: string[];
   obsStreamActive: boolean;
+  missedHeartbeats?: number;
+  lastDisconnectReason?: string;
+  reconnectAttempts?: number;
+  lastReconnectAttemptAt?: Date | null;
+  diagnosticLogs?: IObsBridgeDiagnosticEvent[];
   lastConnectedAt?: Date | null;
   lastDisconnectedAt?: Date | null;
   lastHeartbeatAt?: Date | null;
@@ -86,19 +112,42 @@ const obsBridgeSchema = new Schema<IObsBridge>(
     },
     connectionStatus: {
       type: String,
-      enum: ['ONLINE', 'OFFLINE'],
+      enum: ['ONLINE', 'RECONNECTING', 'CONNECTION_LOST', 'OFFLINE'],
+      default: 'OFFLINE',
+    },
+    bridgeConnectionState: {
+      type: String,
+      enum: ['CONNECTED', 'RECONNECTING', 'CONNECTION_LOST', 'OFFLINE'],
       default: 'OFFLINE',
     },
     obsStatus: {
       type: String,
-      enum: ['CONNECTED', 'DISCONNECTED', 'CONNECTING', 'ERROR'],
+      enum: ['CONNECTED', 'DISCONNECTED', 'CONNECTING', 'RECONNECTING', 'CONNECTION_LOST', 'ERROR'],
       default: 'DISCONNECTED',
+    },
+    obsConnectionState: {
+      type: String,
+      enum: ['CONNECTED', 'RECONNECTING', 'CONNECTION_LOST', 'OFFLINE'],
+      default: 'OFFLINE',
     },
     obsVersion: { type: String, default: '' },
     obsWebSocketVersion: { type: String, default: '' },
     activeObsScene: { type: String, default: '' },
     obsScenes: [{ type: String }],
     obsStreamActive: { type: Boolean, default: false },
+    missedHeartbeats: { type: Number, default: 0 },
+    lastDisconnectReason: { type: String, default: '', maxlength: 300 },
+    reconnectAttempts: { type: Number, default: 0 },
+    lastReconnectAttemptAt: { type: Date, default: null },
+    diagnosticLogs: [
+      {
+        timestamp: { type: Date, default: Date.now },
+        level: { type: String, default: 'info', maxlength: 20 },
+        category: { type: String, default: 'lifecycle', maxlength: 60 },
+        message: { type: String, default: '', maxlength: 400 },
+        reason: { type: String, default: '', maxlength: 200 },
+      },
+    ],
     lastConnectedAt: { type: Date, default: null },
     lastDisconnectedAt: { type: Date, default: null },
     lastHeartbeatAt: { type: Date, default: null },
