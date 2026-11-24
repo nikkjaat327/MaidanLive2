@@ -294,13 +294,9 @@ export function AdminLayout() {
   const isOrganizer = adminUser?.role === 'TOURNAMENT_ORGANIZER';
   const perms = adminUser?.permissions;
 
-  // Enforce Broadcaster isolation: Broadcaster role only uses /broadcaster/* or /admin/broadcast-studio/*
-  if (
-    isBroadcaster &&
-    !location.pathname.startsWith('/admin/broadcast-studio') &&
-    !location.pathname.startsWith('/admin/notifications')
-  ) {
-    return <Navigate to="/broadcaster/dashboard" replace />;
+  // Enforce strict Broadcaster isolation: Broadcaster role is always routed to dedicated full-screen studio
+  if (isBroadcaster) {
+    return <Navigate to="/broadcaster" replace />;
   }
 
   const navItems: AdminNavItem[] = [

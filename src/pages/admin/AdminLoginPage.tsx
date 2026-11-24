@@ -38,7 +38,7 @@ export function AdminLoginPage() {
   }, []);
 
   if (!adminLoading && adminUser) {
-    const dest = adminUser.role === 'BROADCASTER' ? '/broadcaster/dashboard' : '/admin/dashboard';
+    const dest = adminUser.role === 'BROADCASTER' ? '/broadcaster' : '/admin/dashboard';
     return <Navigate to={dest} replace />;
   }
 
@@ -67,7 +67,7 @@ export function AdminLoginPage() {
           setInfoMsg(res.message || 'Enter the 6-digit code from your authenticator app.');
           return;
         }
-        const dest = res.user?.role === 'BROADCASTER' ? '/broadcaster/dashboard' : '/admin/dashboard';
+        const dest = res.user?.role === 'BROADCASTER' ? '/broadcaster' : '/admin/dashboard';
         navigate(dest, { replace: true });
       }
     } catch (err: any) {

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import type { ComponentType } from 'react';
-import { Link, NavLink, Navigate, Outlet } from 'react-router-dom';
+import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import {
   Activity,
   ArrowLeft,
@@ -207,6 +207,7 @@ function BroadcasterDesktopSidebar({
 
 export function BroadcasterLayout() {
   const { adminUser, logoutAdmin, adminUnreadNotifications } = useAuth();
+  const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -230,6 +231,19 @@ export function BroadcasterLayout() {
 
   if (adminUser && !ALLOWED_BROADCASTER_PORTAL_ROLES.has(adminUser.role)) {
     return <Navigate to="/admin/dashboard" replace />;
+  }
+
+  // Broadcaster role gets a dedicated full-screen, camera-first interface with zero admin/sidebar chrome
+  if (adminUser?.role === 'BROADCASTER') {
+    if (
+      location.pathname.startsWith('/broadcaster/dashboard') ||
+      location.pathname.startsWith('/broadcaster/control-room')
+    ) {
+      const matchTail = location.pathname.replace(/^\/broadcaster\/control-room\/?/, '');
+      const dest = matchTail && !matchTail.includes('/') ? `/broadcaster/${matchTail}` : '/broadcaster';
+      return <Navigate to={dest} replace />;
+    }
+    return <Outlet />;
   }
 
   const canAccessAdminPortal =

@@ -159,13 +159,7 @@ const VALID_SOURCE_TYPES: CameraSourceType[] = [
 const VALID_RESOLUTIONS = ['1920x1080', '1280x720', '854x480', '640x360'] as const;
 const VALID_LAYOUTS = Object.keys(LAYOUT_METADATA) as ObsLayoutType[];
 
-const DEFAULT_BROADCASTER_PERMS = [
-  'broadcast:control',
-  'broadcast:manage_cameras',
-  'broadcast:manage_overlays',
-  'broadcast:stream_control',
-  'broadcast:record_control',
-];
+const DEFAULT_BROADCASTER_PERMS = ['broadcast:control'];
 
 function resolveBaseAppUrl(req: Request): string {
   const envUrl = (
@@ -235,6 +229,20 @@ async function authorizeBroadcastControl(
     return false;
   }
   return true;
+}
+
+function rejectBroadcasterAdminAction(
+  req: AuthenticatedRequest,
+  res: Response,
+  actionLabel = 'administrative broadcast configuration'
+): boolean {
+  if (req.user?.role === 'BROADCASTER') {
+    res.status(403).json({
+      message: `Forbidden: Broadcaster accounts cannot access ${actionLabel}.`,
+    });
+    return true;
+  }
+  return false;
 }
 
 // =========================================================================
@@ -1095,15 +1103,18 @@ router.get(
         return;
       }
 
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
       const [snapshot, sponsors, operators, canOverride, canManageCameras, canManageOverlays, canControlStream, canControlRecord] = await Promise.all([
-        getStudioSnapshot(matchId, true),
+        getStudioSnapshot(matchId, !isBroadcaster),
         Sponsor.find({ isActive: true }).sort({ createdAt: -1 }).lean(),
-        User.find({
-          isActive: true,
-          role: { $in: ['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'MODERATOR', 'SCORER'] },
-        })
-          .select('name email role permissions')
-          .lean(),
+        isBroadcaster
+          ? Promise.resolve([])
+          : User.find({
+              isActive: true,
+              role: { $in: ['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'MODERATOR', 'SCORER'] },
+            })
+              .select('name email role permissions')
+              .lean(),
         req.user!.role === 'SUPER_ADMIN' || req.user!.role === 'ADMIN'
           ? Promise.resolve(true)
           : hasBroadcastAccess(req.user!, matchId, 'broadcast:override'),
@@ -1149,7 +1160,10 @@ router.get(
           overlayConfig: stream.overlayConfig,
         },
         ...snapshot,
-        scoreboardOverlayUrl: `${baseUrl}/broadcast/overlay/view/${matchId}?obs=1&controls=0`,
+        auditLogs: isBroadcaster ? [] : snapshot.auditLogs,
+        scoreboardOverlayUrl: isBroadcaster
+          ? ''
+          : `${baseUrl}/broadcast/overlay/view/${matchId}?obs=1&controls=0`,
         sponsors: sponsors.map((sp: any) => ({
           id: String(sp._id),
           name: sp.name,
@@ -1157,12 +1171,14 @@ router.get(
           sponsorshipType: sp.sponsorshipType,
           tagline: sp.tagline,
         })),
-        operators: operators.map((op: any) => ({
-          id: String(op._id),
-          name: op.name,
-          email: op.email,
-          role: op.role,
-        })),
+        operators: isBroadcaster
+          ? []
+          : operators.map((op: any) => ({
+              id: String(op._id),
+              name: op.name,
+              email: op.email,
+              role: op.role,
+            })),
         permissions: {
           canOverride,
           canManageCameras,
@@ -1185,6 +1201,7 @@ router.patch(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS profile settings')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -1256,6 +1273,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS agent token generation')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -1290,6 +1308,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS connection testing')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -1314,6 +1333,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS connection management')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -1347,6 +1367,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS disconnection controls')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const profile = await disconnectObs(matchId, req.user!);
@@ -1364,6 +1385,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS sync controls')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const data = await refreshObsState(matchId);
@@ -1382,6 +1404,7 @@ router.post(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS scene sync controls')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const data = await refreshObsState(matchId);
@@ -1404,6 +1427,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge management')) return;
       const matchIdFilter =
         typeof req.query.matchId === 'string' && mongoose.Types.ObjectId.isValid(req.query.matchId)
           ? req.query.matchId.trim()
@@ -1425,8 +1449,8 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const actor = req.user!;
-      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER'].includes(actor.role)) {
-        res.status(403).json({ message: 'Forbidden: Broadcaster or Admin role required to register an OBS bridge.' });
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER'].includes(actor.role)) {
+        res.status(403).json({ message: 'Forbidden: Admin or Organizer role required to register an OBS bridge.' });
         return;
       }
       const name = sanitizeText(req.body.name, 120) || 'Windows OBS Bridge';
@@ -1478,6 +1502,7 @@ router.patch(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge configuration')) return;
       const { bridgeId } = req.params;
       const assignedMatchIds = Array.isArray(req.body.assignedMatchIds)
         ? req.body.assignedMatchIds.filter((id: unknown): id is string => typeof id === 'string')
@@ -1527,6 +1552,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge token rotation')) return;
       const { bridgeId } = req.params;
       const result = await rotateObsBridgeToken(bridgeId, req.user!, resolveBaseAppUrl(req));
       res.json(result);
@@ -1545,6 +1571,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge revocation')) return;
       const { bridgeId } = req.params;
       const reason = sanitizeText(req.body.reason, 240);
       const bridge = await revokeObsBridge(bridgeId, reason, req.user!);
@@ -1564,6 +1591,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge reactivation')) return;
       const { bridgeId } = req.params;
       const bridge = await reactivateObsBridge(bridgeId, req.user!);
       res.json({ ok: true, bridge });
@@ -1609,8 +1637,8 @@ router.post(
         return;
       }
       const actor = req.user!;
-      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'BROADCASTER', 'SCORER'].includes(actor.role)) {
-        res.status(403).json({ message: 'Forbidden: Broadcaster or Admin access required to pair a bridge.' });
+      if (!['SUPER_ADMIN', 'ADMIN', 'TOURNAMENT_ORGANIZER', 'SCORER'].includes(actor.role)) {
+        res.status(403).json({ message: 'Forbidden: Admin or Organizer access required to pair a bridge.' });
         return;
       }
 
@@ -1831,6 +1859,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge connection controls')) return;
       const { bridgeId } = req.params;
       const result = await requestBridgeObsReconnect(bridgeId, req.user!);
       res.json(result);
@@ -1849,6 +1878,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge disconnection controls')) return;
       const { bridgeId } = req.params;
       const bridge = await disconnectActiveBridgeByOperator(bridgeId, req.user!);
       res.json({ ok: true, bridge });
@@ -1866,6 +1896,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS Bridge installer administration')) return;
       const { exePath, pkgPath, externalUrl } = resolveInstallerPaths();
       let version = (process.env.OBS_BRIDGE_INSTALLER_VERSION || '').trim() || '1.0.0';
       if (fs.existsSync(pkgPath)) {
@@ -2696,6 +2727,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'MediaMTX configuration')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -2761,6 +2793,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'MediaMTX configuration')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -2833,8 +2866,14 @@ router.post(
         override: Boolean(req.body.override),
         baseAppUrl: resolveBaseAppUrl(req),
       });
-      const snapshot = await getStudioSnapshot(matchId, true);
-      res.json({ ok: true, ...result, ...snapshot });
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
     } catch (err: any) {
       const code = Number(err?.statusCode) || 503;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to switch OBS camera.' });
@@ -2850,6 +2889,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'camera transform configuration')) return;
       const { matchId, cameraId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -2919,8 +2959,14 @@ router.post(
         req.user!
       );
 
-      const snapshot = await getStudioSnapshot(matchId, true);
-      res.json({ ok: true, ...result, ...snapshot });
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
     } catch (err: any) {
       const code = Number(err?.statusCode) || 503;
       res.status(code).json({
@@ -2938,6 +2984,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS source discovery')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const inputs = await listObsInputs(matchId);
@@ -3134,6 +3181,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'native OBS scene switching')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -3162,6 +3210,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS scene source inspection')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const sceneName = typeof req.query.sceneName === 'string' ? sanitizeText(req.query.sceneName, 120) : '';
@@ -3184,6 +3233,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS scene transform inspection')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const sceneName =
@@ -3208,6 +3258,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'OBS scene source toggling')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const sceneName = sanitizeText(req.body.sceneName, 120);
@@ -3243,6 +3294,7 @@ router.patch(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'YouTube broadcast configuration')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
@@ -3466,8 +3518,9 @@ router.post(
         req.user!,
         Boolean(req.body.override)
       );
-      const snapshot = await getStudioSnapshot(matchId, true);
-      res.json({ ...result, ...snapshot });
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({ ...result, ...snapshot, ...(isBroadcaster ? { auditLogs: [] } : {}) });
     } catch (err: any) {
       const code = Number(err?.statusCode) || 500;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to reconnect camera.' });
@@ -3493,8 +3546,9 @@ router.post(
         req.user!,
         Boolean(req.body.override)
       );
-      const snapshot = await getStudioSnapshot(matchId, true);
-      res.json({ ok: true, ...result, ...snapshot });
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({ ok: true, ...result, ...snapshot, ...(isBroadcaster ? { auditLogs: [] } : {}) });
     } catch (err: any) {
       const code = Number(err?.statusCode) || 500;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to toggle camera audio.' });
@@ -3540,6 +3594,7 @@ router.post(
   broadcastCommandLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'broadcast session administration')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
       const mode = req.body.mode;
@@ -3564,6 +3619,7 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if (rejectBroadcasterAdminAction(req, res, 'broadcast audit logs')) return;
       const { matchId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 

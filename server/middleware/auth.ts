@@ -310,6 +310,7 @@ export async function hasBroadcastAccess(
   }
 
   if (requiredPerm === 'broadcast:override') {
+    if (user.role === 'BROADCASTER') return false;
     if (user.role === 'ADMIN') return true;
     if (user.role === 'TOURNAMENT_ORGANIZER') {
       const stream = await findDocByAnyId(LiveStream, matchId);
@@ -349,6 +350,14 @@ export async function hasBroadcastAccess(
   }
 
   if (user.role === 'BROADCASTER') {
+    // Broadcasters are strictly camera/layout operators; never grant camera config or overlay editing
+    if (
+      requiredPerm === 'broadcast:manage_cameras' ||
+      requiredPerm === 'broadcast:manage_overlays'
+    ) {
+      return false;
+    }
+
     const assignments = await BroadcastAssignment.find({ userId: user._id }).lean();
     let explicitlyBlocked = false;
 
@@ -363,7 +372,11 @@ export async function hasBroadcastAccess(
       if (matchHit || tourHit) {
         if (a.status === 'ACTIVE') {
           const perms = Array.isArray(a.permissions) ? a.permissions : [];
-          if (perms.length === 0 || perms.includes(requiredPerm) || perms.includes('broadcast:control')) {
+          if (requiredPerm === 'broadcast:control') {
+            if (perms.length === 0 || perms.includes('broadcast:control')) {
+              return true;
+            }
+          } else if (perms.includes(requiredPerm)) {
             return true;
           }
         } else {
@@ -374,13 +387,15 @@ export async function hasBroadcastAccess(
 
     if (explicitlyBlocked) return false;
 
-    // Legacy direct user assignment fallback (only if not explicitly suspended/revoked)
-    const directMatch = (user.assignedStreamIds || []).some((id) => id.toString() === matchId);
-    const directTournament =
-      Boolean(streamTournamentId) &&
-      (user.assignedTournamentIds || []).some((id) => id.toString() === streamTournamentId);
-    if (directMatch || directTournament) {
-      return true;
+    // Legacy direct user assignment fallback: only basic camera/layout control, not higher perms
+    if (requiredPerm === 'broadcast:control') {
+      const directMatch = (user.assignedStreamIds || []).some((id) => id.toString() === matchId);
+      const directTournament =
+        Boolean(streamTournamentId) &&
+        (user.assignedTournamentIds || []).some((id) => id.toString() === streamTournamentId);
+      if (directMatch || directTournament) {
+        return true;
+      }
     }
     return false;
   }

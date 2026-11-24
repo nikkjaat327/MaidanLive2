@@ -6,6 +6,7 @@ import { AdminThemeProvider } from './context/AdminThemeContext.tsx';
 import { LiveMonitorProvider } from './context/LiveMonitorContext.tsx';
 import { GlobalLiveMonitor } from './components/streaming/GlobalLiveMonitor.tsx';
 import { offlineScoreService } from './services/scoreboard/offlineScoreService.ts';
+import { useAuth } from './hooks/useAuth.ts';
 import { CustomerLayout } from './components/layout/CustomerLayout.tsx';
 import { AdminLayout, RequireAdminAuth } from './components/layout/AdminLayout.tsx';
 import { BroadcasterLayout } from './components/layout/BroadcasterLayout.tsx';
@@ -61,7 +62,24 @@ import { ObsOverlayViewerPage } from './pages/broadcast/ObsOverlayViewerPage.tsx
 import { AdminObsBroadcastStudioPage } from './pages/admin/AdminObsBroadcastStudioPage.tsx';
 import { AdminBroadcastersPage } from './pages/admin/AdminBroadcastersPage.tsx';
 import { BroadcasterDashboardPage } from './pages/broadcaster/BroadcasterDashboardPage.tsx';
+import { BroadcasterStudioPage } from './pages/broadcaster/BroadcasterStudioPage.tsx';
 import { CameraCompanionPage } from './pages/broadcast/CameraCompanionPage.tsx';
+
+function BroadcasterIndexRoute() {
+  const { adminUser } = useAuth();
+  if (adminUser?.role === 'BROADCASTER') {
+    return <BroadcasterStudioPage />;
+  }
+  return <Navigate to="/broadcaster/dashboard" replace />;
+}
+
+function RequireNonBroadcasterOverlayAccess() {
+  const { adminUser } = useAuth();
+  if (adminUser?.role === 'BROADCASTER') {
+    return <Navigate to="/broadcaster" replace />;
+  }
+  return <BroadcastOverlayConfigPage />;
+}
 
 export default function App() {
   useEffect(() => {
@@ -84,16 +102,17 @@ export default function App() {
               {/* Dedicated OBS Broadcast Overlay Configuration Studio (Auth Protected) */}
               <Route path="/broadcast/overlay" element={<RequireAdminAuth />}>
                 <Route index element={<Navigate to="/admin/live-streams" replace />} />
-                <Route path=":matchId" element={<BroadcastOverlayConfigPage />} />
+                <Route path=":matchId" element={<RequireNonBroadcasterOverlayAccess />} />
               </Route>
 
-              {/* Broadcaster Portal Routes (Dedicated Dark Broadcast Control Room) */}
+              {/* Broadcaster Portal Routes */}
               <Route path="/broadcaster" element={<RequireAdminAuth />}>
                 <Route element={<BroadcasterLayout />}>
-                  <Route index element={<Navigate to="/broadcaster/dashboard" replace />} />
+                  <Route index element={<BroadcasterIndexRoute />} />
                   <Route path="dashboard" element={<BroadcasterDashboardPage />} />
                   <Route path="control-room" element={<AdminObsBroadcastStudioPage />} />
                   <Route path="control-room/:matchId" element={<AdminObsBroadcastStudioPage />} />
+                  <Route path=":matchId" element={<BroadcasterStudioPage />} />
                 </Route>
               </Route>
 
