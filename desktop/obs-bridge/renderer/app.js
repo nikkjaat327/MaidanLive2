@@ -175,7 +175,47 @@ function renderState(state) {
   $('lbl-obs-pw-saved').textContent = state.hasObsPassword ? '(Encrypted Locally)' : '';
   $('chk-autostart').checked = Boolean(state.autoStart);
 
+  renderMediaMTX(state);
   renderScenes(state);
+}
+
+function renderMediaMTX(state) {
+  const mtx = state.mediamtx || {};
+  if (mtx.running) {
+    setPill($('badge-mtx'), 'MediaMTX: Running', 'pill-ok');
+  } else if (mtx.installed) {
+    setPill($('badge-mtx'), 'MediaMTX: Installed (Stopped)', 'pill-warn');
+  } else {
+    setPill($('badge-mtx'), 'MediaMTX: Not Detected', 'pill-muted');
+  }
+
+  $('mtx-installed').textContent = mtx.installed
+    ? mtx.executablePath || 'Detected'
+    : 'Not Installed (Optional)';
+  $('mtx-ports').textContent = `${mtx.rtmpPortOpen ? 'RTMP OK' : 'RTMP Off'} / ${
+    mtx.srtPortOpen ? 'SRT OK' : 'SRT Off'
+  }`;
+  const activeCount = Array.isArray(mtx.activePaths)
+    ? mtx.activePaths.filter((p) => p.ready).length
+    : 0;
+  $('mtx-paths').textContent = `${activeCount} streaming`;
+  $('mtx-lan-ips').textContent =
+    Array.isArray(mtx.lanIps) && mtx.lanIps.length > 0 ? mtx.lanIps.join(', ') : '127.0.0.1';
+
+  const input = $('mtx-path-input');
+  if (input && document.activeElement !== input && state.mediamtxPath && !input.value) {
+    input.value = state.mediamtxPath;
+  }
+
+  $('btn-mtx-start').disabled = Boolean(mtx.running);
+  $('btn-mtx-stop').disabled = !mtx.running;
+
+  if (mtx.lastError && !mtx.running) {
+    $('mtx-alert').textContent = mtx.lastError;
+    $('mtx-alert').classList.remove('hidden');
+  } else {
+    $('mtx-alert').classList.add('hidden');
+  }
 }
 
 // Tab switching on pairing view
@@ -258,6 +298,40 @@ $('btn-launch-obs').addEventListener('click', async () => {
 $('btn-reconnect-obs').addEventListener('click', () => window.bridgeApi.reconnectObs());
 $('btn-refresh-scenes').addEventListener('click', () => window.bridgeApi.refreshScenes());
 $('btn-clear-logs').addEventListener('click', () => window.bridgeApi.clearLogs());
+
+$('btn-mtx-start').addEventListener('click', async () => {
+  $('mtx-alert').classList.add('hidden');
+  try {
+    const customPath = $('mtx-path-input').value.trim();
+    if (customPath) await window.bridgeApi.updateMediaMTXPath(customPath);
+    await window.bridgeApi.startMediaMTX();
+  } catch (err) {
+    $('mtx-alert').textContent = err?.message || 'Failed to start MediaMTX.';
+    $('mtx-alert').classList.remove('hidden');
+  }
+});
+
+$('btn-mtx-stop').addEventListener('click', async () => {
+  try {
+    await window.bridgeApi.stopMediaMTX();
+  } catch (err) {
+    $('mtx-alert').textContent = err?.message || 'Failed to stop MediaMTX.';
+    $('mtx-alert').classList.remove('hidden');
+  }
+});
+
+$('btn-mtx-sync').addEventListener('click', async () => {
+  $('mtx-alert').classList.add('hidden');
+  try {
+    await window.bridgeApi.updateMediaMTXPath($('mtx-path-input').value.trim());
+    await window.bridgeApi.syncMediaMTXConfig();
+  } catch (err) {
+    $('mtx-alert').textContent = err?.message || 'Failed to sync MediaMTX configuration.';
+    $('mtx-alert').classList.remove('hidden');
+  }
+});
+
+$('btn-mtx-refresh').addEventListener('click', () => window.bridgeApi.refreshMediaMTX());
 
 $('chk-autostart').addEventListener('change', (e) => {
   window.bridgeApi.setAutoStart(Boolean(e.target.checked));

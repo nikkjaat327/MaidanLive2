@@ -81,6 +81,7 @@ export interface IObsControllerProfile extends Document {
   autoSyncScoreboardSource: boolean;
   scoreboardSourceName: string;
   selectedSponsorIds: string[];
+  mediamtxState?: Record<string, any> | null;
   lastSyncedAt?: Date | null;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -189,6 +190,7 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
       maxlength: 120,
     },
     selectedSponsorIds: [{ type: String }],
+    mediamtxState: { type: Schema.Types.Mixed, default: null },
     lastSyncedAt: { type: Date, default: null },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

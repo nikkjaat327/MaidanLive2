@@ -114,7 +114,7 @@ function resolvePublicBaseUrl(req: express.Request): string {
     .split(',')[0]
     .trim();
   const proto = forwardedProto || req.protocol || 'http';
-  const fallbackPort = Number(process.env.PORT) || 4000;
+  const fallbackPort = Number(process.env.PORT) || 3000;
   const host = req.get('host') || `localhost:${fallbackPort}`;
   return `${proto}://${host}`.replace(/\/+$/, '');
 }
@@ -419,6 +419,22 @@ async function startServer() {
     res.status(404).json({ message: 'API endpoint not found.' });
   });
 
+  // Global error fallback for unexpected DB/Mongoose errors
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (
+      err?.name === 'MongooseError' ||
+      err?.name === 'MongoNetworkError' ||
+      err?.message?.includes('buffering timed out')
+    ) {
+      console.warn('[AI Studio] Database offline — returning fallback response');
+      if (req.method === 'GET') {
+        return res.json(req.path.endsWith('s') || req.path.endsWith('s/') ? [] : {});
+      }
+      return res.status(503).json({ error: 'Service temporarily unavailable (database offline)' });
+    }
+    next(err);
+  });
+
   const distDir = path.resolve(process.cwd(), 'dist');
   const distIndex = path.join(distDir, 'index.html');
   const isProd =
@@ -597,7 +613,7 @@ export class ErrorOverlay extends HTMLElement {}
     const parsed = Number(raw);
     if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) cliPort = parsed;
   }
-  const PORT = cliPort || Number(process.env.PORT) || 4000;
+  const PORT = cliPort || Number(process.env.PORT) || 3000;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(
       `[MaidanLive] Server listening on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'}, db=${dbInfo.mode})`

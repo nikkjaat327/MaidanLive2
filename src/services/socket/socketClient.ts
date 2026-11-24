@@ -4,7 +4,8 @@ let socketInstance: Socket | null = null;
 
 export function getSocketClient(): Socket {
   if (!socketInstance) {
-    socketInstance = io({
+    const socketOrigin = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim().replace(/\/+$/, '');
+    const opts = {
       path: '/socket.io',
       transports: ['polling', 'websocket'],
       upgrade: true,
@@ -13,7 +14,8 @@ export function getSocketClient(): Socket {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       autoConnect: true,
-    });
+    };
+    socketInstance = socketOrigin ? io(socketOrigin, opts) : io(opts);
   }
   return socketInstance;
 }

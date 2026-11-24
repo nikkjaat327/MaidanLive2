@@ -7,20 +7,25 @@ export const ADMIN_REFRESH_KEY = 'maidanlive_admin_refresh_token';
 export const CUSTOMER_USER_CACHE_KEY = 'maidanlive_customer_user_cache';
 export const ADMIN_USER_CACHE_KEY = 'maidanlive_admin_user_cache';
 
+const CONFIGURED_API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/+$/, '');
+export const API_BASE_URL = CONFIGURED_API_BASE
+  ? (CONFIGURED_API_BASE.endsWith('/api') ? CONFIGURED_API_BASE : `${CONFIGURED_API_BASE}/api`)
+  : '/api';
+
 export const publicApi = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 export const customerApi = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 export const adminApi = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });

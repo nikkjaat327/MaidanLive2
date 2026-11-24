@@ -7,6 +7,10 @@ function getConfigFilePath() {
   return path.join(app.getPath('userData'), 'bridge-config.json');
 }
 
+function getUserDataDir() {
+  return app.getPath('userData');
+}
+
 function defaultConfig() {
   return {
     serverUrl: '',
@@ -15,6 +19,7 @@ function defaultConfig() {
     label: `${os.hostname()} (${process.platform === 'win32' ? 'Windows PC' : process.platform})`,
     obsUrl: 'ws://127.0.0.1:4455',
     obsPassword: '',
+    mediamtxPath: '',
     autoStart: false,
     activeMatch: null,
     pairedAt: null,
@@ -81,6 +86,7 @@ function loadConfig() {
       label: String(parsed.label || base.label).trim(),
       obsUrl: String(parsed.obsUrl || base.obsUrl).trim() || 'ws://127.0.0.1:4455',
       obsPassword: String(obsPassword || ''),
+      mediamtxPath: String(parsed.mediamtxPath || '').trim(),
       autoStart: Boolean(parsed.autoStart),
       activeMatch: parsed.activeMatch || null,
       pairedAt: parsed.pairedAt || null,
@@ -100,6 +106,7 @@ function saveConfig(patch) {
   next.bridgeId = String(next.bridgeId || '').trim().toUpperCase();
   next.bridgeToken = String(next.bridgeToken || '').trim();
   next.obsUrl = String(next.obsUrl || 'ws://127.0.0.1:4455').trim() || 'ws://127.0.0.1:4455';
+  next.mediamtxPath = String(next.mediamtxPath || '').trim();
   next.label = String(next.label || defaultConfig().label).trim();
   next.autoStart = Boolean(next.autoStart);
 
@@ -111,6 +118,7 @@ function saveConfig(patch) {
     label: next.label,
     obsUrl: next.obsUrl,
     obsPasswordEnc: encryptValue(next.obsPassword),
+    mediamtxPath: next.mediamtxPath,
     autoStart: next.autoStart,
     activeMatch: next.activeMatch || null,
     pairedAt: next.pairedAt || null,
@@ -137,6 +145,7 @@ function hasPairedCredentials(cfg) {
 }
 
 module.exports = {
+  getUserDataDir,
   loadConfig,
   saveConfig,
   clearPairing,

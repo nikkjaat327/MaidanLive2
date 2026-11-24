@@ -255,6 +255,42 @@ const GUIDE_SECTIONS: GuideStep[] = [
     jumpLabel: 'Open Live Graphics Studio',
     jumpTarget: 'graphics',
   },
+  {
+    id: 'larix-mediamtx',
+    badge: 'LARIX + MEDIAMTX',
+    icon: Camera,
+    titleMixed: 'Larix Broadcaster + MediaMTX Camera Workflow (VDO.Ninja ke Saath Parallel Mode)',
+    titleHinglish: 'Larix Broadcaster + MediaMTX Mobile Camera Setup (VDO.Ninja Bilkul Safe)',
+    titleEnglish: 'Larix Broadcaster + MediaMTX Camera Input (Alongside VDO.Ninja)',
+    summaryMixed:
+      'Agar aap unstable ground internet ya high-bitrate mobile camera chahte hain to "+ Larix Cam" se Larix Broadcaster (RTMP ya SRT) camera jodein. Phone feed local PC ke MediaMTX par aati hai aur OBS Studio use FFmpeg Media Source se receive karta hai — VDO.Ninja cameras bilkul pehle ki tarah chalti rehti hain.',
+    summaryHinglish:
+      'High-bitrate ya SRT mobile streaming ke liye Larix Broadcaster add karein: Phone (Larix) -> Local PC MediaMTX (:1935 RTMP / :8890 SRT) -> OBS Media Source -> YouTube Live. Aap same match me VDO.Ninja aur Larix dono mix kar sakte hain.',
+    summaryEnglish:
+      'Add Larix Broadcaster cameras (RTMP or SRT) alongside VDO.Ninja in the same match. Mobile streams ingest directly into MediaMTX and pull into OBS Studio as FFmpeg Media Sources—zero video passes through the MaidanLive backend, and VDO.Ninja continues working even without MediaMTX.',
+    bulletsMixed: [
+      '1. Cameras Tab ya Grid me "+ Larix Cam" dabayein, Camera Name aur RTMP/SRT choose karein -> scoped Stream Key + QR generate ho jayegi.',
+      '2. Phone aur Laptop ek Wi-Fi par hon to modal me PC ka LAN IP (192.168.x.x) select karke QR scan karein ya Full URL Larix app me paste karein.',
+      '3. Larix me Record start hote hi MaidanLive "Larix Streaming" status dikhata hai; "Sync OBS" dabane par OBS me Media Source auto-ban jaata hai.',
+      '4. Security & Match Isolation: Har match ka stream path aur secret key alag hota hai — ek match ki key doosre match me publish nahi kar sakti.',
+      '5. Deployment URL Switching: Localhost se VPS/domain par shift hone par sirf .env me MAIDANLIVE_SERVER_URL / MEDIAMTX_*_URL update karein.',
+    ],
+    bulletsHinglish: [
+      '"+ Larix Cam" -> Protocol (RTMP/SRT) -> Phone Larix app me QR scan ya URL paste karein.',
+      'Local Wi-Fi par Larix setup ke liye PC ka LAN IP (192.168.x.x) choose karein.',
+      '"Sync OBS" button OBS Studio me FFmpeg Media Source automatically create/update karta hai.',
+      'Domain/Server change karne ke liye sirf .env URLs update karna kaafi hai.',
+    ],
+    bulletsEnglish: [
+      'Click "+ Larix Cam", pick RTMP or SRT, and scan the generated Larix QR code or paste the Server URL + Stream Key/StreamID into Larix Broadcaster.',
+      'For local PC ingest, pick your PC LAN IP (192.168.x.x) in the Larix modal so mobile phones connect directly over Wi-Fi.',
+      'Click "Sync OBS" to automatically provision the FFmpeg Media Source inside OBS Studio with hardware-friendly reconnect settings.',
+      'Every camera stream path and key is cryptographically scoped to a single match and camera; revoke or rotate keys anytime without affecting other cameras.',
+      'All MediaMTX & server endpoints read centrally from .env so migrating from localhost to a public domain requires only .env edits.',
+    ],
+    jumpLabel: 'Open Cameras & Larix Setup',
+    jumpTarget: 'cameras',
+  },
 ];
 
 export function BroadcastGuideDrawer({

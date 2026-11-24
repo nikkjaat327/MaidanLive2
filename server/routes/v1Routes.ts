@@ -18,7 +18,12 @@ import type {
   IStoredDocMeta,
   PaymentVerificationStatus,
 } from '../models/TournamentRegistration.ts';
+import crypto from 'crypto';
 import { extractKeyFromQueryString, getMediaMTXEnvConfig } from '../services/mediamtxService.ts';
+import { BroadcastCamera } from '../models/BroadcastCamera.ts';
+import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
+import { decryptObsSecret, verifyScopedToken } from '../utils/obsCrypto.ts';
+import { emitFullStudioState } from '../services/obsControllerService.ts';
 import { getDatabaseDiagnostics, retryMongoConnection } from '../config/db.ts';
 import {
   authenticate,
@@ -29,14 +34,14 @@ import {
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
-import { notifyTournamentAdminsAndOrganizers, notifyUser } from '../utils/notifications.ts';
-import { emitStreamEvent } from '../socket/index.ts';
+import { emitBroadcastStudioEvent, emitStreamEvent } from '../socket/index.ts';
 import {
   deleteFromCloudinary,
   isCloudinaryConfigured,
   uploadBufferToCloudinary,
 } from '../services/cloudinaryService.ts';
 import { buildIdMatchFilter, deleteDocByAnyId } from '../utils/mongoNormalize.ts';
+import { notifyTournamentAdminsAndOrganizers, notifyUser } from '../utils/notifications.ts';
 
 function dedupeRosterEntries(entries: IRosterPlayerEntry[] = []): IRosterPlayerEntry[] {
   const seen = new Set<string>();
@@ -452,16 +457,139 @@ router.use('/live-streams', scoreRoutes);
 router.use('/matches', liveStreamRoutes);
 router.use('/matches', scoreRoutes);
 
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function isLoopbackClientIp(rawIp: unknown): boolean {
+  const ip = String(rawIp || '').trim().toLowerCase();
+  if (!ip) return false;
+  return (
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === '::ffff:127.0.0.1' ||
+    ip === 'localhost'
+  );
+}
+
+function verifyCameraStreamKey(cam: any, suppliedKey: string): boolean {
+  if (!cam || !suppliedKey) return false;
+  if (cam.mediamtxStreamKeyHash && verifyScopedToken(suppliedKey, cam.mediamtxStreamKeyHash)) {
+    return true;
+  }
+  if (cam.mediamtxStreamKeyEnc) {
+    const plain = decryptObsSecret(cam.mediamtxStreamKeyEnc);
+    if (plain && timingSafeEqualString(suppliedKey, plain)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ==================== MEDIAMTX PUBLISH AUTH WEBHOOK ====================
-// Supports MediaMTX `externalAuthenticationURL` POST payload: { user, password, ip, action, path, protocol, id, query }
+// Supports MediaMTX `authHTTPAddress` POST payload: { user, password, ip, action, path, protocol, id, query }
 router.post('/mediamtx/auth', async (req: Request, res: Response) => {
   try {
     const action = String(req.body?.action || '').toLowerCase();
-    const rawPath = String(req.body?.path || '').replace(/^\/+/, '').trim();
-    const rawQuery = String(req.body?.query || '');
+    const rawPathInput = String(req.body?.path || '').replace(/^\/+/, '').trim();
+    const [rawPathOnly, inlinePathQuery = ''] = rawPathInput.split('?');
+    const rawPath = (rawPathOnly || '').trim();
+    const rawQuery = String(req.body?.query || inlinePathQuery || '');
+    const clientIp = req.body?.ip || req.ip || '';
 
-    // Allow read/playback requests publicly unless explicitly restricted
-    if (action === 'read' || action === 'playback' || action === 'api' || action === 'metrics') {
+    if (action === 'api' || action === 'metrics') {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const suppliedKey =
+      extractKeyFromQueryString(rawQuery) || String(req.body?.password || '').trim();
+
+    // Check per-camera Larix/MediaMTX path first when path is present
+    const cam = rawPath
+      ? await BroadcastCamera.findOne({ mediamtxStreamPath: rawPath }).select(
+          '+mediamtxStreamKeyEnc +mediamtxStreamKeyHash'
+        )
+      : null;
+
+    if (cam) {
+      if (action === 'read' || action === 'playback') {
+        // Local OBS pulls via loopback or any OBS with valid scoped key
+        if (!cam.enabled || cam.mediamtxRevoked) {
+          res.status(403).json({ ok: false, message: 'Camera stream is disabled or revoked.' });
+          return;
+        }
+        if (isLoopbackClientIp(clientIp) || verifyCameraStreamKey(cam, suppliedKey)) {
+          res.status(200).json({ ok: true, cameraId: cam.cameraId, matchId: String(cam.matchId) });
+          return;
+        }
+        res.status(403).json({ ok: false, message: 'Unauthorized read on private camera stream.' });
+        return;
+      }
+
+      if (!cam.enabled) {
+        res.status(403).json({ ok: false, message: 'Camera is disabled for this match.' });
+        return;
+      }
+      if (cam.mediamtxRevoked) {
+        res.status(403).json({ ok: false, message: 'Camera stream key has been revoked.' });
+        return;
+      }
+      if (cam.sourceType !== 'mediamtx') {
+        res.status(403).json({ ok: false, message: 'Camera is not configured for MediaMTX ingest.' });
+        return;
+      }
+      if (!suppliedKey || !verifyCameraStreamKey(cam, suppliedKey)) {
+        res.status(403).json({ ok: false, message: 'Invalid Larix/MediaMTX stream key.' });
+        return;
+      }
+
+      // Enforce match isolation and prevent publishing to an ended match
+      const matchStream = await LiveStream.findById(cam.matchId).select('status').lean();
+      if (!matchStream || matchStream.status === 'ENDED') {
+        res.status(403).json({
+          ok: false,
+          message: 'Cannot publish camera feed: target match is missing or already ended.',
+        });
+        return;
+      }
+
+      if (action === 'publish') {
+        const profile = await ObsControllerProfile.findOne({ matchId: cam.matchId }).lean();
+        const isLiveInObs = Boolean(
+          profile?.connectionStatus === 'CONNECTED' &&
+            (profile.activeCameraId === cam.cameraId ||
+              (Array.isArray(profile.activeCameraIds) && profile.activeCameraIds.includes(cam.cameraId)) ||
+              (cam.obsSceneName && profile.activeObsScene === cam.obsSceneName))
+        );
+        cam.mediamtxPublisherConnected = true;
+        cam.mediamtxLastConnectedAt = new Date();
+        cam.mediamtxDisconnectedAt = null;
+        cam.lastHeartbeatAt = new Date();
+        cam.lastError = '';
+        cam.status = isLiveInObs ? 'ACTIVE' : 'CONNECTED';
+        await cam.save();
+
+        emitBroadcastStudioEvent(String(cam.matchId), 'obs:camera_status', {
+          matchId: String(cam.matchId),
+          cameraId: cam.cameraId,
+          status: cam.status,
+          sourceType: cam.sourceType,
+          mediamtxPublisherConnected: true,
+        });
+        await emitFullStudioState(String(cam.matchId));
+      }
+
+      res.status(200).json({ ok: true, cameraId: cam.cameraId, matchId: String(cam.matchId) });
+      return;
+    }
+
+    // Legacy LiveStream fallback: allow public playback/read when not a private camera stream
+    if (action === 'read' || action === 'playback') {
       res.status(200).json({ ok: true });
       return;
     }
@@ -471,8 +599,6 @@ router.post('/mediamtx/auth', async (req: Request, res: Response) => {
       return;
     }
 
-    const suppliedKey =
-      extractKeyFromQueryString(rawQuery) || String(req.body?.password || '').trim();
     if (!suppliedKey) {
       res.status(401).json({ ok: false, message: 'Missing MediaMTX stream key.' });
       return;
@@ -481,7 +607,7 @@ router.post('/mediamtx/auth', async (req: Request, res: Response) => {
     const stream = await LiveStream.findOne({ mediamtxStreamPath: rawPath }).select(
       '+mediamtxStreamKey'
     );
-    if (!stream || !stream.mediamtxStreamKey || stream.mediamtxStreamKey !== suppliedKey) {
+    if (!stream || !stream.mediamtxStreamKey || !timingSafeEqualString(stream.mediamtxStreamKey, suppliedKey)) {
       res.status(403).json({ ok: false, message: 'Invalid MediaMTX stream key or path.' });
       return;
     }
@@ -518,21 +644,79 @@ router.post('/mediamtx/auth', async (req: Request, res: Response) => {
 // Receives MediaMTX lifecycle events (ready / not_ready / publish / unpublish / error)
 router.post('/mediamtx/webhook', async (req: Request, res: Response) => {
   try {
-    const rawPath = String(req.body?.path || req.body?.streamPath || '').replace(/^\/+/, '').trim();
+    const rawPathInput = String(req.body?.path || req.body?.streamPath || '').replace(/^\/+/, '').trim();
+    const [rawPathOnly, inlinePathQuery = ''] = rawPathInput.split('?');
+    const rawPath = (rawPathOnly || '').trim();
     const rawStreamId = String(req.body?.streamId || '').trim();
     const rawEvent = String(req.body?.event || req.body?.action || '').toLowerCase().trim();
-    const rawQuery = String(req.body?.query || '');
+    const rawQuery = String(req.body?.query || inlinePathQuery || '');
     const suppliedKey =
       extractKeyFromQueryString(rawQuery) ||
       String(req.body?.streamKey || req.body?.key || req.body?.password || '').trim();
     const configuredSecret = process.env.MEDIAMTX_WEBHOOK_SECRET?.trim() || '';
     const suppliedSecret = String(req.headers['x-mediamtx-secret'] || '').trim();
+    const secretMatches = Boolean(
+      configuredSecret && suppliedSecret && timingSafeEqualString(configuredSecret, suppliedSecret)
+    );
 
     if (!rawPath && !rawStreamId) {
       res.status(400).json({ ok: false, message: 'MediaMTX stream path or streamId is required.' });
       return;
     }
 
+    // 1. Check per-camera Larix/MediaMTX camera path
+    if (!rawStreamId && rawPath) {
+      const cam = await BroadcastCamera.findOne({ mediamtxStreamPath: rawPath }).select(
+        '+mediamtxStreamKeyEnc +mediamtxStreamKeyHash'
+      );
+      if (cam) {
+        if (!secretMatches && !verifyCameraStreamKey(cam, suppliedKey)) {
+          res.status(403).json({ ok: false, message: 'Invalid MediaMTX webhook credentials.' });
+          return;
+        }
+        const detail = sanitizeText(req.body?.detail || req.body?.message, 300);
+        if (rawEvent === 'publish' || rawEvent === 'ready' || rawEvent === 'publishing') {
+          const profile = await ObsControllerProfile.findOne({ matchId: cam.matchId }).lean();
+          const isLiveInObs = Boolean(
+            profile?.connectionStatus === 'CONNECTED' &&
+              (profile.activeCameraId === cam.cameraId ||
+                (Array.isArray(profile.activeCameraIds) && profile.activeCameraIds.includes(cam.cameraId)) ||
+                (cam.obsSceneName && profile.activeObsScene === cam.obsSceneName))
+          );
+          cam.mediamtxPublisherConnected = true;
+          cam.mediamtxLastConnectedAt = new Date();
+          cam.mediamtxDisconnectedAt = null;
+          cam.lastHeartbeatAt = new Date();
+          cam.lastError = '';
+          cam.status = isLiveInObs ? 'ACTIVE' : 'CONNECTED';
+        } else if (rawEvent === 'error' || rawEvent === 'failed') {
+          cam.mediamtxPublisherConnected = false;
+          cam.status = 'ERROR';
+          cam.lastError = detail || 'MediaMTX reported a camera stream error.';
+        } else {
+          cam.mediamtxPublisherConnected = false;
+          cam.mediamtxDisconnectedAt = new Date();
+          cam.status = 'DISCONNECTED';
+          if (detail) cam.lastError = detail;
+        }
+        await cam.save();
+
+        const camPayload = {
+          matchId: String(cam.matchId),
+          cameraId: cam.cameraId,
+          status: cam.status,
+          sourceType: cam.sourceType,
+          mediamtxPublisherConnected: cam.mediamtxPublisherConnected,
+          lastError: cam.lastError,
+        };
+        emitBroadcastStudioEvent(String(cam.matchId), 'obs:camera_status', camPayload);
+        await emitFullStudioState(String(cam.matchId));
+        res.status(200).json({ ok: true, ...camPayload });
+        return;
+      }
+    }
+
+    // 2. Fallback: LiveStream broadcast path
     const queryFilter = rawStreamId && mongoose.Types.ObjectId.isValid(rawStreamId)
       ? { _id: rawStreamId }
       : { mediamtxStreamPath: rawPath };
@@ -542,8 +726,9 @@ router.post('/mediamtx/webhook', async (req: Request, res: Response) => {
       return;
     }
 
-    const secretMatches = Boolean(configuredSecret && suppliedSecret && configuredSecret === suppliedSecret);
-    const keyMatches = Boolean(stream.mediamtxStreamKey && suppliedKey && stream.mediamtxStreamKey === suppliedKey);
+    const keyMatches = Boolean(
+      stream.mediamtxStreamKey && suppliedKey && timingSafeEqualString(stream.mediamtxStreamKey, suppliedKey)
+    );
     if (!secretMatches && !keyMatches) {
       res.status(403).json({ ok: false, message: 'Invalid MediaMTX webhook credentials.' });
       return;
@@ -612,8 +797,11 @@ router.get(
         database: diagnostics,
         mediamtx: {
           rtmpBase: mtxEnv.rtmpBase,
+          srtBase: mtxEnv.srtBase,
           hlsBase: mtxEnv.hlsBase,
           webrtcBase: mtxEnv.webrtcBase,
+          obsRtmpBase: mtxEnv.obsRtmpBase,
+          obsSrtBase: mtxEnv.obsSrtBase,
           apiConfigured: Boolean(process.env.MEDIAMTX_API_URL),
         },
         nodeVersion: process.version,

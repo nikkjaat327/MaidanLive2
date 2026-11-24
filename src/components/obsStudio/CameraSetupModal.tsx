@@ -18,6 +18,7 @@ import type {
   CameraOrientationMode,
   CameraPreviewFit,
   CameraSourceType,
+  CameraStreamProtocol,
   CameraType,
 } from '../../types/obs.ts';
 
@@ -44,6 +45,7 @@ export function CameraFormModal({
   const [position, setPosition] = useState('');
   const [cameraType, setCameraType] = useState<CameraType>('smartphone_vdo');
   const [sourceType, setSourceType] = useState<CameraSourceType>('vdoninja');
+  const [streamProtocol, setStreamProtocol] = useState<CameraStreamProtocol>('vdoninja');
   const [connectionUrl, setConnectionUrl] = useState('');
   const [resolution, setResolution] = useState<BroadcastCameraData['resolution']>('1280x720');
   const [fps, setFps] = useState('30');
@@ -73,6 +75,10 @@ export function CameraFormModal({
       setPosition(editingCamera.position || '');
       setCameraType(editingCamera.cameraType || 'smartphone_vdo');
       setSourceType(editingCamera.sourceType || 'vdoninja');
+      setStreamProtocol(
+        editingCamera.streamProtocol ||
+          (editingCamera.sourceType === 'mediamtx' ? 'rtmp' : 'vdoninja')
+      );
       setConnectionUrl(editingCamera.connectionUrl || '');
       setResolution(editingCamera.resolution || '1280x720');
       setFps(String(editingCamera.fps || 30));
@@ -97,6 +103,7 @@ export function CameraFormModal({
       setPosition('Center Ground');
       setCameraType('smartphone_vdo');
       setSourceType('vdoninja');
+      setStreamProtocol('vdoninja');
       setConnectionUrl('');
       setResolution('1280x720');
       setFps('30');
@@ -128,6 +135,14 @@ export function CameraFormModal({
         position: position.trim(),
         cameraType,
         sourceType,
+        streamProtocol:
+          sourceType === 'mediamtx'
+            ? streamProtocol === 'srt'
+              ? 'srt'
+              : 'rtmp'
+            : sourceType === 'vdoninja'
+              ? 'vdoninja'
+              : streamProtocol,
         connectionUrl: connectionUrl.trim(),
         vdoRoomName,
         resolution,
@@ -205,15 +220,24 @@ export function CameraFormModal({
               onChange={(e) => {
                 const nextType = e.target.value as CameraType;
                 setCameraType(nextType);
-                if (nextType === 'smartphone_vdo') setSourceType('vdoninja');
-                else if (nextType === 'rtmp_mediamtx') setSourceType('mediamtx');
-                else if (nextType === 'browser_source') setSourceType('browser_source');
-                else setSourceType('obs_input');
+                if (nextType === 'smartphone_vdo') {
+                  setSourceType('vdoninja');
+                  setStreamProtocol('vdoninja');
+                } else if (nextType === 'rtmp_mediamtx') {
+                  setSourceType('mediamtx');
+                  setStreamProtocol((prev) => (prev === 'srt' ? 'srt' : 'rtmp'));
+                } else if (nextType === 'browser_source') {
+                  setSourceType('browser_source');
+                  setStreamProtocol('browser');
+                } else {
+                  setSourceType('obs_input');
+                  setStreamProtocol('obs_input');
+                }
               }}
               className="w-full min-h-[40px] px-3 text-sm border border-slate-300 rounded-lg bg-white"
             >
               <option value="smartphone_vdo">Smartphone Camera (VDO.Ninja WebRTC)</option>
-              <option value="rtmp_mediamtx">RTMP / Larix Mobile Feed (MediaMTX)</option>
+              <option value="rtmp_mediamtx">Larix Broadcaster (MediaMTX RTMP / SRT)</option>
               <option value="browser_source">Custom Browser Source URL</option>
               <option value="usb_capture">USB / HDMI Capture Card (Local OBS)</option>
               <option value="ip_camera">IP / RTSP Camera (Local OBS)</option>
@@ -224,18 +248,59 @@ export function CameraFormModal({
             <label className="block text-xs font-semibold text-slate-700 mb-1">Video Transport</label>
             <select
               value={sourceType}
-              onChange={(e) => setSourceType(e.target.value as CameraSourceType)}
+              onChange={(e) => {
+                const next = e.target.value as CameraSourceType;
+                setSourceType(next);
+                if (next === 'mediamtx') {
+                  setCameraType('rtmp_mediamtx');
+                  setStreamProtocol((prev) => (prev === 'srt' ? 'srt' : 'rtmp'));
+                } else if (next === 'vdoninja') {
+                  setCameraType('smartphone_vdo');
+                  setStreamProtocol('vdoninja');
+                }
+              }}
               className="w-full min-h-[40px] px-3 text-sm border border-slate-300 rounded-lg bg-white"
             >
               <option value="vdoninja">VDO.Ninja (Free / Mobile Browser)</option>
+              <option value="mediamtx">Larix Broadcaster → MediaMTX (RTMP / SRT)</option>
               <option value="browser_source">Generic Browser Source URL</option>
-              <option value="mediamtx">MediaMTX HLS / WebRTC</option>
               <option value="obs_input">Existing Local OBS Source</option>
             </select>
           </div>
         </div>
 
-        {sourceType !== 'vdoninja' && (
+        {(sourceType === 'mediamtx' || cameraType === 'rtmp_mediamtx') && (
+          <div className="p-3 rounded-xl border border-orange-200 bg-orange-50/60 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <label className="block text-xs font-bold text-slate-900">
+                  Larix / MediaMTX Ingest Protocol
+                </label>
+                <p className="text-[11px] text-slate-600">
+                  Stream path &amp; scoped credentials are auto-generated for this match on save.
+                </p>
+              </div>
+              <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5">
+                {(['rtmp', 'srt'] as const).map((proto) => (
+                  <button
+                    key={proto}
+                    type="button"
+                    onClick={() => setStreamProtocol(proto)}
+                    className={`min-h-[30px] px-3 py-1 rounded-md text-xs font-bold uppercase ${
+                      (streamProtocol === 'srt' ? 'srt' : 'rtmp') === proto
+                        ? 'bg-[#EA580C] text-white'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {proto}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {sourceType !== 'vdoninja' && sourceType !== 'mediamtx' && (
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Source URL / Stream Path (Optional for Local OBS Inputs)

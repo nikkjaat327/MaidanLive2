@@ -29,6 +29,7 @@ const APPROVED_COMMANDS = new Set([
   'set_input_mute',
   'get_input_mute',
   'reconnect_input',
+  'remove_input',
   'get_scene_items',
   'set_scene_item_enabled',
   'get_input_list',
@@ -135,8 +136,14 @@ if (fs.existsSync(configPath)) {
   }
 }
 
+const DEFAULT_PORT = Number(process.env.PORT) || 3000;
 const SERVER_URL = String(
-  args.server || process.env.MAIDANLIVE_URL || fileConfig.serverUrl || 'http://127.0.0.1:4000'
+  args.server ||
+    process.env.MAIDANLIVE_SERVER_URL ||
+    process.env.PUBLIC_APP_URL ||
+    process.env.MAIDANLIVE_URL ||
+    fileConfig.serverUrl ||
+    `http://127.0.0.1:${DEFAULT_PORT}`
 )
   .trim()
   .replace(/\/+$/, '');
@@ -255,16 +262,53 @@ function formatObsConnectError(err) {
   return raw || `Unable to reach OBS at ${OBS_URL}`;
 }
 
+async function probeLocalMediaMTX() {
+  const apiBase = (process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997').trim().replace(/\/+$/, '');
+  const lanIps = [];
+  try {
+    for (const entries of Object.values(os.networkInterfaces())) {
+      for (const info of entries || []) {
+        if (info.family === 'IPv4' && !info.internal && info.address) lanIps.push(info.address);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const res = await fetch(`${apiBase}/v3/paths/list`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(1000),
+    });
+    if (!res.ok) return { running: false, apiReachable: false, activePaths: [], lanIps };
+    const json = await res.json().catch(() => ({}));
+    const activePaths = Array.isArray(json?.items)
+      ? json.items
+          .map((item) => ({
+            name: String(item?.name || '').trim(),
+            ready: Boolean(item?.ready),
+            sourceType: String(item?.source?.type || '').trim(),
+          }))
+          .filter((p) => Boolean(p.name))
+      : [];
+    return { running: true, apiReachable: true, activePaths, lanIps };
+  } catch {
+    return { running: false, apiReachable: false, activePaths: [], lanIps };
+  }
+}
+
 async function emitObsSnapshot() {
   if (!socket.connected) return;
+  const mtxStatus = await probeLocalMediaMTX();
   if (!obsConnected) {
     socket.emit('agent:obs_state', {
       connectionStatus: obsConnecting ? 'CONNECTING' : lastError ? 'ERROR' : 'DISCONNECTED',
       lastError,
       obsScenes: [],
       obsInputs: [],
+      obsMediaStates: {},
       activeObsScene: '',
       obsStreamActive: false,
+      mediamtx: mtxStatus,
     });
     return;
   }
@@ -291,6 +335,18 @@ async function emitObsSnapshot() {
           .filter((inp) => Boolean(inp.inputName))
       : [];
 
+    const obsMediaStates = {};
+    for (const inp of obsInputs) {
+      if (inp.inputKind === 'ffmpeg_source' || inp.unversionedInputKind === 'ffmpeg_source') {
+        try {
+          const st = await obs.call('GetMediaInputStatus', { inputName: inp.inputName });
+          if (st?.mediaState) obsMediaStates[inp.inputName] = String(st.mediaState);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     socket.emit('agent:obs_state', {
       connectionStatus: 'CONNECTED',
       lastError: '',
@@ -301,6 +357,8 @@ async function emitObsSnapshot() {
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
         : [],
       obsInputs,
+      obsMediaStates,
+      mediamtx: mtxStatus,
       obsStreamActive: Boolean(streamRes.outputActive),
       obsStreamTimecode: String(streamRes.outputTimecode || ''),
       obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
@@ -686,21 +744,39 @@ async function handleCommand(command, payload) {
   if (command === 'reconnect_input') {
     const sceneName = String(payload.sceneName || '').trim();
     const inputName = String(payload.inputName || '').trim();
+    const inputKind = String(payload.inputKind || 'browser_source');
     if (sceneName && inputName) {
       await ensureSceneAndInput(
         sceneName,
         inputName,
-        String(payload.inputKind || 'browser_source'),
+        inputKind,
         payload.inputSettings || {}
       ).catch(() => {});
     }
     if (inputName) {
-      await obs
-        .call('PressInputPropertiesButton', { inputName, propertyName: 'refreshnocache' })
-        .catch(() => {});
+      if (inputKind === 'ffmpeg_source') {
+        await obs
+          .call('TriggerMediaInputAction', {
+            inputName,
+            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+          })
+          .catch(() => {});
+      } else {
+        await obs
+          .call('PressInputPropertiesButton', { inputName, propertyName: 'refreshnocache' })
+          .catch(() => {});
+      }
     }
     await emitObsSnapshot();
     return { reconnected: true, inputName };
+  }
+
+  if (command === 'remove_input') {
+    const inputName = String(payload.inputName || '').trim();
+    if (!inputName) throw new Error('inputName is required.');
+    await obs.call('RemoveInput', { inputName });
+    await emitObsSnapshot();
+    return { removed: true, inputName };
   }
 
   if (command === 'get_scene_items') {

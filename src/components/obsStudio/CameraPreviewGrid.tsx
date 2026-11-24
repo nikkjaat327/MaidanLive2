@@ -4,6 +4,7 @@ import {
   Camera,
   Check,
   Grid,
+  Layers,
   Mic,
   MicOff,
   Play,
@@ -16,6 +17,7 @@ import {
   Smartphone,
   Star,
   Video,
+  Wifi,
   Zap,
 } from 'lucide-react';
 import type {
@@ -75,6 +77,10 @@ interface CameraPreviewGridProps {
   onToggleAudio: (cam: BroadcastCameraData) => Promise<void> | void;
   onReconnectCamera: (cam: BroadcastCameraData) => Promise<void> | void;
   onOpenQrWizard: (cam: BroadcastCameraData) => void;
+  onOpenLarixWizard?: (cam: BroadcastCameraData) => void;
+  onAddLarixCamera?: () => void;
+  onAssignCameraToObs?: (cam: BroadcastCameraData) => Promise<void> | void;
+  assigningObsCamId?: string | null;
   onOpenMapSourcesModal: () => void;
   onScaffoldCameras: (count: number) => Promise<void> | void;
   onSyncObsState: () => Promise<void> | void;
@@ -152,6 +158,10 @@ export function CameraPreviewGrid({
   onToggleAudio,
   onReconnectCamera,
   onOpenQrWizard,
+  onOpenLarixWizard,
+  onAddLarixCamera,
+  onAssignCameraToObs,
+  assigningObsCamId,
   onOpenMapSourcesModal,
   onScaffoldCameras,
   onSyncObsState,
@@ -402,6 +412,17 @@ export function CameraPreviewGrid({
             <span>{refreshingAllPreviews ? 'Fetching...' : 'Refresh Frames'}</span>
           </button>
 
+          {canManageCameras && onAddLarixCamera && (
+            <button
+              type="button"
+              onClick={onAddLarixCamera}
+              className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-slate-900 border border-[#EA580C]/70 rounded-lg hover:bg-slate-800 whitespace-nowrap shrink-0"
+            >
+              <Wifi className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>+ Larix Cam</span>
+            </button>
+          )}
+
           {canManageCameras && (
             <button
               type="button"
@@ -628,6 +649,21 @@ export function CameraPreviewGrid({
                             CAM {cam.cameraNumber}
                           </span>
                           <span
+                            className={`font-mono text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                              cam.sourceType === 'mediamtx'
+                                ? 'bg-orange-950/90 text-orange-200 border border-orange-500/40'
+                                : cam.sourceType === 'vdoninja'
+                                  ? 'bg-sky-950/90 text-sky-200 border border-sky-500/40'
+                                  : 'bg-slate-900/90 text-slate-200'
+                            }`}
+                          >
+                            {cam.sourceType === 'mediamtx'
+                              ? `LARIX ${cam.streamProtocol === 'srt' ? 'SRT' : 'RTMP'}`
+                              : cam.sourceType === 'vdoninja'
+                                ? 'VDO.NINJA'
+                                : cam.sourceType.toUpperCase()}
+                          </span>
+                          <span
                             className={`font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded ${
                               cam.status === 'ERROR'
                                 ? 'bg-red-900/90 text-red-200'
@@ -636,7 +672,13 @@ export function CameraPreviewGrid({
                                   : 'bg-slate-900/90 text-slate-300'
                             }`}
                           >
-                            {cam.status}
+                            {cam.sourceType === 'mediamtx'
+                              ? cam.mediamtxRevoked
+                                ? 'REVOKED'
+                                : cam.mediamtxPublisherConnected
+                                  ? 'STREAMING'
+                                  : cam.status
+                              : cam.status}
                           </span>
                         </div>
 
@@ -781,15 +823,49 @@ export function CameraPreviewGrid({
                             />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => onOpenQrWizard(cam)}
-                            title="Smartphone QR Setup"
-                            aria-label={`Open QR setup for ${cam.label || cam.name}`}
-                            className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center px-1.5 text-slate-300 bg-slate-950 border border-slate-800 rounded hover:border-slate-600"
-                          >
-                            <QrCode className="w-3 h-3" />
-                          </button>
+                          {cam.sourceType === 'mediamtx' ? (
+                            <>
+                              {onAssignCameraToObs && (
+                                <button
+                                  type="button"
+                                  disabled={!obsConnected || assigningObsCamId === cam.cameraId || cam.mediamtxRevoked}
+                                  onClick={() => onAssignCameraToObs(cam)}
+                                  title="Create or sync MediaMTX FFmpeg Media Source in OBS Studio"
+                                  aria-label={`Sync ${cam.label || cam.name} to OBS`}
+                                  className={`min-h-[28px] inline-flex items-center gap-1 px-2 text-[10px] font-bold rounded border disabled:opacity-40 ${
+                                    cam.obsSourceAvailable
+                                      ? 'bg-emerald-950 text-emerald-200 border-emerald-700'
+                                      : 'bg-slate-950 text-amber-200 border-amber-700/70 hover:border-amber-500'
+                                  }`}
+                                >
+                                  <Layers className="w-3 h-3" />
+                                  <span>{assigningObsCamId === cam.cameraId ? '...' : 'Sync OBS'}</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenLarixWizard ? onOpenLarixWizard(cam) : onOpenQrWizard(cam)
+                                }
+                                title="Larix Broadcaster Setup & Credentials"
+                                aria-label={`Open Larix setup for ${cam.label || cam.name}`}
+                                className="min-h-[28px] inline-flex items-center gap-1 px-2 text-[10px] font-bold text-orange-200 bg-orange-950/80 border border-orange-500/50 rounded hover:border-[#EA580C]"
+                              >
+                                <Wifi className="w-3 h-3" />
+                                <span>Larix</span>
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onOpenQrWizard(cam)}
+                              title="Smartphone QR Setup"
+                              aria-label={`Open QR setup for ${cam.label || cam.name}`}
+                              className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center px-1.5 text-slate-300 bg-slate-950 border border-slate-800 rounded hover:border-slate-600"
+                            >
+                              <QrCode className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       </div>
 

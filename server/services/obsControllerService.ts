@@ -40,7 +40,11 @@ import type {
 import { emitBroadcastStudioEvent, registerObsAgentHandlers } from '../socket/index.ts';
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
-import { verifyMediaMTXStreamHealth } from './mediamtxService.ts';
+import {
+  buildLarixCameraConfig,
+  isValidMediaSourceUrl,
+  verifyMediaMTXStreamHealth,
+} from './mediamtxService.ts';
 import { clearLiveGraphics, getGraphicsStateForMatch } from './broadcastGraphicsService.ts';
 import { handleMatchSessionEndedForSchedules } from './broadcastAdScheduleService.ts';
 
@@ -402,6 +406,13 @@ export function initObsControllerBridge(): void {
         ? payload.obsScenes.filter((s: unknown): s is string => typeof s === 'string')
         : undefined;
 
+      const mediamtxPayload =
+        payload.mediamtx && typeof payload.mediamtx === 'object' ? payload.mediamtx : null;
+      const obsMediaStates =
+        payload.obsMediaStates && typeof payload.obsMediaStates === 'object'
+          ? (payload.obsMediaStates as Record<string, string>)
+          : null;
+
       if (context.bridgeId) {
         const br = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
         if (!br || br.status === 'REVOKED') {
@@ -422,6 +433,9 @@ export function initObsControllerBridge(): void {
         if (obsScenes) bridgeUpdate.obsScenes = obsScenes;
         if (typeof payload.obsStreamActive === 'boolean') {
           bridgeUpdate.obsStreamActive = payload.obsStreamActive;
+        }
+        if (mediamtxPayload) {
+          bridgeUpdate.mediamtxState = mediamtxPayload;
         }
         await ObsBridge.findOneAndUpdate({ bridgeId: context.bridgeId }, { $set: bridgeUpdate });
       }
@@ -450,15 +464,25 @@ export function initObsControllerBridge(): void {
           updateFields.activeObsScene = status === 'CONNECTED' ? activeObsScene : '';
         }
         if (obsScenes) updateFields.obsScenes = obsScenes;
+        const normalizedInputs: Array<{
+          inputName: string;
+          inputKind: string;
+          unversionedInputKind: string;
+        }> = Array.isArray(payload.obsInputs)
+          ? payload.obsInputs
+              .filter((inp: any) => inp && typeof inp.inputName === 'string' && inp.inputName.trim())
+              .slice(0, 100)
+              .map((inp: any) => ({
+                inputName: String(inp.inputName).trim().slice(0, 140),
+                inputKind: String(inp.inputKind || '').trim().slice(0, 80),
+                unversionedInputKind: String(inp.unversionedInputKind || '').trim().slice(0, 80),
+              }))
+          : [];
         if (Array.isArray(payload.obsInputs)) {
-          updateFields.obsInputs = payload.obsInputs
-            .filter((inp: any) => inp && typeof inp.inputName === 'string' && inp.inputName.trim())
-            .slice(0, 100)
-            .map((inp: any) => ({
-              inputName: String(inp.inputName).trim().slice(0, 140),
-              inputKind: String(inp.inputKind || '').trim().slice(0, 80),
-              unversionedInputKind: String(inp.unversionedInputKind || '').trim().slice(0, 80),
-            }));
+          updateFields.obsInputs = normalizedInputs;
+        }
+        if (mediamtxPayload) {
+          updateFields.mediamtxState = mediamtxPayload;
         }
         if (typeof payload.obsStreamActive === 'boolean') {
           updateFields.obsStreamActive = payload.obsStreamActive;
@@ -483,6 +507,65 @@ export function initObsControllerBridge(): void {
         }
 
         await ObsControllerProfile.findOneAndUpdate({ matchId: mid }, { $set: updateFields }, { new: true });
+
+        // Sync OBS input presence and local MediaMTX active ingest paths onto cameras
+        if (Array.isArray(payload.obsInputs) || mediamtxPayload || obsMediaStates) {
+          const inputSet = new Set(normalizedInputs.map((i) => i.inputName));
+          const activeMtxPaths = new Set<string>(
+            mediamtxPayload && mediamtxPayload.apiReachable && Array.isArray(mediamtxPayload.activePaths)
+              ? mediamtxPayload.activePaths
+                  .filter((p: any) => p && p.ready && typeof p.name === 'string')
+                  .map((p: any) => p.name.replace(/^\/+/, ''))
+              : []
+          );
+          const cams = await BroadcastCamera.find({ matchId: mid });
+          for (const cam of cams) {
+            let dirty = false;
+            const targetInput = cam.obsInputName?.trim() || `ML_CAM_${cam.cameraNumber}`;
+            if (Array.isArray(payload.obsInputs)) {
+              const presentInObs = status === 'CONNECTED' && inputSet.has(targetInput);
+              if (Boolean(cam.obsSourceAvailable) !== presentInObs) {
+                cam.obsSourceAvailable = presentInObs;
+                if (presentInObs) cam.obsSourceConfigured = true;
+                dirty = true;
+              }
+            }
+            if (obsMediaStates && typeof obsMediaStates[targetInput] === 'string') {
+              const nextMediaState = String(obsMediaStates[targetInput]).slice(0, 40);
+              if (cam.obsMediaState !== nextMediaState) {
+                cam.obsMediaState = nextMediaState;
+                dirty = true;
+              }
+            }
+            if (
+              cam.sourceType === 'mediamtx' &&
+              mediamtxPayload &&
+              mediamtxPayload.apiReachable &&
+              cam.mediamtxStreamPath &&
+              !cam.mediamtxRevoked
+            ) {
+              const cleanCamPath = cam.mediamtxStreamPath.replace(/^\/+/, '');
+              const publisherLive = activeMtxPaths.has(cleanCamPath);
+              if (publisherLive) {
+                if (!cam.mediamtxPublisherConnected) {
+                  cam.mediamtxLastConnectedAt = new Date();
+                }
+                cam.mediamtxPublisherConnected = true;
+                cam.mediamtxDisconnectedAt = null;
+                cam.lastHeartbeatAt = new Date();
+                cam.lastError = '';
+                dirty = true;
+              } else if (cam.mediamtxPublisherConnected) {
+                cam.mediamtxPublisherConnected = false;
+                cam.mediamtxDisconnectedAt = new Date();
+                dirty = true;
+              }
+            }
+            if (dirty) {
+              await cam.save();
+            }
+          }
+        }
 
         if (activeObsScene && status === 'CONNECTED') {
           await reconcileCameraActiveStates(mid, activeObsScene);
@@ -649,6 +732,106 @@ export async function ensureObsProfileForMatch(
   return profile;
 }
 
+export function buildObsEnsureInputForCamera(
+  camera: any,
+  profile: any,
+  roomPassword = ''
+): { inputName: string; inputKind: string; inputSettings: Record<string, any> } | undefined {
+  if (!camera) return undefined;
+  const inputName = camera.obsInputName?.trim() || `ML_CAM_${camera.cameraNumber}`;
+
+  if (camera.sourceType === 'vdoninja' && camera.vdoStreamId) {
+    const links = buildVdoNinjaLinks({
+      roomName: camera.vdoRoomName || profile?.vdoRoomName || 'maidanlive',
+      streamId: camera.vdoStreamId,
+      password: roomPassword,
+      label: camera.label || camera.name,
+      resolution: camera.resolution,
+      fps: camera.fps,
+      bitrateKbps: camera.bitrateKbps,
+      lowBandwidthMode: camera.lowBandwidthMode,
+      facingMode: camera.facingMode,
+    });
+    return {
+      inputName,
+      inputKind: 'browser_source',
+      inputSettings: {
+        url: links.obsViewUrl,
+        width: 1920,
+        height: 1080,
+      },
+    };
+  }
+
+  if (camera.sourceType === 'browser_source' && camera.connectionUrl) {
+    return {
+      inputName,
+      inputKind: 'browser_source',
+      inputSettings: {
+        url: camera.connectionUrl,
+        width: 1920,
+        height: 1080,
+      },
+    };
+  }
+
+  if (camera.sourceType === 'mediamtx') {
+    if (camera.mediamtxRevoked) return undefined;
+    let obsPullUrl = '';
+    if (camera.mediamtxStreamPath) {
+      const plainKey = camera.mediamtxStreamKeyEnc ? decryptObsSecret(camera.mediamtxStreamKeyEnc) : '';
+      const cfg = buildLarixCameraConfig({
+        matchId: String(camera.matchId || profile?.matchId || ''),
+        cameraId: camera.cameraId,
+        cameraName: camera.label || camera.name,
+        protocol: camera.streamProtocol === 'srt' ? 'srt' : 'rtmp',
+        streamPath: camera.mediamtxStreamPath,
+        streamKey: plainKey,
+      });
+      obsPullUrl = cfg.obsPullUrl;
+    } else if (camera.connectionUrl) {
+      obsPullUrl = camera.connectionUrl;
+    }
+
+    if (!obsPullUrl || !isValidMediaSourceUrl(obsPullUrl)) {
+      return undefined;
+    }
+
+    return {
+      inputName,
+      inputKind: 'ffmpeg_source',
+      inputSettings: {
+        is_local_file: false,
+        input: obsPullUrl,
+        reconnect_delay_sec: 2,
+        restart_on_activate: true,
+        clear_on_media_end: false,
+        close_when_inactive: false,
+        hw_decode: true,
+        buffering_mb: 2,
+      },
+    };
+  }
+
+  if (camera.sourceType === 'rtsp_ffmpeg' && camera.connectionUrl && isValidMediaSourceUrl(camera.connectionUrl)) {
+    return {
+      inputName,
+      inputKind: 'ffmpeg_source',
+      inputSettings: {
+        is_local_file: false,
+        input: camera.connectionUrl,
+        reconnect_delay_sec: 2,
+        restart_on_activate: true,
+        clear_on_media_end: false,
+        close_when_inactive: false,
+        hw_decode: true,
+      },
+    };
+  }
+
+  return undefined;
+}
+
 export function computeEffectiveCameraStatus(
   camera: any,
   activeCameraId: string,
@@ -666,6 +849,22 @@ export function computeEffectiveCameraStatus(
 
   if (camera.status === 'ERROR' && camera.lastError) {
     return 'ERROR';
+  }
+
+  if (camera.sourceType === 'mediamtx') {
+    if (camera.mediamtxRevoked) return 'DISCONNECTED';
+    const hasLarixConfig = Boolean(
+      camera.mediamtxStreamPath || camera.connectionUrl || camera.obsInputName || camera.obsSceneName
+    );
+    if (!hasLarixConfig) return 'NOT_CONFIGURED';
+    const hbMs = camera.lastHeartbeatAt ? new Date(camera.lastHeartbeatAt).getTime() : 0;
+    const isMediaPlaying =
+      Boolean(camera.mediamtxPublisherConnected) ||
+      camera.obsMediaState === 'OBS_MEDIA_STATE_PLAYING' ||
+      Boolean(hbMs && Date.now() - hbMs <= HEARTBEAT_STALE_MS);
+    if (isSelectedLive) return 'ACTIVE';
+    if (isMediaPlaying) return 'CONNECTED';
+    return 'DISCONNECTED';
   }
 
   const hasConfig =
@@ -773,6 +972,7 @@ export function formatSafeProfile(profile: any) {
     selectedSponsorIds: Array.isArray(profile.selectedSponsorIds)
       ? profile.selectedSponsorIds
       : [],
+    mediamtxState: profile.mediamtxState || null,
     lastSyncedAt: profile.lastSyncedAt || null,
     updatedAt: profile.updatedAt || null,
   };
@@ -808,6 +1008,34 @@ export function formatSafeCamera(
     });
   }
 
+  const targetInputName = camera.obsInputName?.trim() || `ML_CAM_${camera.cameraNumber}`;
+  const obsInputsList = Array.isArray(safeProfile?.obsInputs) ? safeProfile.obsInputs : [];
+  const presentInObs = Boolean(
+    obsConnected && obsInputsList.some((inp: any) => inp.inputName === targetInputName)
+  );
+
+  let larixConfig: ReturnType<typeof buildLarixCameraConfig> | null = null;
+  if (
+    options.includePrivateUrls &&
+    camera.sourceType === 'mediamtx' &&
+    !camera.mediamtxRevoked &&
+    camera.mediamtxStreamPath
+  ) {
+    const plainKey = camera.mediamtxStreamKeyEnc
+      ? decryptObsSecret(camera.mediamtxStreamKeyEnc)
+      : '';
+    if (plainKey) {
+      larixConfig = buildLarixCameraConfig({
+        matchId: String(camera.matchId || profile?.matchId || ''),
+        cameraId: camera.cameraId,
+        cameraName: camera.label || camera.name,
+        protocol: camera.streamProtocol === 'srt' ? 'srt' : 'rtmp',
+        streamPath: camera.mediamtxStreamPath,
+        streamKey: plainKey,
+      });
+    }
+  }
+
   return {
     id: String(camera._id || camera.id || ''),
     matchId: String(camera.matchId || ''),
@@ -819,14 +1047,33 @@ export function formatSafeCamera(
     position: camera.position || '',
     cameraType: camera.cameraType || 'smartphone_vdo',
     sourceType: camera.sourceType || 'vdoninja',
+    streamProtocol:
+      camera.streamProtocol ||
+      (camera.sourceType === 'mediamtx'
+        ? 'rtmp'
+        : camera.sourceType === 'vdoninja'
+          ? 'vdoninja'
+          : camera.sourceType || 'vdoninja'),
     connectionUrl: options.includePrivateUrls ? camera.connectionUrl || '' : '',
     vdoRoomName: camera.vdoRoomName || '',
     vdoStreamId: camera.vdoStreamId || '',
     vdoPushUrl: vdoLinks?.pushUrl || '',
     obsBrowserSourceUrl:
-      vdoLinks?.obsViewUrl || (options.includePrivateUrls ? camera.connectionUrl || '' : ''),
+      vdoLinks?.obsViewUrl ||
+      (options.includePrivateUrls && camera.sourceType !== 'mediamtx' ? camera.connectionUrl || '' : ''),
     pushTokenPrefix: camera.pushTokenPrefix || '',
     pushTokenExpiresAt: camera.pushTokenExpiresAt || null,
+    mediamtxStreamPath: camera.mediamtxStreamPath || '',
+    mediamtxStreamKeyPrefix: camera.mediamtxStreamKeyPrefix || '',
+    mediamtxRevoked: Boolean(camera.mediamtxRevoked),
+    mediamtxRevokedAt: camera.mediamtxRevokedAt || null,
+    mediamtxPublisherConnected: Boolean(camera.mediamtxPublisherConnected),
+    mediamtxLastConnectedAt: camera.mediamtxLastConnectedAt || null,
+    mediamtxDisconnectedAt: camera.mediamtxDisconnectedAt || null,
+    obsSourceConfigured: Boolean(camera.obsSourceConfigured || presentInObs),
+    obsSourceAvailable: Boolean(presentInObs || camera.obsSourceAvailable),
+    obsMediaState: camera.obsMediaState || '',
+    larixConfig,
     broadcastSessionId: camera.broadcastSessionId || '',
     audioMuted: Boolean(camera.audioMuted ?? camera.telemetry?.audioMuted),
     obsInputMuted: typeof camera.obsInputMuted === 'boolean' ? camera.obsInputMuted : null,
@@ -893,8 +1140,12 @@ async function getRoomPasswordForProfile(profile: any): Promise<string> {
 
 export async function getStudioSnapshot(matchId: string, includePrivateUrls = true) {
   const profile = await ensureObsProfileForMatch(matchId);
+  const cameraQuery = BroadcastCamera.find({ matchId }).sort({ sortOrder: 1, cameraNumber: 1 });
+  if (includePrivateUrls) {
+    cameraQuery.select('+mediamtxStreamKeyEnc');
+  }
   const [cameras, scenes, auditLogs, graphicsState] = await Promise.all([
-    BroadcastCamera.find({ matchId }).sort({ sortOrder: 1, cameraNumber: 1 }).lean(),
+    cameraQuery.lean(),
     BroadcastScene.find({ matchId }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
     BroadcastAuditLog.find({ matchId }).sort({ timestamp: -1 }).limit(60).lean(),
     getGraphicsStateForMatch(matchId),
@@ -1732,22 +1983,32 @@ export async function executeDirectObsCommand(
   if (command === 'reconnect_input') {
     const sceneName = String(payload.sceneName || '');
     const inputName = String(payload.inputName || '');
-    if (sceneName && inputName) {
+    const inputKind = String(payload.inputKind || 'browser_source');
+    if (sceneName && inputName && inputKind) {
       await ensureSceneAndInputDirect(
         obs,
         sceneName,
         inputName,
-        payload.inputKind || 'browser_source',
+        inputKind,
         payload.inputSettings || {}
       ).catch(() => {});
     }
     if (inputName) {
-      await obs
-        .call('PressInputPropertiesButton', {
-          inputName,
-          propertyName: 'refreshnocache',
-        })
-        .catch(() => {});
+      if (inputKind === 'ffmpeg_source') {
+        await obs
+          .call('TriggerMediaInputAction', {
+            inputName,
+            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+          })
+          .catch(() => {});
+      } else {
+        await obs
+          .call('PressInputPropertiesButton', {
+            inputName,
+            propertyName: 'refreshnocache',
+          })
+          .catch(() => {});
+      }
     }
     const snapshot = await pullDirectObsSnapshot(matchId, obs);
     return {
@@ -1755,6 +2016,14 @@ export async function executeDirectObsCommand(
       inputName,
       obsScenes: snapshot.obsScenes,
     };
+  }
+
+  if (command === 'remove_input') {
+    const inputName = String(payload.inputName || '').trim();
+    if (!inputName) throw new Error('inputName is required.');
+    await obs.call('RemoveInput', { inputName }).catch(() => {});
+    const snapshot = await pullDirectObsSnapshot(matchId, obs);
+    return { removed: true, inputName, obsScenes: snapshot.obsScenes };
   }
 
   if (command === 'get_scene_items') {
@@ -2107,39 +2376,14 @@ export async function switchCameraLive(
   const roomPassword = await getRoomPasswordForProfile(profile);
   const baseAppUrl = (options.baseAppUrl || '').replace(/\/+$/, '');
 
-  let ensureInput: Record<string, any> | undefined;
-  if (camera.sourceType === 'vdoninja' && camera.vdoStreamId) {
-    const links = buildVdoNinjaLinks({
-      roomName: camera.vdoRoomName || profile.vdoRoomName,
-      streamId: camera.vdoStreamId,
-      password: roomPassword,
-      label: camera.label || camera.name,
-      resolution: camera.resolution,
-      fps: camera.fps,
-      bitrateKbps: camera.bitrateKbps,
-      lowBandwidthMode: camera.lowBandwidthMode,
-      facingMode: camera.facingMode,
-    });
-    ensureInput = {
-      inputName: camera.obsInputName || `ML_CAM_${camera.cameraNumber}`,
-      inputKind: 'browser_source',
-      inputSettings: {
-        url: links.obsViewUrl,
-        width: 1920,
-        height: 1080,
-      },
-    };
-  } else if (camera.sourceType === 'browser_source' && camera.connectionUrl) {
-    ensureInput = {
-      inputName: camera.obsInputName || `ML_CAM_${camera.cameraNumber}`,
-      inputKind: 'browser_source',
-      inputSettings: {
-        url: camera.connectionUrl,
-        width: 1920,
-        height: 1080,
-      },
-    };
-  }
+  const cameraWithSecret = await BroadcastCamera.findOne({ matchId, cameraId })
+    .select('+mediamtxStreamKeyEnc')
+    .lean();
+  const ensureInput = buildObsEnsureInputForCamera(
+    cameraWithSecret || camera,
+    profile,
+    roomPassword
+  );
 
   const rotationDeg = parseOrientationDegrees(camera.orientationMode);
   const previewFit = normalizePreviewFit(camera.previewFit);
@@ -2314,7 +2558,9 @@ export async function applyDynamicLayoutToObs(
     throw err;
   }
 
-  const allCameras = await BroadcastCamera.find({ matchId }).sort({ sortOrder: 1, cameraNumber: 1 });
+  const allCameras = await BroadcastCamera.find({ matchId })
+    .select('+mediamtxStreamKeyEnc')
+    .sort({ sortOrder: 1, cameraNumber: 1 });
   const cameraMap = new Map(allCameras.map((c) => [c.cameraId, c]));
   const selectedIds = params.cameraIds.filter((id) => {
     const cam = cameraMap.get(id);
@@ -2350,35 +2596,15 @@ export async function applyDynamicLayoutToObs(
   const obsBoxes = boxes.map((box) => {
     const cam = cameraMap.get(box.cameraId)!;
     const inputName = cam.obsInputName || `ML_CAM_${cam.cameraNumber}`;
-    let inputKind = 'browser_source';
-    let inputSettings: Record<string, any> = {};
-
-    if (cam.sourceType === 'vdoninja' && cam.vdoStreamId) {
-      const links = buildVdoNinjaLinks({
-        roomName: cam.vdoRoomName || profile.vdoRoomName,
-        streamId: cam.vdoStreamId,
-        password: roomPassword,
-        label: cam.label || cam.name,
-        resolution: cam.resolution,
-        fps: cam.fps,
-        bitrateKbps: cam.bitrateKbps,
-        lowBandwidthMode: cam.lowBandwidthMode,
-        facingMode: cam.facingMode,
-      });
-      inputSettings = { url: links.obsViewUrl, width: 1920, height: 1080 };
-    } else if (cam.sourceType === 'browser_source' && cam.connectionUrl) {
-      inputSettings = { url: cam.connectionUrl, width: 1920, height: 1080 };
-    } else {
-      inputKind = '';
-    }
+    const ensured = buildObsEnsureInputForCamera(cam, profile, roomPassword);
 
     return {
       ...box,
       rotation: parseOrientationDegrees(cam.orientationMode),
       previewFit: normalizePreviewFit(cam.previewFit),
-      inputName,
-      inputKind,
-      inputSettings,
+      inputName: ensured?.inputName || inputName,
+      inputKind: ensured?.inputKind || '',
+      inputSettings: ensured?.inputSettings || {},
     };
   });
 
@@ -2722,7 +2948,7 @@ export async function updateCameraTransformInObs(
   const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
   checkAdminOverrideGuard(profile, actor, override);
 
-  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId }).select('+mediamtxStreamKeyEnc');
   if (!cam) {
     const err: any = new Error('Camera not found.');
     err.statusCode = 404;
@@ -2756,31 +2982,7 @@ export async function updateCameraTransformInObs(
 
   if (isObsConnected && targetInputName) {
     const roomPassword = await getRoomPasswordForProfile(profile);
-    let ensureInput: Record<string, any> | undefined;
-    if (cam.sourceType === 'vdoninja' && cam.vdoStreamId) {
-      const links = buildVdoNinjaLinks({
-        roomName: cam.vdoRoomName || profile.vdoRoomName,
-        streamId: cam.vdoStreamId,
-        password: roomPassword,
-        label: cam.label || cam.name,
-        resolution: cam.resolution,
-        fps: cam.fps,
-        bitrateKbps: cam.bitrateKbps,
-        lowBandwidthMode: cam.lowBandwidthMode,
-        facingMode: cam.facingMode,
-      });
-      ensureInput = {
-        inputName: targetInputName,
-        inputKind: 'browser_source',
-        inputSettings: { url: links.obsViewUrl, width: 1920, height: 1080 },
-      };
-    } else if (cam.sourceType === 'browser_source' && cam.connectionUrl) {
-      ensureInput = {
-        inputName: targetInputName,
-        inputKind: 'browser_source',
-        inputSettings: { url: cam.connectionUrl, width: 1920, height: 1080 },
-      };
-    }
+    const ensureInput = buildObsEnsureInputForCamera(cam, profile, roomPassword);
 
     // 1. Update active multi-cam box transform if this camera is currently in an active multi-cam scene
     const activeScene = String(profile.activeObsScene || '').trim();
@@ -3061,7 +3263,7 @@ export async function reconnectCameraSource(
   const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
   checkAdminOverrideGuard(profile, actor, override);
 
-  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId }).select('+mediamtxStreamKeyEnc');
   if (!cam) {
     const err: any = new Error('Camera not found.');
     err.statusCode = 404;
@@ -3071,27 +3273,9 @@ export async function reconnectCameraSource(
   const targetSceneName = cam.obsSceneName?.trim() || `CAM ${cam.cameraNumber} FULL`;
   const targetInputName = cam.obsInputName?.trim() || `ML_CAM_${cam.cameraNumber}`;
   const roomPassword = await getRoomPasswordForProfile(profile);
-
-  let inputKind = 'browser_source';
-  let inputSettings: Record<string, any> = {};
-  if (cam.sourceType === 'vdoninja' && cam.vdoStreamId) {
-    const links = buildVdoNinjaLinks({
-      roomName: cam.vdoRoomName || profile.vdoRoomName,
-      streamId: cam.vdoStreamId,
-      password: roomPassword,
-      label: cam.label || cam.name,
-      resolution: cam.resolution,
-      fps: cam.fps,
-      bitrateKbps: cam.bitrateKbps,
-      lowBandwidthMode: cam.lowBandwidthMode,
-      facingMode: cam.facingMode,
-    });
-    inputSettings = { url: links.obsViewUrl, width: 1920, height: 1080 };
-  } else if (cam.sourceType === 'browser_source' && cam.connectionUrl) {
-    inputSettings = { url: cam.connectionUrl, width: 1920, height: 1080 };
-  } else {
-    inputKind = '';
-  }
+  const ensured = buildObsEnsureInputForCamera(cam, profile, roomPassword);
+  const inputKind = ensured?.inputKind || '';
+  const inputSettings = ensured?.inputSettings || {};
 
   const isObsConnected =
     profile.connectionMode === 'local_agent'
@@ -3109,6 +3293,9 @@ export async function reconnectCameraSource(
         inputSettings,
       });
       obsSynced = true;
+      if (ensured) {
+        cam.obsSourceConfigured = true;
+      }
     } catch (err: any) {
       obsNote = err?.message || 'OBS input refresh returned an error.';
     }
@@ -3118,14 +3305,25 @@ export async function reconnectCameraSource(
 
   let signalOk = false;
   let signalDetail = '';
-  if (cam.sourceType === 'mediamtx' && cam.connectionUrl) {
-    const mtx = await verifyMediaMTXStreamHealth({
-      streamPath: cam.connectionUrl,
-      hlsPlaybackUrl: cam.connectionUrl,
-      webrtcPlaybackUrl: '',
-    });
-    signalOk = mtx.ok;
-    signalDetail = mtx.message;
+  if (cam.sourceType === 'mediamtx') {
+    if (cam.mediamtxPublisherConnected) {
+      signalOk = true;
+      signalDetail = `Larix / MediaMTX publisher active on "${cam.mediamtxStreamPath}"${obsSynced ? ' and OBS Media Source restarted.' : '.'}`;
+    } else if (cam.mediamtxStreamPath || cam.connectionUrl) {
+      const mtx = await verifyMediaMTXStreamHealth({
+        streamPath: cam.mediamtxStreamPath || cam.connectionUrl,
+        hlsPlaybackUrl: cam.connectionUrl,
+        webrtcPlaybackUrl: '',
+      });
+      signalOk = mtx.ok || obsSynced;
+      signalDetail = mtx.ok
+        ? mtx.message
+        : obsSynced
+          ? `Restarted OBS Media Source "${targetInputName}". Waiting for Larix publisher on "${cam.mediamtxStreamPath}".`
+          : mtx.message;
+    } else {
+      signalDetail = obsNote || 'Larix MediaMTX stream path is not configured.';
+    }
   } else if (
     cam.lastHeartbeatAt &&
     Date.now() - new Date(cam.lastHeartbeatAt).getTime() <= HEARTBEAT_STALE_MS
@@ -3273,6 +3471,7 @@ export function formatSafeBridge(bridge: any) {
     lastHeartbeatAt: bridge.lastHeartbeatAt || null,
     lastError: bridge.lastError || '',
     platform: bridge.platform || 'win32',
+    mediamtxState: bridge.mediamtxState || null,
     revokedAt: bridge.revokedAt || null,
     revokeReason: bridge.revokeReason || '',
     createdAt: bridge.createdAt || null,
@@ -4148,6 +4347,156 @@ export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: 
 
   return formatSafeBridge(bridge.toObject());
 }
+
+export async function assignCameraToObs(
+  matchId: string,
+  cameraId: string,
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId }).select('+mediamtxStreamKeyEnc');
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetSceneName = cam.obsSceneName?.trim() || `CAM ${cam.cameraNumber} FULL`;
+  const targetInputName = cam.obsInputName?.trim() || `ML_CAM_${cam.cameraNumber}`;
+  const roomPassword = await getRoomPasswordForProfile(profile);
+  const ensureInput = buildObsEnsureInputForCamera(cam, profile, roomPassword);
+  if (!ensureInput) {
+    const err: any = new Error(
+      cam.sourceType === 'mediamtx' && cam.mediamtxRevoked
+        ? 'Camera credentials are revoked. Rotate credentials before syncing to OBS.'
+        : 'Camera source URL/configuration is missing or invalid.'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const rotationDeg = parseOrientationDegrees(cam.orientationMode);
+  const previewFit = normalizePreviewFit(cam.previewFit);
+  const rpcRes = await callObsRpc(matchId, 'update_camera_transform', {
+    sceneName: targetSceneName,
+    inputName: targetInputName,
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    rotation: rotationDeg,
+    previewFit,
+    ensureInput,
+  });
+
+  cam.obsSceneName = targetSceneName;
+  cam.obsInputName = targetInputName;
+  cam.obsSourceConfigured = true;
+  cam.obsSourceAvailable = true;
+  await cam.save();
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_OBS_SYNCED',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    newScene: targetSceneName,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: 'SUCCESS',
+    metadata: { inputName: targetInputName, inputKind: ensureInput.inputKind },
+  });
+  await emitFullStudioState(matchId);
+
+  return {
+    ok: true,
+    sceneName: targetSceneName,
+    inputName: targetInputName,
+    inputKind: ensureInput.inputKind,
+    rpcRes,
+    camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+  };
+}
+
+export async function removeCameraObsSource(matchId: string, inputName: string): Promise<boolean> {
+  if (!inputName || !inputName.trim()) return false;
+  try {
+    await callObsRpc(matchId, 'remove_input', { inputName: inputName.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function controlBridgeMediaMTX(
+  matchId: string,
+  action: 'status' | 'start' | 'stop' | 'sync_config',
+  payload: Record<string, any> = {},
+  actor?: IUser | null
+) {
+  const cmdMap: Record<typeof action, string> = {
+    status: 'mediamtx_status',
+    start: 'mediamtx_start',
+    stop: 'mediamtx_stop',
+    sync_config: 'mediamtx_sync_config',
+  };
+  const resolved = await resolveAgentSocketForMatch(matchId);
+  if (!resolved) {
+    const err: any = new Error(
+      'Windows Local OBS Bridge is offline. Open MaidanLive OBS Bridge on the broadcasting PC or run MediaMTX manually.'
+    );
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const data = await new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Bridge MediaMTX command "${action}" timed out.`));
+    }, 10_000);
+    resolved.socket.emit(
+      'server:obs_command',
+      { command: cmdMap[action], payload },
+      (ack: any) => {
+        clearTimeout(timer);
+        if (!ack || !ack.ok) {
+          reject(new Error(ack?.error || `MediaMTX ${action} command failed on bridge.`));
+          return;
+        }
+        resolve(ack.data || {});
+      }
+    );
+  });
+
+  if (data?.mediamtx) {
+    await ObsControllerProfile.findOneAndUpdate(
+      { matchId },
+      { $set: { mediamtxState: data.mediamtx } }
+    );
+    if (resolved.bridgeId) {
+      await ObsBridge.findOneAndUpdate(
+        { bridgeId: resolved.bridgeId },
+        { $set: { mediamtxState: data.mediamtx } }
+      );
+    }
+  }
+
+  if (actor) {
+    await writeBroadcastAudit({
+      matchId,
+      actionType: 'MEDIAMTX_CONTROL',
+      actor,
+      obsStatus: 'SUCCESS',
+      metadata: { action, running: data?.mediamtx?.running ?? null },
+    });
+  }
+  await emitFullStudioState(matchId);
+  return data;
+}
+
 
 
 

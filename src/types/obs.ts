@@ -34,6 +34,74 @@ export type CameraSourceType =
   | 'obs_input'
   | 'rtsp_ffmpeg';
 
+export type CameraStreamProtocol =
+  | 'vdoninja'
+  | 'rtmp'
+  | 'srt'
+  | 'browser'
+  | 'obs_input'
+  | 'rtsp_ffmpeg';
+
+export interface LarixCameraConfig {
+  protocol: 'rtmp' | 'srt';
+  streamPath: string;
+  streamKey: string;
+  streamKeyPrefix: string;
+  rtmpServerUrl: string;
+  rtmpStreamKeyParam: string;
+  rtmpFullUrl: string;
+  srtServerUrl: string;
+  srtStreamId: string;
+  srtFullUrl: string;
+  larixDeepLinkUrl: string;
+  obsPullUrl: string;
+  obsPullProtocol: 'rtmp' | 'srt';
+  hlsPreviewUrl: string;
+  webrtcPreviewUrl: string;
+  usesLocalhostIngest: boolean;
+}
+
+export interface MediaMTXBridgeState {
+  installed: boolean;
+  running: boolean;
+  executablePath?: string;
+  managedConfigPath?: string;
+  rtmpPortOpen?: boolean;
+  srtPortOpen?: boolean;
+  apiReachable?: boolean;
+  activePathCount?: number;
+  activePaths?: string[];
+  lanIps?: string[];
+  pid?: number | null;
+  lastError?: string;
+  checkedAt?: string;
+}
+
+export interface MediaMTXConfigPayload {
+  ok: boolean;
+  serverUrl: string;
+  envConfig: {
+    rtmpBase: string;
+    srtBase: string;
+    hlsBase: string;
+    webrtcBase: string;
+    apiBase: string;
+    obsRtmpBase: string;
+    obsSrtBase: string;
+  };
+  lanIps: string[];
+  mediamtxState: MediaMTXBridgeState | null;
+  yamlConfig: string;
+  cameras: Array<{
+    cameraId: string;
+    name: string;
+    protocol: 'rtmp' | 'srt';
+    revoked: boolean;
+    publisherConnected: boolean;
+    config: LarixCameraConfig | null;
+  }>;
+}
+
 export type CameraConnectionStatus =
   | 'CONNECTED'
   | 'DISCONNECTED'
@@ -101,6 +169,7 @@ export interface ObsControllerProfileData {
   autoSyncScoreboardSource: boolean;
   scoreboardSourceName: string;
   selectedSponsorIds: string[];
+  mediamtxState?: MediaMTXBridgeState | null;
   lastSyncedAt?: string | null;
   updatedAt?: string | null;
 }
@@ -140,6 +209,7 @@ export interface BroadcastCameraData {
   position: string;
   cameraType: CameraType;
   sourceType: CameraSourceType;
+  streamProtocol?: CameraStreamProtocol;
   connectionUrl: string;
   vdoRoomName: string;
   vdoStreamId: string;
@@ -147,6 +217,17 @@ export interface BroadcastCameraData {
   obsBrowserSourceUrl?: string;
   pushTokenPrefix: string;
   pushTokenExpiresAt?: string | null;
+  mediamtxStreamPath?: string;
+  mediamtxStreamKeyPrefix?: string;
+  mediamtxRevoked?: boolean;
+  mediamtxRevokedAt?: string | null;
+  mediamtxPublisherConnected?: boolean;
+  mediamtxLastConnectedAt?: string | null;
+  mediamtxDisconnectedAt?: string | null;
+  obsSourceConfigured?: boolean;
+  obsSourceAvailable?: boolean;
+  obsMediaState?: string;
+  larixConfig?: LarixCameraConfig | null;
   broadcastSessionId?: string;
   audioMuted?: boolean;
   obsInputMuted?: boolean | null;

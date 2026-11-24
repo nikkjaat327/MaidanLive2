@@ -272,13 +272,21 @@ app.on('window-all-closed', () => {
 
 ipcMain.handle('bridge:bootstrap', async () => {
   const cfg = loadConfig();
+  const envServerUrl = (
+    process.env.MAIDANLIVE_SERVER_URL ||
+    process.env.PUBLIC_APP_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
   return {
     state: engine.getState(),
     logs: engine.getLogs(),
     obsUrl: cfg.obsUrl || 'ws://127.0.0.1:4455',
     hasObsPassword: Boolean(cfg.obsPassword),
     autoStart: Boolean(cfg.autoStart),
-    defaultServerUrl: cfg.serverUrl || '',
+    mediamtxPath: cfg.mediamtxPath || '',
+    defaultServerUrl: cfg.serverUrl || envServerUrl || '',
   };
 });
 
@@ -361,4 +369,24 @@ ipcMain.handle('bridge:minimize-tray', async () => {
 ipcMain.handle('bridge:clear-logs', async () => {
   engine.clearLogs();
   return { ok: true };
+});
+
+ipcMain.handle('bridge:mediamtx-path', async (_ev, executablePath) => {
+  return engine.updateMediaMTXPath(String(executablePath || '').trim());
+});
+
+ipcMain.handle('bridge:mediamtx-refresh', async () => {
+  return engine.refreshMediaMTXStatus();
+});
+
+ipcMain.handle('bridge:mediamtx-sync', async () => {
+  return engine.handleCommand('mediamtx_sync_config', {});
+});
+
+ipcMain.handle('bridge:mediamtx-start', async () => {
+  return engine.handleCommand('mediamtx_start', {});
+});
+
+ipcMain.handle('bridge:mediamtx-stop', async () => {
+  return engine.handleCommand('mediamtx_stop', {});
 });

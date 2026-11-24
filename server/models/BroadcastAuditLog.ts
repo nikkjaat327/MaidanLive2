@@ -20,6 +20,10 @@ export type BroadcastAuditAction =
   | 'CAMERA_AUDIO_TOGGLE'
   | 'CAMERA_TEST'
   | 'CAMERA_SWITCH'
+  | 'CAMERA_OBS_SYNCED'
+  | 'LARIX_CREDENTIALS_ROTATED'
+  | 'LARIX_CREDENTIALS_REVOKED'
+  | 'MEDIAMTX_CONTROL'
   | 'LAYOUT_SWITCH'
   | 'SCENE_SWITCH'
   | 'OVERLAY_SYNC'
@@ -103,6 +107,10 @@ const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
         'CAMERA_AUDIO_TOGGLE',
         'CAMERA_TEST',
         'CAMERA_SWITCH',
+        'CAMERA_OBS_SYNCED',
+        'LARIX_CREDENTIALS_ROTATED',
+        'LARIX_CREDENTIALS_REVOKED',
+        'MEDIAMTX_CONTROL',
         'LAYOUT_SWITCH',
         'SCENE_SWITCH',
         'OVERLAY_SYNC',

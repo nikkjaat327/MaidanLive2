@@ -11,13 +11,13 @@ apiAddress: 0.0.0.0:9997
 # Webhook authentication against MaidanLive backend (/api/v1/mediamtx/auth)
 # MediaMTX sends POST { user, password, ip, action, path, protocol, id, query }
 authMethod: http
-authHTTPAddress: http://app:4000/api/v1/mediamtx/auth
+authHTTPAddress: http://app:3000/api/v1/mediamtx/auth
 
-# Allow public playback (read/playback) without stream keys;
+# Allow public viewer playback (read/playback) when needed;
 # enforce stream-key webhook validation on RTMP/SRT/WHIP publish.
+# NOTE: For strict local-PC-only camera reads, remove read/playback from authHTTPExclude
+# so /api/v1/mediamtx/auth checks loopback IP or scoped key on camera paths.
 authHTTPExclude:
-  - action: read
-  - action: playback
   - action: api
   - action: metrics
 
@@ -25,6 +25,10 @@ authHTTPExclude:
 rtmp: yes
 rtmpAddress: :1935
 rtmpEncryption: "no"
+
+# SRT ingest (Larix Broadcaster mobile cellular/Wi-Fi fallback)
+srt: yes
+srtAddress: :8890
 
 # Low-Latency HLS (LL-HLS) playback for Safari, Android Chrome, and fallback players
 hls: yes

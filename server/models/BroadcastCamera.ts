@@ -27,6 +27,7 @@ export type CameraConnectionStatus =
 
 export type CameraOrientationMode = 'auto' | '0' | '90' | '180' | '270';
 export type CameraPreviewFit = 'contain' | 'cover' | 'fill';
+export type CameraStreamProtocol = 'vdoninja' | 'rtmp' | 'srt' | 'browser' | 'obs_input' | 'rtsp_ffmpeg';
 
 export interface ICameraTelemetry {
   networkType?: string;
@@ -54,6 +55,7 @@ export interface IBroadcastCamera extends Document {
   position: string;
   cameraType: CameraType;
   sourceType: CameraSourceType;
+  streamProtocol: CameraStreamProtocol;
   connectionUrl: string;
   vdoRoomName: string;
   vdoStreamId: string;
@@ -61,6 +63,18 @@ export interface IBroadcastCamera extends Document {
   pushTokenHash: string;
   pushTokenPrefix: string;
   pushTokenExpiresAt?: Date | null;
+  mediamtxStreamPath: string;
+  mediamtxStreamKeyEnc: string;
+  mediamtxStreamKeyHash: string;
+  mediamtxStreamKeyPrefix: string;
+  mediamtxRevoked: boolean;
+  mediamtxRevokedAt?: Date | null;
+  mediamtxPublisherConnected: boolean;
+  mediamtxLastConnectedAt?: Date | null;
+  mediamtxDisconnectedAt?: Date | null;
+  obsSourceConfigured: boolean;
+  obsSourceAvailable: boolean;
+  obsMediaState: string;
   broadcastSessionId: string;
   audioMuted: boolean;
   obsInputMuted?: boolean | null;
@@ -116,6 +130,11 @@ const broadcastCameraSchema = new Schema<IBroadcastCamera>(
       enum: ['vdoninja', 'browser_source', 'mediamtx', 'obs_input', 'rtsp_ffmpeg'],
       default: 'vdoninja',
     },
+    streamProtocol: {
+      type: String,
+      enum: ['vdoninja', 'rtmp', 'srt', 'browser', 'obs_input', 'rtsp_ffmpeg'],
+      default: 'vdoninja',
+    },
     connectionUrl: { type: String, trim: true, default: '', maxlength: 600 },
     vdoRoomName: { type: String, trim: true, default: '', maxlength: 100 },
     vdoStreamId: { type: String, trim: true, default: '', maxlength: 100 },
@@ -123,6 +142,18 @@ const broadcastCameraSchema = new Schema<IBroadcastCamera>(
     pushTokenHash: { type: String, default: '', select: false },
     pushTokenPrefix: { type: String, default: '' },
     pushTokenExpiresAt: { type: Date, default: null },
+    mediamtxStreamPath: { type: String, trim: true, default: '', maxlength: 160, index: true },
+    mediamtxStreamKeyEnc: { type: String, default: '', select: false },
+    mediamtxStreamKeyHash: { type: String, default: '', select: false },
+    mediamtxStreamKeyPrefix: { type: String, default: '', maxlength: 40 },
+    mediamtxRevoked: { type: Boolean, default: false },
+    mediamtxRevokedAt: { type: Date, default: null },
+    mediamtxPublisherConnected: { type: Boolean, default: false },
+    mediamtxLastConnectedAt: { type: Date, default: null },
+    mediamtxDisconnectedAt: { type: Date, default: null },
+    obsSourceConfigured: { type: Boolean, default: false },
+    obsSourceAvailable: { type: Boolean, default: false },
+    obsMediaState: { type: String, trim: true, default: '', maxlength: 40 },
     broadcastSessionId: { type: String, trim: true, default: '', maxlength: 80 },
     audioMuted: { type: Boolean, default: false },
     obsInputMuted: { type: Boolean, default: null },

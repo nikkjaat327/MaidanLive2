@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -23,13 +24,15 @@ import { SecurityPolicy } from '../models/SecurityPolicy.ts';
 import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
 import { ObsControllerProfile } from '../models/ObsControllerProfile.ts';
 import { BroadcastCamera } from '../models/BroadcastCamera.ts';
-import type { CameraSourceType, CameraType } from '../models/BroadcastCamera.ts';
+import type { CameraSourceType, CameraStreamProtocol, CameraType } from '../models/BroadcastCamera.ts';
 import { BroadcastScene } from '../models/BroadcastScene.ts';
 import { BroadcastAuditLog } from '../models/BroadcastAuditLog.ts';
 import {
   applyDynamicLayoutToObs,
+  assignCameraToObs,
   captureObsPreviewImage,
   connectDirectObs,
+  controlBridgeMediaMTX,
   controlObsOutput,
   createBridgePairingCode,
   disconnectActiveBridgeByOperator,
@@ -53,6 +56,7 @@ import {
   reconnectCameraSource,
   refreshObsState,
   registerObsBridge,
+  removeCameraObsSource,
   requestBridgeObsReconnect,
   revokeObsBridge,
   rotateObsBridgeToken,
@@ -75,6 +79,7 @@ import {
   decryptObsSecret,
   encryptObsSecret,
   generateScopedToken,
+  hashScopedToken,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import { verifyTotpCode } from '../services/totpService.ts';
@@ -83,7 +88,16 @@ import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLay
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
 import { emitBroadcastStudioEvent, emitStreamEvent } from '../socket/index.ts';
-import { verifyMediaMTXStreamHealth } from '../services/mediamtxService.ts';
+import {
+  buildLarixCameraConfig,
+  buildScopedCameraStreamPath,
+  generateCameraMediaMTXKey,
+  generateMediaMTXYamlConfig,
+  getMediaMTXEnvConfig,
+  isValidMediaSourceUrl,
+  sanitizeMediaMTXStreamPath,
+  verifyMediaMTXStreamHealth,
+} from '../services/mediamtxService.ts';
 import { extractYouTubeVideoId } from '../../src/utils/youtube.ts';
 
 const router = Router();
@@ -154,7 +168,12 @@ const DEFAULT_BROADCASTER_PERMS = [
 ];
 
 function resolveBaseAppUrl(req: Request): string {
-  const envUrl = (process.env.PUBLIC_APP_URL || process.env.VITE_PUBLIC_APP_URL || '').trim();
+  const envUrl = (
+    process.env.MAIDANLIVE_SERVER_URL ||
+    process.env.PUBLIC_APP_URL ||
+    process.env.VITE_PUBLIC_APP_URL ||
+    ''
+  ).trim();
   if (envUrl) return envUrl.replace(/\/+$/, '');
   const proto =
     String(req.headers['x-forwarded-proto'] || '')
@@ -162,9 +181,26 @@ function resolveBaseAppUrl(req: Request): string {
       .trim() ||
     req.protocol ||
     'http';
-  const fallbackPort = Number(process.env.PORT) || 4000;
+  const fallbackPort = Number(process.env.PORT) || 3000;
   const host = req.get('host') || `localhost:${fallbackPort}`;
   return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+function detectLanIpv4Addresses(): string[] {
+  try {
+    const nets = os.networkInterfaces();
+    const out: string[] = [];
+    for (const entries of Object.values(nets)) {
+      for (const net of entries || []) {
+        if (net.family === 'IPv4' && !net.internal && net.address) {
+          if (!out.includes(net.address)) out.push(net.address);
+        }
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 async function authorizeBroadcastControl(
@@ -1915,7 +1951,7 @@ router.get('/bridge/installer/download', pairingLimiter, (req: Request, res: Res
   }
 });
 
-// POST /api/obs/matches/:matchId/cameras - Add new dynamic camera (no limit)
+// POST /api/obs/matches/:matchId/cameras - Add new dynamic camera (VDO.Ninja or Larix/MediaMTX or OBS Input)
 router.post(
   '/matches/:matchId/cameras',
   authenticate,
@@ -1942,18 +1978,78 @@ router.post(
       const duplicate = existingCameras.some((c) => c.cameraId === cameraId);
       const finalCameraId = duplicate ? `${cameraId}_${Date.now().toString(36).slice(-4)}` : cameraId;
 
-      const cameraType: CameraType = VALID_CAMERA_TYPES.includes(req.body.cameraType)
-        ? req.body.cameraType
-        : 'smartphone_vdo';
-      const sourceType: CameraSourceType = VALID_SOURCE_TYPES.includes(req.body.sourceType)
-        ? req.body.sourceType
-        : cameraType === 'smartphone_vdo'
-          ? 'vdoninja'
-          : cameraType === 'rtmp_mediamtx'
+      const rawCameraType = String(req.body.cameraType || '').trim();
+      const rawSourceType = String(req.body.sourceType || '').trim();
+      const isLarixAlias =
+        rawCameraType === 'larix' ||
+        rawSourceType === 'larix' ||
+        rawSourceType === 'rtmp' ||
+        rawSourceType === 'srt';
+
+      const sourceType: CameraSourceType = isLarixAlias
+        ? 'mediamtx'
+        : VALID_SOURCE_TYPES.includes(rawSourceType as CameraSourceType)
+          ? (rawSourceType as CameraSourceType)
+          : rawCameraType === 'rtmp_mediamtx'
             ? 'mediamtx'
-            : cameraType === 'browser_source'
+            : rawCameraType === 'browser_source'
               ? 'browser_source'
-              : 'obs_input';
+              : rawCameraType === 'smartphone_vdo' || !rawCameraType
+                ? 'vdoninja'
+                : 'obs_input';
+
+      const cameraType: CameraType = isLarixAlias
+        ? 'rtmp_mediamtx'
+        : VALID_CAMERA_TYPES.includes(rawCameraType as CameraType)
+          ? (rawCameraType as CameraType)
+          : sourceType === 'mediamtx'
+            ? 'rtmp_mediamtx'
+            : sourceType === 'browser_source'
+              ? 'browser_source'
+              : sourceType === 'vdoninja'
+                ? 'smartphone_vdo'
+                : 'usb_capture';
+
+      const explicitUrl = sanitizeText(req.body.connectionUrl, 600);
+      if (
+        explicitUrl &&
+        (sourceType === 'mediamtx' || sourceType === 'rtsp_ffmpeg' || sourceType === 'browser_source') &&
+        !isValidMediaSourceUrl(explicitUrl)
+      ) {
+        res.status(400).json({
+          message: 'Invalid camera connection URL. Use rtmp://, srt://, rtsp://, http://, or https://.',
+        });
+        return;
+      }
+
+      const streamProtocol: CameraStreamProtocol =
+        sourceType === 'mediamtx'
+          ? req.body.streamProtocol === 'srt' || rawSourceType === 'srt'
+            ? 'srt'
+            : 'rtmp'
+          : sourceType === 'vdoninja'
+            ? 'vdoninja'
+            : sourceType === 'rtsp_ffmpeg'
+              ? 'rtsp_ffmpeg'
+              : sourceType === 'browser_source'
+                ? 'browser'
+                : 'obs_input';
+
+      let mediamtxStreamPath = '';
+      let mediamtxStreamKeyEnc = '';
+      let mediamtxStreamKeyHash = '';
+      let mediamtxStreamKeyPrefix = '';
+
+      if (sourceType === 'mediamtx') {
+        const requestedPath = sanitizeMediaMTXStreamPath(String(req.body.mediamtxStreamPath || ''));
+        const basePath = requestedPath || buildScopedCameraStreamPath(matchId, finalCameraId);
+        const pathTaken = existingCameras.some((c) => c.mediamtxStreamPath === basePath);
+        mediamtxStreamPath = pathTaken ? `${basePath}_${Date.now().toString(36).slice(-4)}` : basePath;
+        const keyPair = generateCameraMediaMTXKey();
+        mediamtxStreamKeyEnc = encryptObsSecret(keyPair.raw);
+        mediamtxStreamKeyHash = hashScopedToken(keyPair.raw);
+        mediamtxStreamKeyPrefix = keyPair.prefix;
+      }
 
       const pushToken = generateScopedToken('mlcam');
       const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
@@ -1981,7 +2077,14 @@ router.post(
         position: sanitizeText(req.body.position, 120),
         cameraType,
         sourceType,
-        connectionUrl: sanitizeText(req.body.connectionUrl, 600),
+        streamProtocol,
+        connectionUrl: explicitUrl,
+        mediamtxStreamPath,
+        mediamtxStreamKeyEnc,
+        mediamtxStreamKeyHash,
+        mediamtxStreamKeyPrefix,
+        mediamtxRevoked: false,
+        mediamtxPublisherConnected: false,
         vdoRoomName,
         vdoStreamId,
         pushTokenHash: pushToken.hash,
@@ -2023,12 +2126,17 @@ router.post(
         cameraName: cam.name,
         actor: req.user!,
         obsStatus: 'SUCCESS',
+        metadata: { sourceType, streamProtocol },
       });
       await emitFullStudioState(matchId);
 
+      const camWithSecrets = {
+        ...cam.toObject(),
+        mediamtxStreamKeyEnc,
+      };
       const baseUrl = resolveBaseAppUrl(req);
       res.status(201).json({
-        camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+        camera: formatSafeCamera(camWithSecrets, profile, { includePrivateUrls: true }),
         mobileConnectUrl: `${baseUrl}/camera-connect/${cam._id.toString()}?token=${pushToken.raw}`,
         pushToken: pushToken.raw,
         pushTokenExpiresAt: pushTokenExpiresAt.toISOString(),
@@ -2167,7 +2275,9 @@ router.patch(
       const { matchId, cameraId } = req.params;
       if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
 
-      const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+      const cam = await BroadcastCamera.findOne({ matchId, cameraId }).select(
+        '+mediamtxStreamKeyEnc +mediamtxStreamKeyHash'
+      );
       if (!cam) {
         res.status(404).json({ message: 'Camera not found.' });
         return;
@@ -2179,7 +2289,23 @@ router.patch(
       if (typeof req.body.position === 'string') cam.position = sanitizeText(req.body.position, 120);
       if (VALID_CAMERA_TYPES.includes(req.body.cameraType)) cam.cameraType = req.body.cameraType;
       if (VALID_SOURCE_TYPES.includes(req.body.sourceType)) cam.sourceType = req.body.sourceType;
-      if (typeof req.body.connectionUrl === 'string') cam.connectionUrl = sanitizeText(req.body.connectionUrl, 600);
+      if (req.body.streamProtocol === 'rtmp' || req.body.streamProtocol === 'srt' || req.body.streamProtocol === 'vdoninja') {
+        cam.streamProtocol = req.body.streamProtocol;
+      }
+      if (typeof req.body.connectionUrl === 'string') {
+        const cleanUrl = sanitizeText(req.body.connectionUrl, 600);
+        if (
+          cleanUrl &&
+          (cam.sourceType === 'mediamtx' || cam.sourceType === 'rtsp_ffmpeg' || cam.sourceType === 'browser_source') &&
+          !isValidMediaSourceUrl(cleanUrl)
+        ) {
+          res.status(400).json({
+            message: 'Invalid camera connection URL. Use rtmp://, srt://, rtsp://, http://, or https://.',
+          });
+          return;
+        }
+        cam.connectionUrl = cleanUrl;
+      }
       if (typeof req.body.vdoRoomName === 'string' && req.body.vdoRoomName.trim()) cam.vdoRoomName = sanitizeText(req.body.vdoRoomName, 100);
       if (typeof req.body.vdoStreamId === 'string' && req.body.vdoStreamId.trim()) cam.vdoStreamId = sanitizeText(req.body.vdoStreamId, 100);
       if (VALID_RESOLUTIONS.includes(req.body.resolution)) cam.resolution = req.body.resolution;
@@ -2195,6 +2321,24 @@ router.patch(
       if (typeof req.body.description === 'string') cam.description = sanitizeText(req.body.description, 400);
       if (req.body.priority !== undefined) cam.priority = Math.max(1, Math.min(1000, Number(req.body.priority) || 10));
       if (typeof req.body.enabled === 'boolean') cam.enabled = req.body.enabled;
+
+      // Auto-provision Larix/MediaMTX credentials if camera was switched into MediaMTX source mode
+      if (cam.sourceType === 'mediamtx') {
+        if (cam.streamProtocol !== 'rtmp' && cam.streamProtocol !== 'srt') {
+          cam.streamProtocol = 'rtmp';
+        }
+        if (!cam.mediamtxStreamPath) {
+          cam.mediamtxStreamPath = buildScopedCameraStreamPath(matchId, cam.cameraId);
+        }
+        if (!cam.mediamtxStreamKeyEnc) {
+          const keyPair = generateCameraMediaMTXKey();
+          cam.mediamtxStreamKeyEnc = encryptObsSecret(keyPair.raw);
+          cam.mediamtxStreamKeyHash = hashScopedToken(keyPair.raw);
+          cam.mediamtxStreamKeyPrefix = keyPair.prefix;
+          cam.mediamtxRevoked = false;
+        }
+      }
+
       if (req.body.operatorUserId !== undefined) {
         if (req.body.operatorUserId && mongoose.Types.ObjectId.isValid(req.body.operatorUserId)) {
           const op = await User.findById(req.body.operatorUserId).lean();
@@ -2255,6 +2399,13 @@ router.delete(
         res.status(404).json({ message: 'Camera not found.' });
         return;
       }
+
+      const removeFromObs = req.query.removeFromObs === 'true' || req.body?.removeFromObs === true;
+      if (removeFromObs) {
+        const inputName = cam.obsInputName || `ML_CAM_${cam.cameraNumber}`;
+        await removeCameraObsSource(matchId, inputName).catch(() => false);
+      }
+
       await BroadcastCamera.deleteOne({ _id: cam._id });
       await writeBroadcastAudit({
         matchId,
@@ -2334,14 +2485,21 @@ router.post(
       let ok = false;
       let detail = '';
 
-      if (cam.sourceType === 'mediamtx' && cam.connectionUrl) {
+      if (cam.sourceType === 'mediamtx') {
         const mtx = await verifyMediaMTXStreamHealth({
-          streamPath: cam.connectionUrl,
-          hlsPlaybackUrl: cam.connectionUrl,
+          streamPath: cam.mediamtxStreamPath || cam.connectionUrl,
+          hlsPlaybackUrl:
+            cam.mediamtxStreamPath
+              ? `${getMediaMTXEnvConfig().hlsBase}/${cam.mediamtxStreamPath}/index.m3u8`
+              : cam.connectionUrl,
           webrtcPlaybackUrl: '',
         });
-        ok = mtx.ok;
-        detail = mtx.message;
+        ok = mtx.ok || Boolean(cam.mediamtxPublisherConnected);
+        detail = cam.mediamtxRevoked
+          ? 'Larix stream credentials are revoked. Rotate credentials before streaming.'
+          : ok
+            ? `Larix MediaMTX publisher active on "${cam.mediamtxStreamPath || cam.connectionUrl}".`
+            : mtx.message;
       } else if (cam.lastHeartbeatAt && Date.now() - new Date(cam.lastHeartbeatAt).getTime() <= 45_000) {
         ok = cam.status !== 'ERROR';
         detail = ok
@@ -2380,6 +2538,260 @@ router.post(
       });
     } catch (err: any) {
       res.status(500).json({ ok: false, detail: err?.message || 'Camera test failed.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/larix/rotate - Rotate Larix/MediaMTX stream key
+router.post(
+  '/matches/:matchId/cameras/:cameraId/larix/rotate',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const cam = await BroadcastCamera.findOne({ matchId, cameraId }).select(
+        '+mediamtxStreamKeyEnc +mediamtxStreamKeyHash'
+      );
+      if (!cam) {
+        res.status(404).json({ message: 'Camera not found.' });
+        return;
+      }
+
+      if (!cam.mediamtxStreamPath) {
+        cam.mediamtxStreamPath = buildScopedCameraStreamPath(matchId, cam.cameraId);
+      }
+      const keyPair = generateCameraMediaMTXKey();
+      const keyEnc = encryptObsSecret(keyPair.raw);
+      cam.sourceType = 'mediamtx';
+      cam.cameraType = 'rtmp_mediamtx';
+      if (cam.streamProtocol !== 'rtmp' && cam.streamProtocol !== 'srt') {
+        cam.streamProtocol = 'rtmp';
+      }
+      cam.mediamtxStreamKeyEnc = keyEnc;
+      cam.mediamtxStreamKeyHash = hashScopedToken(keyPair.raw);
+      cam.mediamtxStreamKeyPrefix = keyPair.prefix;
+      cam.mediamtxRevoked = false;
+      cam.mediamtxRevokedAt = null;
+      cam.mediamtxPublisherConnected = false;
+      cam.status = 'DISCONNECTED';
+      await cam.save();
+
+      if (req.body?.syncObs !== false) {
+        await assignCameraToObs(matchId, cameraId, req.user!, Boolean(req.body?.override)).catch(
+          () => null
+        );
+      }
+
+      await writeBroadcastAudit({
+        matchId,
+        actionType: 'LARIX_CREDENTIALS_ROTATED',
+        cameraId: cam.cameraId,
+        cameraName: cam.name,
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
+        metadata: { streamPath: cam.mediamtxStreamPath, prefix: keyPair.prefix },
+      });
+      await emitFullStudioState(matchId);
+
+      const profile = await ObsControllerProfile.findOne({ matchId }).lean();
+      const freshCam = await BroadcastCamera.findById(cam._id)
+        .select('+mediamtxStreamKeyEnc')
+        .lean();
+      res.json({
+        ok: true,
+        camera: formatSafeCamera(
+          freshCam || { ...cam.toObject(), mediamtxStreamKeyEnc: keyEnc },
+          profile,
+          { includePrivateUrls: true }
+        ),
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to rotate Larix stream key.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/larix/revoke - Revoke Larix/MediaMTX stream key
+router.post(
+  '/matches/:matchId/cameras/:cameraId/larix/revoke',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+      if (!cam) {
+        res.status(404).json({ message: 'Camera not found.' });
+        return;
+      }
+
+      cam.mediamtxRevoked = true;
+      cam.mediamtxRevokedAt = new Date();
+      cam.mediamtxPublisherConnected = false;
+      cam.status = 'DISCONNECTED';
+      await cam.save();
+
+      await writeBroadcastAudit({
+        matchId,
+        actionType: 'LARIX_CREDENTIALS_REVOKED',
+        cameraId: cam.cameraId,
+        cameraName: cam.name,
+        actor: req.user!,
+        obsStatus: 'SUCCESS',
+        metadata: { streamPath: cam.mediamtxStreamPath },
+      });
+      await emitFullStudioState(matchId);
+
+      const profile = await ObsControllerProfile.findOne({ matchId }).lean();
+      res.json({
+        ok: true,
+        camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to revoke Larix stream key.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/assign-obs - Create/update OBS source (ffmpeg_source for Larix or browser_source for VDO.Ninja)
+router.post(
+  '/matches/:matchId/cameras/:cameraId/assign-obs',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const result = await assignCameraToObs(
+        matchId,
+        cameraId,
+        req.user!,
+        Boolean(req.body?.override)
+      );
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ...result, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to sync camera source to OBS Studio.',
+      });
+    }
+  }
+);
+
+// GET /api/obs/matches/:matchId/mediamtx/config - Centralized MediaMTX config, LAN IPs & YAML generator
+router.get(
+  '/matches/:matchId/mediamtx/config',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const profile = await ensureObsProfileForMatch(matchId, req.user!._id as any);
+      const envConfig = getMediaMTXEnvConfig();
+      const baseUrl = resolveBaseAppUrl(req);
+      const serverLanIps = detectLanIpv4Addresses();
+      const bridgeLanIps: string[] = Array.isArray((profile as any).mediamtxState?.lanIps)
+        ? (profile as any).mediamtxState.lanIps
+        : [];
+      const lanIps = Array.from(new Set([...bridgeLanIps, ...serverLanIps]));
+
+      const larixCameras = await BroadcastCamera.find({
+        matchId,
+        sourceType: 'mediamtx',
+      })
+        .select('+mediamtxStreamKeyEnc')
+        .sort({ sortOrder: 1, cameraNumber: 1 })
+        .lean();
+
+      res.json({
+        ok: true,
+        serverUrl: baseUrl,
+        envConfig,
+        lanIps,
+        mediamtxState: (profile as any).mediamtxState || null,
+        yamlConfig: generateMediaMTXYamlConfig(baseUrl),
+        cameras: larixCameras.map((c: any) => {
+          const rawKey =
+            c.mediamtxStreamKeyEnc && !c.mediamtxRevoked
+              ? decryptObsSecret(c.mediamtxStreamKeyEnc)
+              : '';
+          return {
+            cameraId: c.cameraId,
+            name: c.name,
+            protocol: c.streamProtocol === 'srt' ? 'srt' : 'rtmp',
+            revoked: Boolean(c.mediamtxRevoked),
+            publisherConnected: Boolean(c.mediamtxPublisherConnected),
+            config:
+              rawKey && c.mediamtxStreamPath
+                ? buildLarixCameraConfig({
+                    matchId,
+                    cameraId: c.cameraId,
+                    cameraName: c.name,
+                    protocol: c.streamProtocol === 'srt' ? 'srt' : 'rtmp',
+                    streamPath: c.mediamtxStreamPath,
+                    streamKey: rawKey,
+                  })
+                : null,
+          };
+        }),
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || 'Failed to load MediaMTX configuration.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/mediamtx/control - Control local MediaMTX via paired OBS Bridge
+router.post(
+  '/matches/:matchId/mediamtx/control',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId, 'broadcast:manage_cameras'))) return;
+
+      const action = req.body?.action;
+      if (!['status', 'start', 'stop', 'sync_config'].includes(action)) {
+        res.status(400).json({ message: 'action must be status, start, stop, or sync_config.' });
+        return;
+      }
+
+      const executablePath =
+        typeof req.body?.executablePath === 'string'
+          ? sanitizeText(req.body.executablePath, 400)
+          : '';
+      const result = await controlBridgeMediaMTX(
+        matchId,
+        action,
+        {
+          serverUrl: resolveBaseAppUrl(req),
+          ...(executablePath ? { executablePath } : {}),
+        },
+        req.user!
+      );
+      const snapshot = await getStudioSnapshot(matchId, true);
+      res.json({ ok: true, result, ...snapshot });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to control local MediaMTX receiver.',
+      });
     }
   }
 );

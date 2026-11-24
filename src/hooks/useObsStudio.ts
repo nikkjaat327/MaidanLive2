@@ -81,6 +81,9 @@ export function useObsStudio(matchId?: string) {
                 incoming.obsBrowserSourceUrl || existing.obsBrowserSourceUrl || '',
               vdoPushUrl: incoming.vdoPushUrl || existing.vdoPushUrl || '',
               connectionUrl: incoming.connectionUrl || existing.connectionUrl || '',
+              larixConfig: incoming.mediamtxRevoked
+                ? null
+                : incoming.larixConfig || existing.larixConfig || null,
             };
           });
         }
@@ -107,6 +110,9 @@ export function useObsStudio(matchId?: string) {
                   lastHeartbeatAt: payload.lastHeartbeatAt || cam.lastHeartbeatAt,
                   telemetry: payload.telemetry || cam.telemetry,
                   lastError: payload.lastError !== undefined ? payload.lastError : cam.lastError,
+                  ...(typeof payload.mediamtxPublisherConnected === 'boolean'
+                    ? { mediamtxPublisherConnected: payload.mediamtxPublisherConnected }
+                    : {}),
                 }
               : cam
           ),

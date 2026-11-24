@@ -9,6 +9,7 @@ import type {
   CameraOrientationMode,
   CameraPreviewFit,
   LocalBridgeProbeStatus,
+  MediaMTXConfigPayload,
   ObsBridgeData,
   ObsBridgeInstallerStatus,
   ObsBridgePairingResponse,
@@ -268,8 +269,59 @@ export const obsStudioService = {
     return data;
   },
 
-  async deleteCamera(matchId: string, cameraId: string): Promise<void> {
-    await adminApi.delete(`/obs/matches/${matchId}/cameras/${cameraId}`);
+  async deleteCamera(matchId: string, cameraId: string, removeFromObs = false): Promise<void> {
+    await adminApi.delete(`/obs/matches/${matchId}/cameras/${cameraId}`, {
+      params: removeFromObs ? { removeFromObs: 'true' } : undefined,
+    });
+  },
+
+  async rotateLarixCredentials(
+    matchId: string,
+    cameraId: string,
+    syncObs = true,
+    override = false
+  ): Promise<{ ok: boolean; camera: BroadcastCameraData }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/larix/rotate`, {
+      syncObs,
+      override,
+    });
+    return data;
+  },
+
+  async revokeLarixCredentials(
+    matchId: string,
+    cameraId: string
+  ): Promise<{ ok: boolean; camera: BroadcastCameraData }> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/larix/revoke`);
+    return data;
+  },
+
+  async assignCameraToObs(
+    matchId: string,
+    cameraId: string,
+    override = false
+  ): Promise<{ ok: boolean; detail?: string; obsSynced?: boolean } & Partial<ObsStudioPayload>> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/cameras/${cameraId}/assign-obs`, {
+      override,
+    });
+    return data;
+  },
+
+  async getMediaMTXConfig(matchId: string): Promise<MediaMTXConfigPayload> {
+    const { data } = await adminApi.get<MediaMTXConfigPayload>(`/obs/matches/${matchId}/mediamtx/config`);
+    return data;
+  },
+
+  async controlMediaMTX(
+    matchId: string,
+    action: 'status' | 'start' | 'stop' | 'sync_config',
+    executablePath = ''
+  ): Promise<{ ok: boolean; result?: any } & Partial<ObsStudioPayload>> {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/mediamtx/control`, {
+      action,
+      ...(executablePath ? { executablePath } : {}),
+    });
+    return data;
   },
 
   async reorderCameras(matchId: string, orderedIds: string[]): Promise<void> {

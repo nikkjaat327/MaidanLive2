@@ -267,6 +267,66 @@
           </div>
         </section>
 
+        <!-- Local MediaMTX Receiver (Larix Broadcaster Add-On) -->
+        <section class="card span-2">
+          <div class="section-head">
+            <div>
+              <h3>Local MediaMTX Receiver (Optional — For Larix Broadcaster)</h3>
+              <p class="muted">
+                VDO.Ninja cameras work without MediaMTX. Enable MediaMTX on this PC to receive Larix RTMP/SRT streams and pull them cleanly into OBS.
+              </p>
+            </div>
+            <span id="badge-mtx" class="status-pill pill-muted">MediaMTX: Not Detected</span>
+          </div>
+
+          <div class="two-col">
+            <div class="check-list">
+              <div class="check-row">
+                <span>MediaMTX Binary</span>
+                <strong id="mtx-installed">Checking...</strong>
+              </div>
+              <div class="check-row">
+                <span>RTMP Port 1935 / SRT Port 8890</span>
+                <strong id="mtx-ports">—</strong>
+              </div>
+              <div class="check-row">
+                <span>Active Camera Paths</span>
+                <strong id="mtx-paths">0 active</strong>
+              </div>
+              <div class="check-row">
+                <span>PC LAN IP(s) for Phone Wi-Fi</span>
+                <strong id="mtx-lan-ips" class="mono">—</strong>
+              </div>
+            </div>
+
+            <div class="stack-tight">
+              <div class="field">
+                <label for="mtx-path-input">Optional Custom MediaMTX Executable Path</label>
+                <input
+                  id="mtx-path-input"
+                  type="text"
+                  placeholder="C:\mediamtx\mediamtx.exe (leave blank for auto-detect)"
+                />
+              </div>
+              <div class="btn-row">
+                <button type="button" id="btn-mtx-start" class="btn btn-primary">
+                  Start Local MediaMTX
+                </button>
+                <button type="button" id="btn-mtx-stop" class="btn btn-danger-outline">
+                  Stop MediaMTX
+                </button>
+                <button type="button" id="btn-mtx-sync" class="btn btn-secondary">
+                  Save Path &amp; Sync Config
+                </button>
+                <button type="button" id="btn-mtx-refresh" class="btn btn-secondary">
+                  Refresh
+                </button>
+              </div>
+              <div id="mtx-alert" class="alert alert-warn hidden"></div>
+            </div>
+          </div>
+        </section>
+
         <!-- Activity Logs -->
         <section class="card span-2">
           <div class="section-head">

@@ -2,8 +2,20 @@ const { EventEmitter } = require('node:events');
 const os = require('node:os');
 const { io } = require('socket.io-client');
 const { default: OBSWebSocket } = require('obs-websocket-js');
-const { loadConfig, saveConfig, clearPairing, hasPairedCredentials } = require('./store.cjs');
+const {
+  getUserDataDir,
+  loadConfig,
+  saveConfig,
+  clearPairing,
+  hasPairedCredentials,
+} = require('./store.cjs');
 const { detectObsEnvironment } = require('./obsDetector.cjs');
+const {
+  writeManagedConfig: writeMediaMTXConfig,
+  getMediaMTXStatus,
+  startMediaMTX,
+  stopMediaMTX,
+} = require('./mediamtxManager.cjs');
 
 const APPROVED_COMMANDS = new Set([
   'get_snapshot',
@@ -19,10 +31,15 @@ const APPROVED_COMMANDS = new Set([
   'set_input_mute',
   'get_input_mute',
   'reconnect_input',
+  'remove_input',
   'get_scene_items',
   'set_scene_item_enabled',
   'get_input_list',
   'reconnect_obs',
+  'mediamtx_status',
+  'mediamtx_start',
+  'mediamtx_stop',
+  'mediamtx_sync_config',
 ]);
 
 function buildCenterBoxTransform(box) {
@@ -89,6 +106,21 @@ class BridgeEngine extends EventEmitter {
       obsRecordActive: false,
       hasObsPassword: false,
       autoStart: false,
+      mediamtxPath: '',
+      mediamtx: {
+        installed: false,
+        executablePath: '',
+        running: false,
+        managedByBridge: false,
+        rtmpPortOpen: false,
+        srtPortOpen: false,
+        apiPortOpen: false,
+        apiReachable: false,
+        activePaths: [],
+        lanIps: [],
+        configPath: '',
+        lastError: '',
+      },
       obsEnv: {
         installed: false,
         running: false,
@@ -150,13 +182,37 @@ class BridgeEngine extends EventEmitter {
       obsUrl: cfg.obsUrl || 'ws://127.0.0.1:4455',
       hasObsPassword: Boolean(cfg.obsPassword),
       autoStart: Boolean(cfg.autoStart),
+      mediamtxPath: cfg.mediamtxPath || '',
     });
+  }
+
+  async refreshMediaMTXStatus() {
+    const cfg = loadConfig();
+    const mtx = await getMediaMTXStatus({
+      configuredPath: cfg.mediamtxPath || '',
+      userDataDir: getUserDataDir(),
+    }).catch(() => this.state.mediamtx);
+    this._setState({ mediamtx: mtx });
+    return mtx;
+  }
+
+  async updateMediaMTXPath(executablePath) {
+    const cfg = saveConfig({ mediamtxPath: String(executablePath || '').trim() });
+    this._syncConfigToState(cfg);
+    await this.refreshMediaMTXStatus();
+    return this.getState();
   }
 
   async refreshObsEnvironment() {
     const cfg = loadConfig();
-    const env = await detectObsEnvironment(cfg.obsUrl || 'ws://127.0.0.1:4455');
-    this._setState({ obsEnv: env });
+    const [env, mtx] = await Promise.all([
+      detectObsEnvironment(cfg.obsUrl || 'ws://127.0.0.1:4455'),
+      getMediaMTXStatus({
+        configuredPath: cfg.mediamtxPath || '',
+        userDataDir: getUserDataDir(),
+      }).catch(() => this.state.mediamtx),
+    ]);
+    this._setState({ obsEnv: env, mediamtx: mtx });
     return env;
   }
 
@@ -609,6 +665,7 @@ class BridgeEngine extends EventEmitter {
   }
 
   async emitObsSnapshot() {
+    const mtxStatus = await this.refreshMediaMTXStatus().catch(() => this.state.mediamtx);
     if (!this.state.obsConnected) {
       if (this.socket && this.socket.connected) {
         this.socket.emit('agent:obs_state', {
@@ -620,8 +677,10 @@ class BridgeEngine extends EventEmitter {
           lastError: this.state.obsError || '',
           obsScenes: [],
           obsInputs: [],
+          obsMediaStates: {},
           activeObsScene: '',
           obsStreamActive: false,
+          mediamtx: mtxStatus,
         });
       }
       return;
@@ -651,6 +710,26 @@ class BridgeEngine extends EventEmitter {
             }))
             .filter((inp) => Boolean(inp.inputName))
         : [];
+
+      const obsMediaStates = {};
+      const mediaInputs = obsInputs.filter(
+        (inp) =>
+          inp.inputKind === 'ffmpeg_source' ||
+          inp.unversionedInputKind === 'ffmpeg_source'
+      );
+      await Promise.all(
+        mediaInputs.map(async (inp) => {
+          try {
+            const st = await this.obs.call('GetMediaInputStatus', { inputName: inp.inputName });
+            if (st && st.mediaState) {
+              obsMediaStates[inp.inputName] = String(st.mediaState);
+            }
+          } catch {
+            // ignore inputs that do not report media status
+          }
+        })
+      );
+
       const activeScene = String(sceneRes.currentProgramSceneName || '');
 
       this._setState({
@@ -673,6 +752,8 @@ class BridgeEngine extends EventEmitter {
           activeObsScene: activeScene,
           obsScenes: scenes,
           obsInputs,
+          obsMediaStates,
+          mediamtx: mtxStatus,
           obsStreamActive: Boolean(streamRes.outputActive),
           obsStreamTimecode: String(streamRes.outputTimecode || ''),
           obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
@@ -767,6 +848,55 @@ class BridgeEngine extends EventEmitter {
         obsUrl: next.obsUrl,
         lastError: next.obsConnected ? '' : next.obsError,
       };
+    }
+
+    if (command === 'mediamtx_status') {
+      const mtx = await this.refreshMediaMTXStatus();
+      return { mediamtx: mtx };
+    }
+
+    if (command === 'mediamtx_sync_config') {
+      const cfg = loadConfig();
+      const targetServer = String(payload.serverUrl || cfg.serverUrl || '').trim();
+      if (!targetServer) {
+        throw new Error('MaidanLive Server URL is not configured on this OBS Bridge.');
+      }
+      if (payload.executablePath) {
+        saveConfig({ mediamtxPath: String(payload.executablePath).trim() });
+      }
+      const written = writeMediaMTXConfig(targetServer, getUserDataDir());
+      this.log('info', `Generated local MediaMTX config at ${written.configPath}`);
+      const mtx = await this.refreshMediaMTXStatus();
+      return { configPath: written.configPath, mediamtx: mtx };
+    }
+
+    if (command === 'mediamtx_start') {
+      const cfg = loadConfig();
+      const targetServer = String(payload.serverUrl || cfg.serverUrl || '').trim();
+      const customExe = payload.executablePath ? String(payload.executablePath).trim() : cfg.mediamtxPath;
+      if (payload.executablePath) {
+        saveConfig({ mediamtxPath: customExe });
+      }
+      const mtx = await startMediaMTX({
+        serverUrl: targetServer,
+        configuredPath: customExe,
+        userDataDir: getUserDataDir(),
+        onLog: (lvl, msg) => this.log(lvl, msg),
+      });
+      this._setState({ mediamtx: mtx });
+      await this.emitObsSnapshot().catch(() => {});
+      return { mediamtx: mtx };
+    }
+
+    if (command === 'mediamtx_stop') {
+      const cfg = loadConfig();
+      const mtx = await stopMediaMTX({
+        configuredPath: cfg.mediamtxPath || '',
+        userDataDir: getUserDataDir(),
+      });
+      this._setState({ mediamtx: mtx });
+      await this.emitObsSnapshot().catch(() => {});
+      return { mediamtx: mtx };
     }
 
     if (!this.state.obsConnected) {
@@ -1031,21 +1161,39 @@ class BridgeEngine extends EventEmitter {
     if (command === 'reconnect_input') {
       const sceneName = String(payload.sceneName || '').trim();
       const inputName = String(payload.inputName || '').trim();
+      const inputKind = String(payload.inputKind || 'browser_source');
       if (sceneName && inputName) {
         await this._ensureSceneAndInput(
           sceneName,
           inputName,
-          String(payload.inputKind || 'browser_source'),
+          inputKind,
           payload.inputSettings || {}
         ).catch(() => {});
       }
       if (inputName) {
-        await this.obs
-          .call('PressInputPropertiesButton', { inputName, propertyName: 'refreshnocache' })
-          .catch(() => {});
+        if (inputKind === 'ffmpeg_source') {
+          await this.obs
+            .call('TriggerMediaInputAction', {
+              inputName,
+              mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+            })
+            .catch(() => {});
+        } else {
+          await this.obs
+            .call('PressInputPropertiesButton', { inputName, propertyName: 'refreshnocache' })
+            .catch(() => {});
+        }
       }
       await this.emitObsSnapshot();
       return { reconnected: true, inputName };
+    }
+
+    if (command === 'remove_input') {
+      const inputName = String(payload.inputName || '').trim();
+      if (!inputName) throw new Error('inputName is required.');
+      await this.obs.call('RemoveInput', { inputName });
+      await this.emitObsSnapshot();
+      return { removed: true, inputName };
     }
 
     if (command === 'get_scene_items') {
@@ -1196,6 +1344,7 @@ class BridgeEngine extends EventEmitter {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.envPollTimer) clearInterval(this.envPollTimer);
     this.disconnectServerSocket();
+    await stopMediaMTX().catch(() => {});
     await this.obs.disconnect().catch(() => {});
   }
 }

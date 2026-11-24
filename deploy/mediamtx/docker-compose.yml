@@ -7,6 +7,7 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
       - "1935:1935"     # RTMP ingest
+      - "8890:8890/udp" # SRT ingest (Larix Broadcaster / low-latency mobile links)
       - "8888:8888"     # LL-HLS playback (behind Nginx in production)
       - "8889:8889"     # WebRTC WHEP HTTP signaling
       - "8189:8189/udp" # WebRTC ICE/RTP media UDP
@@ -23,23 +24,25 @@ services:
       - mediamtx
     environment:
       NODE_ENV: production
-      PORT: "4000"
+      PORT: "${PORT:-3000}"
       JWT_SECRET: "${JWT_SECRET:-change-this-in-production-to-64-chars}"
       MONGODB_URI: "${MONGODB_URI:-}"
       SQLITE_DB_PATH: "/data/maidanlive.db"
-      # Public endpoints advertised to browsers / OBS Studio
+      PUBLIC_APP_URL: "${PUBLIC_APP_URL:-http://localhost:3000}"
+      # Public endpoints advertised to browsers / OBS Studio / Larix
       MEDIAMTX_RTMP_URL: "${MEDIAMTX_RTMP_URL:-rtmp://localhost:1935}"
+      MEDIAMTX_SRT_URL: "${MEDIAMTX_SRT_URL:-srt://localhost:8890}"
       MEDIAMTX_HLS_URL: "${MEDIAMTX_HLS_URL:-http://localhost:8888}"
       MEDIAMTX_WEBRTC_URL: "${MEDIAMTX_WEBRTC_URL:-http://localhost:8889}"
       # Internal Docker network Control API URL used by server health checks
-      MEDIAMTX_API_URL: "http://mediamtx:9997"
+      MEDIAMTX_API_URL: "${MEDIAMTX_API_URL:-http://mediamtx:9997}"
       BOOTSTRAP_SUPER_ADMIN_EMAIL: "${BOOTSTRAP_SUPER_ADMIN_EMAIL:-}"
       BOOTSTRAP_SUPER_ADMIN_PASSWORD: "${BOOTSTRAP_SUPER_ADMIN_PASSWORD:-}"
       BOOTSTRAP_SUPER_ADMIN_NAME: "${BOOTSTRAP_SUPER_ADMIN_NAME:-Super Admin}"
     volumes:
       - maidanlive_data:/data
     ports:
-      - "127.0.0.1:4000:4000"
+      - "127.0.0.1:3000:3000"
 
   mongo:
     image: mongo:7
