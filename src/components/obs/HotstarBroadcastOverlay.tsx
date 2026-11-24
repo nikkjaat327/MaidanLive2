@@ -9,6 +9,7 @@ interface HotstarBroadcastOverlayProps {
   score: LiveScoreData | null;
   config: BroadcastOverlayConfig;
   isPortrait?: boolean;
+  serverClockOffsetMs?: number;
   className?: string;
 }
 
@@ -26,6 +27,7 @@ export function HotstarBroadcastOverlay({
   score,
   config,
   isPortrait = false,
+  serverClockOffsetMs = 0,
   className = '',
 }: HotstarBroadcastOverlayProps) {
   const isVisible = Boolean(config.visible) && config.mode !== 'hidden';
@@ -72,6 +74,7 @@ export function HotstarBroadcastOverlay({
               config={config}
               theme={theme}
               isPortrait={isPortrait}
+              serverClockOffsetMs={serverClockOffsetMs}
             />
           </motion.div>
         )}

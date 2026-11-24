@@ -22,6 +22,7 @@ import {
   encryptObsSecret,
   generateScopedToken,
   hashScopedToken,
+  sanitizeVdoViewUrl,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import {
@@ -863,7 +864,7 @@ export function buildObsEnsureInputForCamera(
       inputName,
       inputKind: 'browser_source',
       inputSettings: {
-        url: camera.connectionUrl,
+        url: sanitizeVdoViewUrl(camera.connectionUrl),
         width: 1920,
         height: 1080,
       },
@@ -1173,7 +1174,9 @@ export function formatSafeCamera(
     vdoPushUrl: vdoLinks?.pushUrl || '',
     obsBrowserSourceUrl:
       vdoLinks?.obsViewUrl ||
-      (options.includePrivateUrls && camera.sourceType !== 'mediamtx' ? camera.connectionUrl || '' : ''),
+      (options.includePrivateUrls && camera.sourceType !== 'mediamtx'
+        ? sanitizeVdoViewUrl(camera.connectionUrl || '')
+        : ''),
     pushTokenPrefix: camera.pushTokenPrefix || '',
     pushTokenExpiresAt: camera.pushTokenExpiresAt || null,
     mediamtxStreamPath: camera.mediamtxStreamPath || '',

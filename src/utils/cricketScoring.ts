@@ -1039,11 +1039,11 @@ export function applyCricketAction(
     const prevBalls = isA ? next.teamABalls : next.teamBBalls;
     const newBalls = prevBalls + legalBallIncrement;
     const updatedRecent = [...next.recentBalls.slice(-11), token];
-    next.recentBalls = updatedRecent;
     if (legalBallIncrement > 0 && newBalls > 0 && newBalls % 6 === 0) {
       next.lastOverSummary = updatedRecent.slice(-6);
-    } else if (next.lastOverSummary.length === 0) {
-      next.lastOverSummary = updatedRecent.slice(-6);
+      next.recentBalls = [];
+    } else {
+      next.recentBalls = updatedRecent;
     }
   };
 
@@ -1416,6 +1416,7 @@ export function applyCricketAction(
         next.bowler = action.nextBowler.trim();
       }
       next.lastOverSummary = next.recentBalls.slice(-6);
+      next.recentBalls = [];
       const oversDone = Math.floor((isA ? next.teamABalls : next.teamBBalls) / 6);
       label = `End of Over ${oversDone}`;
       checkAutoTransitions();

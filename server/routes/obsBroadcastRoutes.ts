@@ -2099,7 +2099,12 @@ router.post(
       const pushToken = generateScopedToken('mlcam');
       const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
       const pushTokenExpiresAt = new Date(Date.now() + expiresInHours * 3600_000);
-      const vdoStreamId = sanitizeText(req.body.vdoStreamId, 80) || `${finalCameraId}_${matchId.slice(-4)}`;
+      const requestedVdoStreamId = sanitizeText(req.body.vdoStreamId, 80);
+      const baseVdoStreamId = requestedVdoStreamId || `${finalCameraId}_${matchId.slice(-4)}`;
+      const usedStreamIds = new Set(existingCameras.map((c) => String(c.vdoStreamId || '').trim()).filter(Boolean));
+      const vdoStreamId = usedStreamIds.has(baseVdoStreamId)
+        ? `${baseVdoStreamId}_${Date.now().toString(36).slice(-4)}`
+        : baseVdoStreamId;
       const vdoRoomName = sanitizeText(req.body.vdoRoomName, 80) || profile.vdoRoomName;
 
       let operatorName = sanitizeText(req.body.operatorName, 120);
@@ -2231,12 +2236,18 @@ router.post(
       const expiresInHours = Math.max(1, Math.min(72, Number(req.body.expiresInHours) || 12));
       const pushTokenExpiresAt = new Date(Date.now() + expiresInHours * 3600_000);
 
+      const usedStreamIds = new Set(existing.map((c) => String(c.vdoStreamId || '').trim()).filter(Boolean));
       for (let i = 0; i < count; i += 1) {
         const num = startNum + i;
         const pad = String(num).padStart(2, '0');
         const camId = `maidanlive_cam_${pad}_${Date.now().toString(36).slice(-2)}${i}`;
         const pushToken = generateScopedToken('mlcam');
         const label = defaultLabels[num - 1] || `Mobile Camera ${num}`;
+        const baseVdoId = `cam${num}_${matchId.slice(-4)}`;
+        const uniqueVdoId = usedStreamIds.has(baseVdoId)
+          ? `${baseVdoId}_${Date.now().toString(36).slice(-3)}${i}`
+          : baseVdoId;
+        usedStreamIds.add(uniqueVdoId);
         const doc = await BroadcastCamera.create({
           matchId,
           tournamentId: stream.tournamentId || null,
@@ -2248,7 +2259,7 @@ router.post(
           cameraType: 'smartphone_vdo',
           sourceType: 'vdoninja',
           vdoRoomName: profile.vdoRoomName,
-          vdoStreamId: `cam${num}_${matchId.slice(-4)}`,
+          vdoStreamId: uniqueVdoId,
           pushTokenHash: pushToken.hash,
           pushTokenPrefix: pushToken.displayPrefix,
           pushTokenExpiresAt,

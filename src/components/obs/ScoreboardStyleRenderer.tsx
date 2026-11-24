@@ -18,6 +18,7 @@ interface ScoreboardStyleRendererProps {
   config: BroadcastOverlayConfig;
   theme: ObsThemeTokens;
   isPortrait?: boolean;
+  serverClockOffsetMs?: number;
 }
 
 function BallChips({
@@ -86,7 +87,9 @@ function TelemetrySubRow({
   className?: string;
   style?: React.CSSProperties;
 }) {
+  const hasSplitStats = Boolean(vm.leftStatsText || vm.rightStatsText);
   const hasContent =
+    hasSplitStats ||
     vm.tournamentName ||
     vm.battersText ||
     vm.bowlerText ||
@@ -97,6 +100,49 @@ function TelemetrySubRow({
     vm.footerNote;
 
   if (!hasContent || config.mode !== 'full') return null;
+
+  if (hasSplitStats) {
+    return (
+      <div
+        style={{
+          fontSize: m.metaFontPx,
+          paddingLeft: m.subStripPadX,
+          paddingRight: m.subStripPadX,
+          paddingTop: m.subStripPadY,
+          paddingBottom: m.subStripPadY,
+          gap: Math.max(8, Math.round(m.sectionGapPx * 0.75)),
+          ...style,
+        }}
+        className={`flex items-center justify-between min-w-0 font-mono tabular-nums ${isPortrait ? 'flex-wrap' : ''} ${className}`}
+      >
+        <span className="font-semibold truncate">{vm.leftStatsText}</span>
+        {vm.situationBanner ? (
+          <span
+            style={{
+              color:
+                vm.situationAccent === 'result'
+                  ? '#6EE7B7'
+                  : vm.situationAccent === 'warning'
+                    ? '#FDA4AF'
+                    : theme.chaseHighlightText,
+            }}
+            className="inline-flex items-center gap-1 font-display font-extrabold uppercase tracking-wide truncate"
+          >
+            {vm.situationAccent === 'result' && <Trophy className="w-3.5 h-3.5 shrink-0" />}
+            {vm.situationBanner}
+          </span>
+        ) : vm.tournamentName ? (
+          <span
+            style={{ color: theme.accentPrimary }}
+            className="font-display font-extrabold uppercase tracking-wider truncate"
+          >
+            {vm.tournamentName}
+          </span>
+        ) : null}
+        <span className="font-semibold truncate text-right">{vm.rightStatsText}</span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -115,16 +161,16 @@ function TelemetrySubRow({
         {vm.tournamentName && (
           <span
             style={{ color: theme.accentPrimary }}
-            className="font-display font-extrabold uppercase tracking-wider truncate max-w-[220px]"
+            className="font-display font-extrabold uppercase tracking-wider truncate"
           >
             {vm.tournamentName}
           </span>
         )}
         {vm.battersText && (
-          <span className="font-semibold truncate max-w-[280px]">{vm.battersText}</span>
+          <span className="font-semibold truncate">{vm.battersText}</span>
         )}
         {vm.bowlerText && (
-          <span style={{ color: theme.mutedText }} className="font-semibold truncate max-w-[200px]">
+          <span style={{ color: theme.mutedText }} className="font-semibold truncate">
             {vm.bowlerText}
           </span>
         )}
@@ -161,7 +207,7 @@ function TelemetrySubRow({
                     ? '#FDA4AF'
                     : theme.chaseHighlightText,
             }}
-            className="inline-flex items-center gap-1 font-display font-extrabold uppercase tracking-wide truncate max-w-[340px]"
+            className="inline-flex items-center gap-1 font-display font-extrabold uppercase tracking-wide truncate"
           >
             {vm.situationAccent === 'result' && <Trophy className="w-3.5 h-3.5 shrink-0" />}
             {vm.situationBanner}
@@ -187,6 +233,7 @@ export function ScoreboardStyleRenderer({
   config,
   theme,
   isPortrait = false,
+  serverClockOffsetMs = 0,
 }: ScoreboardStyleRendererProps) {
   const styleId: ScoreboardStyleId = config.style || 'broadcast_classic';
   const sport = score?.sportType || stream.gameName || 'Other';
@@ -204,7 +251,14 @@ export function ScoreboardStyleRenderer({
         );
       case 'Kabaddi':
         return (
-          <KabaddiObsOverlay stream={stream} score={score} config={config} theme={theme} isPortrait={isPortrait} />
+          <KabaddiObsOverlay
+            stream={stream}
+            score={score}
+            config={config}
+            theme={theme}
+            isPortrait={isPortrait}
+            serverClockOffsetMs={serverClockOffsetMs}
+          />
         );
       case 'Volleyball':
         return (
@@ -224,6 +278,7 @@ export function ScoreboardStyleRenderer({
       config={config}
       theme={theme}
       isPortrait={isPortrait}
+      serverClockOffsetMs={serverClockOffsetMs}
       styleId={styleId}
     />
   );
@@ -235,6 +290,7 @@ function AlternativeScoreboardStyles({
   config,
   theme,
   isPortrait = false,
+  serverClockOffsetMs = 0,
   styleId,
 }: ScoreboardStyleRendererProps & { styleId: Exclude<ScoreboardStyleId, 'broadcast_classic'> }) {
   const m = computeOverlayMetrics(config, isPortrait);
@@ -243,11 +299,12 @@ function AlternativeScoreboardStyles({
 
   useEffect(() => {
     if (!isKabaddi) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    const id = window.setInterval(() => setNowMs(Date.now()), 350);
     return () => window.clearInterval(id);
   }, [isKabaddi]);
 
-  const vm = buildScoreboardViewModel(stream, score, config, theme, nowMs);
+  const effectiveNowMs = nowMs + serverClockOffsetMs;
+  const vm = buildScoreboardViewModel(stream, score, config, theme, effectiveNowMs);
 
   const prevSeedRef = useRef(vm.pulseKeySeed);
   const [pulseKey, setPulseKey] = useState(0);
@@ -275,6 +332,7 @@ function AlternativeScoreboardStyles({
       compact
       showTimer={false}
       scaleMultiplier={m.overallScale}
+      nowMs={effectiveNowMs}
     />
   ) : null;
 
@@ -365,11 +423,17 @@ function AlternativeScoreboardStyles({
             }}
             className="rounded-full flex flex-col items-center justify-center shrink-0 shadow-lg border border-white/25"
           >
-            <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-extrabold leading-none whitespace-nowrap">
-              {vm.centerPrimary}
-            </span>
+            {vm.centerPrimary ? (
+              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-extrabold leading-none whitespace-nowrap">
+                {vm.centerPrimary}
+              </span>
+            ) : !(!isScoreOnly && vm.centerSecondary) ? (
+              <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
+                VS
+              </span>
+            ) : null}
             {!isScoreOnly && vm.centerSecondary && (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-wider opacity-85 leading-none mt-0.5 whitespace-nowrap">
+              <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-wider opacity-85 leading-none whitespace-nowrap ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
                 {vm.centerSecondary}
               </span>
             )}
@@ -530,9 +594,11 @@ function AlternativeScoreboardStyles({
               <span style={{ fontSize: m.metaLabelPx }} className="font-mono font-bold uppercase tracking-widest text-purple-200 leading-none">
                 {vm.sportLabel}
               </span>
-              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-tight whitespace-nowrap">
-                {vm.centerPrimary}
-              </span>
+              {vm.centerPrimary && (
+                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-tight whitespace-nowrap">
+                  {vm.centerPrimary}
+                </span>
+              )}
             </div>
 
             {/* Team B Angular Wing */}
@@ -659,11 +725,17 @@ function AlternativeScoreboardStyles({
             </div>
 
             <div className="flex flex-col items-center px-3 py-1 rounded-xl bg-white/10 border border-white/15 shrink-0">
-              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-bold leading-none">
-                {vm.centerPrimary}
-              </span>
+              {vm.centerPrimary ? (
+                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-bold leading-none">
+                  {vm.centerPrimary}
+                </span>
+              ) : !(!isScoreOnly && vm.centerSecondary) ? (
+                <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase leading-none">
+                  VS
+                </span>
+              ) : null}
               {!isScoreOnly && vm.centerSecondary && (
-                <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-bold uppercase mt-0.5 leading-none">
+                <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className={`font-bold uppercase leading-none ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
                   {vm.centerSecondary}
                 </span>
               )}
@@ -784,11 +856,17 @@ function AlternativeScoreboardStyles({
             }}
             className="flex flex-col items-center justify-center border-x border-white/20 shrink-0"
           >
-            <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
-              {vm.centerPrimary}
-            </span>
+            {vm.centerPrimary ? (
+              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
+                {vm.centerPrimary}
+              </span>
+            ) : !(!isScoreOnly && vm.centerSecondary) ? (
+              <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
+                VS
+              </span>
+            ) : null}
             {!isScoreOnly && vm.centerSecondary && (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-widest text-amber-400 leading-none mt-1">
+              <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-widest text-amber-400 leading-none ${vm.centerPrimary ? 'mt-1' : ''}`}>
                 {vm.centerSecondary}
               </span>
             )}
@@ -922,12 +1000,16 @@ function AlternativeScoreboardStyles({
                 padY={Math.max(2, m.pillPadY - 1)}
               />
             )}
-            <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black mt-1 leading-none whitespace-nowrap">
-              {vm.centerPrimary}
-            </span>
-            <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-widest opacity-85 mt-0.5 leading-none">
-              {vm.centerSecondary || 'VS'}
-            </span>
+            {vm.centerPrimary && (
+              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black mt-1 leading-none whitespace-nowrap">
+                {vm.centerPrimary}
+              </span>
+            )}
+            {(vm.centerSecondary || !vm.centerPrimary) && (
+              <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-widest opacity-85 mt-0.5 leading-none">
+                {vm.centerSecondary || 'VS'}
+              </span>
+            )}
           </div>
 
           {/* Right Wing */}
@@ -991,11 +1073,11 @@ function AlternativeScoreboardStyles({
   // STYLE 7: MINIMAL CORNER BUG — compact TV corner bug footprint
   // -----------------------------------------------------------------------
   if (styleId === 'minimal_corner_bug') {
-    const bugWidth = isScoreOnly ? Math.round(280 * m.overallScale) : Math.round(390 * m.overallScale);
+    const bugWidth = isScoreOnly ? Math.round(280 * m.overallScale) : Math.round(410 * m.overallScale);
     return wrapWithKabaddi(
       <div
         style={{
-          width: isPortrait ? '100%' : Math.min(580, Math.max(240, bugWidth)),
+          width: isPortrait ? '100%' : Math.min(1150, Math.max(220, bugWidth)),
           background: theme.barBg,
           borderColor: theme.barBorder,
           color: theme.primaryText,
@@ -1075,7 +1157,7 @@ function AlternativeScoreboardStyles({
               >
                 {vm.secondaryScore}
               </span>
-              {!vm.isCricket && (
+              {!vm.isCricket && vm.centerPrimary && (
                 <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono">
                   {vm.centerPrimary}
                 </span>
@@ -1084,7 +1166,15 @@ function AlternativeScoreboardStyles({
           </div>
         </div>
 
-        {config.mode === 'full' && (vm.situationBanner || vm.recentBalls.length > 0 || vm.battersText) && (
+        {config.mode === 'full' && (vm.leftStatsText || vm.rightStatsText) ? (
+          <div
+            style={{ background: theme.subStripBg, borderColor: theme.subStripBorder, fontSize: m.metaLabelPx }}
+            className="px-3 py-1 border-t flex items-center justify-between gap-2 font-mono tabular-nums"
+          >
+            <span className="truncate">{vm.leftStatsText}</span>
+            <span className="truncate text-right">{vm.rightStatsText}</span>
+          </div>
+        ) : config.mode === 'full' && (vm.situationBanner || vm.recentBalls.length > 0 || vm.battersText) ? (
           <div
             style={{ background: theme.subStripBg, borderColor: theme.subStripBorder, fontSize: m.metaLabelPx }}
             className="px-3 py-1 border-t flex items-center justify-between gap-2"
@@ -1094,7 +1184,7 @@ function AlternativeScoreboardStyles({
             </span>
             <BallChips balls={vm.recentBalls} chipPx={Math.max(14, m.ballChipPx - 3)} fontPx={Math.max(8, m.ballChipFontPx - 1)} isLight={theme.isLight} />
           </div>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -1126,7 +1216,9 @@ function AlternativeScoreboardStyles({
               <Trophy className="w-3 h-3 shrink-0" />
               {vm.tournamentName || `MAIDANLIVE ${vm.sportLabel} CHAMPIONSHIP`}
             </span>
-            <span className="font-mono font-extrabold shrink-0">{vm.centerPrimary}</span>
+            {vm.centerPrimary && (
+              <span className="font-mono font-extrabold shrink-0">{vm.centerPrimary}</span>
+            )}
           </div>
         )}
 
@@ -1327,27 +1419,40 @@ function AlternativeScoreboardStyles({
             }}
             className="border-l flex flex-col justify-center gap-1 min-w-[160px] max-w-[44%] shrink-0"
           >
-            <div className="flex items-center justify-between gap-2">
-              <span style={{ fontSize: m.metaFontPx, color: theme.accentPrimary }} className="font-mono font-extrabold whitespace-nowrap">
-                {vm.centerPrimary}
-              </span>
-              {config.showLiveIndicator && (
-                <ObsLiveStatusPill
-                  label={vm.statusPillLabel}
-                  isLive={vm.showLiveDot}
-                  variant={vm.statusPillVariant}
-                  compact
-                  fontPx={m.pillFontPx}
-                  padX={m.pillPadX}
-                  padY={m.pillPadY}
-                />
-              )}
-            </div>
-            {config.mode === 'full' && (vm.situationBanner || vm.battersText || vm.statChips.length > 0) && (
+            {(vm.centerPrimary || config.showLiveIndicator) && (
+              <div className="flex items-center justify-between gap-2">
+                {vm.centerPrimary ? (
+                  <span style={{ fontSize: m.metaFontPx, color: theme.accentPrimary }} className="font-mono font-extrabold whitespace-nowrap">
+                    {vm.centerPrimary}
+                  </span>
+                ) : (
+                  <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-bold uppercase">
+                    {vm.centerSecondary || vm.sportLabel}
+                  </span>
+                )}
+                {config.showLiveIndicator && (
+                  <ObsLiveStatusPill
+                    label={vm.statusPillLabel}
+                    isLive={vm.showLiveDot}
+                    variant={vm.statusPillVariant}
+                    compact
+                    fontPx={m.pillFontPx}
+                    padX={m.pillPadX}
+                    padY={m.pillPadY}
+                  />
+                )}
+              </div>
+            )}
+            {config.mode === 'full' && (vm.leftStatsText || vm.rightStatsText) ? (
+              <div style={{ fontSize: m.metaLabelPx, color: theme.secondaryText }} className="flex items-center justify-between gap-2 font-mono tabular-nums">
+                <span className="truncate">{vm.leftStatsText}</span>
+                <span className="truncate text-right">{vm.rightStatsText}</span>
+              </div>
+            ) : config.mode === 'full' && (vm.situationBanner || vm.battersText || vm.statChips.length > 0) ? (
               <p style={{ fontSize: m.metaLabelPx, color: theme.secondaryText }} className="font-mono truncate">
                 {vm.situationBanner || vm.battersText || vm.statChips.map((c) => `${c.label} ${c.value}`).join(' · ')}
               </p>
-            )}
+            ) : null}
             {config.mode === 'full' && vm.recentBalls.length > 0 && (
               <BallChips balls={vm.recentBalls} chipPx={Math.max(15, m.ballChipPx - 2)} fontPx={Math.max(8, m.ballChipFontPx - 1)} isLight={theme.isLight} />
             )}
@@ -1397,7 +1502,7 @@ function AlternativeScoreboardStyles({
             paddingTop: Math.round(m.stripPadY * 0.8),
             paddingBottom: Math.round(m.stripPadY * 0.8),
           }}
-          className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[340px]"
+          className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[44%]"
         >
           <ObsTeamBadge
             logoUrl={vm.primaryLogo}
@@ -1419,26 +1524,30 @@ function AlternativeScoreboardStyles({
         </div>
 
         {/* Pod 3: Center Clock / Match Info */}
-        <div
-          style={{
-            background: theme.brandBg,
-            color: theme.brandText,
-            paddingLeft: m.stripPadX,
-            paddingRight: m.stripPadX,
-            paddingTop: Math.round(m.stripPadY * 0.8),
-            paddingBottom: Math.round(m.stripPadY * 0.8),
-          }}
-          className="rounded-xl shadow-lg flex flex-col items-center justify-center shrink-0 border border-white/20"
-        >
-          <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
-            {vm.centerPrimary}
-          </span>
-          {!isScoreOnly && vm.centerSecondary && (
-            <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase opacity-85 leading-none mt-0.5">
-              {vm.centerSecondary}
-            </span>
-          )}
-        </div>
+        {(vm.centerPrimary || (!isScoreOnly && vm.centerSecondary)) && (
+          <div
+            style={{
+              background: theme.brandBg,
+              color: theme.brandText,
+              paddingLeft: m.stripPadX,
+              paddingRight: m.stripPadX,
+              paddingTop: Math.round(m.stripPadY * 0.8),
+              paddingBottom: Math.round(m.stripPadY * 0.8),
+            }}
+            className="rounded-xl shadow-lg flex flex-col items-center justify-center shrink-0 border border-white/20"
+          >
+            {vm.centerPrimary && (
+              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
+                {vm.centerPrimary}
+              </span>
+            )}
+            {!isScoreOnly && vm.centerSecondary && (
+              <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase opacity-85 leading-none ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
+                {vm.centerSecondary}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Pod 4: Secondary Team */}
         <div
@@ -1451,7 +1560,7 @@ function AlternativeScoreboardStyles({
             paddingTop: Math.round(m.stripPadY * 0.8),
             paddingBottom: Math.round(m.stripPadY * 0.8),
           }}
-          className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[340px]"
+          className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[44%]"
         >
           <span
             key={`dc-b-${pulseKey}`}

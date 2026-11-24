@@ -121,7 +121,7 @@ const TOGGLE_FIELDS: Array<{
   { key: 'showBowler', label: 'Bowler' },
   { key: 'showRecentOver', label: 'Recent Over' },
   { key: 'showLiveIndicator', label: 'Live Indicator' },
-  { key: 'showMatchStatus', label: 'Match Status' },
+  { key: 'showMatchStatus', label: 'Match Status / Timer' },
 ];
 
 export function BroadcastOverlayConfigPage() {
@@ -154,6 +154,7 @@ export function BroadcastOverlayConfigPage() {
     setScore,
     overlayConfig,
     setOverlayConfig,
+    serverClockOffsetMs,
     loading,
     error,
     connected,
@@ -781,6 +782,7 @@ export function BroadcastOverlayConfigPage() {
                           score={score}
                           config={effectiveOverlayConfig}
                           isPortrait={isPreviewPortrait}
+                          serverClockOffsetMs={serverClockOffsetMs}
                         />
                       </div>
                     </div>

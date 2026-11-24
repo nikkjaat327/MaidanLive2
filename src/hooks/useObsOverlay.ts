@@ -14,16 +14,29 @@ export function useObsOverlay(matchId?: string) {
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(() => getSocketClient().connected);
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number>(0);
 
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const lastSequenceRef = useRef<number>(0);
   const lastBootIdRef = useRef<string | null>(null);
+
+  const syncServerClock = useCallback((iso?: unknown) => {
+    if (typeof iso !== 'string' || !iso) return;
+    const parsed = Date.parse(iso);
+    if (!Number.isFinite(parsed)) return;
+    const nextOffset = parsed - Date.now();
+    // Smooth tiny jitter (<300ms) while adjusting promptly for larger clock skews
+    setServerClockOffsetMs((prev) =>
+      Math.abs(nextOffset - prev) >= 300 ? nextOffset : prev
+    );
+  }, []);
 
   const fetchOverlay = useCallback(async () => {
     if (!matchId) return;
     try {
       setError(null);
       const res = await liveStreamService.getOverlayData(matchId);
+      syncServerClock(res.serverNowIso);
       setStream(res.stream);
       setScore(res.score);
       setOverlayConfig(normalizeOverlayConfig(res.overlayConfig));
@@ -35,7 +48,7 @@ export function useObsOverlay(matchId?: string) {
     } finally {
       setLoading(false);
     }
-  }, [matchId]);
+  }, [matchId, syncServerClock]);
 
   useEffect(() => {
     seenEventIdsRef.current.clear();
@@ -97,18 +110,24 @@ export function useObsOverlay(matchId?: string) {
       score?: LiveScoreData;
       eventId?: string;
       sequence?: number;
+      serverNowIso?: string;
+      emittedAt?: string;
     }) => {
       if (payload?.streamId !== matchId) return;
       if (!shouldAcceptEvent(payload, true)) return;
+      syncServerClock(payload.serverNowIso || payload.emittedAt);
       if (payload.score) {
         setScore(payload.score);
       }
     };
 
-    const handleStreamUpdated = (updated: LiveStreamData & { eventId?: string }) => {
+    const handleStreamUpdated = (
+      updated: LiveStreamData & { eventId?: string; serverNowIso?: string; emittedAt?: string }
+    ) => {
       const id = updated?.id || updated?._id;
       if (id !== matchId) return;
       if (!shouldAcceptEvent(updated, false)) return;
+      syncServerClock(updated.serverNowIso || updated.emittedAt);
       setStream((prev) => (prev ? { ...prev, ...updated } : updated));
       if (updated.score) {
         setScore(updated.score);
@@ -133,9 +152,12 @@ export function useObsOverlay(matchId?: string) {
       overlayConfig?: BroadcastOverlayConfig;
       showScoreboardOnYoutube?: boolean;
       eventId?: string;
+      serverNowIso?: string;
+      emittedAt?: string;
     }) => {
       if (payload?.streamId !== matchId) return;
       if (!shouldAcceptEvent(payload, false)) return;
+      syncServerClock(payload.serverNowIso || payload.emittedAt);
       if (payload.overlayConfig) {
         setOverlayConfig(normalizeOverlayConfig(payload.overlayConfig));
       }
@@ -151,10 +173,13 @@ export function useObsOverlay(matchId?: string) {
       streamId?: string;
       graphicsState?: BroadcastGraphicsStateData;
       eventId?: string;
+      serverNowIso?: string;
+      emittedAt?: string;
     }) => {
       const targetId = payload?.matchId || payload?.streamId;
       if (targetId !== matchId) return;
       if (!shouldAcceptEvent(payload, false)) return;
+      syncServerClock(payload.serverNowIso || payload.emittedAt);
       if (payload.graphicsState) {
         setGraphicsState(payload.graphicsState);
       }
@@ -212,7 +237,7 @@ export function useObsOverlay(matchId?: string) {
       socket.off('graphics:state_updated', handleGraphicsStateUpdated);
       socket.emit('match:leave', matchId);
     };
-  }, [matchId, fetchOverlay]);
+  }, [matchId, fetchOverlay, syncServerClock]);
 
   // Reliable background reconciliation polling so OBS Browser Sources never drift even if WebSocket is blocked
   useEffect(() => {
@@ -233,6 +258,7 @@ export function useObsOverlay(matchId?: string) {
     setOverlayConfig,
     graphicsState,
     setGraphicsState,
+    serverClockOffsetMs,
     loading,
     error,
     connected,

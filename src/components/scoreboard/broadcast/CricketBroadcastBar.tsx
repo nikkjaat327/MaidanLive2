@@ -36,9 +36,7 @@ export function CricketBroadcastBar({ stream, score, compact = false }: CricketB
   const balls = isBattingA ? d.teamABalls : d.teamBBalls;
   const extras = isBattingA ? getTotalExtras(d.extrasA) : getTotalExtras(d.extrasB);
 
-  const lastOver = d.lastOverSummary && d.lastOverSummary.length > 0
-    ? d.lastOverSummary
-    : d.recentBalls.slice(-6);
+  const lastOver = (d.recentBalls || []).slice(-6);
 
   const hasPlayers = Boolean(d.batsman1 || d.batsman2 || d.bowler);
 

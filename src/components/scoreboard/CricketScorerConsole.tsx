@@ -361,8 +361,6 @@ export function CricketScorerConsole({
   const firstBalls = firstSide === 'A' ? details.teamABalls : details.teamBBalls;
   const secondTeamDefaultName = firstSide === 'A' ? teamB : teamA;
 
-  const oversCompletedNow = activeBalls % 6 === 0 && details.recentBalls.length > 0 ? [] : details.recentBalls.slice(-(activeBalls % 6 || 6));
-
   return (
     <div className="space-y-4">
       <datalist id="cricket-batting-players">
@@ -526,24 +524,22 @@ export function CricketScorerConsole({
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mr-1">
               Recent Balls:
             </span>
-            {(oversCompletedNow.length > 0 ? details.recentBalls.slice(-8) : details.recentBalls.slice(-6)).map(
-              (b, idx) => (
-                <span
-                  key={`${b}-${idx}`}
-                  className={`inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-md font-mono text-xs font-bold tabular-nums ${
-                    b.includes('W') && !b.startsWith('Wd')
-                      ? 'bg-red-600 text-white'
-                      : b === '4' || b === '6'
-                        ? 'bg-emerald-600 text-white'
-                        : b.startsWith('Wd') || b.startsWith('Nb')
-                          ? 'bg-amber-500 text-slate-950'
-                          : 'bg-white border border-slate-300 text-slate-800'
-                  }`}
-                >
-                  {b}
-                </span>
-              )
-            )}
+            {details.recentBalls.slice(-8).map((b, idx) => (
+              <span
+                key={`${b}-${idx}`}
+                className={`inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-md font-mono text-xs font-bold tabular-nums ${
+                  b.includes('W') && !b.startsWith('Wd')
+                    ? 'bg-red-600 text-white'
+                    : b === '4' || b === '6'
+                      ? 'bg-emerald-600 text-white'
+                      : b.startsWith('Wd') || b.startsWith('Nb')
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-white border border-slate-300 text-slate-800'
+                }`}
+              >
+                {b}
+              </span>
+            ))}
           </div>
         )}
 

@@ -977,9 +977,11 @@ export function KabaddiSidebarPanels({
                   <input
                     type="checkbox"
                     checked={viewerDraft[item.key]}
-                    onChange={(e) =>
-                      setViewerDraft((prev) => ({ ...prev, [item.key]: e.target.checked }))
-                    }
+                    onChange={(e) => {
+                      const next = { ...viewerDraft, [item.key]: e.target.checked };
+                      setViewerDraft(next);
+                      onSaveViewerSettings(next);
+                    }}
                     className="w-4 h-4 rounded border-slate-600 text-[#EA580C]"
                   />
                 </label>

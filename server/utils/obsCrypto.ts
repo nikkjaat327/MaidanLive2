@@ -167,7 +167,7 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
       : '',
   ].join('');
 
-  const obsViewUrl = `${baseUrl}/?view=${stream}&room=${room}${pwd}&scene&cleanoutput&noheader&nofooter&transparent${viewExtras}`;
+  const obsViewUrl = `${baseUrl}/?view=${stream}&room=${room}${pwd}&solo&cleanoutput&noheader&nofooter&transparent${viewExtras}`;
   const directorUrl = `${baseUrl}/?director=${room}${pwd}${label}`;
 
   return {
@@ -175,4 +175,21 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
     obsViewUrl,
     directorUrl,
   };
+}
+
+export function sanitizeVdoViewUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    const isVdo = parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('view');
+    if (!isVdo) return trimmed;
+    parsed.searchParams.delete('scene');
+    if (parsed.searchParams.has('view') && !parsed.searchParams.has('solo')) {
+      parsed.searchParams.set('solo', '1');
+    }
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
 }

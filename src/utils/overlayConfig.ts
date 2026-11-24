@@ -476,35 +476,35 @@ export function computeOverlayMetrics(
 
   const barWidthPct = isPortrait
     ? overallScale < 0.92
-      ? Math.round(Math.min(100, Math.max(76, 66 + overallScale * 34)))
+      ? Math.round(Math.min(100, Math.max(72, 62 + overallScale * 36)))
       : 100
-    : Math.round(Math.min(96, Math.max(52, 42 + overallScale * 34)));
+    : Math.round(Math.min(98, Math.max(46, 32 + overallScale * 38)));
 
   return {
     overallScale,
     barWidthPct,
-    scoreFontPx: clampPx(22 * overallScale * score, 12, 68),
-    teamNameFontPx: clampPx(16 * overallScale * text * teamName, 10, 48),
-    subTeamFontPx: clampPx(12 * overallScale * text * teamName, 8.5, 32),
-    metaFontPx: clampPx(12.5 * overallScale * text * meta, 9, 32),
-    metaLabelPx: clampPx(10 * overallScale * text * meta, 7.5, 24),
-    logoMdPx: clampPx(34 * overallScale * logo, 18, 92),
-    logoSmPx: clampPx(26 * overallScale * logo, 15, 72),
-    brandIconPx: clampPx(17 * overallScale * logo, 10, 46),
-    brandFontPx: clampPx(12 * overallScale * text, 8, 28),
-    brandPadX: clampPx(13 * overallScale, 6, 38),
-    brandPadY: clampPx(8 * overallScale, 4, 24),
-    pillFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 26),
-    pillPadX: clampPx(10 * overallScale, 5, 24),
-    pillPadY: clampPx(4.5 * overallScale, 2.5, 14),
-    stripPadX: clampPx(15 * overallScale, 7, 38),
-    stripPadY: clampPx(9 * overallScale, 4, 28),
-    subStripPadX: clampPx(15 * overallScale, 7, 38),
-    subStripPadY: clampPx(6.5 * overallScale, 3, 20),
-    sectionGapPx: clampPx(13 * overallScale, 5, 34),
-    scorePillPadX: clampPx(13 * overallScale, 6, 34),
-    scorePillPadY: clampPx(6.5 * overallScale, 3, 20),
-    ballChipPx: clampPx(21 * overallScale * meta, 13, 48),
-    ballChipFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 24),
+    scoreFontPx: clampPx(22 * overallScale * score, 12, 84),
+    teamNameFontPx: clampPx(16 * overallScale * text * teamName, 10, 60),
+    subTeamFontPx: clampPx(12 * overallScale * text * teamName, 8.5, 40),
+    metaFontPx: clampPx(12.5 * overallScale * text * meta, 9, 40),
+    metaLabelPx: clampPx(10 * overallScale * text * meta, 7.5, 30),
+    logoMdPx: clampPx(34 * overallScale * logo, 18, 112),
+    logoSmPx: clampPx(26 * overallScale * logo, 15, 88),
+    brandIconPx: clampPx(17 * overallScale * logo, 10, 56),
+    brandFontPx: clampPx(12 * overallScale * text, 8, 36),
+    brandPadX: clampPx(13 * overallScale, 6, 46),
+    brandPadY: clampPx(8 * overallScale, 4, 30),
+    pillFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 32),
+    pillPadX: clampPx(10 * overallScale, 5, 30),
+    pillPadY: clampPx(4.5 * overallScale, 2.5, 18),
+    stripPadX: clampPx(15 * overallScale, 7, 48),
+    stripPadY: clampPx(9 * overallScale, 4, 34),
+    subStripPadX: clampPx(15 * overallScale, 7, 48),
+    subStripPadY: clampPx(6.5 * overallScale, 3, 24),
+    sectionGapPx: clampPx(13 * overallScale, 5, 42),
+    scorePillPadX: clampPx(13 * overallScale, 6, 42),
+    scorePillPadY: clampPx(6.5 * overallScale, 3, 26),
+    ballChipPx: clampPx(21 * overallScale * meta, 13, 56),
+    ballChipFontPx: clampPx(10.5 * overallScale * text * meta, 7.5, 30),
   };
 }

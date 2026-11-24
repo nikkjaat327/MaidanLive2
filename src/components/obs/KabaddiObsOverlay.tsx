@@ -18,6 +18,7 @@ interface KabaddiObsOverlayProps {
   config: BroadcastOverlayConfig;
   theme: ObsThemeTokens;
   isPortrait?: boolean;
+  serverClockOffsetMs?: number;
 }
 
 export function KabaddiObsOverlay({
@@ -26,6 +27,7 @@ export function KabaddiObsOverlay({
   config,
   theme,
   isPortrait = false,
+  serverClockOffsetMs = 0,
 }: KabaddiObsOverlayProps) {
   const m = computeOverlayMetrics(config, isPortrait);
   const d = normalizeKabaddiDetails(score?.sportSpecificDetails);
@@ -33,10 +35,11 @@ export function KabaddiObsOverlay({
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    const id = window.setInterval(() => setNowMs(Date.now()), 350);
     return () => window.clearInterval(id);
   }, []);
-  const effClock = computeEffectiveKabaddiClock(d, nowMs);
+  const effectiveNowMs = nowMs + serverClockOffsetMs;
+  const effClock = computeEffectiveKabaddiClock(d, effectiveNowMs);
 
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
@@ -77,6 +80,7 @@ export function KabaddiObsOverlay({
       compact
       showTimer={false}
       scaleMultiplier={m.overallScale}
+      nowMs={effectiveNowMs}
     />
   );
 
@@ -118,12 +122,14 @@ export function KabaddiObsOverlay({
           <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
             {shortB}
           </span>
-          <span
-            className="font-mono tabular-nums font-bold shrink-0"
-            style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}
-          >
-            {clock}
-          </span>
+          {config.showMatchStatus && vis.showMatchTimer && (
+            <span
+              className="font-mono tabular-nums font-bold shrink-0"
+              style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}
+            >
+              {clock}
+            </span>
+          )}
         </div>
       </div>
     );
@@ -190,7 +196,7 @@ export function KabaddiObsOverlay({
             className="obs-score-pop flex items-center gap-3 rounded-md font-mono tabular-nums font-extrabold leading-none shrink-0"
           >
             <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreA : '•'}</span>
-            {config.showMatchStatus && (
+            {config.showMatchStatus && (vis.showMatchTimer || vis.showHalf) ? (
               <span className="flex flex-col items-center px-1.5 leading-tight opacity-90">
                 {vis.showMatchTimer && (
                   <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}>
@@ -205,6 +211,10 @@ export function KabaddiObsOverlay({
                     {d.clock.halfLabel || d.half}
                   </span>
                 )}
+              </span>
+            ) : (
+              <span style={{ fontSize: m.metaFontPx }} className="px-1 opacity-60">
+                -
               </span>
             )}
             <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreB : '•'}</span>

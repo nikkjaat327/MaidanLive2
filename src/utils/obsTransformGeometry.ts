@@ -398,6 +398,10 @@ export function resolveCameraLiveWebUrl(cam?: {
         if (parsed.searchParams.has('push') && !parsed.searchParams.has('view')) {
           continue;
         }
+        parsed.searchParams.delete('scene');
+        if (!parsed.searchParams.has('solo')) {
+          parsed.searchParams.set('solo', '1');
+        }
         parsed.searchParams.set('muted', '1');
         parsed.searchParams.set('autoplay', '1');
         parsed.searchParams.set('noaudio', '1');

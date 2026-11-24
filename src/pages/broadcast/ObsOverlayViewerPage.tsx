@@ -20,6 +20,7 @@ export function ObsOverlayViewerPage() {
     overlayConfig,
     setOverlayConfig,
     graphicsState,
+    serverClockOffsetMs,
     loading,
     refetch,
   } = useObsOverlay(matchId);
@@ -137,6 +138,7 @@ export function ObsOverlayViewerPage() {
             score={score}
             config={effectiveConfig}
             isPortrait={isPortrait}
+            serverClockOffsetMs={serverClockOffsetMs}
           />
         )}
         <ObsGraphicsLayer

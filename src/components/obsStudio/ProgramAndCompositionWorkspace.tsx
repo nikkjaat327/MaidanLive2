@@ -99,6 +99,10 @@ function buildVdoProgramMonitorUrl(rawUrl?: string): string {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.hostname.includes('vdo.ninja') || parsed.searchParams.has('view')) {
+      parsed.searchParams.delete('scene');
+      if (!parsed.searchParams.has('solo')) {
+        parsed.searchParams.set('solo', '1');
+      }
       parsed.searchParams.set('muted', '1');
       parsed.searchParams.set('autoplay', '1');
       parsed.searchParams.set('noaudio', '1');

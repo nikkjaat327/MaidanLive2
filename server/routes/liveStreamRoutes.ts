@@ -783,6 +783,7 @@ router.get('/:id/overlay', async (req: Request, res: Response) => {
       score: score || null,
       overlayConfig,
       graphicsState,
+      serverNowIso: new Date().toISOString(),
     });
   } catch (err) {
     console.error('[LiveStream] Get overlay error:', err);
@@ -867,18 +868,22 @@ router.patch(
         }
       );
 
-      emitRoomOnlyEvent(id, 'overlay:config_updated', {
+      const serverNowIso = new Date().toISOString();
+      emitStreamEvent(id, 'overlay:config_updated', {
         streamId: id,
         overlayConfig: nextConfig,
+        serverNowIso,
       });
       emitBroadcastStudioEvent(id, 'overlay:config_updated', {
         streamId: id,
         overlayConfig: nextConfig,
+        serverNowIso,
       });
 
       res.json({
         streamId: id,
         overlayConfig: nextConfig,
+        serverNowIso,
       });
     } catch (err) {
       console.error('[LiveStream] Update overlay error:', err);

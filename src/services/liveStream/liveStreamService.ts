@@ -205,12 +205,14 @@ export const liveStreamService = {
     score: LiveScoreData | null;
     overlayConfig: BroadcastOverlayConfig;
     graphicsState?: BroadcastGraphicsStateData;
+    serverNowIso?: string;
   }> {
     const { data } = await publicApi.get<{
       stream: LiveStreamData;
       score: LiveScoreData | null;
       overlayConfig: BroadcastOverlayConfig;
       graphicsState?: BroadcastGraphicsStateData;
+      serverNowIso?: string;
     }>(`/live/${id}/overlay`, {
       params: { _t: Date.now() },
       headers: {
@@ -227,10 +229,12 @@ export const liveStreamService = {
   ): Promise<{
     streamId: string;
     overlayConfig: BroadcastOverlayConfig;
+    serverNowIso?: string;
   }> {
     const { data } = await adminApi.patch<{
       streamId: string;
       overlayConfig: BroadcastOverlayConfig;
+      serverNowIso?: string;
     }>(`/live/${id}/overlay`, { overlayConfig });
     return data;
   },

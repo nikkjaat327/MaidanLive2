@@ -373,30 +373,34 @@ export async function handleKabaddiEventRoute(
       }
     );
 
+    const serverNowIso = new Date().toISOString();
     const payload = {
       streamId: id,
       score: txResult.score.toObject(),
       historyItem: populatedHistory,
       triggeredDoOrDie: txResult.applied.triggeredDoOrDie || null,
       triggeredAllOut: txResult.applied.triggeredAllOut || null,
+      serverNowIso,
     };
 
     emitStreamEvent(id, 'score:updated', payload);
     emitStreamEvent(id, 'kabaddi:state', {
       streamId: id,
       score: payload.score,
-      serverNowIso: new Date().toISOString(),
+      serverNowIso,
     });
     if (txResult.applied.triggeredDoOrDie) {
       emitStreamEvent(id, 'kabaddi:do_or_die', {
         streamId: id,
         doOrDie: txResult.applied.triggeredDoOrDie,
+        serverNowIso,
       });
     }
     if (txResult.applied.triggeredAllOut) {
       emitStreamEvent(id, 'kabaddi:all_out', {
         streamId: id,
         allOut: txResult.applied.triggeredAllOut,
+        serverNowIso,
       });
     }
     emitStreamEvent(id, 'match:timeline:updated', {
@@ -643,6 +647,7 @@ export async function handleKabaddiSettingsRoute(
     const payload = {
       streamId: id,
       score: score.toObject(),
+      serverNowIso: new Date().toISOString(),
     };
 
     emitStreamEvent(id, 'kabaddi:settings_updated', payload);

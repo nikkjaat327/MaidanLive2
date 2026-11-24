@@ -86,10 +86,7 @@ export function CricketObsOverlay({
   }, [runs, wickets, balls]);
 
   const recentBalls = details.recentBalls || [];
-  const lastOver =
-    recentBalls.length > 0
-      ? recentBalls.slice(-6)
-      : (details.lastOverSummary || []).slice(-6);
+  const lastOver = recentBalls.slice(-6);
 
   let statusPillLabel = 'LIVE';
   let statusPillVariant: 'live' | 'break' | 'warning' | 'final' | 'upcoming' = 'live';

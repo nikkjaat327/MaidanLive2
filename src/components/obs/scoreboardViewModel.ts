@@ -49,6 +49,8 @@ export interface ScoreboardViewModel {
   statChips: Array<{ label: string; value: string; accent?: 'primary' | 'secondary' | 'normal' }>;
   battersText: string;
   bowlerText: string;
+  leftStatsText?: string;
+  rightStatsText?: string;
   recentBalls: string[];
   footerNote: string;
   mvpPlayerName: string;
@@ -230,7 +232,7 @@ export function buildScoreboardViewModel(
 
     const recentBalls =
       config.showRecentOver && !isAbandoned
-        ? (details.recentBalls?.length ? details.recentBalls : details.lastOverSummary || []).slice(-6)
+        ? (details.recentBalls || []).slice(-6)
         : [];
 
     const oversDisplay = `${formatCricketOvers(balls)}/${details.oversLimit} OV`;
@@ -303,6 +305,14 @@ export function buildScoreboardViewModel(
       bannerAccent = 'chase';
     }
 
+    const showClock = config.showMatchStatus && vis.showMatchTimer;
+    const matSuffixA = vis.showPlayersOnCourtDots
+      ? ` · Mat ${d.playersOnCourtA}/${d.rules.playersPerSide}`
+      : '';
+    const matSuffixB = vis.showPlayersOnCourtDots
+      ? ` · Mat ${d.playersOnCourtB}/${d.rules.playersPerSide}`
+      : '';
+
     return {
       sport: 'Kabaddi',
       sportLabel: 'KABADDI',
@@ -319,15 +329,17 @@ export function buildScoreboardViewModel(
       secondaryAccent: config.teamBColor,
       secondaryScore: vis.showScores ? String(scoreB) : '•',
       secondarySub: `R ${d.teamB.raidPoints} · T ${d.teamB.tacklePoints} · B ${d.teamB.bonusPoints} · AO ${d.teamB.allOutPoints}`,
-      centerPrimary: vis.showMatchTimer ? effClock.formattedClock : 'KABADDI',
-      centerSecondary: [
-        vis.showHalf ? d.clock.halfLabel || d.half : '',
-        vis.showRaidTimer && d.clock.raidTimerEnabled && !d.matchCompleted
-          ? `R${effClock.raidRemainingSec}s`
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' · '),
+      centerPrimary: showClock ? effClock.formattedClock : '',
+      centerSecondary: config.showMatchStatus
+        ? [
+            vis.showHalf ? d.clock.halfLabel || d.half : '',
+            vis.showRaidTimer && d.clock.raidTimerEnabled && !d.matchCompleted
+              ? `R${effClock.raidRemainingSec}s`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '',
       statusPillLabel: resultDeclared ? 'FINAL' : stdStatus === 'LIVE' ? 'LIVE' : stdStatus,
       statusPillVariant: resultDeclared ? 'final' : stdStatus === 'LIVE' ? 'live' : 'break',
       showLiveDot: stream.status === 'LIVE' && !resultDeclared,
@@ -335,14 +347,11 @@ export function buildScoreboardViewModel(
       isCricket: false,
       situationBanner: banner,
       situationAccent: bannerAccent,
-      statChips: vis.showPlayersOnCourtDots
-        ? [
-            { label: `${shortA} MAT`, value: `${d.playersOnCourtA}/${d.rules.playersPerSide}` },
-            { label: `${shortB} MAT`, value: `${d.playersOnCourtB}/${d.rules.playersPerSide}` },
-          ]
-        : [],
-      battersText: `${shortA}: R${d.teamA.raidPoints} T${d.teamA.tacklePoints} B${d.teamA.bonusPoints} AO${d.teamA.allOutPoints}`,
-      bowlerText: `${shortB}: R${d.teamB.raidPoints} T${d.teamB.tacklePoints} B${d.teamB.bonusPoints} AO${d.teamB.allOutPoints}`,
+      statChips: [],
+      battersText: '',
+      bowlerText: '',
+      leftStatsText: `${shortA}: R ${d.teamA.raidPoints} · T ${d.teamA.tacklePoints} · B ${d.teamA.bonusPoints} · AO ${d.teamA.allOutPoints}${matSuffixA}`,
+      rightStatsText: `${shortB}: R ${d.teamB.raidPoints} · T ${d.teamB.tacklePoints} · B ${d.teamB.bonusPoints} · AO ${d.teamB.allOutPoints}${matSuffixB}`,
       recentBalls: [],
       footerNote: '',
       mvpPlayerName: resultDeclared && score?.mvpPlayerName ? score.mvpPlayerName : '',

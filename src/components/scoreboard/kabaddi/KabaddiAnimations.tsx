@@ -23,6 +23,7 @@ interface KabaddiAnimationsProps {
   compact?: boolean;
   showTimer?: boolean;
   scaleMultiplier?: number;
+  nowMs?: number;
 }
 
 export function KabaddiAnimations({
@@ -42,16 +43,42 @@ export function KabaddiAnimations({
   compact = false,
   showTimer = true,
   scaleMultiplier = 1,
+  nowMs,
 }: KabaddiAnimationsProps) {
   const [activeAllOut, setActiveAllOut] = useState<KabaddiAllOutBanner | null>(null);
   const initialHydratedRef = useRef(false);
   const seenAllOutIdsRef = useRef<Set<string>>(new Set());
+  const activeAllOutTimerRef = useRef<number | null>(null);
+  const nowMsRef = useRef<number>(typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now());
+  nowMsRef.current = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now();
   const durationMs = Math.max(2, allOutDurationSec || 6) * 1000;
 
-  // Prevent replay of historical All-Out events on page reload / socket reconnect
   useEffect(() => {
-    const evtId = lastAllOut?.eventId;
-    if (!evtId) return;
+    initialHydratedRef.current = false;
+    seenAllOutIdsRef.current.clear();
+    if (activeAllOutTimerRef.current !== null) {
+      window.clearTimeout(activeAllOutTimerRef.current);
+      activeAllOutTimerRef.current = null;
+    }
+    setActiveAllOut(null);
+  }, [streamId]);
+
+  useEffect(() => {
+    return () => {
+      if (activeAllOutTimerRef.current !== null) {
+        window.clearTimeout(activeAllOutTimerRef.current);
+        activeAllOutTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const lastAllOutEventId = lastAllOut?.eventId || '';
+  const lastAllOutTriggeredIso = lastAllOut?.triggeredAtIso || '';
+
+  // Prevent replay of historical All-Out events on page reload / socket reconnect
+  // while ensuring polling or unrelated score object updates never cancel an active All-Out banner
+  useEffect(() => {
+    if (!lastAllOutEventId || !lastAllOut) return;
 
     const storageKey = `maidanlive_kbd_ao_seen_${streamId}`;
     let storedSeen: string[] = [];
@@ -62,36 +89,45 @@ export function KabaddiAnimations({
       storedSeen = [];
     }
 
+    const effectiveNow = nowMsRef.current;
+    const triggeredMs = lastAllOutTriggeredIso ? Date.parse(lastAllOutTriggeredIso) : NaN;
+    const ageMs = Number.isFinite(triggeredMs) ? effectiveNow - triggeredMs : 0;
+
     if (!initialHydratedRef.current) {
       initialHydratedRef.current = true;
-      const ageMs = lastAllOut?.triggeredAtIso
-        ? Date.now() - new Date(lastAllOut.triggeredAtIso).getTime()
-        : 999_999;
-      if (storedSeen.includes(evtId) || ageMs > durationMs) {
-        seenAllOutIdsRef.current.add(evtId);
+      if (storedSeen.includes(lastAllOutEventId) || ageMs > durationMs) {
+        seenAllOutIdsRef.current.add(lastAllOutEventId);
         return;
       }
     }
 
-    if (seenAllOutIdsRef.current.has(evtId) || storedSeen.includes(evtId)) {
+    if (seenAllOutIdsRef.current.has(lastAllOutEventId) || storedSeen.includes(lastAllOutEventId)) {
       return;
     }
 
-    seenAllOutIdsRef.current.add(evtId);
+    seenAllOutIdsRef.current.add(lastAllOutEventId);
     try {
-      const updated = Array.from(new Set([...storedSeen, evtId])).slice(-20);
+      const updated = Array.from(new Set([...storedSeen, lastAllOutEventId])).slice(-20);
       window.sessionStorage.setItem(storageKey, JSON.stringify(updated));
     } catch {
       // ignore storage failure
     }
 
     if (!displaySettings.showAllOutAnimation) return;
+
+    const remainingBannerMs = Number.isFinite(triggeredMs)
+      ? Math.max(1500, Math.min(durationMs, triggeredMs + durationMs - effectiveNow))
+      : durationMs;
+
+    if (activeAllOutTimerRef.current !== null) {
+      window.clearTimeout(activeAllOutTimerRef.current);
+    }
     setActiveAllOut(lastAllOut);
-    const timer = window.setTimeout(() => {
+    activeAllOutTimerRef.current = window.setTimeout(() => {
+      activeAllOutTimerRef.current = null;
       setActiveAllOut(null);
-    }, durationMs);
-    return () => window.clearTimeout(timer);
-  }, [lastAllOut, streamId, displaySettings.showAllOutAnimation, durationMs]);
+    }, remainingBannerMs);
+  }, [lastAllOutEventId, lastAllOutTriggeredIso, lastAllOut, streamId, displaySettings.showAllOutAnimation, durationMs]);
 
   const animClass = displaySettings.enableAnimations ? 'animate-pulse' : '';
   const dodTeamName = doOrDie.team === 'A' ? teamAName : teamBName;
