@@ -3,11 +3,13 @@ import type React from 'react';
 import { useLocation } from 'react-router-dom';
 import { ExternalLink, GripHorizontal, Maximize2, Minimize2, X, Youtube } from 'lucide-react';
 import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
+import { useAuth } from '../../hooks/useAuth.ts';
 
 type ResizeDirection = 'se' | 'e' | 's' | 'w' | 'sw';
 
 export function FloatingYouTubePreviewWindow() {
   const location = useLocation();
+  const { adminUser } = useAuth();
   const { youtubePreview, updateYouTubeGeometry, closeYouTubePreview } = useBroadcastPreview();
 
   const [interaction, setInteraction] = useState<'idle' | 'drag' | 'resize'>('idle');
@@ -95,7 +97,7 @@ export function FloatingYouTubePreviewWindow() {
     };
   }, [interaction, updateYouTubeGeometry]);
 
-  if (isIsolatedRoute || !youtubePreview.open || !youtubePreview.videoId) {
+  if (!adminUser || isIsolatedRoute || !youtubePreview.open || !youtubePreview.videoId) {
     return null;
   }
 

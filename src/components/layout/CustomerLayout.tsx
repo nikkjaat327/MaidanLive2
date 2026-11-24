@@ -25,7 +25,6 @@ import { useLanguage } from '../../context/LanguageContext.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { OfflineIndicator } from '../common/OfflineIndicator.tsx';
 import { GlobalSearchModal } from '../common/GlobalSearchModal.tsx';
-import { HeaderYouTubePreviewControl } from '../streaming/HeaderYouTubePreviewControl.tsx';
 
 export function CustomerLayout() {
   const { customerUser, adminUser, unreadNotifications } = useAuth();
@@ -225,9 +224,8 @@ export function CustomerLayout() {
             ))}
           </nav>
 
-          {/* Right Zone: YouTube Preview, Search, Language Toggle, PWA Install, Notifications & Account */}
+          {/* Right Zone: Search, Language Toggle, PWA Install, Notifications & Account */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <HeaderYouTubePreviewControl tone="light" compact className="max-w-[140px] sm:max-w-[205px]" />
             <button
               type="button"
               onClick={() => setSearchOpen(true)}
