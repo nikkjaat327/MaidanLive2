@@ -706,6 +706,7 @@ export function AdvancedEventComposer({
                     <option value="PENALTY_GOAL">Penalty Goal</option>
                     <option value="OWN_GOAL">Own Goal</option>
                     <option value="PENALTY_MISS">Penalty Missed</option>
+                    <option value="FOUL">Foul</option>
                     <option value="YELLOW_CARD">Yellow Card</option>
                     <option value="RED_CARD">Red Card</option>
                     <option value="SECOND_YELLOW">Second Yellow + Red</option>

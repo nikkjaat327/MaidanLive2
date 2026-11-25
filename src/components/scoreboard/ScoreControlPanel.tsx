@@ -1150,10 +1150,26 @@ function FootballControls({
           disabled={saving}
           onClick={() =>
             onApply(
+              applyFootballAction(details, scoreA, scoreB, {
+                type: 'FOUL',
+                team,
+                delta: 1,
+              })
+            )
+          }
+          className="min-h-[42px] rounded-lg bg-orange-100 text-orange-900 text-xs font-semibold hover:bg-orange-200"
+        >
+          +1 Foul ({(team === 'A' ? details.teamAFouls : details.teamBFouls) || 0})
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() =>
+            onApply(
               applyFootballAction(details, scoreA, scoreB, { type: 'PENALTY', team, delta: 1 })
             )
           }
-          className="col-span-2 min-h-[42px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+          className="min-h-[42px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
         >
           +1 Shootout Penalty
         </button>

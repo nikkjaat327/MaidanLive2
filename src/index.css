@@ -10,7 +10,7 @@
 @layer base {
   html,
   body {
-    overflow-x: hidden;
+    overflow-x: clip;
     font-family: var(--font-sans);
   }
 
@@ -291,6 +291,214 @@ html[data-obs-overlay-view="true"] #root {
   100% { transform: translateX(260%) skewX(-20deg); opacity: 0; }
 }
 
+/* Thin Neon Custom Scrollbar for Sidebars & Dark Broadcast Panels */
+.sidebar-neon-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.72) rgba(6, 10, 20, 0.9);
+}
+.sidebar-neon-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.sidebar-neon-scroll::-webkit-scrollbar-track {
+  background: rgba(6, 10, 20, 0.92);
+  border-radius: 9999px;
+}
+.sidebar-neon-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #06b6d4 0%, #a855f7 52%, #f97316 100%);
+  border-radius: 9999px;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.55);
+}
+.sidebar-neon-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #22d3ee 0%, #c084fc 50%, #fb923c 100%);
+}
 
+/* JioHotstar & Pro Kabaddi Broadcast Event Stinger Animations (GPU-only transform/opacity/filter) */
+@keyframes mlEventSlamIn {
+  0% {
+    opacity: 0;
+    transform: perspective(1000px) scale3d(1.42, 1.42, 1) rotateX(18deg) translate3d(0, -28px, 0);
+    filter: brightness(1.75) blur(4px);
+  }
+  52% {
+    opacity: 1;
+    transform: perspective(1000px) scale3d(0.95, 0.95, 1) rotateX(-3deg) translate3d(0, 4px, 0);
+    filter: brightness(1.25) blur(0px);
+  }
+  78% {
+    opacity: 1;
+    transform: perspective(1000px) scale3d(1.03, 1.03, 1) rotateX(0deg) translate3d(0, -2px, 0);
+    filter: brightness(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(1000px) scale3d(1, 1, 1) rotateX(0deg) translate3d(0, 0, 0);
+    filter: brightness(1);
+  }
+}
 
+@keyframes mlEventRibbonSweep {
+  0% {
+    opacity: 0;
+    transform: translate3d(-140px, 0, 0) skewX(-16deg) scale3d(0.82, 0.94, 1);
+    filter: brightness(1.6);
+  }
+  60% {
+    opacity: 1;
+    transform: translate3d(10px, 0, 0) skewX(-3deg) scale3d(1.03, 1.01, 1);
+    filter: brightness(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) skewX(0deg) scale3d(1, 1, 1);
+    filter: brightness(1);
+  }
+}
 
+@keyframes mlEventPopBlast {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.32, 0.32, 1) rotate(-8deg);
+    filter: brightness(1.8);
+  }
+  58% {
+    opacity: 1;
+    transform: scale3d(1.09, 1.09, 1) rotate(2deg);
+    filter: brightness(1.2);
+  }
+  82% {
+    opacity: 1;
+    transform: scale3d(0.98, 0.98, 1) rotate(-0.5deg);
+    filter: brightness(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: scale3d(1, 1, 1) rotate(0deg);
+    filter: brightness(1);
+  }
+}
+
+@keyframes mlEventSlamOut {
+  0% {
+    opacity: 1;
+    transform: scale3d(1, 1, 1) translate3d(0, 0, 0);
+    filter: brightness(1);
+  }
+  30% {
+    opacity: 1;
+    transform: scale3d(1.04, 1.04, 1) translate3d(0, -4px, 0);
+    filter: brightness(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: scale3d(0.84, 0.84, 1) translate3d(48px, -14px, 0);
+    filter: brightness(1.4) blur(4px);
+  }
+}
+
+@keyframes mlEventShockwave {
+  0% {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) scale3d(0.25, 0.25, 1);
+  }
+  70% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale3d(2.3, 2.3, 1);
+  }
+}
+
+@keyframes mlEventShockwaveOuter {
+  0% {
+    opacity: 0.78;
+    transform: translate(-50%, -50%) scale3d(0.18, 0.18, 1) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale3d(2.8, 2.8, 1) rotate(35deg);
+  }
+}
+
+@keyframes mlEventSheenSweep {
+  0% {
+    transform: translate3d(-160%, 0, 0) skewX(-24deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.75;
+  }
+  65% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate3d(260%, 0, 0) skewX(-24deg);
+    opacity: 0;
+  }
+}
+
+@keyframes mlEventSparkBurst {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale3d(0.4, 0.4, 1);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--spark-x, 70px), var(--spark-y, -60px), 0) scale3d(1.15, 1.15, 1);
+  }
+}
+
+@keyframes mlEventEmberRise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale3d(0.6, 0.6, 1);
+  }
+  25% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--ember-dx, 14px), -68px, 0) scale3d(1.1, 1.1, 1);
+  }
+}
+
+@keyframes mlEventEnergyPulse {
+  0%, 100% {
+    transform: scale3d(1, 1, 1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale3d(1.028, 1.028, 1);
+    filter: brightness(1.14);
+  }
+}
+
+@keyframes mlEventBadgeFloat {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+  50% {
+    transform: translate3d(0, -3px, 0) scale3d(1.04, 1.04, 1);
+  }
+}
+
+@keyframes mlEventScanSweep {
+  0% {
+    transform: translate3d(0, -100%, 0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.55;
+  }
+  75% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate3d(0, 220%, 0);
+    opacity: 0;
+  }
+}

@@ -73,6 +73,12 @@ import {
 } from '../../src/utils/volleyballScoring.ts';
 import type { VolleyballRules } from '../../src/utils/volleyballScoring.ts';
 import { normalizeOverlayConfig } from '../../src/utils/overlayConfig.ts';
+import {
+  BROADCAST_EVENT_KEYS,
+  BroadcastEventKey,
+  normalizeEventAnimationsConfig,
+} from '../../src/utils/eventAnimations.ts';
+import { emitBroadcastEventAnimation } from '../utils/eventAnimationDispatcher.ts';
 import { sanitizeImageUrl, sanitizeText } from '../utils/sanitize.ts';
 import {
   emitBroadcastStudioEvent,
@@ -869,6 +875,21 @@ router.patch(
           : req.body;
 
       const currentConfig = normalizeOverlayConfig((stream as any).overlayConfig);
+      const mergedEventAnimations =
+        incoming.eventAnimations && typeof incoming.eventAnimations === 'object'
+          ? normalizeEventAnimationsConfig(
+              BROADCAST_EVENT_KEYS.reduce<Record<string, unknown>>((acc, key) => {
+                const curRule = currentConfig.eventAnimations[key];
+                const incRule = (incoming.eventAnimations as Record<string, unknown>)[key];
+                acc[key] =
+                  incRule && typeof incRule === 'object'
+                    ? { ...curRule, ...(incRule as Record<string, unknown>) }
+                    : curRule;
+                return acc;
+              }, {})
+            )
+          : currentConfig.eventAnimations;
+
       const mergedRaw: Record<string, unknown> = {
         ...currentConfig,
         ...incoming,
@@ -879,6 +900,7 @@ router.patch(
                 ...incoming.customScoreboardDesign,
               }
             : currentConfig.customScoreboardDesign,
+        eventAnimations: mergedEventAnimations,
       };
 
       // Keep visible & mode coherent
@@ -938,6 +960,71 @@ router.patch(
     } catch (err) {
       console.error('[LiveStream] Update overlay error:', err);
       res.status(500).json({ message: 'Failed to update broadcast overlay configuration.' });
+    }
+  }
+);
+
+// POST /api/live/:id/overlay/trigger-event-animation - Admin manual live trigger for JioHotstar/PKL event animations
+router.post(
+  '/:id/overlay/trigger-event-animation',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const [canStream, canScore, canOverlayAccess, canScoreGranular] = await Promise.all([
+        canManageStream(req.user!, id, 'stream'),
+        canManageStream(req.user!, id, 'score'),
+        hasBroadcastAccess(req.user!, id, 'broadcast:manage_overlays'),
+        hasGranularPermission(req.user!, 'matches:score', { scopeType: 'match', scopeId: id }),
+      ]);
+      if (!canStream && !canScore && !canOverlayAccess && !canScoreGranular) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to trigger broadcast event animations for this match.',
+        });
+        return;
+      }
+
+      const eventKeyRaw = String(req.body?.eventKey || '').toUpperCase();
+      if (!BROADCAST_EVENT_KEYS.includes(eventKeyRaw as BroadcastEventKey)) {
+        res.status(400).json({ message: 'Invalid broadcast eventKey.' });
+        return;
+      }
+
+      const stream = await LiveStream.findById(id)
+        .select('teamAName teamBName gameName overlayConfig')
+        .lean();
+      if (!stream) {
+        res.status(404).json({ message: 'Match broadcast not found.' });
+        return;
+      }
+
+      const teamSide =
+        req.body?.teamSide === 'A' || req.body?.teamSide === 'B' ? req.body.teamSide : '';
+
+      const payload = await emitBroadcastEventAnimation({
+        streamId: id,
+        eventKey: eventKeyRaw as BroadcastEventKey,
+        stream,
+        teamSide,
+        teamName: sanitizeText(req.body?.teamName, 80),
+        teamColor: sanitizeText(req.body?.teamColor, 30),
+        playerName: sanitizeText(req.body?.playerName, 80),
+        subtitle: sanitizeText(req.body?.subtitle, 140),
+        pointsLabel: sanitizeText(req.body?.pointsLabel, 40),
+        previewStyleId: sanitizeText(req.body?.styleId, 80) || undefined,
+        manualOverride: true,
+      });
+
+      res.json({ ok: true, eventId: payload?.eventId || '', payload });
+    } catch (err) {
+      console.error('[LiveStream] Trigger event animation error:', err);
+      res.status(500).json({ message: 'Failed to trigger broadcast event animation.' });
     }
   }
 );

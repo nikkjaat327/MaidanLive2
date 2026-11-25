@@ -59,6 +59,11 @@ import {
 } from '../../utils/matchTimeout.ts';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
 import {
+  useBroadcastEventQueue,
+  type ActiveBroadcastEventItem,
+} from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../../components/obs/BroadcastEventAnimationLayer.tsx';
+import {
   getStickyMatchId,
   setStickyMatchId,
   subscribeStickyMatchId,
@@ -175,6 +180,8 @@ function LiveCameraScoreboardLayer({
   graphicsState,
   matchId,
   containerWidth,
+  activeEventItem,
+  isEventExiting,
 }: {
   stream: LiveStreamData | null;
   score: LiveScoreData | null;
@@ -182,6 +189,8 @@ function LiveCameraScoreboardLayer({
   graphicsState: BroadcastGraphicsStateData | null;
   matchId: string;
   containerWidth: number;
+  activeEventItem: ActiveBroadcastEventItem | null;
+  isEventExiting: boolean;
 }) {
   if (!stream || containerWidth <= 0) return null;
   const scale = containerWidth / 1920;
@@ -251,6 +260,14 @@ function LiveCameraScoreboardLayer({
             tournamentId={stream.tournamentId || null}
           />
         )}
+        <BroadcastEventAnimationLayer
+          activeItem={activeEventItem}
+          isExiting={isEventExiting}
+          overlayConfig={tileConfig}
+          variant="canvas"
+          isPortrait={false}
+          zIndex={42}
+        />
       </div>
     </div>
   );
@@ -275,6 +292,8 @@ function ConnectedCameraTile({
   overlayConfig,
   graphicsState,
   matchId,
+  activeEventItem,
+  isEventExiting,
   onTileClick,
   onToggleAudio,
 }: {
@@ -296,6 +315,8 @@ function ConnectedCameraTile({
   overlayConfig: BroadcastOverlayConfig;
   graphicsState: BroadcastGraphicsStateData | null;
   matchId: string;
+  activeEventItem: ActiveBroadcastEventItem | null;
+  isEventExiting: boolean;
   onTileClick: (cam: BroadcastCameraData) => void;
   onToggleAudio: (cam: BroadcastCameraData) => void;
 }) {
@@ -425,6 +446,8 @@ function ConnectedCameraTile({
             graphicsState={graphicsState}
             matchId={matchId}
             containerWidth={frameWidth}
+            activeEventItem={activeEventItem}
+            isEventExiting={isEventExiting}
           />
         </div>
 
@@ -630,6 +653,11 @@ export function BroadcasterStudioPage() {
     overlayConfig,
     graphicsState,
   } = useObsOverlay(activeMatchId || undefined);
+
+  const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
+    matchId: activeMatchId || undefined,
+    overlayConfig,
+  });
 
   const profile = studio?.profile || null;
   const obsConnected = Boolean(profile && profile.connectionStatus === 'CONNECTED');
@@ -1443,6 +1471,8 @@ export function BroadcasterStudioPage() {
                   overlayConfig={overlayConfig}
                   graphicsState={graphicsState}
                   matchId={activeMatchId}
+                  activeEventItem={activeEventItem}
+                  isEventExiting={isEventExiting}
                   onTileClick={handleTileClick}
                   onToggleAudio={(target) => void handleToggleAudio(target)}
                 />

@@ -263,4 +263,24 @@ export const liveStreamService = {
     }>(`/live/${id}/overlay`, { overlayConfig });
     return data;
   },
+
+  async triggerEventAnimation(
+    id: string,
+    payload: {
+      eventKey: string;
+      styleId?: string;
+      teamSide?: 'A' | 'B';
+      teamName?: string;
+      teamColor?: string;
+      playerName?: string;
+      subtitle?: string;
+      pointsLabel?: string;
+    }
+  ): Promise<{ ok: boolean; eventId: string }> {
+    const { data } = await adminApi.post<{ ok: boolean; eventId: string }>(
+      `/live/${id}/overlay/trigger-event-animation`,
+      payload
+    );
+    return data;
+  },
 };

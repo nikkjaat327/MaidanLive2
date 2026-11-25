@@ -41,6 +41,8 @@ import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
 import { MultiCamSplitBorders } from './MultiCamSplitBorders.tsx';
 import type { CameraPreviewSnapshot } from './CameraPreviewGrid.tsx';
 import type { ProgramMonitorMode } from './ProgramAndCompositionWorkspace.tsx';
+import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
 
 interface ControlRoomMonitorsProps {
   cameras: BroadcastCameraData[];
@@ -129,6 +131,10 @@ function ScaledScoreboardOverlayLayer({
 
   const timeoutInfo = resolveMatchTimeoutState(normalizedStream, score);
   const timeoutDecision = resolveTimeoutOverlayDecision(config, timeoutInfo);
+  const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
+    matchId: stream.id,
+    overlayConfig: config,
+  });
 
   return (
     <div
@@ -179,6 +185,14 @@ function ScaledScoreboardOverlayLayer({
           isPortrait={false}
           zIndex={32}
           visible={timeoutDecision.showFullscreenSponsorAd}
+        />
+        <BroadcastEventAnimationLayer
+          activeItem={activeEventItem}
+          isExiting={isEventExiting}
+          overlayConfig={config}
+          variant="canvas"
+          isPortrait={false}
+          zIndex={42}
         />
       </div>
     </div>

@@ -7,6 +7,7 @@ import {
   PlaySquare,
   Radio,
   SlidersHorizontal,
+  Sparkles,
   Trophy,
   UserCheck,
   Users,
@@ -106,6 +107,13 @@ export function AdminDashboardPage() {
       desc: 'Configure tournament & live banners',
       icon: Award,
       tone: 'text-purple-600',
+    },
+    {
+      to: '/broadcast/overlay?section=events',
+      label: 'Event Animations (Pro)',
+      desc: 'JioHotstar / PKL stingers, styles & positions',
+      icon: Sparkles,
+      tone: 'text-cyan-600',
     },
   ];
 

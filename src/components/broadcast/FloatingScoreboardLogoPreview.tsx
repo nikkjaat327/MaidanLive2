@@ -108,7 +108,7 @@ export function FloatingScoreboardLogoPreview() {
   }, [location.pathname, location.search, overlayPreview.open, closeOverlayPreview]);
 
   const isIsolatedRoute =
-    location.pathname.startsWith('/broadcast/overlay/view') ||
+    location.pathname.startsWith('/broadcast/overlay') ||
     location.pathname.startsWith('/camera-connect');
 
   const isVisible =

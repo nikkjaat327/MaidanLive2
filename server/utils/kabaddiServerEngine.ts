@@ -29,6 +29,7 @@ import { runWithOptionalTransaction } from './dbTransaction.ts';
 import { dispatchMatchNotifications } from './notifications.ts';
 import { buildIdMatchFilter, findDocByAnyId } from './mongoNormalize.ts';
 import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
+import { emitBroadcastEventAnimation } from './eventAnimationDispatcher.ts';
 
 const PLAYER_STAT_FIELDS = [
   'raidPoints',
@@ -412,6 +413,58 @@ export async function handleKabaddiEventRoute(
       triggerBroadcastGraphicEvent(id, 'ALL_OUT', `k_allout_${txResult.historyId}`).catch(() => {});
     } else if (txResult.applied.eventType === 'SUPER_TACKLE') {
       triggerBroadcastGraphicEvent(id, 'SUPER_TACKLE', `k_st_${txResult.historyId}`).catch(() => {});
+    }
+
+    const kabHistId = String(txResult.historyId || Date.now());
+    const kabPlayerName = String((populatedHistory as any)?.playerName || '');
+    const kabAwardSide =
+      txResult.applied.awardingTeam === 'A' || txResult.applied.awardingTeam === 'B'
+        ? txResult.applied.awardingTeam
+        : '';
+    if (txResult.applied.eventType === 'SUPER_RAID') {
+      emitBroadcastEventAnimation({
+        streamId: id,
+        eventKey: 'SUPER_RAID',
+        eventId: `kab_sr_${kabHistId}`,
+        teamSide: kabAwardSide,
+        playerName: kabPlayerName,
+        pointsLabel: `+${Math.max(3, txResult.applied.pointsAwarded || 3)} RAID PTS`,
+        subtitle: txResult.applied.label,
+      }).catch(() => {});
+    }
+    if (txResult.applied.eventType === 'SUPER_TACKLE') {
+      emitBroadcastEventAnimation({
+        streamId: id,
+        eventKey: 'SUPER_TACKLE',
+        eventId: `kab_st_${kabHistId}`,
+        teamSide: kabAwardSide,
+        playerName: kabPlayerName,
+        pointsLabel: `+${Math.max(2, txResult.applied.pointsAwarded || 2)} TACKLE PTS`,
+        subtitle: txResult.applied.label,
+      }).catch(() => {});
+    }
+    if (txResult.applied.triggeredAllOut) {
+      const aoSide = txResult.applied.triggeredAllOut.awardingTeam;
+      emitBroadcastEventAnimation({
+        streamId: id,
+        eventKey: 'ALL_OUT',
+        eventId: `kab_ao_${kabHistId}`,
+        teamSide: aoSide === 'A' || aoSide === 'B' ? aoSide : kabAwardSide,
+        playerName: kabPlayerName,
+        pointsLabel: 'ALL OUT +2',
+        subtitle: txResult.applied.label,
+      }).catch(() => {});
+    }
+    if (txResult.applied.triggeredDoOrDie || actionPayload.type === 'DO_OR_DIE_TRIGGER') {
+      const dodSide =
+        txResult.applied.triggeredDoOrDie?.team || txResult.applied.details.activeRaidingTeam;
+      emitBroadcastEventAnimation({
+        streamId: id,
+        eventKey: 'DO_OR_DIE_RAID',
+        eventId: `kab_dod_${kabHistId}`,
+        teamSide: dodSide === 'A' || dodSide === 'B' ? dodSide : '',
+        subtitle: '3RD CONSECUTIVE RAID · MUST SCORE OR OUT',
+      }).catch(() => {});
     }
 
     res.json(payload);

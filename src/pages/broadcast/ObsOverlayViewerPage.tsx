@@ -20,6 +20,8 @@ import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { MultiCamSplitBorders } from '../../components/obsStudio/MultiCamSplitBorders.tsx';
+import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../../components/obs/BroadcastEventAnimationLayer.tsx';
 
 export function ObsOverlayViewerPage() {
   const { matchId: routeMatchId } = useParams<{ matchId: string }>();
@@ -164,6 +166,11 @@ export function ObsOverlayViewerPage() {
     () => applyOverlayQueryParams(overlayConfig, location.search),
     [overlayConfig, location.search]
   );
+
+  const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
+    matchId: effectiveMatchId,
+    overlayConfig: effectiveConfig,
+  });
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const timeoutInfo = useMemo(
@@ -310,6 +317,15 @@ export function ObsOverlayViewerPage() {
           canvasHeight={canvasHeight}
           matchId={effectiveMatchId}
           tournamentId={stream.tournamentId || null}
+        />
+
+        <BroadcastEventAnimationLayer
+          activeItem={activeEventItem}
+          isExiting={isEventExiting}
+          overlayConfig={effectiveConfig}
+          variant="canvas"
+          isPortrait={isPortrait}
+          zIndex={42}
         />
       </div>
 

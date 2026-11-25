@@ -22,6 +22,8 @@ export interface FootballDetails {
   teamARedCards: number;
   teamBYellowCards: number;
   teamBRedCards: number;
+  teamAFouls?: number;
+  teamBFouls?: number;
   events: FootballTimelineEvent[];
 }
 
@@ -37,6 +39,8 @@ export function createInitialFootballDetails(): FootballDetails {
     teamARedCards: 0,
     teamBYellowCards: 0,
     teamBRedCards: 0,
+    teamAFouls: 0,
+    teamBFouls: 0,
     events: [],
   };
 }
@@ -46,6 +50,7 @@ export type FootballEventType =
   | 'PENALTY_GOAL'
   | 'OWN_GOAL'
   | 'PENALTY_MISS'
+  | 'FOUL'
   | 'YELLOW_CARD'
   | 'RED_CARD'
   | 'SECOND_YELLOW'
@@ -56,6 +61,7 @@ export type FootballEventType =
 
 export type FootballActionPayload =
   | { type: 'GOAL'; team: 'A' | 'B'; delta: number }
+  | { type: 'FOUL'; team: 'A' | 'B'; delta: number }
   | { type: 'CARD'; team: 'A' | 'B'; card: 'yellow' | 'red'; delta: number }
   | { type: 'PENALTY'; team: 'A' | 'B'; delta: number }
   | {
@@ -113,6 +119,16 @@ export function applyFootballAction(
       label = action.delta > 0 ? `Goal for Team ${action.team}!` : `Adjusted Team ${action.team} goals`;
       break;
     }
+    case 'FOUL': {
+      eventCategory = 'DISCIPLINE';
+      if (action.team === 'A') {
+        next.teamAFouls = Math.max(0, (next.teamAFouls || 0) + action.delta);
+      } else {
+        next.teamBFouls = Math.max(0, (next.teamBFouls || 0) + action.delta);
+      }
+      label = `Foul · Team ${action.team}`;
+      break;
+    }
     case 'CARD': {
       eventCategory = 'DISCIPLINE';
       if (action.team === 'A') {
@@ -167,6 +183,14 @@ export function applyFootballAction(
         case 'PENALTY_MISS': {
           pointsAwarded = 0;
           label = `${minuteLabel} Penalty Missed by Team ${action.team}${pName ? ` (${pName})` : ''}`;
+          break;
+        }
+        case 'FOUL': {
+          eventCategory = 'DISCIPLINE';
+          pointsAwarded = 0;
+          if (action.team === 'A') next.teamAFouls = (next.teamAFouls || 0) + 1;
+          else next.teamBFouls = (next.teamBFouls || 0) + 1;
+          label = `${minuteLabel} Foul · Team ${action.team}${pName ? ` (${pName})` : ''}`;
           break;
         }
         case 'YELLOW_CARD': {

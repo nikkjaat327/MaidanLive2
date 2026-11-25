@@ -1,3 +1,9 @@
+import {
+  DEFAULT_EVENT_ANIMATIONS,
+  normalizeEventAnimationsConfig,
+  type EventAnimationConfigMap,
+} from './eventAnimations.ts';
+
 export type OverlayMode = 'full' | 'compact' | 'score_only' | 'hidden';
 
 export type OverlayPosition =
@@ -660,6 +666,7 @@ export interface BroadcastOverlayConfig {
   fullScoreboardVisible: boolean;
   fullScoreboardStyle: FullScoreboardStyleId;
   customScoreboardDesign: CustomScoreboardDesign;
+  eventAnimations: EventAnimationConfigMap;
 }
 
 export const OVERLAY_MODES: readonly OverlayMode[] = ['full', 'compact', 'score_only', 'hidden'];
@@ -778,6 +785,7 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   fullScoreboardVisible: false,
   fullScoreboardStyle: 'multisport_jiohotstar_prime',
   customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
+  eventAnimations: normalizeEventAnimationsConfig(DEFAULT_EVENT_ANIMATIONS),
 };
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -1211,6 +1219,7 @@ export function normalizeOverlayConfig(
     ),
     fullScoreboardStyle,
     customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
+    eventAnimations: normalizeEventAnimationsConfig(src.eventAnimations),
   };
 }
 
@@ -1223,6 +1232,7 @@ export function applyOverlayQueryParams(
   const next: BroadcastOverlayConfig = {
     ...base,
     customScoreboardDesign: { ...base.customScoreboardDesign },
+    eventAnimations: normalizeEventAnimationsConfig(base.eventAnimations),
   };
 
   const mode = params.get('mode');

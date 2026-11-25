@@ -44,6 +44,7 @@ import { recordActivity } from '../utils/audit.ts';
 import { runWithOptionalTransaction } from '../utils/dbTransaction.ts';
 import { dispatchMatchNotifications } from '../utils/notifications.ts';
 import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
+import { emitBroadcastEventAnimation } from '../utils/eventAnimationDispatcher.ts';
 import {
   applyKabaddiPlayerStatDeltas,
   handleKabaddiClockRoute,
@@ -481,6 +482,61 @@ router.patch(
 
       emitStreamEvent(id, 'score:updated', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+
+      const updHistId = String(historyItem._id);
+      if (score.sportType === 'Football') {
+        const prevFb = (previousSnapshot.sportSpecificDetails || {}) as Partial<FootballDetails>;
+        const nextFb = (score.sportSpecificDetails || {}) as Partial<FootballDetails>;
+        if (score.teamAScore > (previousSnapshot.teamAScore || 0)) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'GOAL',
+            eventId: `fb_upd_goalA_${updHistId}`,
+            teamSide: 'A',
+            subtitle: actionLabel,
+          }).catch(() => {});
+        } else if (score.teamBScore > (previousSnapshot.teamBScore || 0)) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'GOAL',
+            eventId: `fb_upd_goalB_${updHistId}`,
+            teamSide: 'B',
+            subtitle: actionLabel,
+          }).catch(() => {});
+        }
+        const foulDeltaA =
+          Number(nextFb.teamAFouls || 0) > Number(prevFb.teamAFouls || 0) ||
+          Number(nextFb.teamAYellowCards || 0) > Number(prevFb.teamAYellowCards || 0) ||
+          Number(nextFb.teamARedCards || 0) > Number(prevFb.teamARedCards || 0);
+        const foulDeltaB =
+          Number(nextFb.teamBFouls || 0) > Number(prevFb.teamBFouls || 0) ||
+          Number(nextFb.teamBYellowCards || 0) > Number(prevFb.teamBYellowCards || 0) ||
+          Number(nextFb.teamBRedCards || 0) > Number(prevFb.teamBRedCards || 0);
+        if (foulDeltaA || foulDeltaB) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'FOUL',
+            eventId: `fb_upd_foul_${updHistId}`,
+            teamSide: foulDeltaA ? 'A' : 'B',
+            subtitle: actionLabel,
+          }).catch(() => {});
+        }
+      } else if (score.sportType === 'Volleyball') {
+        const prevVb = normalizeVolleyballDetails(previousSnapshot.sportSpecificDetails);
+        const nextVb = normalizeVolleyballDetails(score.sportSpecificDetails);
+        if (nextVb.teamASetsWon > prevVb.teamASetsWon || nextVb.teamBSetsWon > prevVb.teamBSetsWon) {
+          const winSide = nextVb.teamASetsWon > prevVb.teamASetsWon ? 'A' : 'B';
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'SET_WIN',
+            eventId: `vb_upd_set_${updHistId}`,
+            teamSide: winSide,
+            pointsLabel: `SETS ${nextVb.teamASetsWon} - ${nextVb.teamBSetsWon}`,
+            subtitle: actionLabel,
+          }).catch(() => {});
+        }
+      }
+
       res.json(payload);
     } catch (err) {
       console.error('[Score] Update error:', err);
@@ -1027,6 +1083,114 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         triggerBroadcastGraphicEvent(id, 'FIRST_HALF', `score_${histId}`).catch(() => {});
       } else if (rawEvType === 'SECOND_HALF') {
         triggerBroadcastGraphicEvent(id, 'SECOND_HALF', `score_${histId}`).catch(() => {});
+      }
+
+      // Trigger JioHotstar / Pro Kabaddi-style Broadcast Event Animations
+      const evPlayerName = sanitizeText(
+        req.body.playerName || actionPayload?.playerName || actionPayload?.dismissedPlayer || '',
+        80
+      );
+      const evTeamSide: 'A' | 'B' | '' =
+        actionPayload?.team === 'A' || actionPayload?.team === 'B'
+          ? actionPayload.team
+          : req.body?.teamSide === 'A' || req.body?.teamSide === 'B'
+            ? req.body.teamSide
+            : '';
+
+      if (activeSport === 'Cricket') {
+        const extraTypeUpper = String(actionPayload?.extraType || '').toUpperCase();
+        const isNoBall = rawEvType === 'NO_BALL' || extraTypeUpper === 'NO_BALL';
+        const isWide = rawEvType === 'WIDE' || extraTypeUpper === 'WIDE';
+        const cricketBattingSide: 'A' | 'B' =
+          Number((finalScoreObj?.sportSpecificDetails as any)?.innings || 1) === 2 ? 'B' : 'A';
+        const cricketBowlingSide: 'A' | 'B' = cricketBattingSide === 'A' ? 'B' : 'A';
+
+        if (isNoBall) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'NO_BALL',
+            eventId: `ev_nb_${histId}`,
+            stream,
+            teamSide: cricketBowlingSide,
+            playerName: sanitizeText(actionPayload?.bowler || '', 80),
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        }
+        if (txResult.cricketWicketEvent) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'WICKET',
+            eventId: `ev_wkt_${histId}`,
+            stream,
+            teamSide: cricketBowlingSide,
+            playerName: evPlayerName,
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        }
+        if (!isWide && (batRuns === 6 || rawEvType === 'SIX')) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'SIX',
+            eventId: `ev_six_${histId}`,
+            stream,
+            teamSide: cricketBattingSide,
+            playerName: evPlayerName,
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        } else if (!isWide && (batRuns === 4 || rawEvType === 'FOUR')) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'FOUR',
+            eventId: `ev_four_${histId}`,
+            stream,
+            teamSide: cricketBattingSide,
+            playerName: evPlayerName,
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        }
+      } else if (activeSport === 'Football') {
+        if (['GOAL', 'PENALTY_GOAL', 'OWN_GOAL'].includes(rawEvType)) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'GOAL',
+            eventId: `ev_goal_${histId}`,
+            stream,
+            teamSide: evTeamSide,
+            playerName: evPlayerName,
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        } else if (['FOUL', 'YELLOW_CARD', 'RED_CARD', 'SECOND_YELLOW'].includes(rawEvType)) {
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'FOUL',
+            eventId: `ev_foul_${histId}`,
+            stream,
+            teamSide: evTeamSide,
+            playerName: evPlayerName,
+            pointsLabel:
+              rawEvType === 'RED_CARD' || rawEvType === 'SECOND_YELLOW'
+                ? 'RED CARD'
+                : rawEvType === 'YELLOW_CARD'
+                  ? 'YELLOW CARD'
+                  : 'FOUL',
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        }
+      } else if (activeSport === 'Volleyball') {
+        const prevVb = normalizeVolleyballDetails(txResult.previousSnapshot?.sportSpecificDetails);
+        const nextVb = normalizeVolleyballDetails(finalScoreObj?.sportSpecificDetails);
+        if (nextVb.teamASetsWon > prevVb.teamASetsWon || nextVb.teamBSetsWon > prevVb.teamBSetsWon) {
+          const winSide = nextVb.teamASetsWon > prevVb.teamASetsWon ? 'A' : 'B';
+          emitBroadcastEventAnimation({
+            streamId: id,
+            eventKey: 'SET_WIN',
+            eventId: `ev_vb_set_${histId}`,
+            stream,
+            teamSide: winSide,
+            pointsLabel: `SETS ${nextVb.teamASetsWon} - ${nextVb.teamBSetsWon}`,
+            subtitle: txResult.actionLabel,
+          }).catch(() => {});
+        }
       }
 
       res.status(201).json(payload);

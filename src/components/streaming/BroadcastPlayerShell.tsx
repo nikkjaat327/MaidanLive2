@@ -25,6 +25,8 @@ import {
   resolveMatchTimeoutState,
   resolveTimeoutOverlayDecision,
 } from '../../utils/matchTimeout.ts';
+import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
 
 interface BroadcastPlayerShellProps {
   stream: LiveStreamData;
@@ -190,6 +192,10 @@ export function BroadcastPlayerShell({
   const normalizedOverlayConfig = normalizeOverlayConfig(stream.overlayConfig);
   const timeoutInfo = resolveMatchTimeoutState(stream, score);
   const timeoutDecision = resolveTimeoutOverlayDecision(normalizedOverlayConfig, timeoutInfo);
+  const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
+    matchId: stream.id || stream._id,
+    overlayConfig: normalizedOverlayConfig,
+  });
 
   const getScoreboardAnchorClass = () => {
     switch (position) {
@@ -352,6 +358,13 @@ export function BroadcastPlayerShell({
             variant="responsive"
             zIndex={28}
             visible={timeoutDecision.showFullscreenSponsorAd}
+          />
+          <BroadcastEventAnimationLayer
+            activeItem={activeEventItem}
+            isExiting={isEventExiting}
+            overlayConfig={normalizedOverlayConfig}
+            variant="responsive"
+            zIndex={34}
           />
         </div>
       </div>

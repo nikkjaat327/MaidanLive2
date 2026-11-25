@@ -74,6 +74,8 @@ import {
   resolveMatchTimeoutState,
   resolveTimeoutOverlayDecision,
 } from '../../utils/matchTimeout.ts';
+import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -196,6 +198,11 @@ export function LiveBroadcastView({
     () => resolveTimeoutOverlayDecision(normalizedOverlayConfig, timeoutInfo),
     [normalizedOverlayConfig, timeoutInfo]
   );
+
+  const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
+    matchId: broadcast.id,
+    overlayConfig: normalizedOverlayConfig,
+  });
 
   const kabaddiActiveRaids = useMemo(
     () => (kabaddiDetails ? kabaddiDetails.raidTimeline.filter((r) => !r.reverted) : []),
@@ -875,6 +882,13 @@ export function LiveBroadcastView({
                   variant="responsive"
                   zIndex={28}
                   visible={timeoutDecision.showFullscreenSponsorAd}
+                />
+                <BroadcastEventAnimationLayer
+                  activeItem={activeEventItem}
+                  isExiting={isEventExiting}
+                  overlayConfig={normalizedOverlayConfig}
+                  variant="responsive"
+                  zIndex={34}
                 />
               </>
             )}

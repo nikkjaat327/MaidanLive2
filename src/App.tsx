@@ -103,10 +103,12 @@ export default function App() {
               {/* Standalone Mobile Camera Companion Route (Scoped Camera Push Token Auth) */}
               <Route path="/camera-connect/:cameraDocId" element={<CameraCompanionPage />} />
 
-              {/* Dedicated OBS Broadcast Overlay Configuration Studio (Auth Protected) */}
+              {/* OBS Broadcast Overlay Configuration Studio (Auth Protected + Persistent Admin Sidebar) */}
               <Route path="/broadcast/overlay" element={<RequireAdminAuth />}>
-                <Route index element={<Navigate to="/admin/live-streams" replace />} />
-                <Route path=":matchId" element={<RequireNonBroadcasterOverlayAccess />} />
+                <Route element={<AdminLayout />}>
+                  <Route index element={<Navigate to="/admin/live-streams" replace />} />
+                  <Route path=":matchId" element={<RequireNonBroadcasterOverlayAccess />} />
+                </Route>
               </Route>
 
               {/* Broadcaster Portal Routes */}

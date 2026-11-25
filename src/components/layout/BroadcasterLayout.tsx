@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ComponentType } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -122,12 +123,12 @@ function BroadcasterDesktopSidebar({
   return (
     <aside
       aria-label="Broadcaster Navigation Sidebar"
-      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#090D16] border-r border-slate-800/90 z-30 transition-[width] duration-200 ease-out overflow-hidden ${
+      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#060913] border-r border-cyan-500/25 shadow-[4px_0_24px_rgba(6,182,212,0.08)] z-[70] transition-[width] duration-200 ease-out overflow-hidden ${
         collapsed ? 'lg:w-16' : 'lg:w-60'
       }`}
     >
       <div
-        className={`h-14 flex items-center border-b border-slate-800/80 shrink-0 ${
+        className={`h-14 flex items-center border-b border-cyan-500/20 shrink-0 ${
           collapsed ? 'justify-center px-2' : 'justify-between px-3.5'
         }`}
       >
@@ -136,10 +137,12 @@ function BroadcasterDesktopSidebar({
             to="/broadcaster/dashboard"
             className="font-display text-sm font-bold tracking-tight text-white flex items-center gap-2 min-w-0"
           >
-            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600 text-white flex items-center justify-center shrink-0">
+            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500 via-fuchsia-500 to-cyan-500 text-white flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(34,211,238,0.35)]">
               <Radio className="w-4 h-4" />
             </span>
-            <span className="truncate">MaidanLive Studio</span>
+            <span className="truncate bg-gradient-to-r from-white via-cyan-100 to-orange-300 bg-clip-text text-transparent">
+              MaidanLive Studio
+            </span>
           </Link>
         )}
         <button
@@ -155,19 +158,20 @@ function BroadcasterDesktopSidebar({
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800/80 transition-colors shrink-0"
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-cyan-300 hover:text-white hover:bg-cyan-500/15 border border-cyan-500/25 hover:border-cyan-400/60 transition-all shrink-0"
         >
           {collapsed ? (
-            <PanelLeftOpen className="w-4 h-4 text-purple-400" />
+            <PanelLeftOpen className="w-4 h-4 text-cyan-300" />
           ) : (
-            <PanelLeftClose className="w-4 h-4" />
+            <PanelLeftClose className="w-4 h-4 text-cyan-300" />
           )}
         </button>
       </div>
 
       <nav
         aria-label="Broadcaster Sidebar"
-        className={`flex-1 py-3 space-y-1 overflow-y-auto overflow-x-hidden ${
+        onScroll={() => setTooltip(null)}
+        className={`sidebar-neon-scroll flex-1 py-3 space-y-1 overflow-y-auto overflow-x-hidden ${
           collapsed ? 'px-2' : 'px-2.5'
         }`}
       >
@@ -185,18 +189,18 @@ function BroadcasterDesktopSidebar({
               onMouseLeave={() => setTooltip(null)}
               onFocus={(e) => showTooltip(e.currentTarget, item.label)}
               onBlur={() => setTooltip(null)}
-              className={`relative w-full flex items-center rounded-lg text-[13px] font-semibold transition-colors whitespace-nowrap ${
+              className={`relative w-full flex items-center rounded-lg text-[13px] font-semibold transition-all whitespace-nowrap ${
                 collapsed ? 'justify-center w-10 h-10 mx-auto px-0' : 'justify-between gap-2 px-3 py-2'
               } ${
                 item.isActive
                   ? isControlRoom
-                    ? 'bg-gradient-to-r from-purple-600 to-violet-600 text-white shadow-lg shadow-purple-950/50'
-                    : 'bg-[#EA580C] text-white shadow-sm'
-                  : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
+                    ? 'bg-gradient-to-r from-violet-600 via-fuchsia-600 to-cyan-500 text-white shadow-[0_0_18px_rgba(168,85,247,0.5)] ring-1 ring-cyan-300/50'
+                    : 'bg-gradient-to-r from-[#EA580C] via-rose-500 to-fuchsia-600 text-white shadow-[0_0_16px_rgba(234,88,12,0.42)] ring-1 ring-cyan-300/40'
+                  : 'text-slate-300 hover:bg-cyan-500/10 hover:text-cyan-200 border border-transparent hover:border-cyan-500/25'
               }`}
             >
               <span className="flex items-center gap-2.5 min-w-0">
-                <Icon className="w-4 h-4 shrink-0" />
+                <Icon className={`w-4 h-4 shrink-0 ${item.isActive ? 'text-white' : 'text-cyan-400/80'}`} />
                 {!collapsed && <span className="truncate">{item.label}</span>}
               </span>
               {!collapsed && typeof item.badge === 'number' && item.badge > 0 && (
@@ -321,15 +325,19 @@ function BroadcasterDesktopSidebar({
         </button>
       </div>
 
-      {collapsed && tooltip && (
-        <div
-          role="tooltip"
-          style={{ top: tooltip.top }}
-          className="fixed left-[72px] -translate-y-1/2 z-50 pointer-events-none px-2.5 py-1.5 rounded-md bg-slate-900 border border-slate-700 text-xs font-semibold text-white shadow-xl whitespace-nowrap"
-        >
-          {tooltip.label}
-        </div>
-      )}
+      {typeof document !== 'undefined' &&
+        collapsed &&
+        tooltip &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ top: tooltip.top }}
+            className="fixed left-[72px] -translate-y-1/2 z-[95] pointer-events-none px-2.5 py-1.5 rounded-md bg-[#080d1c] border border-cyan-400/50 text-xs font-semibold text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,0.3)] whitespace-nowrap"
+          >
+            {tooltip.label}
+          </div>,
+          document.body
+        )}
     </aside>
   );
 }
@@ -573,15 +581,15 @@ export function BroadcasterLayout() {
       {/* Mobile Drawer */}
       {drawerOpen && (
         <div
-          className="fixed inset-0 z-50 lg:hidden bg-black/75 flex"
+          className="fixed inset-0 z-[80] lg:hidden bg-black/75 flex"
           onClick={(e) => {
             if (e.target === e.currentTarget) setDrawerOpen(false);
           }}
         >
-          <div className="w-72 max-w-[85vw] bg-[#090D16] border-r border-slate-800 h-full flex flex-col">
-            <div className="h-14 px-4 flex items-center justify-between border-b border-slate-800">
+          <div className="w-72 max-w-[85vw] bg-[#060913] border-r border-cyan-500/30 h-full flex flex-col">
+            <div className="h-14 px-4 flex items-center justify-between border-b border-cyan-500/20">
               <span className="font-display font-bold text-white flex items-center gap-2">
-                <Radio className="w-4 h-4 text-[#EA580C]" />
+                <Radio className="w-4 h-4 text-cyan-400" />
                 <span>MaidanLive Studio</span>
               </span>
               <button
@@ -593,7 +601,7 @@ export function BroadcasterLayout() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+            <nav className="sidebar-neon-scroll flex-1 p-3 space-y-1 overflow-y-auto">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isControlRoom = item.id === 'control_room';

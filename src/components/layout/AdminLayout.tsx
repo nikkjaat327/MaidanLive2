@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ComponentType } from 'react';
 import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
@@ -118,7 +119,15 @@ function isChildRouteActive(
     });
   }
   const basePath = item.to.split('?')[0];
-  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+  const isBaseMatch = pathname === basePath || pathname.startsWith(`${basePath}/`);
+  if (!isBaseMatch) return false;
+  if (item.id === 'event_animations') {
+    return new URLSearchParams(search).get('section') === 'events';
+  }
+  if (item.id === 'overlay_studio') {
+    return new URLSearchParams(search).get('section') !== 'events';
+  }
+  return true;
 }
 
 function AdminDesktopSidebar({
@@ -141,6 +150,7 @@ function AdminDesktopSidebar({
   const [tooltip, setTooltip] = useState<{ label: string; top: number } | null>(null);
   const [flyout, setFlyout] = useState<{ groupId: string; top: number } | null>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
+  const flyoutRef = useRef<HTMLDivElement | null>(null);
 
   const activeGroupId = useMemo(
     () =>
@@ -164,7 +174,12 @@ function AdminDesktopSidebar({
   useEffect(() => {
     if (!flyout) return;
     const handleOutside = (ev: MouseEvent) => {
-      if (sidebarRef.current && !sidebarRef.current.contains(ev.target as Node)) {
+      const target = ev.target as Node;
+      if (
+        sidebarRef.current &&
+        !sidebarRef.current.contains(target) &&
+        (!flyoutRef.current || !flyoutRef.current.contains(target))
+      ) {
         setFlyout(null);
       }
     };
@@ -190,7 +205,7 @@ function AdminDesktopSidebar({
       const rect = el.getBoundingClientRect();
       setTooltip(null);
       setFlyout((prev) =>
-        prev?.groupId === groupId ? null : { groupId, top: Math.min(rect.top, window.innerHeight - 340) }
+        prev?.groupId === groupId ? null : { groupId, top: Math.min(rect.top, window.innerHeight - 380) }
       );
       return;
     }
@@ -209,13 +224,13 @@ function AdminDesktopSidebar({
     <aside
       ref={sidebarRef}
       aria-label="Admin Navigation Sidebar"
-      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-slate-950 text-slate-100 border-r border-slate-800 z-30 transition-[width] duration-200 ease-out overflow-hidden ${
+      className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#060913] text-slate-100 border-r border-cyan-500/25 shadow-[4px_0_24px_rgba(6,182,212,0.08)] z-[70] transition-[width] duration-200 ease-out overflow-hidden ${
         collapsed ? 'lg:w-16' : 'lg:w-64'
       }`}
     >
       {/* Top Brand + Collapse Toggle */}
       <div
-        className={`h-16 flex items-center border-b border-slate-800 shrink-0 ${
+        className={`h-16 flex items-center border-b border-cyan-500/20 bg-gradient-to-r from-[#080d1c] to-[#060913] shrink-0 ${
           collapsed ? 'justify-center px-2' : 'justify-between px-4'
         }`}
       >
@@ -224,8 +239,10 @@ function AdminDesktopSidebar({
             to="/admin/dashboard"
             className="font-display text-lg font-extrabold tracking-tight text-white whitespace-nowrap flex items-center gap-2 min-w-0"
           >
-            <Activity className="w-5 h-5 text-[#EA580C] shrink-0" />
-            <span className="truncate">MaidanLive Admin</span>
+            <Activity className="w-5 h-5 text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.85)] shrink-0" />
+            <span className="truncate bg-gradient-to-r from-white via-cyan-100 to-orange-300 bg-clip-text text-transparent">
+              MaidanLive Admin
+            </span>
           </Link>
         )}
         <button
@@ -242,12 +259,12 @@ function AdminDesktopSidebar({
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent hover:border-slate-800 transition-colors shrink-0"
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-cyan-300 hover:text-white hover:bg-cyan-500/15 border border-cyan-500/25 hover:border-cyan-400/60 transition-all shrink-0 shadow-[0_0_12px_rgba(34,211,238,0.12)]"
         >
           {collapsed ? (
-            <PanelLeftOpen className="w-4 h-4 text-[#EA580C]" />
+            <PanelLeftOpen className="w-4 h-4 text-cyan-300" />
           ) : (
-            <PanelLeftClose className="w-4 h-4" />
+            <PanelLeftClose className="w-4 h-4 text-cyan-300" />
           )}
         </button>
       </div>
@@ -256,7 +273,7 @@ function AdminDesktopSidebar({
       <nav
         aria-label="Admin Sidebar"
         onScroll={() => setTooltip(null)}
-        className={`flex-1 py-3 space-y-1.5 overflow-y-auto overflow-x-hidden ${
+        className={`sidebar-neon-scroll flex-1 py-3 space-y-1.5 overflow-y-auto overflow-x-hidden ${
           collapsed ? 'px-2' : 'px-3'
         }`}
       >
@@ -278,36 +295,38 @@ function AdminDesktopSidebar({
                 onMouseLeave={() => setTooltip(null)}
                 onFocus={(e) => showTooltip(e.currentTarget, group.label)}
                 onBlur={() => setTooltip(null)}
-                className={`group relative w-full flex items-center rounded-lg text-sm font-semibold transition-colors whitespace-nowrap ${
+                className={`group relative w-full flex items-center rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${
                   collapsed
                     ? 'justify-center w-10 h-10 mx-auto px-0'
                     : 'justify-between gap-2 px-3 py-2'
                 } ${
                   hasActiveChild
                     ? collapsed
-                      ? 'bg-[#EA580C] text-white shadow-sm'
-                      : 'bg-slate-900 text-white border border-slate-800'
-                    : 'text-slate-300 hover:bg-slate-900/80 hover:text-white border border-transparent'
+                      ? 'bg-gradient-to-br from-[#EA580C] via-fuchsia-600 to-cyan-500 text-white shadow-[0_0_18px_rgba(34,211,238,0.45)] ring-1 ring-cyan-300/60'
+                      : 'bg-gradient-to-r from-cyan-500/15 via-slate-900/95 to-fuchsia-500/10 text-cyan-100 border border-cyan-400/45 shadow-[0_0_14px_rgba(34,211,238,0.16)]'
+                    : 'text-slate-300 hover:bg-cyan-500/10 hover:text-cyan-200 border border-transparent hover:border-cyan-500/25'
                 }`}
               >
                 <span className="flex items-center gap-2.5 min-w-0">
                   <GroupIcon
-                    className={`w-4 h-4 shrink-0 ${
-                      hasActiveChild && !collapsed ? 'text-[#EA580C]' : ''
+                    className={`w-4 h-4 shrink-0 transition-colors ${
+                      hasActiveChild && !collapsed
+                        ? 'text-cyan-300 drop-shadow-[0_0_6px_rgba(34,211,238,0.85)]'
+                        : 'group-hover:text-cyan-300'
                     }`}
                   />
                   {!collapsed && <span className="truncate">{group.label}</span>}
                 </span>
                 {!collapsed &&
                   (isOpen ? (
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <ChevronDown className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                   ) : (
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-cyan-300 shrink-0" />
                   ))}
               </button>
 
               {!collapsed && isOpen && (
-                <div className="ml-3.5 pl-2.5 border-l border-slate-800 space-y-0.5 py-0.5">
+                <div className="ml-3.5 pl-2.5 border-l border-cyan-500/30 space-y-0.5 py-0.5">
                   {group.items.map((item) => {
                     const ItemIcon = item.icon;
                     const active = isChildRouteActive(item, pathname, search);
@@ -316,13 +335,17 @@ function AdminDesktopSidebar({
                         key={item.id}
                         to={item.to}
                         aria-current={active ? 'page' : undefined}
-                        className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${
+                        className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap ${
                           active
-                            ? 'bg-[#EA580C] text-white font-semibold shadow-sm'
-                            : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
+                            ? 'bg-gradient-to-r from-[#EA580C] via-rose-500 to-fuchsia-600 text-white font-semibold shadow-[0_0_16px_rgba(234,88,12,0.42)] ring-1 ring-cyan-300/40'
+                            : 'text-slate-300 hover:bg-cyan-500/10 hover:text-cyan-200'
                         }`}
                       >
-                        <ItemIcon className="w-3.5 h-3.5 shrink-0" />
+                        <ItemIcon
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            active ? 'text-white' : 'text-cyan-400/75'
+                          }`}
+                        />
                         <span className="truncate">{item.label}</span>
                       </Link>
                     );
@@ -336,7 +359,7 @@ function AdminDesktopSidebar({
 
       {/* Footer Profile & Sign Out */}
       <div
-        className={`border-t border-slate-800 shrink-0 ${
+        className={`border-t border-cyan-500/20 bg-[#050811] shrink-0 ${
           collapsed ? 'p-2 space-y-2 flex flex-col items-center' : 'p-4 space-y-3'
         }`}
       >
@@ -358,14 +381,14 @@ function AdminDesktopSidebar({
                 )
               }
               onBlur={() => setTooltip(null)}
-              className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-xs font-bold text-slate-200 select-none"
+              className="w-9 h-9 rounded-lg bg-slate-900 border border-cyan-500/35 flex items-center justify-center text-xs font-bold text-cyan-200 select-none shadow-[0_0_10px_rgba(34,211,238,0.14)]"
             >
               {initials || 'A'}
             </div>
           ) : (
             <div className="text-xs">
               <p className="font-semibold text-white truncate">{adminUser.name}</p>
-              <p className="text-slate-400 truncate">
+              <p className="text-cyan-400/80 truncate">
                 {ROLE_LABELS[adminUser.role as keyof typeof ROLE_LABELS] || adminUser.role}
               </p>
             </div>
@@ -378,7 +401,7 @@ function AdminDesktopSidebar({
           onFocus={(e) => showTooltip(e.currentTarget, 'Sign Out')}
           onBlur={() => setTooltip(null)}
           aria-label="Sign Out"
-          className={`flex items-center justify-center text-xs font-medium text-slate-200 bg-slate-900 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors ${
+          className={`flex items-center justify-center text-xs font-medium text-slate-200 bg-slate-900/90 border border-cyan-500/25 rounded-lg hover:bg-rose-500/20 hover:border-rose-400/50 hover:text-rose-200 transition-colors ${
             collapsed ? 'w-10 h-10 px-0' : 'w-full min-h-[40px] gap-2 px-3 py-2'
           }`}
         >
@@ -387,49 +410,60 @@ function AdminDesktopSidebar({
         </button>
       </div>
 
-      {/* Collapsed Rail Floating Tooltip */}
-      {collapsed && tooltip && !activeFlyoutGroup && (
-        <div
-          role="tooltip"
-          style={{ top: tooltip.top }}
-          className="fixed left-[72px] -translate-y-1/2 z-50 pointer-events-none px-2.5 py-1.5 rounded-md bg-slate-900 border border-slate-700 text-xs font-semibold text-white shadow-xl whitespace-nowrap"
-        >
-          {tooltip.label}
-        </div>
-      )}
+      {/* Portaled Collapsed Rail Floating Tooltip (never clipped or overlapped by main content) */}
+      {typeof document !== 'undefined' &&
+        collapsed &&
+        tooltip &&
+        !activeFlyoutGroup &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ top: tooltip.top }}
+            className="fixed left-[72px] -translate-y-1/2 z-[95] pointer-events-none px-2.5 py-1.5 rounded-md bg-[#080d1c] border border-cyan-400/50 text-xs font-semibold text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,0.3)] whitespace-nowrap"
+          >
+            {tooltip.label}
+          </div>,
+          document.body
+        )}
 
-      {/* Collapsed Rail Child Submenu Flyout */}
-      {collapsed && activeFlyoutGroup && flyout && (
-        <div
-          role="menu"
-          aria-label={`${activeFlyoutGroup.label} menu`}
-          style={{ top: Math.max(12, flyout.top) }}
-          className="fixed left-[70px] z-50 w-56 max-h-[75vh] overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 shadow-2xl p-2 space-y-1"
-        >
-          <p className="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 mb-1">
-            {activeFlyoutGroup.label}
-          </p>
-          {activeFlyoutGroup.items.map((item) => {
-            const ItemIcon = item.icon;
-            const active = isChildRouteActive(item, pathname, search);
-            return (
-              <Link
-                key={item.id}
-                to={item.to}
-                onClick={() => setFlyout(null)}
-                className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                  active
-                    ? 'bg-[#EA580C] text-white font-semibold'
-                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                <ItemIcon className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{item.label}</span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+      {/* Portaled Collapsed Rail Child Submenu Flyout (paints cleanly above Control Room / Studio headers) */}
+      {typeof document !== 'undefined' &&
+        collapsed &&
+        activeFlyoutGroup &&
+        flyout &&
+        createPortal(
+          <div
+            ref={flyoutRef}
+            role="menu"
+            aria-label={`${activeFlyoutGroup.label} menu`}
+            style={{ top: Math.max(12, flyout.top) }}
+            className="sidebar-neon-scroll fixed left-[70px] z-[95] w-60 max-h-[78vh] overflow-y-auto rounded-xl bg-[#070b18]/98 backdrop-blur-md border border-cyan-400/40 shadow-[0_14px_40px_rgba(0,0,0,0.75),0_0_24px_rgba(34,211,238,0.2)] p-2 space-y-1"
+          >
+            <p className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300 border-b border-cyan-500/25 mb-1">
+              {activeFlyoutGroup.label}
+            </p>
+            {activeFlyoutGroup.items.map((item) => {
+              const ItemIcon = item.icon;
+              const active = isChildRouteActive(item, pathname, search);
+              return (
+                <Link
+                  key={item.id}
+                  to={item.to}
+                  onClick={() => setFlyout(null)}
+                  className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                    active
+                      ? 'bg-gradient-to-r from-[#EA580C] via-rose-500 to-fuchsia-600 text-white font-semibold shadow-[0_0_14px_rgba(234,88,12,0.45)] ring-1 ring-cyan-300/40'
+                      : 'text-slate-200 hover:bg-cyan-500/15 hover:text-cyan-200'
+                  }`}
+                >
+                  <ItemIcon className={`w-3.5 h-3.5 shrink-0 ${active ? 'text-white' : 'text-cyan-400/80'}`} />
+                  <span className="truncate">{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>,
+          document.body
+        )}
     </aside>
   );
 }
@@ -594,6 +628,13 @@ export function AdminLayout() {
           show: !isBroadcaster,
         },
         {
+          id: 'event_animations',
+          to: `${overlayBase}?section=events`,
+          label: 'Event Animations (Pro)',
+          icon: Sparkles,
+          show: !isBroadcaster,
+        },
+        {
           id: 'graphics_studio',
           to: `${studioBase}?tab=graphics`,
           label: 'Graphics Studio',
@@ -746,7 +787,7 @@ export function AdminLayout() {
   return (
     <div
       data-admin-theme={theme}
-      className={`min-h-screen flex flex-col lg:flex-row pb-16 lg:pb-0 overflow-x-hidden transition-colors ${
+      className={`min-h-screen flex flex-col lg:flex-row pb-16 lg:pb-0 overflow-x-clip transition-colors ${
         theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
       }`}
     >
@@ -844,7 +885,8 @@ export function AdminLayout() {
           className={
             sidebarCollapsed
               ? 'flex-1 w-full max-w-none p-2'
-              : location.pathname.startsWith('/admin/broadcast-studio')
+              : location.pathname.startsWith('/admin/broadcast-studio') ||
+                  location.pathname.startsWith('/broadcast/overlay')
                 ? 'flex-1 w-full max-w-none p-2.5 sm:p-3'
                 : 'flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto'
           }
@@ -861,7 +903,7 @@ export function AdminLayout() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
-            className="fixed inset-0 z-50 lg:hidden bg-slate-950/70 backdrop-blur-xs flex"
+            className="fixed inset-0 z-[80] lg:hidden bg-slate-950/75 backdrop-blur-xs flex"
             onClick={(e) => {
               if (e.target === e.currentTarget) setDrawerOpen(false);
             }}
@@ -871,11 +913,11 @@ export function AdminLayout() {
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', stiffness: 360, damping: 36 }}
-              className="w-76 max-w-[85vw] bg-slate-950 text-white h-full flex flex-col border-r border-slate-800"
+              className="w-76 max-w-[85vw] bg-[#060913] text-white h-full flex flex-col border-r border-cyan-500/30"
             >
-              <div className="h-14 px-4 flex items-center justify-between border-b border-slate-800">
+              <div className="h-14 px-4 flex items-center justify-between border-b border-cyan-500/20">
                 <div className="flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-[#EA580C]" />
+                  <Activity className="w-4 h-4 text-cyan-400" />
                   <span className="font-display font-bold">MaidanLive Admin</span>
                 </div>
                 <button
@@ -887,7 +929,7 @@ export function AdminLayout() {
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <nav className="flex-1 p-3 space-y-1.5 overflow-y-auto">
+              <nav className="sidebar-neon-scroll flex-1 p-3 space-y-1.5 overflow-y-auto">
                 {navGroups.map((group) => {
                   const GroupIcon = group.icon;
                   const isOpen = Boolean(mobileOpenGroups[group.id]);
@@ -991,8 +1033,8 @@ export function AdminLayout() {
       {/* Mobile Bottom Navigation */}
       <nav
         aria-label="Admin Mobile Navigation"
-        className={`lg:hidden fixed bottom-0 left-0 right-0 z-40 h-15 border-t grid grid-cols-4 items-center ${
-          theme === 'dark' ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'
+        className={`lg:hidden fixed bottom-0 left-0 right-0 z-[70] h-15 border-t grid grid-cols-4 items-center ${
+          theme === 'dark' ? 'bg-slate-950 border-cyan-500/25' : 'bg-white border-slate-200'
         }`}
       >
         <NavLink

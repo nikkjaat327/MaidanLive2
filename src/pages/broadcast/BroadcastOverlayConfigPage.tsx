@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import type { ChangeEvent, MouseEvent as ReactMouseEvent } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
@@ -74,6 +74,16 @@ import {
   resolveStickyOrPreferredMatch,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
+import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
+import { BroadcastEventAnimationLayer } from '../../components/obs/BroadcastEventAnimationLayer.tsx';
+import { EventAnimationStudioPanel } from '../../components/obs/EventAnimationStudioPanel.tsx';
+import {
+  BROADCAST_EVENT_META,
+  BroadcastEventKey,
+  EVENT_ANIMATION_BOUNDS,
+  EventAnimationConfigMap,
+  normalizeEventAnimationsConfig,
+} from '../../utils/eventAnimations.ts';
 
 type PreviewBackdrop = 'stadium' | 'turf' | 'checker' | 'custom';
 
@@ -156,7 +166,7 @@ export function BroadcastOverlayConfigPage() {
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const { triggerOverlayPreview } = useBroadcastPreview();
+  const { closeOverlayPreview } = useBroadcastPreview();
 
   const [backdrop, setBackdrop] = useState<PreviewBackdrop>('stadium');
   const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait'>('landscape');
@@ -186,13 +196,39 @@ export function BroadcastOverlayConfigPage() {
     refetch,
   } = useObsOverlay(matchId);
 
+  const location = useLocation();
   const [floatingControlsOpen, setFloatingControlsOpen] = useState(false);
+  const [selectedEventKey, setSelectedEventKey] = useState<BroadcastEventKey>('SUPER_RAID');
+  const [stagePickActive, setStagePickActive] = useState<boolean>(false);
 
   useEffect(() => {
     if (stream?.status === 'LIVE') {
       setFloatingControlsOpen(true);
     }
   }, [stream?.id, stream?.status]);
+
+  useEffect(() => {
+    const sport = String(score?.sportType || stream?.gameName || '').toLowerCase();
+    if (sport.includes('cricket')) setSelectedEventKey('SIX');
+    else if (sport.includes('football') || sport.includes('soccer')) setSelectedEventKey('GOAL');
+    else if (sport.includes('volley') || sport.includes('badminton')) setSelectedEventKey('SET_WIN');
+    else if (sport.includes('kabaddi')) setSelectedEventKey('SUPER_RAID');
+  }, [stream?.id, stream?.gameName, score?.sportType]);
+
+  useEffect(() => {
+    const section = new URLSearchParams(location.search).get('section');
+    if (section !== 'events' || loading || !stream) return;
+    const t = window.setTimeout(() => {
+      document
+        .getElementById('event-animations-studio')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 180);
+    return () => window.clearTimeout(t);
+  }, [location.search, loading, stream]);
+
+  useEffect(() => {
+    closeOverlayPreview();
+  }, [closeOverlayPreview]);
 
   useEffect(() => {
     if (matchId) {
@@ -291,7 +327,19 @@ export function BroadcastOverlayConfigPage() {
 
   const pendingSliderPatchRef = useRef<Partial<BroadcastOverlayConfig>>({});
 
-  async function persistOverlayPatch(partial: Partial<BroadcastOverlayConfig>) {
+  const {
+    activeItem: activeEventItem,
+    isExiting: isEventExiting,
+    triggerLocalPreview,
+  } = useBroadcastEventQueue({
+    matchId,
+    overlayConfig: effectiveOverlayConfig,
+  });
+
+  async function persistOverlayPatch(
+    partial: Partial<BroadcastOverlayConfig>,
+    customNotice?: string
+  ) {
     if (!matchId) return;
     const prev = overlayConfig;
     const apiPatch: Partial<BroadcastOverlayConfig> = { ...partial };
@@ -306,22 +354,17 @@ export function BroadcastOverlayConfigPage() {
         ...partial.customScoreboardDesign,
       };
     }
+    if (partial.eventAnimations) {
+      apiPatch.eventAnimations = normalizeEventAnimationsConfig({
+        ...effectiveOverlayConfig.eventAnimations,
+        ...partial.eventAnimations,
+      });
+    }
 
     const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...apiPatch });
     pendingSliderPatchRef.current = {};
     setSliderDraft(null);
     setOverlayConfig(next);
-    if (stream) {
-      triggerOverlayPreview({
-        matchId,
-        stream,
-        score,
-        config: next,
-        brandLogoUrl,
-        serverClockOffsetMs,
-        sourceTabKey: 'overlay_studio',
-      });
-    }
     setSaving(true);
     setActionError(null);
     try {
@@ -329,20 +372,9 @@ export function BroadcastOverlayConfigPage() {
       if (Date.now() - lastSliderEditAtRef.current >= 400) {
         const synced = normalizeOverlayConfig(res.overlayConfig);
         setOverlayConfig(synced);
-        if (stream) {
-          triggerOverlayPreview({
-            matchId,
-            stream,
-            score,
-            config: synced,
-            brandLogoUrl,
-            serverClockOffsetMs,
-            sourceTabKey: 'overlay_studio',
-          });
-        }
       }
-      setSaveNotice('Synced to live OBS sources');
-      window.setTimeout(() => setSaveNotice(null), 2000);
+      setSaveNotice(customNotice || 'Synced to live OBS sources');
+      window.setTimeout(() => setSaveNotice(null), 2400);
     } catch (err) {
       setOverlayConfig(prev);
       setActionError(extractApiError(err, 'Failed to save overlay configuration.'));
@@ -461,17 +493,6 @@ export function BroadcastOverlayConfigPage() {
     setSliderDraft(nextDraft);
     const next = normalizeOverlayConfig({ ...overlayConfig, ...nextDraft });
     setOverlayConfig(next);
-    if (stream) {
-      triggerOverlayPreview({
-        matchId,
-        stream,
-        score,
-        config: next,
-        brandLogoUrl,
-        serverClockOffsetMs,
-        sourceTabKey: 'overlay_studio',
-      });
-    }
 
     if (sliderDebounceRef.current !== null) {
       window.clearTimeout(sliderDebounceRef.current);
@@ -581,8 +602,53 @@ export function BroadcastOverlayConfigPage() {
   const activeProvider =
     stream?.activeStreamingProvider || stream?.streamingProvider || 'youtube';
 
+  function handleStageClickPick(e: ReactMouseEvent<HTMLDivElement>) {
+    if (!stagePickActive || !previewContainerRef.current) return;
+    const rect = previewContainerRef.current.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const rawX = ((e.clientX - rect.left) / rect.width) * 100;
+    const rawY = ((e.clientY - rect.top) / rect.height) * 100;
+    const xPct = Math.round(
+      Math.min(EVENT_ANIMATION_BOUNDS.xPct.max, Math.max(EVENT_ANIMATION_BOUNDS.xPct.min, rawX))
+    );
+    const yPct = Math.round(
+      Math.min(EVENT_ANIMATION_BOUNDS.yPct.max, Math.max(EVENT_ANIMATION_BOUNDS.yPct.min, rawY))
+    );
+    const currentMap = normalizeEventAnimationsConfig(effectiveOverlayConfig.eventAnimations);
+    const nextMap: EventAnimationConfigMap = {
+      ...currentMap,
+      [selectedEventKey]: {
+        ...currentMap[selectedEventKey],
+        positionPreset: 'custom',
+        xPct,
+        yPct,
+      },
+    };
+    const nextConfig = normalizeOverlayConfig({
+      ...effectiveOverlayConfig,
+      eventAnimations: nextMap,
+    });
+    setOverlayConfig(nextConfig);
+    setStagePickActive(false);
+    const meta = BROADCAST_EVENT_META[selectedEventKey];
+    triggerLocalPreview({
+      streamId: matchId || '',
+      eventId: `pick-${selectedEventKey}-${Date.now()}`,
+      eventKey: selectedEventKey,
+      sportType: meta.sport,
+      teamSide: 'A',
+      teamName: stream?.teamAName || 'HOME SQUAD',
+      teamColor: effectiveOverlayConfig.teamAColor,
+      subtitle: meta.defaultSubtitle,
+      pointsLabel: meta.badge,
+      triggeredAtIso: new Date().toISOString(),
+      manualOverride: true,
+      previewStyleId: nextMap[selectedEventKey].styleId,
+    });
+  }
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-full bg-slate-950 text-slate-100 rounded-xl overflow-x-clip">
       {/* Top Broadcast Studio Header (non-sticky so OBS Stage Preview sticks cleanly at top: 10px) */}
       <header className="relative z-30 border-b border-slate-800/90 bg-slate-950/95 backdrop-blur-md">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -810,11 +876,11 @@ export function BroadcastOverlayConfigPage() {
               </div>
             </section>
 
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-              {/* LEFT COLUMN (7/12): STICKY LIVE 16:9 / 9:16 OBS STAGE PREVIEW (sticks at top: 10px while scrolling customization) */}
-              <div className="xl:col-span-7">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* LEFT COLUMN (6/12): STICKY LIVE 16:9 / 9:16 OBS STAGE PREVIEW (sticks at top while scrolling customization) */}
+              <div className="lg:col-span-6">
                 {/* SECTION B: LIVE 16:9 OVERLAY PREVIEW */}
-                <div className="xl:sticky xl:top-[10px] z-20 space-y-4">
+                <div className="lg:sticky lg:top-3 z-20 space-y-4">
                 <section className="rounded-xl border border-slate-800 bg-slate-900/95 overflow-hidden shadow-2xl">
                   <div className="px-4 py-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -918,7 +984,10 @@ export function BroadcastOverlayConfigPage() {
                   <div className={isPreviewPortrait ? 'py-4 bg-slate-950/90 flex justify-center' : ''}>
                     <div
                       ref={previewContainerRef}
+                      onClick={handleStageClickPick}
                       className={`relative overflow-hidden ${
+                        stagePickActive ? 'cursor-crosshair ring-2 ring-cyan-400/80' : ''
+                      } ${
                         isPreviewPortrait
                           ? 'w-full max-w-[320px] aspect-[9/16] rounded-lg border border-slate-700'
                           : 'w-full aspect-video'
@@ -998,6 +1067,21 @@ export function BroadcastOverlayConfigPage() {
                           zIndex={32}
                           visible={timeoutDecision.showFullscreenSponsorAd}
                         />
+                        <BroadcastEventAnimationLayer
+                          activeItem={activeEventItem}
+                          isExiting={isEventExiting}
+                          overlayConfig={effectiveOverlayConfig}
+                          variant="canvas"
+                          isPortrait={isPreviewPortrait}
+                          zIndex={42}
+                          stagePositionGuide={{
+                            eventKey: selectedEventKey,
+                            rule: normalizeEventAnimationsConfig(
+                              effectiveOverlayConfig.eventAnimations
+                            )[selectedEventKey],
+                            active: stagePickActive,
+                          }}
+                        />
                       </div>
                     </div>
                   </div>
@@ -1019,8 +1103,9 @@ export function BroadcastOverlayConfigPage() {
                 </div>
               </div>
 
-              {/* RIGHT COLUMN (5/12): OVERLAY CUSTOMIZATION CONTROLS */}
-              <div className="xl:col-span-5 rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-5">
+              {/* RIGHT COLUMN (6/12): OVERLAY CUSTOMIZATION + PRO EVENT ANIMATIONS STUDIO */}
+              <div className="lg:col-span-6 space-y-6">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 space-y-5">
                 <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <SlidersHorizontal className="w-4 h-4 text-[#EA580C]" />
@@ -1522,6 +1607,57 @@ export function BroadcastOverlayConfigPage() {
                     })}
                   </div>
                 </div>
+              </div>
+
+              <EventAnimationStudioPanel
+                streamId={stream.id}
+                sportType={sport}
+                teamAName={stream.teamAName}
+                teamBName={stream.teamBName}
+                teamColorOverride={effectiveOverlayConfig.teamAColor}
+                eventAnimations={normalizeEventAnimationsConfig(
+                  effectiveOverlayConfig.eventAnimations
+                )}
+                saving={saving}
+                selectedEventKey={selectedEventKey}
+                onSelectEventKey={setSelectedEventKey}
+                stagePickActive={stagePickActive}
+                onToggleStagePick={setStagePickActive}
+                onLocalConfigChange={(nextMap) => {
+                  setOverlayConfig(
+                    normalizeOverlayConfig({
+                      ...effectiveOverlayConfig,
+                      eventAnimations: nextMap,
+                    })
+                  );
+                }}
+                onSaveEventAnimations={async (nextMap, notice) => {
+                  await persistOverlayPatch({ eventAnimations: nextMap }, notice);
+                }}
+                onPreviewOnStage={(payload, nextMap) => {
+                  if (nextMap) {
+                    setOverlayConfig(
+                      normalizeOverlayConfig({
+                        ...effectiveOverlayConfig,
+                        eventAnimations: nextMap,
+                      })
+                    );
+                  }
+                  triggerLocalPreview(payload, true);
+                }}
+                onTriggerLiveBroadcast={async (payload) => {
+                  setActionError(null);
+                  try {
+                    await liveStreamService.triggerEventAnimation(stream.id, payload);
+                    setSaveNotice(`Triggered live "${BROADCAST_EVENT_META[payload.eventKey].label}" animation on OBS & viewer players!`);
+                    window.setTimeout(() => setSaveNotice(null), 2600);
+                  } catch (err) {
+                    setActionError(
+                      extractApiError(err, 'Failed to trigger live event animation.')
+                    );
+                  }
+                }}
+              />
               </div>
             </div>
 
