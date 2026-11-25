@@ -35,6 +35,11 @@ export interface OverlayFloatingPreviewState {
   updatedAt: number;
 }
 
+export interface OverlayPreviewPosition {
+  x: number;
+  y: number;
+}
+
 interface BroadcastPreviewContextValue {
   youtubePreview: YouTubeFloatingPreviewState;
   openYouTubePreview: (input: string) => { valid: boolean; videoId: string | null; error?: string };
@@ -44,11 +49,30 @@ interface BroadcastPreviewContextValue {
   ) => void;
   closeYouTubePreview: () => void;
   overlayPreview: OverlayFloatingPreviewState;
+  overlayPreviewPosition: OverlayPreviewPosition | null;
+  updateOverlayPreviewPosition: (pos: OverlayPreviewPosition) => void;
+  resetOverlayPreviewPosition: () => void;
   triggerOverlayPreview: (payload: OverlayFloatingPreviewPayload) => void;
   closeOverlayPreview: () => void;
 }
 
 const YT_STORAGE_KEY = 'maidanlive_header_yt_floating_preview_v1';
+const OVERLAY_POS_STORAGE_KEY = 'maidanlive_floating_overlay_preview_pos_v1';
+
+function loadSavedOverlayPreviewPosition(): OverlayPreviewPosition | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(OVERLAY_POS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<OverlayPreviewPosition>;
+    if (typeof parsed.x === 'number' && Number.isFinite(parsed.x) && typeof parsed.y === 'number' && Number.isFinite(parsed.y)) {
+      return { x: Math.round(parsed.x), y: Math.round(parsed.y) };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function getDefaultYouTubeState(): YouTubeFloatingPreviewState {
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
@@ -118,6 +142,9 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
   const [overlayPreview, setOverlayPreview] = useState<OverlayFloatingPreviewState>(
     DEFAULT_OVERLAY_PREVIEW_STATE
   );
+  const [overlayPreviewPosition, setOverlayPreviewPosition] = useState<OverlayPreviewPosition | null>(
+    () => loadSavedOverlayPreviewPosition()
+  );
   const overlayPreviewRef = useRef(overlayPreview);
   overlayPreviewRef.current = overlayPreview;
 
@@ -128,6 +155,25 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
       // Ignore storage quota / private mode
     }
   }, [youtubePreview]);
+
+  const updateOverlayPreviewPosition = useCallback((pos: OverlayPreviewPosition) => {
+    const clean = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    setOverlayPreviewPosition(clean);
+    try {
+      localStorage.setItem(OVERLAY_POS_STORAGE_KEY, JSON.stringify(clean));
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const resetOverlayPreviewPosition = useCallback(() => {
+    setOverlayPreviewPosition(null);
+    try {
+      localStorage.removeItem(OVERLAY_POS_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
 
   const setYouTubeInputDraft = useCallback((rawInput: string) => {
     setYoutubePreview((prev) => ({ ...prev, rawInput }));
@@ -240,6 +286,9 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
         updateYouTubeGeometry,
         closeYouTubePreview,
         overlayPreview,
+        overlayPreviewPosition,
+        updateOverlayPreviewPosition,
+        resetOverlayPreviewPosition,
         triggerOverlayPreview,
         closeOverlayPreview,
       }}

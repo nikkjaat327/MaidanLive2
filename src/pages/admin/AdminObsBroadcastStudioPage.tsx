@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   Ban,
   BookOpen,
@@ -91,6 +92,7 @@ import type {
   ObsStudioMatchSummary,
 } from '../../types/obs.ts';
 import {
+  FULL_SCOREBOARD_STYLES,
   OVERLAY_MODES,
   OVERLAY_POSITIONS,
   OVERLAY_SCALES,
@@ -101,8 +103,11 @@ import {
   OverlayScale,
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
+  SCOREBOARD_STYLES,
   computeOverlayMetrics,
   normalizeOverlayConfig,
+  type FullScoreboardStyleId,
+  type ScoreboardStyleId,
 } from '../../utils/overlayConfig.ts';
 import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
@@ -409,6 +414,33 @@ export function AdminObsBroadcastStudioPage() {
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [setupModalMode, setSetupModalMode] = useState<'create' | 'edit' | null>(null);
   const [setupEditStream, setSetupEditStream] = useState<LiveStreamData | null>(null);
+
+  // 1-Click OBS Match Broadcast + Scoreboard + Details Quick Switcher
+  const [switchingObsBroadcast, setSwitchingObsBroadcast] = useState(false);
+  const [autoSwitchObsOnSelect, setAutoSwitchObsOnSelect] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('maidanlive_auto_switch_obs_on_select') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [quickSwitchModalOpen, setQuickSwitchModalOpen] = useState(false);
+  const prevStudioMatchIdRef = useRef<string | undefined>(matchId);
+  const [detailTitle, setDetailTitle] = useState('');
+  const [detailTeamA, setDetailTeamA] = useState('');
+  const [detailTeamB, setDetailTeamB] = useState('');
+  const [detailSport, setDetailSport] = useState('');
+  const [detailStatus, setDetailStatus] = useState<'UPCOMING' | 'LIVE' | 'ENDED'>('LIVE');
+  const [detailPublished, setDetailPublished] = useState(true);
+  const [detailShowSbOnYt, setDetailShowSbOnYt] = useState(true);
+  const [detailYtInput, setDetailYtInput] = useState('');
+  const [detailProvider, setDetailProvider] = useState<StreamingProvider>('youtube');
+  const [detailSbSourceName, setDetailSbSourceName] = useState('MaidanLive Scoreboard');
+  const [detailTargetScene, setDetailTargetScene] = useState('');
+  const [detailSbStyle, setDetailSbStyle] = useState<ScoreboardStyleId>('broadcast_classic');
+  const [detailFullSbStyle, setDetailFullSbStyle] = useState<FullScoreboardStyleId>('cricket_broadcast_classic');
+  const [detailSyncCameraLayout, setDetailSyncCameraLayout] = useState(false);
+  const [detailCopyStyleFromPrev, setDetailCopyStyleFromPrev] = useState(false);
 
   // Live Graphics Studio & Saved Advertisement Library state
   const [savedAdDesigns, setSavedAdDesigns] = useState<BroadcastAdDesignData[]>([]);
@@ -1845,6 +1877,144 @@ export function AdminObsBroadcastStudioPage() {
     setSetupModalMode('create');
   }
 
+  function updateAutoSwitchPreference(nextVal: boolean) {
+    setAutoSwitchObsOnSelect(nextVal);
+    try {
+      window.localStorage.setItem('maidanlive_auto_switch_obs_on_select', nextVal ? 'true' : 'false');
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  function seedQuickSwitchDrafts() {
+    const m = studio?.match;
+    const normOverlay = normalizeOverlayConfig(m?.overlayConfig);
+    setDetailTitle(m?.matchTitle || '');
+    setDetailTeamA(m?.teamAName || '');
+    setDetailTeamB(m?.teamBName || '');
+    setDetailSport(m?.gameName || 'Cricket');
+    setDetailStatus(
+      m?.status === 'ENDED' || m?.status === 'UPCOMING' || m?.status === 'LIVE'
+        ? m.status
+        : 'LIVE'
+    );
+    setDetailPublished(m?.broadcastPublished !== false);
+    setDetailShowSbOnYt(m?.showScoreboardOnYoutube !== false);
+    setDetailYtInput(m?.youtubeVideoId || '');
+    setDetailProvider(m?.activeStreamingProvider || 'youtube');
+    setDetailSbSourceName(
+      profile?.scoreboardSourceName || scoreboardSourceName || 'MaidanLive Scoreboard'
+    );
+    setDetailTargetScene('');
+    setDetailSbStyle(normOverlay.style || 'broadcast_classic');
+    setDetailFullSbStyle(normOverlay.fullScoreboardStyle || 'cricket_broadcast_classic');
+    setDetailSyncCameraLayout(false);
+    setDetailCopyStyleFromPrev(false);
+  }
+
+  function openQuickSwitchDetailsModal() {
+    seedQuickSwitchDrafts();
+    setQuickSwitchModalOpen(true);
+  }
+
+  async function handleOneClickSwitchObsBroadcast(
+    targetMatchIdArg?: string,
+    explicitSourceMatchId?: string
+  ) {
+    const targetId = targetMatchIdArg || matchId;
+    if (!targetId) return;
+    const sourceId =
+      explicitSourceMatchId && explicitSourceMatchId !== targetId
+        ? explicitSourceMatchId
+        : prevStudioMatchIdRef.current && prevStudioMatchIdRef.current !== targetId
+          ? prevStudioMatchIdRef.current
+          : undefined;
+    try {
+      setSwitchingObsBroadcast(true);
+      setActionError(null);
+      const res = await obsStudioService.switchObsMatchBroadcast(targetId, {
+        ...(sourceId ? { sourceMatchId: sourceId } : {}),
+        keepCurrentObsScene: true,
+        syncScoreboardSource: true,
+        syncCameraLayout: false,
+        scoreboardSourceName:
+          profile?.scoreboardSourceName || scoreboardSourceName.trim() || 'MaidanLive Scoreboard',
+        override: Boolean(profile?.adminOverrideLocked),
+      });
+      prevStudioMatchIdRef.current = targetId;
+      const targetMatch = matches.find((m) => m.id === targetId);
+      const label =
+        targetMatch?.matchTitle ||
+        studio?.match?.matchTitle ||
+        [targetMatch?.teamAName, targetMatch?.teamBName].filter(Boolean).join(' vs ') ||
+        'selected match';
+      notifySuccess(
+        res.obsSynced
+          ? `Switched OBS broadcast & scoreboard to "${label}" (${res.updatedSources?.length || 1} source synced).`
+          : res.obsNote || `Active bridge match switched to "${label}".`
+      );
+      await Promise.all([refetch(), loadBridges(), loadMatches(), refreshStreams()]);
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to switch OBS broadcast match.'));
+    } finally {
+      setSwitchingObsBroadcast(false);
+    }
+  }
+
+  async function handleSaveQuickSwitchDetails(e: React.FormEvent) {
+    e.preventDefault();
+    if (!matchId) return;
+    const sourceId =
+      prevStudioMatchIdRef.current && prevStudioMatchIdRef.current !== matchId
+        ? prevStudioMatchIdRef.current
+        : undefined;
+    try {
+      setSwitchingObsBroadcast(true);
+      setActionError(null);
+      const res = await obsStudioService.switchObsMatchBroadcast(matchId, {
+        ...(sourceId ? { sourceMatchId: sourceId } : {}),
+        targetSceneName: detailTargetScene.trim() || undefined,
+        keepCurrentObsScene: !detailTargetScene.trim(),
+        syncScoreboardSource: true,
+        syncCameraLayout: detailSyncCameraLayout,
+        copyStyleFromSourceMatch: Boolean(detailCopyStyleFromPrev && sourceId),
+        scoreboardSourceName: detailSbSourceName.trim() || 'MaidanLive Scoreboard',
+        override: Boolean(profile?.adminOverrideLocked),
+        matchDetails: {
+          ...(isBroadcasterRole
+            ? {}
+            : {
+                matchTitle: detailTitle.trim() || undefined,
+                teamAName: detailTeamA.trim() || undefined,
+                teamBName: detailTeamB.trim() || undefined,
+                gameName: detailSport.trim() || undefined,
+                status: detailStatus,
+                broadcastPublished: detailPublished,
+                showScoreboardOnYoutube: detailShowSbOnYt,
+                ...(detailYtInput.trim() ? { youtubeInput: detailYtInput.trim() } : {}),
+                activeStreamingProvider: detailProvider,
+              }),
+          overlayPatch: {
+            style: detailSbStyle,
+            fullScoreboardStyle: detailFullSbStyle,
+          },
+        },
+      });
+      prevStudioMatchIdRef.current = matchId;
+      setQuickSwitchModalOpen(false);
+      notifySuccess(
+        res.obsSynced
+          ? `Updated match details & switched OBS broadcast (${res.updatedSources?.length || 1} source synced).`
+          : res.obsNote || 'Updated match details & active bridge broadcast.'
+      );
+      await Promise.all([refetch(), loadBridges(), loadMatches(), refreshStreams()]);
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to apply details and switch OBS broadcast.'));
+    } finally {
+      setSwitchingObsBroadcast(false);
+    }
+  }
+
   // Connection handlers
   async function handleSaveConnectionSettings(e?: React.FormEvent) {
     e?.preventDefault();
@@ -2449,6 +2619,20 @@ export function AdminObsBroadcastStudioPage() {
       ? [selectedMatchObj?.teamAName, selectedMatchObj?.teamBName].filter(Boolean).join(' vs ')
       : 'Select Match');
 
+  const activeObsBridge = useMemo(
+    () =>
+      bridges.find((b) => b.status === 'ACTIVE' && b.connectionStatus === 'ONLINE') ||
+      bridges.find((b) => b.status === 'ACTIVE' && Boolean(b.activeMatchId)) ||
+      null,
+    [bridges]
+  );
+  const obsBridgeOnDifferentMatch = Boolean(
+    matchId && activeObsBridge?.activeMatchId && activeObsBridge.activeMatchId !== matchId
+  );
+  const obsBridgeSyncedToCurrent = Boolean(
+    matchId && activeObsBridge?.activeMatchId && activeObsBridge.activeMatchId === matchId
+  );
+
   function handleHeaderGoLiveClick() {
     if (!matchId || !profile) return;
     if (!obsConnected) {
@@ -2524,28 +2708,82 @@ export function AdminObsBroadcastStudioPage() {
           </span>
         </div>
 
-        {/* Right Match Selector + Go Live + Settings */}
+        {/* Right Match Selector + 1-Click Switch OBS + Go Live + Settings */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <select
-            value={matchId || ''}
-            disabled={loadingMatches}
-            onChange={(e) => {
-              if (e.target.value) {
-                setStickyMatchId(e.target.value);
-                navigate(`${studioBaseRoute}/${e.target.value}`);
-              }
-            }}
-            aria-label="Select broadcast match"
-            title={`Match: ${currentMatchLabel}`}
-            className="h-9 px-3 rounded-lg bg-[#121826] border border-slate-700/90 text-xs font-semibold text-slate-100 max-w-[230px] focus:outline-none focus:border-purple-500"
-          >
-            {matches.length === 0 && <option value="">No matches available</option>}
-            {matches.map((m) => (
-              <option key={m.id} value={m.id}>
-                Match: {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
-              </option>
-            ))}
-          </select>
+          <div className="inline-flex items-center gap-1.5">
+            <select
+              value={matchId || ''}
+              disabled={loadingMatches}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                if (nextId) {
+                  const prevId = matchId;
+                  prevStudioMatchIdRef.current = prevId;
+                  setStickyMatchId(nextId);
+                  navigate(`${studioBaseRoute}/${nextId}`);
+                  if (autoSwitchObsOnSelect && nextId !== prevId) {
+                    void handleOneClickSwitchObsBroadcast(nextId, prevId);
+                  }
+                }
+              }}
+              aria-label="Select broadcast match"
+              title={`Match: ${currentMatchLabel}`}
+              className="h-9 px-3 rounded-lg bg-[#121826] border border-slate-700/90 text-xs font-semibold text-slate-100 max-w-[230px] focus:outline-none focus:border-purple-500"
+            >
+              {matches.length === 0 && <option value="">No matches available</option>}
+              {matches.map((m) => (
+                <option key={m.id} value={m.id}>
+                  Match: {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
+                </option>
+              ))}
+            </select>
+
+            {matchId && (
+              <button
+                type="button"
+                disabled={switchingObsBroadcast || loadingMatches}
+                onClick={() => void handleOneClickSwitchObsBroadcast(matchId)}
+                title={
+                  obsBridgeOnDifferentMatch
+                    ? 'OBS is still showing another match — click once to switch OBS broadcast & scoreboard to this match'
+                    : '1-click switch OBS active broadcast & scoreboard Browser Source to this match'
+                }
+                className={`h-9 px-3 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 ${
+                  obsBridgeOnDifferentMatch
+                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-400 shadow-lg shadow-indigo-500/25'
+                    : obsBridgeSyncedToCurrent
+                      ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/45'
+                      : 'bg-[#121826] hover:bg-indigo-600 text-indigo-200 hover:text-white border-indigo-500/45 hover:border-indigo-400'
+                }`}
+              >
+                {switchingObsBroadcast ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {switchingObsBroadcast
+                    ? 'Switching...'
+                    : obsBridgeSyncedToCurrent
+                      ? 'Sync OBS'
+                      : 'Switch OBS'}
+                </span>
+              </button>
+            )}
+
+            {matchId && studio?.match && (
+              <button
+                type="button"
+                onClick={openQuickSwitchDetailsModal}
+                title="Change match details, scoreboard style, OBS source/scene & auto-switch settings"
+                aria-label="Edit match and OBS switch details"
+                className="h-9 px-2.5 rounded-lg bg-[#121826] border border-slate-700/90 hover:border-indigo-400 text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-300" />
+                <span className="hidden xl:inline">Details</span>
+              </button>
+            )}
+          </div>
 
           <button
             type="button"
@@ -6387,6 +6625,277 @@ export function AdminObsBroadcastStudioPage() {
             >
               <Plus className="w-3.5 h-3.5" />
               <span>{savingNewScene ? 'Saving...' : 'Save Scene'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Switch OBS Broadcast & Edit Match Details Modal */}
+      <Modal
+        open={quickSwitchModalOpen}
+        onClose={() => setQuickSwitchModalOpen(false)}
+        title="Switch OBS Broadcast & Match Details"
+        subtitle="Update match info, scoreboard style, or OBS target scene and push immediately to OBS in one click."
+        maxWidthClass="max-w-2xl"
+      >
+        <form onSubmit={handleSaveQuickSwitchDetails} className="space-y-4">
+          {!isBroadcasterRole && (
+            <div className="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Match & Stream Details
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickSwitchModalOpen(false);
+                    void openEditMatchSetupModal();
+                  }}
+                  className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Full Match Setup</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Match Title
+                  </label>
+                  <input
+                    type="text"
+                    value={detailTitle}
+                    onChange={(e) => setDetailTitle(e.target.value)}
+                    placeholder="e.g. Final: Eagles vs Tigers"
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Sport / Game
+                  </label>
+                  <input
+                    type="text"
+                    value={detailSport}
+                    onChange={(e) => setDetailSport(e.target.value)}
+                    placeholder="Cricket, Kabaddi, Football..."
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Team A Name
+                  </label>
+                  <input
+                    type="text"
+                    value={detailTeamA}
+                    onChange={(e) => setDetailTeamA(e.target.value)}
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Team B Name
+                  </label>
+                  <input
+                    type="text"
+                    value={detailTeamB}
+                    onChange={(e) => setDetailTeamB(e.target.value)}
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Match Status
+                  </label>
+                  <select
+                    value={detailStatus}
+                    onChange={(e) =>
+                      setDetailStatus(e.target.value as 'UPCOMING' | 'LIVE' | 'ENDED')
+                    }
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="UPCOMING">UPCOMING</option>
+                    <option value="LIVE">LIVE</option>
+                    <option value="ENDED">ENDED</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Streaming Provider
+                  </label>
+                  <select
+                    value={detailProvider}
+                    onChange={(e) => setDetailProvider(e.target.value as StreamingProvider)}
+                    className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="youtube">YouTube Live</option>
+                    <option value="mediamtx">Low-Latency (MediaMTX)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  YouTube Live URL / Video ID
+                </label>
+                <input
+                  type="text"
+                  value={detailYtInput}
+                  onChange={(e) => setDetailYtInput(e.target.value)}
+                  placeholder="https://youtube.com/watch?v=... or 11-char ID"
+                  className="w-full min-h-[38px] px-3 text-sm font-mono bg-white border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 pt-1">
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={detailPublished}
+                    onChange={(e) => setDetailPublished(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>Publish to Player Portal</span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={detailShowSbOnYt}
+                    onChange={(e) => setDetailShowSbOnYt(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>Show Scoreboard Overlay on OBS / YouTube</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3 p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+              OBS Scoreboard & Scene Sync
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  OBS Scoreboard Style (Live Ticker)
+                </label>
+                <select
+                  value={detailSbStyle}
+                  onChange={(e) => setDetailSbStyle(e.target.value as ScoreboardStyleId)}
+                  className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                >
+                  {SCOREBOARD_STYLES.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Full Scoreboard Style (Timeout / Break)
+                </label>
+                <select
+                  value={detailFullSbStyle}
+                  onChange={(e) => setDetailFullSbStyle(e.target.value as FullScoreboardStyleId)}
+                  className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                >
+                  {FULL_SCOREBOARD_STYLES.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.sport} · {st.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  OBS Scoreboard Browser Source Name
+                </label>
+                <input
+                  type="text"
+                  value={detailSbSourceName}
+                  onChange={(e) => setDetailSbSourceName(e.target.value)}
+                  placeholder="MaidanLive Scoreboard"
+                  className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  OBS Scene to Switch
+                </label>
+                <select
+                  value={detailTargetScene}
+                  onChange={(e) => setDetailTargetScene(e.target.value)}
+                  className="w-full min-h-[38px] px-3 text-sm bg-white border border-slate-300 rounded-lg"
+                >
+                  <option value="">Keep Current OBS Scene</option>
+                  {(profile?.obsScenes || []).map((sc) => (
+                    <option key={sc} value={sc}>
+                      {sc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={detailSyncCameraLayout}
+                  onChange={(e) => setDetailSyncCameraLayout(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>Also apply this match&apos;s camera layout in OBS</span>
+              </label>
+
+              {prevStudioMatchIdRef.current && prevStudioMatchIdRef.current !== matchId && (
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={detailCopyStyleFromPrev}
+                    onChange={(e) => setDetailCopyStyleFromPrev(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>Copy scoreboard theme &amp; brand logo position from previous match</span>
+                </label>
+              )}
+
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-indigo-900 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSwitchObsOnSelect}
+                  onChange={(e) => updateAutoSwitchPreference(e.target.checked)}
+                  className="w-4 h-4 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>Auto-switch OBS automatically whenever the match dropdown changes</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setQuickSwitchModalOpen(false)}
+              className="min-h-[38px] px-4 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={switchingObsBroadcast}
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-500 disabled:opacity-50 shadow"
+            >
+              {switchingObsBroadcast ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {switchingObsBroadcast ? 'Switching OBS...' : 'Apply Details & Switch OBS'}
+              </span>
             </button>
           </div>
         </form>

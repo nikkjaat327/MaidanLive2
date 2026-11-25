@@ -17,11 +17,73 @@ import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscre
 import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
 import { ObsGraphicsLayer } from '../../components/obsGraphics/ObsGraphicsLayer.tsx';
+import { getSocketClient } from '../../services/socket/socketClient.ts';
+import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { MultiCamSplitBorders } from '../../components/obsStudio/MultiCamSplitBorders.tsx';
 
 export function ObsOverlayViewerPage() {
-  const { matchId } = useParams<{ matchId: string }>();
+  const { matchId: routeMatchId } = useParams<{ matchId: string }>();
   const location = useLocation();
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const followActive = routeMatchId === 'active' || searchParams.get('followActive') === '1';
+  const bridgeFilter = searchParams.get('bridgeId')?.trim() || '';
+
+  const [effectiveMatchId, setEffectiveMatchId] = useState<string | undefined>(() =>
+    routeMatchId && routeMatchId !== 'active' ? routeMatchId : undefined
+  );
+
+  useEffect(() => {
+    if (routeMatchId && routeMatchId !== 'active') {
+      setEffectiveMatchId(routeMatchId);
+      return;
+    }
+    if (routeMatchId === 'active') {
+      let cancelled = false;
+      obsStudioService
+        .getActiveOverlayTarget(bridgeFilter || undefined)
+        .then((res) => {
+          if (!cancelled && res.matchId) {
+            setEffectiveMatchId(res.matchId);
+          }
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [routeMatchId, bridgeFilter]);
+
+  useEffect(() => {
+    if (!followActive) return;
+    const socket = getSocketClient();
+
+    const handleActiveChanged = (payload: { matchId?: string; bridgeId?: string | null }) => {
+      if (!payload?.matchId) return;
+      if (bridgeFilter && payload.bridgeId && payload.bridgeId.toUpperCase() !== bridgeFilter.toUpperCase()) {
+        return;
+      }
+      setEffectiveMatchId(payload.matchId);
+    };
+
+    const handleReconnect = () => {
+      if (routeMatchId === 'active') {
+        obsStudioService
+          .getActiveOverlayTarget(bridgeFilter || undefined)
+          .then((res) => {
+            if (res.matchId) setEffectiveMatchId(res.matchId);
+          })
+          .catch(() => {});
+      }
+    };
+
+    socket.on('obs:active_match_changed', handleActiveChanged);
+    socket.on('connect', handleReconnect);
+    return () => {
+      socket.off('obs:active_match_changed', handleActiveChanged);
+      socket.off('connect', handleReconnect);
+    };
+  }, [followActive, bridgeFilter, routeMatchId]);
+
   const { adminUser, adminLoading } = useAuth();
   const {
     stream,
@@ -35,9 +97,8 @@ export function ObsOverlayViewerPage() {
     serverClockOffsetMs,
     loading,
     refetch,
-  } = useObsOverlay(matchId);
+  } = useObsOverlay(effectiveMatchId);
 
-  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const obsForced = searchParams.get('obs') === '1' || searchParams.get('controls') === '0';
   const sbOff = searchParams.get('sb') === '0';
   const isAdminAuthenticated =
@@ -247,7 +308,7 @@ export function ObsOverlayViewerPage() {
           graphicsState={graphicsState}
           canvasWidth={canvasWidth}
           canvasHeight={canvasHeight}
-          matchId={matchId}
+          matchId={effectiveMatchId}
           tournamentId={stream.tournamentId || null}
         />
       </div>

@@ -720,4 +720,60 @@ export const obsStudioService = {
     });
     return data;
   },
+
+  async getActiveOverlayTarget(bridgeId?: string): Promise<{
+    matchId: string | null;
+    bridgeId: string | null;
+    source: 'bridge_id' | 'online_bridge' | 'live_stream' | 'none';
+  }> {
+    const { data } = await publicApi.get('/obs/overlay/active-target', {
+      params: bridgeId ? { bridgeId } : undefined,
+    });
+    return data;
+  },
+
+  async switchObsMatchBroadcast(
+    matchId: string,
+    payload: {
+      sourceMatchId?: string;
+      targetSceneName?: string;
+      keepCurrentObsScene?: boolean;
+      syncScoreboardSource?: boolean;
+      syncCameraLayout?: boolean;
+      copyStyleFromSourceMatch?: boolean;
+      scoreboardSourceName?: string;
+      override?: boolean;
+      matchDetails?: {
+        matchTitle?: string;
+        teamAName?: string;
+        teamBName?: string;
+        gameName?: string;
+        tournamentName?: string;
+        status?: 'UPCOMING' | 'LIVE' | 'ENDED';
+        broadcastPublished?: boolean;
+        showScoreboardOnYoutube?: boolean;
+        youtubeInput?: string;
+        activeStreamingProvider?: StreamingProvider;
+        overlayPatch?: Record<string, unknown>;
+      };
+    }
+  ): Promise<
+    {
+      ok: boolean;
+      matchId: string;
+      sourceMatchId: string | null;
+      obsSynced: boolean;
+      obsConnected: boolean;
+      obsNote: string;
+      bridgeUpdated: boolean;
+      bridge: ObsBridgeData | null;
+      switchedScene: string;
+      scoreboardOverlayUrl: string;
+      updatedSources: string[];
+      matchDetailsUpdated: boolean;
+    } & Partial<ObsStudioPayload>
+  > {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/switch-obs-broadcast`, payload);
+    return data;
+  },
 };

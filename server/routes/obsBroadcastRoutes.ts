@@ -62,11 +62,13 @@ import {
   registerObsBridge,
   removeCameraObsSource,
   requestBridgeObsReconnect,
+  resolveActiveOverlayMatchId,
   revokeObsBridge,
   rotateObsBridgeToken,
   setCameraFacingMode,
   setCameraObsAudioMute,
   switchCameraLive,
+  switchMatchBroadcastInObs,
   switchObsSceneByName,
   testObsConnection,
   toggleObsSceneItem,
@@ -3909,6 +3911,148 @@ router.get(
       res.json({ logs: logs.map(formatAuditLog) });
     } catch {
       res.status(500).json({ message: 'Failed to load broadcast audit logs.' });
+    }
+  }
+);
+
+// GET /api/obs/overlay/active-target (Public read for /broadcast/overlay/view/active OBS Browser Source)
+router.get('/overlay/active-target', async (req: Request, res: Response) => {
+  try {
+    const bridgeId = typeof req.query.bridgeId === 'string' ? req.query.bridgeId.trim() : undefined;
+    const target = await resolveActiveOverlayMatchId(bridgeId);
+    res.json(target);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to resolve active overlay match.' });
+  }
+});
+
+// POST /api/obs/matches/:matchId/switch-obs-broadcast (1-click OBS active match + scoreboard + match details switch)
+router.post(
+  '/matches/:matchId/switch-obs-broadcast',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+
+      const actor = req.user!;
+      const isBroadcaster = actor.role === 'BROADCASTER';
+      const rawSourceMatchId =
+        typeof req.body?.sourceMatchId === 'string' &&
+        mongoose.Types.ObjectId.isValid(req.body.sourceMatchId.trim())
+          ? req.body.sourceMatchId.trim()
+          : undefined;
+
+      if (
+        rawSourceMatchId &&
+        rawSourceMatchId !== matchId &&
+        actor.role !== 'SUPER_ADMIN' &&
+        actor.role !== 'ADMIN'
+      ) {
+        const canAccessSource = await hasBroadcastAccess(actor, rawSourceMatchId, 'broadcast:control');
+        if (!canAccessSource) {
+          res.status(403).json({
+            message: 'Forbidden: You do not have broadcast control access to the source match.',
+          });
+          return;
+        }
+      }
+
+      const rawDetails =
+        req.body?.matchDetails && typeof req.body.matchDetails === 'object'
+          ? (req.body.matchDetails as Record<string, unknown>)
+          : undefined;
+
+      let filteredDetails: Record<string, unknown> | undefined;
+      if (rawDetails) {
+        filteredDetails = {};
+        if (!isBroadcaster) {
+          if (typeof rawDetails.matchTitle === 'string') filteredDetails.matchTitle = rawDetails.matchTitle;
+          if (typeof rawDetails.teamAName === 'string') filteredDetails.teamAName = rawDetails.teamAName;
+          if (typeof rawDetails.teamBName === 'string') filteredDetails.teamBName = rawDetails.teamBName;
+          if (typeof rawDetails.gameName === 'string') filteredDetails.gameName = rawDetails.gameName;
+          if (typeof rawDetails.tournamentName === 'string')
+            filteredDetails.tournamentName = rawDetails.tournamentName;
+          if (
+            typeof rawDetails.status === 'string' &&
+            ['UPCOMING', 'LIVE', 'ENDED'].includes(rawDetails.status)
+          ) {
+            filteredDetails.status = rawDetails.status;
+          }
+          if (typeof rawDetails.broadcastPublished === 'boolean') {
+            filteredDetails.broadcastPublished = rawDetails.broadcastPublished;
+          }
+          if (typeof rawDetails.showScoreboardOnYoutube === 'boolean') {
+            filteredDetails.showScoreboardOnYoutube = rawDetails.showScoreboardOnYoutube;
+          }
+          if (typeof rawDetails.youtubeInput === 'string') {
+            filteredDetails.youtubeInput = rawDetails.youtubeInput;
+          }
+          if (
+            rawDetails.activeStreamingProvider === 'youtube' ||
+            rawDetails.activeStreamingProvider === 'mediamtx'
+          ) {
+            filteredDetails.activeStreamingProvider = rawDetails.activeStreamingProvider;
+          }
+        }
+        if (rawDetails.overlayPatch && typeof rawDetails.overlayPatch === 'object') {
+          const canOverlay = await hasBroadcastAccess(actor, matchId, 'broadcast:manage_overlays');
+          if (!canOverlay) {
+            res.status(403).json({
+              message: 'Forbidden: Overlay control permission required to update scoreboard style.',
+            });
+            return;
+          }
+          filteredDetails.overlayPatch = rawDetails.overlayPatch;
+        }
+        if (Object.keys(filteredDetails).length === 0) {
+          filteredDetails = undefined;
+        }
+      }
+
+      const result = await switchMatchBroadcastInObs(
+        matchId,
+        {
+          sourceMatchId: rawSourceMatchId,
+          targetSceneName:
+            typeof req.body?.targetSceneName === 'string'
+              ? sanitizeText(req.body.targetSceneName, 120)
+              : undefined,
+          keepCurrentObsScene:
+            typeof req.body?.keepCurrentObsScene === 'boolean'
+              ? req.body.keepCurrentObsScene
+              : true,
+          syncScoreboardSource:
+            typeof req.body?.syncScoreboardSource === 'boolean'
+              ? req.body.syncScoreboardSource
+              : true,
+          syncCameraLayout: Boolean(req.body?.syncCameraLayout),
+          copyStyleFromSourceMatch: Boolean(req.body?.copyStyleFromSourceMatch),
+          scoreboardSourceName:
+            typeof req.body?.scoreboardSourceName === 'string'
+              ? sanitizeText(req.body.scoreboardSourceName, 120)
+              : undefined,
+          override: Boolean(req.body?.override),
+          baseAppUrl: resolveBaseAppUrl(req),
+          matchDetails: filteredDetails as any,
+        },
+        actor
+      );
+
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to switch OBS broadcast match.',
+      });
     }
   }
 );

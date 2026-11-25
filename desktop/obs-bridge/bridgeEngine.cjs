@@ -1627,15 +1627,26 @@ class BridgeEngine extends EventEmitter {
       }
 
       if (payload.scoreboardOverlay?.enabled && payload.scoreboardOverlay?.url) {
+        const sbSourceName = String(
+          payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay'
+        );
         const sbItemId = await this._ensureSceneAndInput(
           sceneName,
-          String(payload.scoreboardOverlay.sourceName || 'MaidanLive_Scoreboard_Overlay'),
+          sbSourceName,
           'browser_source',
           { url: String(payload.scoreboardOverlay.url), width: 1920, height: 1080, reroute_audio: false }
         );
         if (sbItemId !== null) {
           await this.obs
             .call('SetSceneItemEnabled', { sceneName, sceneItemId: sbItemId, sceneItemEnabled: true })
+            .catch(() => {});
+        }
+        if (payload.scoreboardOverlay.refreshBrowserCache) {
+          await this.obs
+            .call('PressInputPropertiesButton', {
+              inputName: sbSourceName,
+              propertyName: 'refreshnocache',
+            })
             .catch(() => {});
         }
       }

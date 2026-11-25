@@ -13,6 +13,7 @@ import { BroadcastScene } from '../models/BroadcastScene.ts';
 import { BroadcastAuditLog } from '../models/BroadcastAuditLog.ts';
 import type { BroadcastAuditAction } from '../models/BroadcastAuditLog.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { LiveScore } from '../models/LiveScore.ts';
 import { User } from '../models/User.ts';
 import type { IUser } from '../models/User.ts';
 import { hasBroadcastAccess } from '../middleware/auth.ts';
@@ -42,14 +43,19 @@ import type {
   CameraPreviewFit,
   ObsSceneTransformItem,
 } from '../../src/utils/obsTransformGeometry.ts';
+import { normalizeOverlayConfig } from '../../src/utils/overlayConfig.ts';
+import { extractYouTubeVideoId } from '../../src/utils/youtube.ts';
 import {
   emitBroadcastStudioEvent,
   emitCameraCompanionEvent,
   emitRoomOnlyEvent,
+  emitStreamEvent,
+  getSocketIO,
   registerObsAgentHandlers,
 } from '../socket/index.ts';
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
+import { sanitizeText } from '../utils/sanitize.ts';
 import {
   buildLarixCameraConfig,
   isValidMediaSourceUrl,
@@ -2605,6 +2611,14 @@ export async function executeDirectObsCommand(
               sceneName,
               sceneItemId: sbItemId,
               sceneItemEnabled: true,
+            })
+            .catch(() => {});
+        }
+        if (payload.scoreboardOverlay.refreshBrowserCache) {
+          await obs
+            .call('PressInputPropertiesButton', {
+              inputName: sbName,
+              propertyName: 'refreshnocache',
             })
             .catch(() => {});
         }
@@ -5792,5 +5806,658 @@ export async function refreshMatchCameras(matchId: string, actor: IUser) {
     ok: true,
     refreshedCount: cameras.filter((c) => c.enabled).length,
     onlineCount,
+  };
+}
+
+export async function resolveActiveOverlayMatchId(bridgeId?: string): Promise<{
+  matchId: string | null;
+  bridgeId: string | null;
+  source: 'bridge_id' | 'online_bridge' | 'live_stream' | 'none';
+}> {
+  const cleanBridgeId = typeof bridgeId === 'string' ? bridgeId.trim().toUpperCase() : '';
+  if (cleanBridgeId) {
+    const specific = await ObsBridge.findOne({ bridgeId: cleanBridgeId, status: 'ACTIVE' }).lean();
+    if (specific?.activeMatchId) {
+      return {
+        matchId: String(specific.activeMatchId),
+        bridgeId: specific.bridgeId,
+        source: 'bridge_id',
+      };
+    }
+  }
+
+  // Prefer currently online registered OBS Bridge
+  const bridges = await ObsBridge.find({ status: 'ACTIVE', activeMatchId: { $ne: null } })
+    .sort({ lastHeartbeatAt: -1, lastConnectedAt: -1, updatedAt: -1 })
+    .lean();
+
+  for (const br of bridges) {
+    const sock = bridgeSockets.get(br.bridgeId);
+    if (sock && sock.connected && br.activeMatchId) {
+      return {
+        matchId: String(br.activeMatchId),
+        bridgeId: br.bridgeId,
+        source: 'online_bridge',
+      };
+    }
+  }
+
+  if (bridges.length > 0 && bridges[0].activeMatchId) {
+    return {
+      matchId: String(bridges[0].activeMatchId),
+      bridgeId: bridges[0].bridgeId,
+      source: 'online_bridge',
+    };
+  }
+
+  const activeLive = await LiveStream.findOne({
+    status: 'LIVE',
+    broadcastPublished: { $ne: false },
+  })
+    .sort({ activatedAt: -1, updatedAt: -1 })
+    .select('_id')
+    .lean();
+
+  if (activeLive?._id) {
+    return {
+      matchId: String(activeLive._id),
+      bridgeId: null,
+      source: 'live_stream',
+    };
+  }
+
+  return { matchId: null, bridgeId: null, source: 'none' };
+}
+
+export interface SwitchMatchBroadcastOptions {
+  sourceMatchId?: string;
+  targetSceneName?: string;
+  keepCurrentObsScene?: boolean;
+  syncScoreboardSource?: boolean;
+  syncCameraLayout?: boolean;
+  copyStyleFromSourceMatch?: boolean;
+  scoreboardSourceName?: string;
+  baseAppUrl?: string;
+  override?: boolean;
+  matchDetails?: {
+    matchTitle?: string;
+    teamAName?: string;
+    teamBName?: string;
+    gameName?: string;
+    tournamentName?: string;
+    status?: 'UPCOMING' | 'LIVE' | 'ENDED';
+    broadcastPublished?: boolean;
+    showScoreboardOnYoutube?: boolean;
+    youtubeInput?: string;
+    activeStreamingProvider?: 'youtube' | 'mediamtx';
+    overlayPatch?: Record<string, unknown>;
+  };
+}
+
+export async function switchMatchBroadcastInObs(
+  targetMatchId: string,
+  options: SwitchMatchBroadcastOptions,
+  actor: IUser
+) {
+  if (!mongoose.Types.ObjectId.isValid(targetMatchId)) {
+    const err: any = new Error('Invalid target match ID.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const stream = await LiveStream.findById(targetMatchId);
+  if (!stream) {
+    const err: any = new Error('Target match broadcast not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetProfile = await ensureObsProfileForMatch(targetMatchId, actor._id as any);
+  checkAdminOverrideGuard(targetProfile, actor, options.override);
+
+  const sourceMatchId =
+    options.sourceMatchId &&
+    mongoose.Types.ObjectId.isValid(options.sourceMatchId) &&
+    options.sourceMatchId !== targetMatchId
+      ? options.sourceMatchId
+      : '';
+
+  const [sourceProfile, sourceStream] = await Promise.all([
+    sourceMatchId ? ObsControllerProfile.findOne({ matchId: sourceMatchId }).select('+obsPasswordEnc').lean() : null,
+    sourceMatchId ? LiveStream.findById(sourceMatchId).lean() : null,
+  ]);
+
+  let matchDetailsUpdated = false;
+  let scoreUpdated = false;
+  let overlayUpdated = false;
+
+  // Apply any inline match/broadcast/scoreboard detail edits alongside the OBS switch
+  if (options.matchDetails && typeof options.matchDetails === 'object') {
+    const d = options.matchDetails;
+    if (typeof d.matchTitle === 'string' && d.matchTitle.trim()) {
+      stream.matchTitle = sanitizeText(d.matchTitle, 160);
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.teamAName === 'string' && d.teamAName.trim()) {
+      stream.teamAName = sanitizeText(d.teamAName, 100);
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.teamBName === 'string' && d.teamBName.trim()) {
+      stream.teamBName = sanitizeText(d.teamBName, 100);
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.gameName === 'string' && d.gameName.trim()) {
+      const cleanedGame = sanitizeText(d.gameName, 80);
+      const matchedSport = (['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Other'] as const).find(
+        (s) => s.toLowerCase() === cleanedGame.toLowerCase()
+      );
+      stream.gameName = matchedSport || 'Other';
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.tournamentName === 'string') {
+      stream.tournamentName = sanitizeText(d.tournamentName, 160);
+      matchDetailsUpdated = true;
+    }
+    if (d.status && ['UPCOMING', 'LIVE', 'ENDED'].includes(d.status)) {
+      stream.status = d.status;
+      if (d.status === 'LIVE' && !stream.startedAt) {
+        stream.startedAt = new Date();
+      }
+      if (d.status === 'ENDED' && !stream.endedAt) {
+        stream.endedAt = new Date();
+      }
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.broadcastPublished === 'boolean') {
+      stream.broadcastPublished = d.broadcastPublished;
+      if (d.broadcastPublished) {
+        stream.wasPublished = true;
+        if (!stream.activatedAt) stream.activatedAt = new Date();
+      }
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.showScoreboardOnYoutube === 'boolean') {
+      stream.showScoreboardOnYoutube = d.showScoreboardOnYoutube;
+      matchDetailsUpdated = true;
+    }
+    if (typeof d.youtubeInput === 'string' && d.youtubeInput.trim()) {
+      const parsedYt = extractYouTubeVideoId(d.youtubeInput);
+      if (!parsedYt.valid || !parsedYt.videoId) {
+        const err: any = new Error(parsedYt.error || 'Invalid YouTube URL or 11-character Video ID.');
+        err.statusCode = 400;
+        throw err;
+      }
+      stream.youtubeVideoId = parsedYt.videoId;
+      stream.youtubeInput = sanitizeText(parsedYt.watchUrl || d.youtubeInput.trim(), 300);
+      if (stream.youtubeStreamStatus === 'UNKNOWN' || stream.youtubeStreamStatus === 'UNAVAILABLE') {
+        stream.youtubeStreamStatus = 'READY';
+      }
+      matchDetailsUpdated = true;
+    }
+    if (d.activeStreamingProvider === 'youtube' || d.activeStreamingProvider === 'mediamtx') {
+      stream.streamingProvider = d.activeStreamingProvider;
+      stream.activeStreamingProvider = d.activeStreamingProvider;
+      stream.lastProviderSwitchAt = new Date();
+      stream.lastProviderSwitchBy = actor._id as mongoose.Types.ObjectId;
+      stream.lastProviderSwitchByName = actor.name;
+      matchDetailsUpdated = true;
+    }
+    if (d.overlayPatch && typeof d.overlayPatch === 'object') {
+      const mergedOverlay = normalizeOverlayConfig({
+        ...((stream as any).overlayConfig || {}),
+        ...d.overlayPatch,
+      });
+      (stream as any).overlayConfig = mergedOverlay;
+      if (typeof (stream as any).markModified === 'function') {
+        (stream as any).markModified('overlayConfig');
+      }
+      overlayUpdated = true;
+      matchDetailsUpdated = true;
+    }
+  }
+
+  // Optional explicit copy of overlay visual style from the previous match
+  if (options.copyStyleFromSourceMatch && sourceStream && (sourceStream as any).overlayConfig) {
+    const srcCfg = normalizeOverlayConfig((sourceStream as any).overlayConfig);
+    const curCfg = normalizeOverlayConfig((stream as any).overlayConfig);
+    (stream as any).overlayConfig = normalizeOverlayConfig({
+      ...curCfg,
+      style: srcCfg.style,
+      fullScoreboardStyle: srcCfg.fullScoreboardStyle,
+      position: srcCfg.position,
+      scale: srcCfg.scale,
+      customScale: srcCfg.customScale,
+      theme: srcCfg.theme,
+      customScoreboardDesign: srcCfg.customScoreboardDesign,
+      brandLogoPosition: srcCfg.brandLogoPosition,
+      brandLogoSize: srcCfg.brandLogoSize,
+      brandLogoOpacity: srcCfg.brandLogoOpacity,
+      showBrandLogo: srcCfg.showBrandLogo,
+      brandLogoUrl: srcCfg.brandLogoUrl,
+    });
+    if (typeof (stream as any).markModified === 'function') {
+      (stream as any).markModified('overlayConfig');
+    }
+    overlayUpdated = true;
+    matchDetailsUpdated = true;
+  }
+
+  if (matchDetailsUpdated) {
+    stream.updatedBy = actor._id as mongoose.Types.ObjectId;
+    await stream.save();
+
+    // Sync LiveScore sport if edited
+    const liveScore = await LiveScore.findOne({ liveStreamId: targetMatchId });
+    if (liveScore) {
+      let dirtyScore = false;
+      const nextSport = stream.gameName || 'Other';
+      if (options.matchDetails?.gameName && liveScore.sportType !== nextSport) {
+        liveScore.sportType = nextSport;
+        dirtyScore = true;
+      }
+      if (dirtyScore) {
+        await liveScore.save();
+        scoreUpdated = true;
+      }
+    }
+
+    const updatedObj = stream.toObject ? stream.toObject() : (stream as any);
+    emitStreamEvent(targetMatchId, 'live:updated', {
+      ...updatedObj,
+      id: String(stream._id),
+    });
+    if (overlayUpdated) {
+      const normalized = normalizeOverlayConfig((stream as any).overlayConfig);
+      emitStreamEvent(targetMatchId, 'overlay:config_updated', {
+        streamId: targetMatchId,
+        overlayConfig: normalized,
+        showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
+      });
+      emitBroadcastStudioEvent(targetMatchId, 'overlay:config_updated', {
+        streamId: targetMatchId,
+        overlayConfig: normalized,
+        showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
+      });
+    }
+    if (scoreUpdated && liveScore) {
+      emitStreamEvent(targetMatchId, 'score:updated', {
+        streamId: targetMatchId,
+        score: liveScore.toObject ? liveScore.toObject() : liveScore,
+      });
+    }
+  }
+
+  if (typeof options.scoreboardSourceName === 'string' && options.scoreboardSourceName.trim()) {
+    targetProfile.scoreboardSourceName = sanitizeText(options.scoreboardSourceName, 120);
+  } else if (
+    sourceProfile?.scoreboardSourceName &&
+    (!targetProfile.scoreboardSourceName ||
+      targetProfile.scoreboardSourceName === 'MaidanLive_Scoreboard_Overlay')
+  ) {
+    targetProfile.scoreboardSourceName = sourceProfile.scoreboardSourceName;
+  }
+
+  // Locate active OBS Bridge or Direct WebSocket session
+  let activeBridgeDoc: any = null;
+  const existingAgent = await resolveAgentSocketForMatch(targetMatchId);
+  if (existingAgent?.bridgeId) {
+    activeBridgeDoc = await ObsBridge.findOne({ bridgeId: existingAgent.bridgeId, status: 'ACTIVE' });
+  }
+
+  if (!activeBridgeDoc && sourceMatchId) {
+    const fromSource = await ObsBridge.find({
+      status: 'ACTIVE',
+      $or: [{ assignedMatchIds: sourceMatchId }, { activeMatchId: sourceMatchId }],
+    })
+      .sort({ lastHeartbeatAt: -1, lastConnectedAt: -1 })
+      .exec();
+    for (const candidate of fromSource) {
+      if (bridgeSockets.get(candidate.bridgeId)?.connected) {
+        activeBridgeDoc = candidate;
+        break;
+      }
+    }
+    if (!activeBridgeDoc && fromSource.length > 0) {
+      activeBridgeDoc = fromSource[0];
+    }
+  }
+
+  if (!activeBridgeDoc) {
+    const allBridges = await ObsBridge.find({ status: 'ACTIVE' })
+      .sort({ lastHeartbeatAt: -1, lastConnectedAt: -1 })
+      .exec();
+    for (const candidate of allBridges) {
+      const sock = bridgeSockets.get(candidate.bridgeId);
+      if (sock?.connected && (await canManageBridge(actor, candidate as any))) {
+        activeBridgeDoc = candidate;
+        break;
+      }
+    }
+  }
+
+  let bridgeUpdated = false;
+  if (activeBridgeDoc) {
+    const targetObjId = new mongoose.Types.ObjectId(targetMatchId);
+    const assigned = Array.isArray(activeBridgeDoc.assignedMatchIds)
+      ? activeBridgeDoc.assignedMatchIds.map((id: any) => String(id))
+      : [];
+    if (!assigned.includes(targetMatchId)) {
+      activeBridgeDoc.assignedMatchIds = [...(activeBridgeDoc.assignedMatchIds || []), targetObjId];
+    }
+    activeBridgeDoc.activeMatchId = targetObjId;
+    await activeBridgeDoc.save();
+    bridgeUpdated = true;
+
+    // Immediately register targetMatchId inside the live Bridge socket context so RPC calls work instantaneously
+    const bridgeSock = bridgeSockets.get(activeBridgeDoc.bridgeId);
+    if (bridgeSock) {
+      const prevCtx = ((bridgeSock.data as any)?.obsContext || {}) as ObsAgentContext;
+      const nextMatchIds = Array.from(new Set([...(prevCtx.matchIds || []), ...assigned, targetMatchId]));
+      (bridgeSock.data as any).obsContext = {
+        ...prevCtx,
+        bridgeId: activeBridgeDoc.bridgeId,
+        matchId: targetMatchId,
+        matchIds: nextMatchIds,
+      };
+    }
+
+    targetProfile.connectionMode = 'local_agent';
+    targetProfile.agentLabel = activeBridgeDoc.label || activeBridgeDoc.name || targetProfile.agentLabel;
+    targetProfile.bridgeVersion = activeBridgeDoc.bridgeVersion || targetProfile.bridgeVersion;
+    targetProfile.bridgeCapabilities = normalizeBridgeCapabilities(
+      activeBridgeDoc.bridgeCapabilities || targetProfile.bridgeCapabilities
+    );
+    if (bridgeSock?.connected) {
+      targetProfile.agentOnline = true;
+      targetProfile.bridgeConnectionState = 'CONNECTED';
+      targetProfile.agentLastSeenAt = new Date();
+      targetProfile.connectionStatus = (activeBridgeDoc.obsStatus || targetProfile.connectionStatus) as any;
+      targetProfile.obsVersion = activeBridgeDoc.obsVersion || targetProfile.obsVersion;
+      targetProfile.obsWebSocketVersion =
+        activeBridgeDoc.obsWebSocketVersion || targetProfile.obsWebSocketVersion;
+      if (Array.isArray(activeBridgeDoc.obsScenes) && activeBridgeDoc.obsScenes.length > 0) {
+        targetProfile.obsScenes = activeBridgeDoc.obsScenes;
+      }
+      targetProfile.obsStreamActive = Boolean(activeBridgeDoc.obsStreamActive);
+      targetProfile.desiredConnected = true;
+      targetProfile.manualDisconnect = false;
+    }
+  } else if (
+    sourceMatchId &&
+    !directSessions.get(targetMatchId)?.connected &&
+    directSessions.get(sourceMatchId)?.connected
+  ) {
+    const srcSession = directSessions.get(sourceMatchId)!;
+    directSessions.set(targetMatchId, {
+      ...srcSession,
+      matchId: targetMatchId,
+    });
+    targetProfile.connectionMode = 'direct_ws';
+    if (sourceProfile) {
+      targetProfile.obsProtocol = sourceProfile.obsProtocol;
+      targetProfile.obsHost = sourceProfile.obsHost;
+      targetProfile.obsPort = sourceProfile.obsPort;
+      targetProfile.obsPasswordEnc = sourceProfile.obsPasswordEnc || '';
+      targetProfile.hasPassword = Boolean(sourceProfile.hasPassword);
+      targetProfile.obsScenes = sourceProfile.obsScenes || [];
+      targetProfile.obsInputs = sourceProfile.obsInputs || [];
+      targetProfile.obsVersion = sourceProfile.obsVersion || '';
+      targetProfile.obsWebSocketVersion = sourceProfile.obsWebSocketVersion || '';
+      targetProfile.obsStreamActive = Boolean(sourceProfile.obsStreamActive);
+    }
+    targetProfile.connectionStatus = 'CONNECTED';
+    targetProfile.desiredConnected = true;
+    targetProfile.manualDisconnect = false;
+  }
+
+  targetProfile.updatedBy = actor._id as mongoose.Types.ObjectId;
+  await targetProfile.save();
+
+  // Execute live OBS Studio updates when OBS is connected
+  const isObsOnline =
+    targetProfile.connectionMode === 'local_agent'
+      ? Boolean((await isMatchBridgeOnline(targetMatchId)) && targetProfile.connectionStatus === 'CONNECTED')
+      : Boolean(directSessions.get(targetMatchId)?.connected);
+
+  const baseAppUrl = (options.baseAppUrl || '').replace(/\/+$/, '');
+  const allowYoutubeScoreboard = stream.showScoreboardOnYoutube !== false;
+  const syncScoreboard = options.syncScoreboardSource !== false && Boolean(baseAppUrl);
+  const scoreboardOverlayUrl = baseAppUrl
+    ? `${baseAppUrl}/broadcast/overlay/view/${targetMatchId}?obs=1&controls=0${allowYoutubeScoreboard ? '' : '&sb=0'}`
+    : '';
+
+  let obsSynced = false;
+  let obsNote = '';
+  let switchedScene = '';
+  const updatedSources: string[] = [];
+
+  if (isObsOnline) {
+    try {
+      // Discover latest OBS inputs when using Bridge/Direct so we update the exact scoreboard source name
+      let discoveredInputs = Array.isArray(targetProfile.obsInputs) ? targetProfile.obsInputs : [];
+      if (discoveredInputs.length === 0 && sourceProfile?.obsInputs?.length) {
+        discoveredInputs = sourceProfile.obsInputs;
+      }
+      if (discoveredInputs.length === 0) {
+        const inputListRes = await callObsRpc<{ inputs?: any[] }>(targetMatchId, 'get_input_list', {}).catch(
+          () => null
+        );
+        if (Array.isArray(inputListRes?.inputs)) {
+          discoveredInputs = inputListRes.inputs;
+        }
+      }
+
+      const browserInputs = discoveredInputs
+        .filter((inp) => String(inp.inputKind || '').includes('browser'))
+        .map((inp) => String(inp.inputName || '').trim())
+        .filter(Boolean);
+
+      const candidateSet = new Set<string>();
+      const addIfValid = (val?: string) => {
+        const clean = String(val || '').trim();
+        if (clean) candidateSet.add(clean);
+      };
+      addIfValid(options.scoreboardSourceName);
+      addIfValid(targetProfile.scoreboardSourceName);
+      addIfValid(sourceProfile?.scoreboardSourceName);
+      for (const name of browserInputs) {
+        if (/scoreboard|maidanlive/i.test(name) && !/^ML_CAM_/i.test(name)) {
+          addIfValid(name);
+        }
+      }
+
+      // Choose existing OBS scoreboard input first so we never create duplicates unnecessarily
+      const existingMatchingInput = Array.from(candidateSet).find((cand) =>
+        browserInputs.some((b) => b.toLowerCase() === cand.toLowerCase())
+      );
+      const primarySbSource =
+        (options.scoreboardSourceName && options.scoreboardSourceName.trim()) ||
+        existingMatchingInput ||
+        targetProfile.scoreboardSourceName ||
+        'MaidanLive Scoreboard';
+
+      const availableScenes = Array.isArray(targetProfile.obsScenes) ? targetProfile.obsScenes : [];
+      const explicitTargetScene =
+        options.targetSceneName && options.targetSceneName !== '__KEEP_CURRENT__'
+          ? options.targetSceneName.trim()
+          : '';
+      const resolvedScene =
+        explicitTargetScene ||
+        (options.keepCurrentObsScene === false &&
+        targetProfile.activeObsScene &&
+        availableScenes.includes(targetProfile.activeObsScene)
+          ? targetProfile.activeObsScene
+          : activeBridgeDoc?.activeObsScene ||
+            sourceProfile?.activeObsScene ||
+            targetProfile.activeObsScene ||
+            availableScenes[0] ||
+            '');
+
+      if (
+        options.syncCameraLayout &&
+        targetProfile.activeLayoutType &&
+        targetProfile.activeLayoutType !== 'SINGLE' &&
+        Array.isArray(targetProfile.activeCameraIds) &&
+        targetProfile.activeCameraIds.length > 0
+      ) {
+        await applyDynamicLayoutToObs(
+          targetMatchId,
+          {
+            layoutType: targetProfile.activeLayoutType,
+            cameraIds: targetProfile.activeCameraIds,
+            mainCameraId: targetProfile.activeCameraId || targetProfile.activeCameraIds[0],
+            pipPosition: targetProfile.activePipPosition,
+            pipSize: targetProfile.activePipSize,
+            sceneName: resolvedScene || undefined,
+            includeScoreboardOverlay: allowYoutubeScoreboard,
+            override: options.override,
+            baseAppUrl,
+          },
+          actor
+        );
+        switchedScene = resolvedScene;
+        updatedSources.push(primarySbSource);
+        obsSynced = true;
+      } else if (resolvedScene) {
+        const rpcRes = await callObsRpc(targetMatchId, 'switch_scene', {
+          sceneName: resolvedScene,
+          scoreboardOverlay: syncScoreboard
+            ? {
+                enabled: true,
+                sourceName: primarySbSource,
+                url: scoreboardOverlayUrl,
+                refreshBrowserCache: true,
+              }
+            : undefined,
+        });
+        switchedScene = String(rpcRes?.verifiedScene || resolvedScene);
+        targetProfile.activeObsScene = switchedScene;
+        if (Array.isArray(rpcRes?.obsScenes)) {
+          targetProfile.obsScenes = rpcRes.obsScenes;
+        }
+        updatedSources.push(primarySbSource);
+        obsSynced = true;
+      }
+
+      // Also update & no-cache refresh any additional existing scoreboard browser sources in OBS
+      if (syncScoreboard && scoreboardOverlayUrl) {
+        const extraTargets = Array.from(candidateSet).filter(
+          (name) =>
+            name !== primarySbSource &&
+            browserInputs.some((b) => b.toLowerCase() === name.toLowerCase())
+        );
+        if (!resolvedScene && !extraTargets.includes(primarySbSource)) {
+          extraTargets.unshift(primarySbSource);
+        }
+        for (const sourceName of extraTargets) {
+          await callObsRpc(targetMatchId, 'reconnect_input', {
+            sceneName: resolvedScene || '',
+            inputName: sourceName,
+            inputKind: 'browser_source',
+            inputSettings: {
+              url: scoreboardOverlayUrl,
+              width: 1920,
+              height: 1080,
+              reroute_audio: false,
+            },
+          })
+            .then(() => {
+              if (!updatedSources.includes(sourceName)) updatedSources.push(sourceName);
+              obsSynced = true;
+            })
+            .catch(() => {});
+        }
+      }
+
+      targetProfile.scoreboardSourceName = primarySbSource;
+      targetProfile.lastSyncedAt = new Date();
+      await targetProfile.save();
+
+      if (activeBridgeDoc && switchedScene) {
+        activeBridgeDoc.activeObsScene = switchedScene;
+        await activeBridgeDoc.save();
+      }
+      await reconcileCameraActiveStates(targetMatchId, targetProfile.activeObsScene || '');
+    } catch (err: any) {
+      obsNote = err?.message || 'Match switched, but OBS Studio rejected part of the sync.';
+    }
+  } else {
+    obsNote =
+      'OBS Bridge active match switched. Connect OBS Studio / Windows Bridge to update the live OBS scene and browser source.';
+  }
+
+  await writeBroadcastAudit({
+    matchId: targetMatchId,
+    tournamentId: stream.tournamentId ? String(stream.tournamentId) : null,
+    actionType: 'MATCH_BROADCAST_SWITCH',
+    previousScene: sourceProfile?.activeObsScene || '',
+    newScene: switchedScene || targetProfile.activeObsScene || '',
+    actor,
+    adminOverride: Boolean(options.override),
+    obsStatus: obsSynced ? 'SUCCESS' : isObsOnline ? 'FAILED' : 'SUCCESS',
+    errorDetails: obsNote,
+    metadata: {
+      sourceMatchId: sourceMatchId || null,
+      bridgeId: activeBridgeDoc?.bridgeId || null,
+      scoreboardOverlayUrl,
+      updatedSources,
+      matchDetailsUpdated,
+    },
+  });
+
+  await recordActivity(
+    actor,
+    'OBS_MATCH_BROADCAST_SWITCH',
+    'LiveStream',
+    targetMatchId,
+    `Switched OBS broadcast to ${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}`,
+    {
+      previousValue: { matchId: sourceMatchId || null },
+      newValue: {
+        matchId: targetMatchId,
+        bridgeId: activeBridgeDoc?.bridgeId || null,
+        switchedScene: switchedScene || targetProfile.activeObsScene || '',
+      },
+    }
+  );
+
+  // Notify any "?followActive=1" / "/broadcast/overlay/view/active" browser sources & studios
+  const io = getSocketIO();
+  if (io) {
+    io.emit('obs:active_match_changed', {
+      matchId: targetMatchId,
+      previousMatchId: sourceMatchId || null,
+      bridgeId: activeBridgeDoc?.bridgeId || null,
+      switchedScene: switchedScene || targetProfile.activeObsScene || '',
+      obsSynced,
+      switchedAt: new Date().toISOString(),
+    });
+  }
+
+  emitBroadcastStudioEvent(targetMatchId, 'obs:match_switched', {
+    matchId: targetMatchId,
+    previousMatchId: sourceMatchId || null,
+    bridgeId: activeBridgeDoc?.bridgeId || null,
+    switchedScene: switchedScene || targetProfile.activeObsScene || '',
+    obsSynced,
+  });
+  await emitFullStudioState(targetMatchId);
+  if (sourceMatchId) {
+    await emitFullStudioState(sourceMatchId);
+  }
+
+  return {
+    ok: true,
+    matchId: targetMatchId,
+    sourceMatchId: sourceMatchId || null,
+    obsSynced,
+    obsConnected: isObsOnline,
+    obsNote,
+    bridgeUpdated,
+    bridge: activeBridgeDoc ? formatSafeBridge(activeBridgeDoc.toObject()) : null,
+    switchedScene: switchedScene || targetProfile.activeObsScene || '',
+    scoreboardOverlayUrl,
+    updatedSources,
+    matchDetailsUpdated,
   };
 }

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  ArrowRightLeft,
   Camera,
   Check,
   Columns2,
   Grid2X2,
   LayoutGrid,
+  Loader2,
   LogOut,
   Maximize2,
   Minimize2,
@@ -785,6 +787,47 @@ export function BroadcasterStudioPage() {
     [activeMatchId, obsConnected, refetch]
   );
 
+  const [switchingObsBroadcast, setSwitchingObsBroadcast] = useState(false);
+  const prevMatchIdRef = useRef<string>('');
+
+  const handleOneClickSwitchObsBroadcast = useCallback(
+    async (targetId?: string, explicitSourceId?: string) => {
+      const id = targetId || activeMatchId;
+      if (!id) return;
+      const sourceId =
+        explicitSourceId && explicitSourceId !== id
+          ? explicitSourceId
+          : prevMatchIdRef.current && prevMatchIdRef.current !== id
+            ? prevMatchIdRef.current
+            : undefined;
+      try {
+        setSwitchingObsBroadcast(true);
+        setActionBanner(null);
+        const res = await obsStudioService.switchObsMatchBroadcast(id, {
+          ...(sourceId ? { sourceMatchId: sourceId } : {}),
+          keepCurrentObsScene: true,
+          syncScoreboardSource: true,
+        });
+        prevMatchIdRef.current = id;
+        setActionBanner({
+          type: 'success',
+          message: res.obsSynced
+            ? 'Switched OBS broadcast & scoreboard to this match.'
+            : res.obsNote || 'Switched active OBS bridge match.',
+        });
+        await Promise.all([refetch(), loadAssignedMatches()]);
+      } catch (err) {
+        setActionBanner({
+          type: 'error',
+          message: extractApiError(err, 'Failed to switch OBS broadcast match.'),
+        });
+      } finally {
+        setSwitchingObsBroadcast(false);
+      }
+    },
+    [activeMatchId, refetch, loadAssignedMatches]
+  );
+
   const activeStagingMeta = useMemo(
     () => LAYOUT_OPTIONS.find((l) => l.type === stagingLayout) || null,
     [stagingLayout]
@@ -1016,27 +1059,62 @@ export function BroadcasterStudioPage() {
           </span>
 
           {matches.length > 1 ? (
-            <select
-              aria-label="Select assigned match"
-              value={activeMatchId}
-              onChange={(e) => {
-                setSelectedMatchId(e.target.value);
-                setStickyMatchId(e.target.value);
-              }}
-              className="h-8 max-w-[260px] px-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-white truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C]"
-            >
-              {matches.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.status === 'LIVE' ? 'LIVE · ' : ''}
-                  {m.matchTitle}
-                </option>
-              ))}
-            </select>
+            <div className="inline-flex items-center gap-1.5">
+              <select
+                aria-label="Select assigned match"
+                value={activeMatchId}
+                onChange={(e) => {
+                  prevMatchIdRef.current = activeMatchId;
+                  setSelectedMatchId(e.target.value);
+                  setStickyMatchId(e.target.value);
+                }}
+                className="h-8 max-w-[240px] px-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-white truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EA580C]"
+              >
+                {matches.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.status === 'LIVE' ? 'LIVE · ' : ''}
+                    {m.matchTitle}
+                  </option>
+                ))}
+              </select>
+              {activeMatchId && (
+                <button
+                  type="button"
+                  disabled={switchingObsBroadcast}
+                  onClick={() => void handleOneClickSwitchObsBroadcast(activeMatchId)}
+                  title="1-Click Switch OBS broadcast & scoreboard to this match"
+                  className="h-8 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 border border-indigo-400 text-white text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 disabled:opacity-45"
+                >
+                  {switchingObsBroadcast ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <ArrowRightLeft className="w-3 h-3" />
+                  )}
+                  <span>{switchingObsBroadcast ? 'Switching...' : 'Switch OBS'}</span>
+                </button>
+              )}
+            </div>
           ) : (
-            <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 min-w-0">
               <p className="text-xs sm:text-sm font-bold text-white truncate max-w-[240px]">
                 {studio?.match?.matchTitle || matches[0]?.matchTitle || 'Broadcaster Live Desk'}
               </p>
+              {activeMatchId && (
+                <button
+                  type="button"
+                  disabled={switchingObsBroadcast}
+                  onClick={() => void handleOneClickSwitchObsBroadcast(activeMatchId)}
+                  title="Sync OBS broadcast & scoreboard to this match"
+                  className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-indigo-600 border border-indigo-500/45 text-indigo-200 hover:text-white text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 disabled:opacity-45"
+                >
+                  {switchingObsBroadcast ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <ArrowRightLeft className="w-3 h-3" />
+                  )}
+                  <span>{switchingObsBroadcast ? 'Syncing...' : 'Sync OBS'}</span>
+                </button>
+              )}
             </div>
           )}
 
