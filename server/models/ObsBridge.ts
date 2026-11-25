@@ -60,6 +60,9 @@ export interface IObsBridge extends Document {
   bridgeVersion: string;
   bridgeCapabilities: string[];
   mediamtxState?: Record<string, any> | null;
+  manualDisconnect?: boolean;
+  manualDisconnectedAt?: Date | null;
+  manualDisconnectedBy?: string;
   revokedAt?: Date | null;
   revokedBy?: mongoose.Types.ObjectId | null;
   revokeReason: string;
@@ -156,6 +159,9 @@ const obsBridgeSchema = new Schema<IObsBridge>(
     bridgeVersion: { type: String, default: '', maxlength: 40 },
     bridgeCapabilities: [{ type: String, maxlength: 64 }],
     mediamtxState: { type: Schema.Types.Mixed, default: null },
+    manualDisconnect: { type: Boolean, default: false },
+    manualDisconnectedAt: { type: Date, default: null },
+    manualDisconnectedBy: { type: String, default: '', maxlength: 140 },
     revokedAt: { type: Date, default: null },
     revokedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     revokeReason: { type: String, default: '', maxlength: 240 },

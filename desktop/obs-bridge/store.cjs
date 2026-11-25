@@ -31,6 +31,8 @@ function defaultConfig() {
     mediamtxPath: '',
     mediamtxConfigPath: '',
     autoStart: false,
+    adminDisconnected: false,
+    obsManuallyDisconnected: false,
     activeMatch: null,
     pairedAt: null,
   };
@@ -99,6 +101,8 @@ function loadConfig() {
       mediamtxPath: String(parsed.mediamtxPath || '').trim(),
       mediamtxConfigPath: String(parsed.mediamtxConfigPath || '').trim(),
       autoStart: Boolean(parsed.autoStart),
+      adminDisconnected: Boolean(parsed.adminDisconnected),
+      obsManuallyDisconnected: Boolean(parsed.obsManuallyDisconnected),
       activeMatch: parsed.activeMatch || null,
       pairedAt: parsed.pairedAt || null,
     };
@@ -121,6 +125,8 @@ function saveConfig(patch) {
   next.mediamtxConfigPath = String(next.mediamtxConfigPath || '').trim();
   next.label = String(next.label || defaultConfig().label).trim();
   next.autoStart = Boolean(next.autoStart);
+  next.adminDisconnected = Boolean(next.adminDisconnected);
+  next.obsManuallyDisconnected = Boolean(next.obsManuallyDisconnected);
 
   const persisted = {
     version: 2,
@@ -133,6 +139,8 @@ function saveConfig(patch) {
     mediamtxPath: next.mediamtxPath,
     mediamtxConfigPath: next.mediamtxConfigPath,
     autoStart: next.autoStart,
+    adminDisconnected: next.adminDisconnected,
+    obsManuallyDisconnected: next.obsManuallyDisconnected,
     activeMatch: next.activeMatch || null,
     pairedAt: next.pairedAt || null,
     updatedAt: new Date().toISOString(),
@@ -148,6 +156,8 @@ function clearPairing() {
   return saveConfig({
     bridgeId: '',
     bridgeToken: '',
+    adminDisconnected: false,
+    obsManuallyDisconnected: false,
     activeMatch: null,
     pairedAt: null,
   });

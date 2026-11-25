@@ -219,6 +219,10 @@ export interface ObsControllerProfileData {
   scoreboardSourceName: string;
   selectedSponsorIds: string[];
   mediamtxState?: MediaMTXBridgeState | null;
+  desiredConnected?: boolean;
+  manualDisconnect?: boolean;
+  manualDisconnectedAt?: string | null;
+  manualDisconnectedBy?: string;
   lastSyncedAt?: string | null;
   updatedAt?: string | null;
 }
@@ -565,6 +569,9 @@ export interface ObsBridgeData {
   capabilities?: string[];
   mediamtxControlSupported?: boolean;
   mediamtxState?: MediaMTXBridgeState | null;
+  manualDisconnect?: boolean;
+  manualDisconnectedAt?: string | null;
+  manualDisconnectedBy?: string;
   revokedAt?: string | null;
   revokeReason: string;
   createdAt?: string | null;
@@ -617,5 +624,7 @@ export interface LocalBridgeProbeStatus {
   sceneCount?: number;
   obsDetected?: boolean;
   obsRunning?: boolean;
+  adminDisconnected?: boolean;
+  obsManuallyDisconnected?: boolean;
 }
 

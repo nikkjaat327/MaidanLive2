@@ -97,6 +97,10 @@ export interface IObsControllerProfile extends Document {
   scoreboardSourceName: string;
   selectedSponsorIds: string[];
   mediamtxState?: Record<string, any> | null;
+  desiredConnected?: boolean;
+  manualDisconnect?: boolean;
+  manualDisconnectedAt?: Date | null;
+  manualDisconnectedBy?: string;
   lastSyncedAt?: Date | null;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
@@ -219,6 +223,10 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     },
     selectedSponsorIds: [{ type: String }],
     mediamtxState: { type: Schema.Types.Mixed, default: null },
+    desiredConnected: { type: Boolean, default: false },
+    manualDisconnect: { type: Boolean, default: false },
+    manualDisconnectedAt: { type: Date, default: null },
+    manualDisconnectedBy: { type: String, default: '', maxlength: 140 },
     lastSyncedAt: { type: Date, default: null },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

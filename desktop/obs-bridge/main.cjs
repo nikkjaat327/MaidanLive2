@@ -80,11 +80,15 @@ function updateTrayMenu() {
   const st = engine.getState();
   const statusLabel = !st.paired
     ? 'Status: Not Paired'
-    : st.serverConnected && st.obsConnected
-      ? `LIVE Ready · OBS Connected (${st.obsScenes.length} scenes)`
-      : st.serverConnected
-        ? 'MaidanLive Online · Waiting for OBS'
-        : 'Reconnecting to MaidanLive...';
+    : st.adminDisconnected
+      ? 'Paused (Disconnected by Admin)'
+      : st.serverConnected && st.obsConnected
+        ? `LIVE Ready · OBS Connected (${st.obsScenes.length} scenes)`
+        : st.serverConnected
+          ? st.obsManuallyDisconnected
+            ? 'MaidanLive Online · OBS Paused by Admin'
+            : 'MaidanLive Online · Waiting for OBS'
+          : 'Reconnecting to MaidanLive...';
 
   tray.setToolTip(`MaidanLive OBS Bridge v${st.bridgeVersion || '1.1.0'} — ${statusLabel}`);
   const menu = Menu.buildFromTemplate([
@@ -100,7 +104,7 @@ function updateTrayMenu() {
     {
       label: 'Reconnect MaidanLive',
       enabled: st.paired,
-      click: () => engine.connectServerSocket(),
+      click: () => engine.reconnectServerNow(),
     },
     { type: 'separator' },
     {
@@ -342,8 +346,7 @@ ipcMain.handle('bridge:reconnect-obs', async () => {
 });
 
 ipcMain.handle('bridge:reconnect-server', async () => {
-  engine.connectServerSocket();
-  return engine.getState();
+  return engine.reconnectServerNow();
 });
 
 ipcMain.handle('bridge:refresh-scenes', async () => {

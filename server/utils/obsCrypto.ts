@@ -151,11 +151,17 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
     `height=${height}`,
     `fps=${fps}`,
     `maxbitrate=${maxBitrate}`,
-    `facingmode=${input.facingMode === 'user' ? 'user' : 'environment'}`,
+    `facing=${input.facingMode === 'user' ? 'user' : 'environment'}`,
     input.lowBandwidthMode ? 'codec=vp8&quality=2' : 'quality=1',
     'webcam',
     'autostart',
-    'noaudio=0',
+    // Keep publisher in room for OBS/Control Room ?view=<stream>&room=<room>&solo discovery,
+    // while blocking all incoming remote video/audio feeds so phones only see their own local preview.
+    'view=',
+    'novideo',
+    'noaudio',
+    'mutespeaker=1',
+    'showpreview',
   ]
     .filter(Boolean)
     .join('&');
@@ -177,15 +183,46 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
   };
 }
 
+export function sanitizeVdoPushUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    const isVdo = parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('push');
+    if (!isVdo || !parsed.searchParams.has('push')) return trimmed;
+
+    const legacyFacing = parsed.searchParams.get('facingmode');
+    if (legacyFacing && !parsed.searchParams.has('facing')) {
+      parsed.searchParams.set('facing', legacyFacing === 'user' ? 'user' : 'environment');
+    }
+    parsed.searchParams.delete('facingmode');
+    parsed.searchParams.delete('scene');
+    parsed.searchParams.delete('broadcast');
+    parsed.searchParams.delete('bc');
+
+    // Force blank view= + novideo + noaudio so room peers/director feeds never play on the phone,
+    // while preserving local self-preview for iOS/Android camera publishing.
+    parsed.searchParams.set('view', '');
+    parsed.searchParams.set('novideo', '');
+    parsed.searchParams.set('noaudio', '');
+    parsed.searchParams.set('mutespeaker', '1');
+    parsed.searchParams.set('showpreview', '');
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 export function sanitizeVdoViewUrl(rawUrl: string): string {
   const trimmed = String(rawUrl || '').trim();
   if (!trimmed) return '';
   try {
     const parsed = new URL(trimmed);
-    const isVdo = parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('view');
+    const viewTarget = (parsed.searchParams.get('view') || '').trim();
+    const isVdo = parsed.hostname.toLowerCase().includes('vdo.ninja') || Boolean(viewTarget);
     if (!isVdo) return trimmed;
     parsed.searchParams.delete('scene');
-    if (parsed.searchParams.has('view') && !parsed.searchParams.has('solo')) {
+    if (viewTarget && !parsed.searchParams.has('solo')) {
       parsed.searchParams.set('solo', '1');
     }
     return parsed.toString();

@@ -61,6 +61,8 @@ interface DirectObsSession {
   manualDisconnect: boolean;
   reconnectTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
+  keepaliveTimer: NodeJS.Timeout | null;
+  keepaliveFailures: number;
 }
 
 const directSessions = new Map<string, DirectObsSession>();
@@ -127,15 +129,18 @@ export class BridgeHeartbeatTracker {
   private readonly heartbeatIntervalMs: number;
   private readonly connectionLostAfterMs: number;
   private readonly offlineAfterMs: number;
+  private readonly persistUntilAdminDisconnect: boolean;
 
   constructor(opts?: {
     heartbeatIntervalMs?: number;
     connectionLostAfterMs?: number;
     offlineAfterMs?: number;
+    persistUntilAdminDisconnect?: boolean;
   }) {
     this.heartbeatIntervalMs = opts?.heartbeatIntervalMs ?? OBS_BRIDGE_HEARTBEAT_INTERVAL_MS;
     this.connectionLostAfterMs = opts?.connectionLostAfterMs ?? OBS_BRIDGE_HEARTBEAT_LOST_MS;
     this.offlineAfterMs = opts?.offlineAfterMs ?? OBS_BRIDGE_HEARTBEAT_OFFLINE_MS;
+    this.persistUntilAdminDisconnect = Boolean(opts?.persistUntilAdminDisconnect);
   }
 
   recordConnected(key: string, matchIds: string[], nowMs = Date.now(), bridgeId?: string): BridgeHealthEntry {
@@ -194,7 +199,7 @@ export class BridgeHeartbeatTracker {
       );
 
       let nextState: BridgeConnectionStateValue = entry.state;
-      if (effectiveElapsed >= this.offlineAfterMs) {
+      if (!this.persistUntilAdminDisconnect && effectiveElapsed >= this.offlineAfterMs) {
         nextState = 'OFFLINE';
       } else if (effectiveElapsed >= this.connectionLostAfterMs || entry.missedHeartbeats >= 3) {
         nextState = 'CONNECTION_LOST';
@@ -222,7 +227,9 @@ export class BridgeHeartbeatTracker {
   }
 }
 
-const bridgeHealthTracker = new BridgeHeartbeatTracker();
+const bridgeHealthTracker = new BridgeHeartbeatTracker({
+  persistUntilAdminDisconnect: true,
+});
 let heartbeatMonitorTimer: NodeJS.Timeout | null = null;
 const bridgeDisconnectTimers = new Map<string, NodeJS.Timeout>();
 
@@ -451,6 +458,13 @@ export function initObsControllerBridge(): void {
         if (!verifyScopedToken(auth.bridgeToken, bridge.tokenHash)) {
           return { ok: false, reason: 'Invalid Bridge Token.' };
         }
+        if (bridge.manualDisconnect && !auth.manualResume) {
+          return {
+            ok: false,
+            reason:
+              'Bridge was disconnected by Administrator from Control Room. Click Reconnect in OBS Bridge to resume.',
+          };
+        }
         const matchIds = Array.from(
           new Set(
             [...(bridge.assignedMatchIds || []).map(String), bridge.activeMatchId ? String(bridge.activeMatchId) : '']
@@ -529,6 +543,9 @@ export function initObsControllerBridge(): void {
               missedHeartbeats: 0,
               lastDisconnectReason: '',
               reconnectAttempts: 0,
+              manualDisconnect: false,
+              manualDisconnectedAt: null,
+              manualDisconnectedBy: '',
               lastConnectedAt: new Date(),
               lastHeartbeatAt: new Date(),
               lastError: '',
@@ -566,6 +583,7 @@ export function initObsControllerBridge(): void {
       }
 
       for (const mid of matchIds) {
+        const curProfile = await ObsControllerProfile.findOne({ matchId: mid }).lean();
         await ObsControllerProfile.findOneAndUpdate(
           { matchId: mid },
           {
@@ -581,6 +599,14 @@ export function initObsControllerBridge(): void {
               bridgeVersion: normalizedVer,
               bridgeCapabilities: normalizedCaps,
               lastError: '',
+              ...(curProfile?.manualDisconnect
+                ? {}
+                : {
+                    desiredConnected: true,
+                    manualDisconnect: false,
+                    manualDisconnectedAt: null,
+                    manualDisconnectedBy: '',
+                  }),
             },
           },
           { new: true }
@@ -614,9 +640,19 @@ export function initObsControllerBridge(): void {
         agentSockets.delete(context.matchId);
       }
 
+      // Never override an explicit Admin disconnect or revocation with RECONNECTING noise
+      if (context.bridgeId) {
+        const existingBridge: any = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
+        if (existingBridge && (existingBridge.status === 'REVOKED' || existingBridge.manualDisconnect)) {
+          bridgeHealthTracker.remove(trackingKey);
+          clearBridgeDisconnectTimer(trackingKey);
+          return;
+        }
+      }
+
       const disconnectReason = String(reason || 'transport closed');
       console.warn(
-        `[OBSBridge] Socket dropped (${context.bridgeId || context.matchId || 'agent'}) reason="${disconnectReason}" — entering RECONNECTING grace window`
+        `[OBSBridge] Socket dropped (${context.bridgeId || context.matchId || 'agent'}) reason="${disconnectReason}" — keeping session alive in RECONNECTING mode until Admin disconnects`
       );
       bridgeHealthTracker.recordDisconnected(trackingKey, disconnectReason);
 
@@ -630,7 +666,7 @@ export function initObsControllerBridge(): void {
       // Transition to RECONNECTING immediately without wiping active YouTube/OBS stream flags
       if (context.bridgeId) {
         await ObsBridge.findOneAndUpdate(
-          { bridgeId: context.bridgeId },
+          { bridgeId: context.bridgeId, manualDisconnect: { $ne: true }, status: { $ne: 'REVOKED' } },
           {
             $set: {
               connectionStatus: 'RECONNECTING',
@@ -646,7 +682,7 @@ export function initObsControllerBridge(): void {
                     timestamp: new Date(),
                     level: 'warn',
                     category: 'disconnect_reason',
-                    message: `Bridge transport interrupted (${disconnectReason}); waiting within grace window.`,
+                    message: `Bridge transport interrupted (${disconnectReason}); auto-reconnecting (never auto-disconnects unless Admin disconnects).`,
                     reason: disconnectReason,
                   },
                 ],
@@ -659,7 +695,7 @@ export function initObsControllerBridge(): void {
 
       for (const mid of matchIds) {
         await ObsControllerProfile.findOneAndUpdate(
-          { matchId: mid, connectionMode: 'local_agent' },
+          { matchId: mid, connectionMode: 'local_agent', manualDisconnect: { $ne: true } },
           {
             $set: {
               bridgeConnectionState: 'RECONNECTING',
@@ -677,30 +713,27 @@ export function initObsControllerBridge(): void {
         await emitFullStudioState(mid);
       }
 
-      // Finalize OFFLINE only after grace period elapses without reconnection
+      // Escalate diagnostic state to CONNECTION_LOST after grace period, NEVER auto-disconnecting to OFFLINE/DISCONNECTED
       clearBridgeDisconnectTimer(trackingKey);
-      const finalizeOfflineTimer = setTimeout(async () => {
+      const persistLostStateTimer = setTimeout(async () => {
         bridgeDisconnectTimers.delete(trackingKey);
         if (context.bridgeId && bridgeSockets.get(context.bridgeId)?.connected) return;
         if (context.matchId && agentSockets.get(context.matchId)?.connected) return;
 
-        console.error(
-          `[OBSBridge] Grace window expired (${OBS_BRIDGE_DISCONNECT_GRACE_MS}ms) for ${trackingKey}; marking OFFLINE (${disconnectReason})`
-        );
-
         if (context.bridgeId) {
+          const br: any = await ObsBridge.findOne({ bridgeId: context.bridgeId }).lean();
+          if (!br || br.status === 'REVOKED' || br.manualDisconnect) return;
           await ObsBridge.findOneAndUpdate(
             { bridgeId: context.bridgeId },
             {
               $set: {
-                connectionStatus: 'OFFLINE',
-                bridgeConnectionState: 'OFFLINE',
-                obsStatus: 'DISCONNECTED',
-                obsConnectionState: 'OFFLINE',
-                obsStreamActive: false,
+                connectionStatus: 'CONNECTION_LOST',
+                bridgeConnectionState: 'CONNECTION_LOST',
+                obsStatus: 'CONNECTION_LOST',
+                obsConnectionState: 'CONNECTION_LOST',
                 lastDisconnectedAt: new Date(),
                 lastDisconnectReason: disconnectReason,
-                lastError: `Bridge offline (${disconnectReason}).`,
+                lastError: `Bridge reconnecting (${disconnectReason}) — awaiting automatic recovery.`,
               },
             }
           );
@@ -711,42 +744,27 @@ export function initObsControllerBridge(): void {
           if (stillHasOnlineBridge) continue;
 
           const profile = await ObsControllerProfile.findOne({ matchId: mid });
-          const wasObsConnected = profile?.connectionStatus === 'CONNECTED';
-          if (profile && profile.connectionMode === 'local_agent') {
-            profile.agentOnline = false;
-            profile.bridgeConnectionState = 'OFFLINE';
-            profile.connectionStatus = 'DISCONNECTED';
-            profile.obsStreamActive = false;
+          if (profile && profile.connectionMode === 'local_agent' && !profile.manualDisconnect) {
+            profile.bridgeConnectionState = 'CONNECTION_LOST';
+            if (profile.connectionStatus === 'CONNECTED' || profile.connectionStatus === 'RECONNECTING' || profile.desiredConnected) {
+              profile.connectionStatus = 'CONNECTION_LOST';
+            }
             profile.lastDisconnectReason = disconnectReason;
-            profile.lastError = `Local OBS Bridge offline (${disconnectReason}).`;
+            profile.lastError = `Local OBS Bridge reconnecting (${disconnectReason}) — will stay linked until Admin disconnects.`;
             await profile.save();
-            await reconcileCameraActiveStates(mid, '');
           }
-          await writeBroadcastAudit({
-            matchId: mid,
-            actionType: 'AGENT_DISCONNECTED',
-            userName: profile?.agentLabel || context.label || 'Local OBS Bridge',
-            userRole: 'AGENT',
-            obsStatus: 'FAILED',
-            errorDetails: `Bridge disconnected: ${disconnectReason}`,
-          });
-          emitBroadcastStudioEvent(mid, 'BRIDGE_DISCONNECTED', {
+          emitBroadcastStudioEvent(mid, 'BRIDGE_HEALTH_CHANGED', {
             matchId: mid,
             bridgeId: context.bridgeId || null,
+            bridgeConnectionState: 'CONNECTION_LOST',
             reason: disconnectReason,
-            bridgeConnectionState: 'OFFLINE',
+            manualDisconnect: false,
           });
-          if (wasObsConnected) {
-            emitBroadcastStudioEvent(mid, 'OBS_DISCONNECTED', {
-              matchId: mid,
-              reason: `Bridge disconnected (${disconnectReason})`,
-            });
-          }
           await emitFullStudioState(mid);
         }
       }, OBS_BRIDGE_DISCONNECT_GRACE_MS);
-      finalizeOfflineTimer.unref?.();
-      bridgeDisconnectTimers.set(trackingKey, finalizeOfflineTimer);
+      persistLostStateTimer.unref?.();
+      bridgeDisconnectTimers.set(trackingKey, persistLostStateTimer);
     },
     onAgentHeartbeat: async (context: ObsAgentContext, payload: Record<string, any>) => {
       const trackingKey = getBridgeTrackingKey(context);
@@ -829,7 +847,8 @@ export function initObsControllerBridge(): void {
     onAgentStateUpdate: async (context: ObsAgentContext, payload: Record<string, any>) => {
       const trackingKey = getBridgeTrackingKey(context);
       bridgeHealthTracker.recordHeartbeat(trackingKey, Date.now());
-      const status =
+      const isManualObsDisconnect = payload.manualDisconnect === true;
+      let status =
         payload.connectionStatus === 'CONNECTED'
           ? 'CONNECTED'
           : payload.connectionStatus === 'CONNECTING'
@@ -840,13 +859,17 @@ export function initObsControllerBridge(): void {
                 ? 'CONNECTION_LOST'
                 : payload.connectionStatus === 'ERROR'
                   ? 'ERROR'
-                  : 'DISCONNECTED';
+                  : isManualObsDisconnect
+                    ? 'DISCONNECTED'
+                    : 'RECONNECTING';
       const explicitObsState: BridgeConnectionStateValue =
         payload.obsConnectionState === 'CONNECTED' ||
         payload.obsConnectionState === 'RECONNECTING' ||
         payload.obsConnectionState === 'CONNECTION_LOST' ||
         payload.obsConnectionState === 'OFFLINE'
-          ? payload.obsConnectionState
+          ? payload.obsConnectionState === 'OFFLINE' && !isManualObsDisconnect
+            ? 'CONNECTION_LOST'
+            : payload.obsConnectionState
           : status === 'CONNECTED'
             ? 'CONNECTED'
             : status === 'CONNECTING' || status === 'RECONNECTING'
@@ -938,6 +961,10 @@ export function initObsControllerBridge(): void {
         const prevStatus = prev?.connectionStatus || 'DISCONNECTED';
         const prevScenes = Array.isArray(prev?.obsScenes) ? prev.obsScenes : [];
         const prevActiveScene = prev?.activeObsScene || '';
+        const effectiveProfileStatus =
+          prev?.manualDisconnect && !isManualObsDisconnect && status !== 'CONNECTED'
+            ? 'DISCONNECTED'
+            : status;
 
         const updateFields: Record<string, any> = {
           connectionMode: 'local_agent',
@@ -945,9 +972,22 @@ export function initObsControllerBridge(): void {
           bridgeConnectionState: 'CONNECTED',
           missedHeartbeats: 0,
           agentLastSeenAt: new Date(),
-          connectionStatus: status,
+          connectionStatus: effectiveProfileStatus,
           lastError: typeof payload.lastError === 'string' ? payload.lastError : '',
           lastSyncedAt: new Date(),
+          ...(effectiveProfileStatus === 'CONNECTED'
+            ? {
+                desiredConnected: true,
+                manualDisconnect: false,
+                manualDisconnectedAt: null,
+                manualDisconnectedBy: '',
+              }
+            : isManualObsDisconnect
+              ? {
+                  desiredConnected: false,
+                  manualDisconnect: true,
+                }
+              : {}),
         };
         if (context.label) updateFields.agentLabel = context.label;
         if (reportedBridgeVersion !== undefined) {
@@ -1156,27 +1196,23 @@ export function initObsControllerBridge(): void {
                 : 'ONLINE';
         if (entry.bridgeId) {
           await ObsBridge.findOneAndUpdate(
-            { bridgeId: entry.bridgeId },
+            { bridgeId: entry.bridgeId, manualDisconnect: { $ne: true }, status: { $ne: 'REVOKED' } },
             {
               $set: {
                 connectionStatus: mappedStatus,
                 bridgeConnectionState: entry.state,
                 missedHeartbeats: entry.missedHeartbeats,
-                ...(entry.state === 'OFFLINE'
-                  ? { obsStatus: 'DISCONNECTED', obsConnectionState: 'OFFLINE' }
-                  : {}),
               },
             }
           ).catch(() => {});
         }
         for (const mid of entry.matchIds) {
           await ObsControllerProfile.findOneAndUpdate(
-            { matchId: mid, connectionMode: 'local_agent' },
+            { matchId: mid, connectionMode: 'local_agent', manualDisconnect: { $ne: true } },
             {
               $set: {
                 bridgeConnectionState: entry.state,
                 missedHeartbeats: entry.missedHeartbeats,
-                ...(entry.state === 'OFFLINE' ? { agentOnline: false, connectionStatus: 'DISCONNECTED' } : {}),
               },
             }
           ).catch(() => {});
@@ -1185,6 +1221,7 @@ export function initObsControllerBridge(): void {
             bridgeId: entry.bridgeId || null,
             bridgeConnectionState: entry.state,
             missedHeartbeats: entry.missedHeartbeats,
+            manualDisconnect: false,
             key,
           });
         }
@@ -1194,6 +1231,23 @@ export function initObsControllerBridge(): void {
     }
   }, OBS_BRIDGE_HEARTBEAT_INTERVAL_MS);
   heartbeatMonitorTimer.unref?.();
+
+  // Auto-resume any Direct WS OBS profiles that were connected before server restart and never manually disconnected
+  ObsControllerProfile.find({
+    connectionMode: 'direct_ws',
+    desiredConnected: true,
+    manualDisconnect: { $ne: true },
+  })
+    .lean()
+    .then((profiles) => {
+      for (const p of profiles || []) {
+        const mid = String((p as any).matchId || '');
+        if (mid) {
+          connectDirectObs(mid, null, true).catch(() => {});
+        }
+      }
+    })
+    .catch(() => {});
 }
 
 export async function writeBroadcastAudit(params: {
@@ -1479,14 +1533,29 @@ export function formatSafeProfile(profile: any) {
   const profileCaps = normalizeBridgeCapabilities(profile.bridgeCapabilities);
   const effectiveCapabilities =
     profileCaps.length > 0 ? profileCaps : normalizeBridgeCapabilities(liveCtx?.capabilities);
+  const isManualDisconnect = Boolean(profile.manualDisconnect);
   let effectiveStatus = profile.connectionStatus || 'DISCONNECTED';
-  if (profile.connectionMode === 'local_agent' && !realAgentOnline) {
+  if (isManualDisconnect) {
     effectiveStatus = 'DISCONNECTED';
+  } else if (profile.connectionMode === 'local_agent') {
+    if (!realAgentOnline) {
+      effectiveStatus =
+        profile.desiredConnected ||
+        profile.connectionStatus === 'CONNECTED' ||
+        profile.connectionStatus === 'RECONNECTING' ||
+        profile.connectionStatus === 'CONNECTION_LOST' ||
+        profile.connectionStatus === 'CONNECTING'
+          ? 'CONNECTION_LOST'
+          : 'DISCONNECTED';
+    } else if (effectiveStatus === 'DISCONNECTED' && profile.desiredConnected) {
+      effectiveStatus = 'RECONNECTING';
+    }
   } else if (profile.connectionMode === 'direct_ws') {
     if (direct?.connected) effectiveStatus = 'CONNECTED';
     else if (direct?.connecting) effectiveStatus = 'CONNECTING';
     else if (profile.connectionStatus === 'RECONNECTING') effectiveStatus = 'RECONNECTING';
     else if (profile.connectionStatus === 'CONNECTION_LOST') effectiveStatus = 'CONNECTION_LOST';
+    else if (profile.desiredConnected) effectiveStatus = 'CONNECTION_LOST';
     else if (profile.connectionStatus === 'ERROR') effectiveStatus = 'ERROR';
     else effectiveStatus = 'DISCONNECTED';
   }
@@ -1508,12 +1577,22 @@ export function formatSafeProfile(profile: any) {
     bridgeVersion: effectiveBridgeVersion,
     capabilities: effectiveCapabilities,
     mediamtxControlSupported: hasMediaMTXControlCapability(effectiveCapabilities),
-    bridgeConnectionState:
-      profile.bridgeConnectionState ||
-      (realAgentOnline ? 'CONNECTED' : 'OFFLINE'),
+    bridgeConnectionState: isManualDisconnect
+      ? 'OFFLINE'
+      : profile.bridgeConnectionState && profile.bridgeConnectionState !== 'OFFLINE'
+        ? profile.bridgeConnectionState
+        : realAgentOnline
+          ? 'CONNECTED'
+          : profile.desiredConnected
+            ? 'CONNECTION_LOST'
+            : 'OFFLINE',
     missedHeartbeats: Number(profile.missedHeartbeats || 0),
     lastDisconnectReason: profile.lastDisconnectReason || '',
     reconnectAttempts: Number(profile.reconnectAttempts || 0),
+    desiredConnected: Boolean(profile.desiredConnected),
+    manualDisconnect: isManualDisconnect,
+    manualDisconnectedAt: profile.manualDisconnectedAt || null,
+    manualDisconnectedBy: profile.manualDisconnectedBy || '',
     connectionStatus: effectiveStatus,
     lastError: profile.lastError || '',
     obsVersion: profile.obsVersion || '',
@@ -1814,12 +1893,51 @@ function clearReconnectTimer(session: DirectObsSession) {
   }
 }
 
+function clearKeepaliveTimer(session: DirectObsSession) {
+  if (session.keepaliveTimer) {
+    clearInterval(session.keepaliveTimer);
+    session.keepaliveTimer = null;
+  }
+}
+
+function startDirectKeepalive(matchId: string, session: DirectObsSession) {
+  clearKeepaliveTimer(session);
+  session.keepaliveFailures = 0;
+  session.keepaliveTimer = setInterval(async () => {
+    const cur = directSessions.get(matchId);
+    if (!cur || cur !== session || !cur.connected || cur.manualDisconnect) return;
+    try {
+      await Promise.race([
+        cur.obs.call('GetVersion'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('OBS WS keepalive timeout')), 5000)
+        ),
+      ]);
+      cur.keepaliveFailures = 0;
+    } catch {
+      cur.keepaliveFailures += 1;
+      if (cur.keepaliveFailures >= 3 && !cur.manualDisconnect) {
+        console.warn(`[DirectOBS] Keepalive missed ${cur.keepaliveFailures} pings on match ${matchId}; recycling WS cleanly.`);
+        clearKeepaliveTimer(cur);
+        cur.connected = false;
+        try {
+          await cur.obs.disconnect();
+        } catch {
+          // ignore
+        }
+        scheduleDirectReconnect(matchId).catch(() => {});
+      }
+    }
+  }, 20_000);
+  session.keepaliveTimer.unref?.();
+}
+
 async function scheduleDirectReconnect(matchId: string) {
   const session = directSessions.get(matchId);
   if (!session || session.manualDisconnect) return;
 
   const profile = await ObsControllerProfile.findOne({ matchId }).lean();
-  if (!profile || profile.connectionMode !== 'direct_ws') return;
+  if (!profile || profile.connectionMode !== 'direct_ws' || profile.manualDisconnect) return;
 
   clearReconnectTimer(session);
   const delayMs = calculateExponentialBackoffMs(session.reconnectAttempts, {
@@ -1848,6 +1966,7 @@ export async function connectDirectObs(
   const existing = directSessions.get(matchId);
   if (existing) {
     clearReconnectTimer(existing);
+    clearKeepaliveTimer(existing);
     existing.manualDisconnect = true;
     try {
       await existing.obs.disconnect();
@@ -1866,11 +1985,17 @@ export async function connectDirectObs(
     manualDisconnect: false,
     reconnectTimer: null,
     reconnectAttempts: existing?.reconnectAttempts || 0,
+    keepaliveTimer: null,
+    keepaliveFailures: 0,
   };
   directSessions.set(matchId, session);
 
   profile.connectionMode = 'direct_ws';
   profile.connectionStatus = 'CONNECTING';
+  profile.desiredConnected = true;
+  profile.manualDisconnect = false;
+  profile.manualDisconnectedAt = null;
+  profile.manualDisconnectedBy = '';
   profile.lastError = '';
   await profile.save();
   await emitFullStudioState(matchId);
@@ -1894,6 +2019,7 @@ export async function connectDirectObs(
   obs.on('ConnectionClosed', async (err: any) => {
     const cur = directSessions.get(matchId);
     if (!cur || cur.obs !== obs) return;
+    clearKeepaliveTimer(cur);
     cur.connected = false;
     cur.connecting = false;
 
@@ -1906,7 +2032,14 @@ export async function connectDirectObs(
           connectionStatus: cur.manualDisconnect ? 'DISCONNECTED' : 'RECONNECTING',
           lastError: cur.manualDisconnect ? '' : reasonMsg,
           lastDisconnectReason: reasonMsg,
-          ...(cur.manualDisconnect ? { obsStreamActive: false } : {}),
+          ...(cur.manualDisconnect
+            ? {
+                obsStreamActive: false,
+                desiredConnected: false,
+                manualDisconnect: true,
+                manualDisconnectedAt: new Date(),
+              }
+            : {}),
         },
       }
     );
@@ -1924,6 +2057,7 @@ export async function connectDirectObs(
       matchId,
       connectionStatus: cur.manualDisconnect ? 'DISCONNECTED' : 'RECONNECTING',
       reason: reasonMsg,
+      manualDisconnect: cur.manualDisconnect,
     });
     await emitFullStudioState(matchId);
 
@@ -2012,6 +2146,7 @@ export async function connectDirectObs(
     session.connected = true;
     session.connecting = false;
     session.reconnectAttempts = 0;
+    startDirectKeepalive(matchId, session);
 
     const snapshot = await pullDirectObsSnapshot(matchId, obs);
     await writeBroadcastAudit({
@@ -2036,11 +2171,12 @@ export async function connectDirectObs(
     await emitFullStudioState(matchId);
     return { ok: true, profile: formatSafeProfile(snapshot.profile) };
   } catch (err: any) {
+    clearKeepaliveTimer(session);
     session.connected = false;
     session.connecting = false;
 
     const errMsg = err?.message || `Failed to connect to OBS WebSocket at ${wsUrl}`;
-    const keepRetrying = isAutoReconnect && !session.manualDisconnect;
+    const keepRetrying = !session.manualDisconnect && (isAutoReconnect || Boolean(profile.desiredConnected));
     if (!keepRetrying) {
       directSessions.delete(matchId);
     }
@@ -2102,6 +2238,10 @@ async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
     {
       $set: {
         connectionStatus: 'CONNECTED',
+        desiredConnected: true,
+        manualDisconnect: false,
+        manualDisconnectedAt: null,
+        manualDisconnectedBy: '',
         lastError: '',
         obsVersion: String(versionRes?.obsVersion || ''),
         obsWebSocketVersion: String(versionRes?.obsWebSocketVersion || ''),
@@ -2141,9 +2281,11 @@ async function pullDirectObsSnapshot(matchId: string, obs: OBSWebSocket) {
 }
 
 export async function disconnectObs(matchId: string, actor?: IUser | null) {
+  const actorName = actor?.name || 'Admin';
   const session = directSessions.get(matchId);
   if (session) {
     clearReconnectTimer(session);
+    clearKeepaliveTimer(session);
     session.manualDisconnect = true;
     try {
       await session.obs.disconnect();
@@ -2159,11 +2301,33 @@ export async function disconnectObs(matchId: string, actor?: IUser | null) {
       $set: {
         connectionStatus: 'DISCONNECTED',
         obsStreamActive: false,
-        lastError: '',
+        lastError: `Disconnected by ${actorName}`,
+        desiredConnected: false,
+        manualDisconnect: true,
+        manualDisconnectedAt: new Date(),
+        manualDisconnectedBy: actorName,
       },
     },
     { new: true }
   );
+
+  // If using Windows Local OBS Bridge, instruct the bridge to pause OBS auto-reconnect until Admin reconnects
+  if (profile?.connectionMode === 'local_agent') {
+    const resolved = await resolveAgentSocketForMatch(matchId);
+    if (resolved?.socket?.connected) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 2500);
+        resolved.socket.emit(
+          'server:obs_command',
+          { command: 'disconnect_obs', payload: { reason: `Disconnected by ${actorName}` } },
+          () => {
+            clearTimeout(t);
+            resolve();
+          }
+        );
+      });
+    }
+  }
 
   await reconcileCameraActiveStates(matchId, '');
   await writeBroadcastAudit({
@@ -2174,10 +2338,59 @@ export async function disconnectObs(matchId: string, actor?: IUser | null) {
   });
   emitBroadcastStudioEvent(matchId, 'OBS_DISCONNECTED', {
     matchId,
-    reason: 'Disconnected by operator',
+    connectionStatus: 'DISCONNECTED',
+    manualDisconnect: true,
+    reason: `Disconnected by ${actorName}`,
   });
   await emitFullStudioState(matchId);
   return formatSafeProfile(profile);
+}
+
+export async function connectLocalAgentObs(matchId: string, actor?: IUser | null) {
+  await ObsControllerProfile.findOneAndUpdate(
+    { matchId },
+    {
+      $set: {
+        desiredConnected: true,
+        manualDisconnect: false,
+        manualDisconnectedAt: null,
+        manualDisconnectedBy: '',
+        lastError: '',
+      },
+    }
+  );
+  const resolved = await resolveAgentSocketForMatch(matchId);
+  if (!resolved || !resolved.socket?.connected) {
+    const err: any = new Error(
+      'Windows Local OBS Bridge is reconnecting or offline. Keep the Bridge app running and retry once connected.'
+    );
+    err.statusCode = 503;
+    throw err;
+  }
+
+  await new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Timed out asking Windows OBS Bridge to reconnect OBS Studio.'));
+    }, 10_000);
+    resolved.socket.emit('server:obs_command', { command: 'reconnect_obs', payload: {} }, (ack: any) => {
+      clearTimeout(timer);
+      if (!ack || !ack.ok) {
+        reject(new Error(ack?.error || 'Failed to reconnect OBS Studio from Bridge.'));
+        return;
+      }
+      resolve(ack.data || {});
+    });
+  });
+
+  const snapshot = await refreshObsState(matchId).catch(() => null);
+  const updated = await ObsControllerProfile.findOne({ matchId }).lean();
+  await writeBroadcastAudit({
+    matchId,
+    actionType: 'OBS_CONNECT',
+    actor: actor || null,
+    obsStatus: 'SUCCESS',
+  });
+  return { ok: true, profile: formatSafeProfile(updated), snapshot };
 }
 
 async function callObsRpc<T = any>(
@@ -2823,6 +3036,10 @@ export async function refreshObsState(matchId: string) {
 
   const updateFields: Record<string, any> = {
     connectionStatus: 'CONNECTED',
+    desiredConnected: true,
+    manualDisconnect: false,
+    manualDisconnectedAt: null,
+    manualDisconnectedBy: '',
     lastError: '',
     lastSyncedAt: new Date(),
   };
@@ -4242,21 +4459,34 @@ export function formatSafeBridge(bridge: any) {
   const sock = bridgeSockets.get(String(bridge.bridgeId || ''));
   const socketOnline = Boolean(sock && sock.connected);
   const tracker = bridgeHealthTracker.getEntry(`bridge:${bridge.bridgeId || ''}`);
-  const explicitBridgeState: BridgeConnectionStateValue =
-    bridge.status === 'REVOKED'
-      ? 'OFFLINE'
-      : socketOnline
-        ? tracker?.state || bridge.bridgeConnectionState || 'CONNECTED'
-        : tracker?.state || bridge.bridgeConnectionState || 'OFFLINE';
+  const isRevoked = bridge.status === 'REVOKED';
+  const isManualDisconnect = Boolean(bridge.manualDisconnect);
+
+  let explicitBridgeState: BridgeConnectionStateValue;
+  if (isRevoked || isManualDisconnect) {
+    explicitBridgeState = 'OFFLINE';
+  } else if (socketOnline) {
+    const candidate = tracker?.state || bridge.bridgeConnectionState || 'CONNECTED';
+    explicitBridgeState = candidate === 'OFFLINE' ? 'CONNECTED' : candidate;
+  } else if (tracker?.state) {
+    explicitBridgeState = tracker.state === 'OFFLINE' ? 'CONNECTION_LOST' : tracker.state;
+  } else if (bridge.lastConnectedAt) {
+    explicitBridgeState =
+      bridge.bridgeConnectionState === 'RECONNECTING' ? 'RECONNECTING' : 'CONNECTION_LOST';
+  } else {
+    explicitBridgeState = 'OFFLINE';
+  }
 
   const mappedConnStatus =
-    bridge.status === 'REVOKED' || explicitBridgeState === 'OFFLINE'
+    isRevoked || isManualDisconnect || explicitBridgeState === 'OFFLINE'
       ? 'OFFLINE'
       : explicitBridgeState === 'CONNECTION_LOST'
         ? 'CONNECTION_LOST'
         : explicitBridgeState === 'RECONNECTING'
           ? 'RECONNECTING'
           : 'ONLINE';
+
+  const forceDisconnected = isRevoked || isManualDisconnect || mappedConnStatus === 'OFFLINE';
 
   return {
     id: String(bridge._id || bridge.id || ''),
@@ -4275,26 +4505,27 @@ export function formatSafeBridge(bridge: any) {
     status: bridge.status || 'ACTIVE',
     connectionStatus: mappedConnStatus,
     bridgeConnectionState: explicitBridgeState,
-    obsStatus:
-      mappedConnStatus !== 'OFFLINE'
-        ? bridge.obsStatus || 'DISCONNECTED'
-        : 'DISCONNECTED',
-    obsConnectionState:
-      mappedConnStatus === 'OFFLINE'
-        ? 'OFFLINE'
-        : bridge.obsConnectionState ||
-          (bridge.obsStatus === 'CONNECTED'
-            ? 'CONNECTED'
-            : bridge.obsStatus === 'RECONNECTING'
-              ? 'RECONNECTING'
-              : bridge.obsStatus === 'CONNECTION_LOST'
-                ? 'CONNECTION_LOST'
-                : 'OFFLINE'),
+    manualDisconnect: isManualDisconnect,
+    manualDisconnectedAt: bridge.manualDisconnectedAt || null,
+    manualDisconnectedBy: bridge.manualDisconnectedBy || '',
+    obsStatus: !forceDisconnected
+      ? bridge.obsStatus || 'DISCONNECTED'
+      : 'DISCONNECTED',
+    obsConnectionState: forceDisconnected
+      ? 'OFFLINE'
+      : bridge.obsConnectionState ||
+        (bridge.obsStatus === 'CONNECTED'
+          ? 'CONNECTED'
+          : bridge.obsStatus === 'RECONNECTING'
+            ? 'RECONNECTING'
+            : bridge.obsStatus === 'CONNECTION_LOST'
+              ? 'CONNECTION_LOST'
+              : 'OFFLINE'),
     obsVersion: bridge.obsVersion || '',
     obsWebSocketVersion: bridge.obsWebSocketVersion || '',
-    activeObsScene: mappedConnStatus !== 'OFFLINE' ? bridge.activeObsScene || '' : '',
+    activeObsScene: !forceDisconnected ? bridge.activeObsScene || '' : '',
     obsScenes: Array.isArray(bridge.obsScenes) ? bridge.obsScenes : [],
-    obsStreamActive: Boolean(mappedConnStatus !== 'OFFLINE' && bridge.obsStreamActive),
+    obsStreamActive: Boolean(!forceDisconnected && bridge.obsStreamActive),
     missedHeartbeats: Number(tracker?.missedHeartbeats ?? bridge.missedHeartbeats ?? 0),
     lastDisconnectReason: tracker?.lastDisconnectReason || bridge.lastDisconnectReason || '',
     reconnectAttempts: Number(bridge.reconnectAttempts || 0),
@@ -4704,6 +4935,9 @@ export async function reactivateObsBridge(bridgeId: string, actor: IUser) {
   bridge.revokedAt = null;
   bridge.revokedBy = null;
   bridge.revokeReason = '';
+  bridge.manualDisconnect = false;
+  bridge.manualDisconnectedAt = null;
+  bridge.manualDisconnectedBy = '';
   bridge.lastError = '';
   await bridge.save();
 
@@ -4915,6 +5149,9 @@ export async function exchangeBridgePairingCode(params: {
     bridge.platform = cleanPlatform;
     bridge.bridgeVersion = cleanBridgeVersion;
     bridge.bridgeCapabilities = cleanCapabilities;
+    bridge.manualDisconnect = false;
+    bridge.manualDisconnectedAt = null;
+    bridge.manualDisconnectedBy = '';
     if (pairing.matchId) {
       const midStr = String(pairing.matchId);
       const existingIds = (bridge.assignedMatchIds || []).map(String);
@@ -5113,6 +5350,27 @@ export async function requestBridgeObsReconnect(bridgeId: string, actor: IUser) 
     throw err;
   }
 
+  bridge.manualDisconnect = false;
+  bridge.manualDisconnectedAt = null;
+  bridge.manualDisconnectedBy = '';
+  await bridge.save();
+  for (const rawId of bridge.assignedMatchIds || []) {
+    const mid = String(rawId);
+    if (mongoose.Types.ObjectId.isValid(mid)) {
+      await ObsControllerProfile.findOneAndUpdate(
+        { matchId: mid },
+        {
+          $set: {
+            desiredConnected: true,
+            manualDisconnect: false,
+            manualDisconnectedAt: null,
+            manualDisconnectedBy: '',
+          },
+        }
+      );
+    }
+  }
+
   const res = await new Promise<any>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Bridge reconnect command timed out.'));
@@ -5152,12 +5410,31 @@ export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: 
     throw err;
   }
 
+  const trackingKey = `bridge:${bridge.bridgeId}`;
+  clearBridgeDisconnectTimer(trackingKey);
+  bridgeHealthTracker.remove(trackingKey);
+
+  const actorName = actor.name || 'Admin';
+  bridge.manualDisconnect = true;
+  bridge.manualDisconnectedAt = new Date();
+  bridge.manualDisconnectedBy = actorName;
+  bridge.connectionStatus = 'OFFLINE';
+  bridge.bridgeConnectionState = 'OFFLINE';
+  bridge.obsStatus = 'DISCONNECTED';
+  bridge.obsConnectionState = 'OFFLINE';
+  bridge.obsStreamActive = false;
+  bridge.lastDisconnectedAt = new Date();
+  bridge.lastDisconnectReason = `Disconnected by ${actorName}`;
+  bridge.lastError = `Disconnected by ${actorName}`;
+  await bridge.save();
+
   const sock = bridgeSockets.get(bridge.bridgeId);
   if (sock) {
     try {
       sock.emit('server:disconnect_bridge', {
         bridgeId: bridge.bridgeId,
-        reason: `Disconnected by ${actor.name} from Control Room`,
+        adminDisconnected: true,
+        reason: `Disconnected by ${actorName} from Control Room`,
       });
       sock.disconnect(true);
     } catch {
@@ -5165,13 +5442,6 @@ export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: 
     }
     bridgeSockets.delete(bridge.bridgeId);
   }
-
-  bridge.connectionStatus = 'OFFLINE';
-  bridge.obsStatus = 'DISCONNECTED';
-  bridge.obsStreamActive = false;
-  bridge.lastDisconnectedAt = new Date();
-  bridge.lastError = `Disconnected by ${actor.name}`;
-  await bridge.save();
 
   for (const rawId of bridge.assignedMatchIds || []) {
     const mid = String(rawId);
@@ -5181,9 +5451,15 @@ export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: 
         {
           $set: {
             agentOnline: false,
+            bridgeConnectionState: 'OFFLINE',
             connectionStatus: 'DISCONNECTED',
             obsStreamActive: false,
-            lastError: `Disconnected by ${actor.name}`,
+            desiredConnected: false,
+            manualDisconnect: true,
+            manualDisconnectedAt: new Date(),
+            manualDisconnectedBy: actorName,
+            lastDisconnectReason: `Disconnected by ${actorName}`,
+            lastError: `Disconnected by ${actorName}`,
           },
         }
       );
@@ -5191,6 +5467,8 @@ export async function disconnectActiveBridgeByOperator(bridgeId: string, actor: 
         matchId: mid,
         bridgeId: bridge.bridgeId,
         reason: 'OPERATOR_DISCONNECT',
+        manualDisconnect: true,
+        bridgeConnectionState: 'OFFLINE',
       });
       await emitFullStudioState(mid);
     }
@@ -5307,10 +5585,6 @@ export async function controlBridgeMediaMTX(
   };
   const resolved = await resolveAgentSocketForMatch(matchId);
   if (!resolved) {
-    await ObsControllerProfile.updateOne(
-      { matchId, agentOnline: true },
-      { $set: { agentOnline: false } }
-    ).catch(() => {});
     const err: any = new Error(
       'Windows Local OBS Bridge is not connected to this match right now. Open MaidanLive OBS Bridge on your broadcasting PC, or click "Download mediamtx.yml" below to run MediaMTX manually.'
     );

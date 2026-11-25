@@ -2762,7 +2762,15 @@ export function AdminObsBroadcastStudioPage() {
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                 <span>
-                  <strong>OBS Studio disconnected:</strong> {profile.lastError}
+                  <strong>
+                    {profile.manualDisconnect
+                      ? 'OBS Studio disconnected by Admin:'
+                      : profile.connectionStatus === 'RECONNECTING' ||
+                          profile.connectionStatus === 'CONNECTION_LOST'
+                        ? 'OBS Studio auto-reconnecting (stays linked until Admin disconnects):'
+                        : 'OBS Studio disconnected:'}
+                  </strong>{' '}
+                  {profile.lastError}
                 </span>
               </div>
               <button
@@ -3354,7 +3362,11 @@ export function AdminObsBroadcastStudioPage() {
                     <p className="text-xs text-slate-500">
                       {obsConnected
                         ? 'No scenes reported by OBS Studio yet. Add scenes in OBS and click Refresh Scenes.'
-                        : 'OBS DISCONNECTED — Start OBS Studio on Windows and connect your Local OBS Bridge to load scenes dynamically.'}
+                        : !profile.manualDisconnect &&
+                            (profile.connectionStatus === 'RECONNECTING' ||
+                              profile.connectionStatus === 'CONNECTION_LOST')
+                          ? 'OBS AUTO-RECONNECTING — Bridge and OBS stay linked until an Admin explicitly disconnects.'
+                          : 'OBS DISCONNECTED — Start OBS Studio on Windows and connect your Local OBS Bridge to load scenes dynamically.'}
                     </p>
                   ) : editingSceneLabels ? (
                     <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
@@ -4701,6 +4713,9 @@ export function AdminObsBroadcastStudioPage() {
                     <p className="text-[11px] font-semibold text-slate-500">Bridge Connection</p>
                     <div className="mt-1 flex items-center gap-2">
                       {(() => {
+                        const isAdminPausedBridge = Boolean(
+                          activeMatchBridge?.manualDisconnect || profile.manualDisconnect
+                        );
                         const explicitState =
                           activeMatchBridge?.bridgeConnectionState ||
                           profile.bridgeConnectionState ||
@@ -4723,34 +4738,36 @@ export function AdminObsBroadcastStudioPage() {
                         }
                         if (explicitState === 'CONNECTION_LOST') {
                           return (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-red-700">
-                              <WifiOff className="w-4 h-4" />
-                              CONNECTION LOST
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700">
+                              <Wifi className="w-4 h-4 animate-pulse" />
+                              RECONNECTING (LINK HELD)
                             </span>
                           );
                         }
                         return (
                           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
                             <WifiOff className="w-4 h-4 text-slate-400" />
-                            OFFLINE
+                            {isAdminPausedBridge ? 'DISCONNECTED (ADMIN)' : 'OFFLINE'}
                           </span>
                         );
                       })()}
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      {activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason
-                        ? `Last event: ${activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason}`
-                        : bridgeIsOnline
-                          ? `${
-                              profile.bridgeVersion || activeMatchBridge?.bridgeVersion
-                                ? `Bridge v${profile.bridgeVersion || activeMatchBridge?.bridgeVersion} · `
-                                : 'Legacy Bridge · '
-                            }${
-                              profile.mediamtxControlSupported || activeMatchBridge?.mediamtxControlSupported
-                                ? 'MediaMTX Remote Ready'
-                                : 'MediaMTX Remote Upgrade Needed'
-                            }`
-                          : 'Outbound secure tunnel (zero router ports)'}
+                      {activeMatchBridge?.manualDisconnect || profile.manualDisconnect
+                        ? 'Paused by Administrator — click Reconnect in OBS Bridge app to resume'
+                        : activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason
+                          ? `Auto-reconnecting (${activeMatchBridge?.lastDisconnectReason || profile.lastDisconnectReason})`
+                          : bridgeIsOnline
+                            ? `${
+                                profile.bridgeVersion || activeMatchBridge?.bridgeVersion
+                                  ? `Bridge v${profile.bridgeVersion || activeMatchBridge?.bridgeVersion} · `
+                                  : 'Legacy Bridge · '
+                              }${
+                                profile.mediamtxControlSupported || activeMatchBridge?.mediamtxControlSupported
+                                  ? 'MediaMTX Remote Ready'
+                                  : 'MediaMTX Remote Upgrade Needed'
+                              }`
+                            : 'Outbound secure tunnel (stays connected until Admin disconnects)'}
                     </p>
                   </div>
 
@@ -4768,7 +4785,9 @@ export function AdminObsBroadcastStudioPage() {
                     <p className="text-[11px] text-slate-500 mt-1">
                       {obsConnected
                         ? `${profile.obsVersion || 'OBS'} · ${profile.obsScenes.length} scenes`
-                        : profile.lastError || 'Waiting for OBS port 4455'}
+                        : profile.manualDisconnect
+                          ? 'Disconnected by Admin — click Connect OBS Studio to resume'
+                          : profile.lastError || 'Auto-reconnecting to OBS port 4455 (stays linked until Admin disconnects)'}
                     </p>
                   </div>
 
@@ -4855,17 +4874,24 @@ export function AdminObsBroadcastStudioPage() {
                     </button>
                   )}
 
-                  {activeMatchBridge && activeMatchBridge.connectionStatus === 'ONLINE' && (
+                  {activeMatchBridge &&
+                    activeMatchBridge.status === 'ACTIVE' &&
+                    !activeMatchBridge.manualDisconnect &&
+                    (activeMatchBridge.connectionStatus === 'ONLINE' ||
+                      activeMatchBridge.bridgeConnectionState === 'RECONNECTING' ||
+                      activeMatchBridge.bridgeConnectionState === 'CONNECTION_LOST') && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => handleReconnectBridgeObs(activeMatchBridge)}
-                        disabled={busyBridgeId === activeMatchBridge.bridgeId}
-                        className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Reconnect OBS</span>
-                      </button>
+                      {activeMatchBridge.connectionStatus === 'ONLINE' && (
+                        <button
+                          type="button"
+                          onClick={() => handleReconnectBridgeObs(activeMatchBridge)}
+                          disabled={busyBridgeId === activeMatchBridge.bridgeId}
+                          className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Reconnect OBS</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleDisconnectBridge(activeMatchBridge)}
@@ -5129,7 +5155,16 @@ export function AdminObsBroadcastStudioPage() {
                     {bridges.map((br) => {
                       const isAssigned = matchId ? br.assignedMatchIds.includes(matchId) : false;
                       const isRevoked = br.status === 'REVOKED';
-                      const isOnline = br.connectionStatus === 'ONLINE' && !isRevoked;
+                      const isManualBridgeDisconnect = Boolean(br.manualDisconnect) && !isRevoked;
+                      const isOnline = br.connectionStatus === 'ONLINE' && !isRevoked && !isManualBridgeDisconnect;
+                      const isAutoRecovering =
+                        !isRevoked &&
+                        !isManualBridgeDisconnect &&
+                        !isOnline &&
+                        (br.bridgeConnectionState === 'RECONNECTING' ||
+                          br.bridgeConnectionState === 'CONNECTION_LOST' ||
+                          br.connectionStatus === 'RECONNECTING' ||
+                          br.connectionStatus === 'CONNECTION_LOST');
                       const busy = busyBridgeId === br.bridgeId;
                       return (
                         <div
@@ -5162,24 +5197,26 @@ export function AdminObsBroadcastStudioPage() {
                                 className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
                                   isRevoked
                                     ? 'bg-red-100 text-red-800 border-red-200'
-                                    : br.bridgeConnectionState === 'CONNECTED' || isOnline
-                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                      : br.bridgeConnectionState === 'RECONNECTING' || br.connectionStatus === 'RECONNECTING'
-                                        ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                        : br.bridgeConnectionState === 'CONNECTION_LOST' || br.connectionStatus === 'CONNECTION_LOST'
-                                          ? 'bg-red-100 text-red-800 border-red-200'
+                                    : isManualBridgeDisconnect
+                                      ? 'bg-slate-200 text-slate-700 border-slate-300'
+                                      : br.bridgeConnectionState === 'CONNECTED' || isOnline
+                                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                        : isAutoRecovering
+                                          ? 'bg-amber-100 text-amber-800 border-amber-200'
                                           : 'bg-slate-200 text-slate-700 border-slate-300'
                                 }`}
                               >
                                 {isRevoked
                                   ? 'REVOKED'
-                                  : br.bridgeConnectionState === 'RECONNECTING' || br.connectionStatus === 'RECONNECTING'
-                                    ? 'RECONNECTING'
-                                    : br.bridgeConnectionState === 'CONNECTION_LOST' || br.connectionStatus === 'CONNECTION_LOST'
-                                      ? 'CONNECTION LOST'
-                                      : isOnline
-                                        ? 'CONNECTED'
-                                        : 'OFFLINE'}
+                                  : isManualBridgeDisconnect
+                                    ? 'DISCONNECTED (ADMIN)'
+                                    : br.bridgeConnectionState === 'RECONNECTING' || br.connectionStatus === 'RECONNECTING'
+                                      ? 'RECONNECTING'
+                                      : br.bridgeConnectionState === 'CONNECTION_LOST' || br.connectionStatus === 'CONNECTION_LOST'
+                                        ? 'RECONNECTING'
+                                        : isOnline
+                                          ? 'CONNECTED'
+                                          : 'OFFLINE'}
                               </span>
                               {!isRevoked && (
                                 <span
@@ -5251,26 +5288,26 @@ export function AdminObsBroadcastStudioPage() {
                             {!isRevoked ? (
                               <>
                                 {isOnline && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      disabled={busy}
-                                      onClick={() => handleReconnectBridgeObs(br)}
-                                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
-                                    >
-                                      <RefreshCw className="w-3 h-3" />
-                                      <span>Reconnect OBS</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={busy}
-                                      onClick={() => handleDisconnectBridge(br)}
-                                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap shrink-0"
-                                    >
-                                      <Unplug className="w-3 h-3" />
-                                      <span>Disconnect</span>
-                                    </button>
-                                  </>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => handleReconnectBridgeObs(br)}
+                                    className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    <span>Reconnect OBS</span>
+                                  </button>
+                                )}
+                                {(isOnline || isAutoRecovering) && !isManualBridgeDisconnect && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => handleDisconnectBridge(br)}
+                                    className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                  >
+                                    <Unplug className="w-3 h-3" />
+                                    <span>Disconnect</span>
+                                  </button>
                                 )}
                                 <button
                                   type="button"
@@ -5458,16 +5495,7 @@ export function AdminObsBroadcastStudioPage() {
                     </button>
                   )}
 
-                  {obsConnected ? (
-                    <button
-                      type="button"
-                      disabled={connectingObs}
-                      onClick={handleDisconnectObs}
-                      className="min-h-[40px] px-4 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
-                    >
-                      Disconnect OBS
-                    </button>
-                  ) : (
+                  {!obsConnected && (
                     <button
                       type="button"
                       disabled={connectingObs}
@@ -5477,8 +5505,25 @@ export function AdminObsBroadcastStudioPage() {
                       {connectingObs
                         ? 'Connecting...'
                         : connMode === 'local_agent'
-                          ? 'Sync Agent State'
+                          ? profile.manualDisconnect
+                            ? 'Connect OBS Studio'
+                            : 'Reconnect / Sync OBS'
                           : 'Connect OBS Studio'}
+                    </button>
+                  )}
+
+                  {(obsConnected ||
+                    (!profile.manualDisconnect &&
+                      (Boolean(profile.desiredConnected) ||
+                        profile.connectionStatus === 'RECONNECTING' ||
+                        profile.connectionStatus === 'CONNECTION_LOST'))) && (
+                    <button
+                      type="button"
+                      disabled={connectingObs}
+                      onClick={handleDisconnectObs}
+                      className="min-h-[40px] px-4 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                    >
+                      Disconnect OBS
                     </button>
                   )}
                 </div>
@@ -5495,19 +5540,21 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                      profile.bridgeConnectionState === 'RECONNECTING'
-                        ? 'bg-amber-100 text-amber-800'
-                        : profile.bridgeConnectionState === 'CONNECTION_LOST'
-                          ? 'bg-red-100 text-red-800'
+                      profile.manualDisconnect
+                        ? 'bg-slate-100 text-slate-700'
+                        : profile.bridgeConnectionState === 'RECONNECTING' ||
+                            profile.bridgeConnectionState === 'CONNECTION_LOST'
+                          ? 'bg-amber-100 text-amber-800'
                           : profile.agentOnline
                             ? 'bg-emerald-100 text-emerald-800'
                             : 'bg-slate-100 text-slate-700'
                     }`}
                   >
-                    {profile.bridgeConnectionState === 'RECONNECTING'
-                      ? 'BRIDGE RECONNECTING'
-                      : profile.bridgeConnectionState === 'CONNECTION_LOST'
-                        ? 'CONNECTION LOST'
+                    {profile.manualDisconnect
+                      ? 'DISCONNECTED (ADMIN)'
+                      : profile.bridgeConnectionState === 'RECONNECTING' ||
+                          profile.bridgeConnectionState === 'CONNECTION_LOST'
+                        ? 'BRIDGE RECONNECTING'
                         : profile.agentOnline
                           ? 'BRIDGE CONNECTED'
                           : 'BRIDGE OFFLINE'}
@@ -5518,10 +5565,11 @@ export function AdminObsBroadcastStudioPage() {
                   <p>
                     Status:{' '}
                     <strong className="text-slate-900">
-                      {profile.bridgeConnectionState === 'RECONNECTING'
-                        ? `Reconnecting automatically (${profile.lastDisconnectReason || 'network blip'})`
-                        : profile.bridgeConnectionState === 'CONNECTION_LOST'
-                          ? `Connection lost (${profile.missedHeartbeats || 0} missed heartbeats)`
+                      {profile.manualDisconnect
+                        ? 'Paused by Administrator — click Connect OBS Studio or Reconnect in OBS Bridge'
+                        : profile.bridgeConnectionState === 'RECONNECTING' ||
+                            profile.bridgeConnectionState === 'CONNECTION_LOST'
+                          ? `Reconnecting automatically (${profile.lastDisconnectReason || 'network blip'}) — stays linked until Admin disconnects`
                           : profile.agentOnline
                             ? `Connected (${profile.agentLabel || 'OBS Host'})`
                             : 'BRIDGE OFFLINE — Waiting for local agent handshake'}

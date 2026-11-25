@@ -32,6 +32,7 @@ export interface ObsAgentRegistrationHandlers {
     platform?: string;
     bridgeVersion?: string;
     capabilities?: string[];
+    manualResume?: boolean;
   }) => Promise<{ ok: boolean; reason?: string; context?: ObsAgentContext }>;
   onAgentConnected: (socket: any, context: ObsAgentContext) => Promise<void>;
   onAgentDisconnected: (socket: any, context: ObsAgentContext, reason: string) => Promise<void>;
@@ -165,8 +166,9 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     },
     transports: ['websocket', 'polling'],
     pingInterval: 15_000,
-    pingTimeout: 45_000,
+    pingTimeout: 60_000,
     connectTimeout: 45_000,
+    perMessageDeflate: false,
   });
 
   if (cleanupTimer) clearInterval(cleanupTimer);
@@ -465,6 +467,7 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
             .map((item) => item.trim().slice(0, 64))
             .slice(0, 32)
         : [];
+      const manualResume = Boolean(auth.manualResume);
 
       if (!obsAgentHandlers) {
         next(new Error('OBS bridge handler unavailable.'));
@@ -480,6 +483,7 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
         platform,
         bridgeVersion,
         capabilities,
+        manualResume,
       });
 
       if (!result.ok || !result.context) {

@@ -55,6 +55,7 @@ const APPROVED_COMMANDS = new Set([
   'set_scene_item_enabled',
   'get_input_list',
   'reconnect_obs',
+  'disconnect_obs',
   'mediamtx_status',
   'mediamtx_start',
   'mediamtx_stop',
@@ -245,7 +246,13 @@ let obsConnected = false;
 let obsConnecting = false;
 let lastError = '';
 let obsReconnectTimer = null;
+let serverReconnectTimer = null;
 let bridgeRevoked = false;
+let adminDisconnected = false;
+let obsManuallyDisconnected = false;
+let isHeartbeatRunning = false;
+let isSnapshotRunning = false;
+let obsSnapshotFailures = 0;
 let obsStreamActiveCache = false;
 let lastObsScenesCache = [];
 let lastActiveObsSceneCache = '';
@@ -256,7 +263,7 @@ let serverDisconnectedAt = 0;
 let obsDisconnectedAt = 0;
 
 const HEARTBEAT_INTERVAL_MS = Math.max(2000, Number(process.env.OBS_BRIDGE_HEARTBEAT_INTERVAL_MS) || 5000);
-const HEARTBEAT_ACK_TIMEOUT_MS = Math.max(2500, Number(process.env.OBS_BRIDGE_HEARTBEAT_ACK_TIMEOUT_MS) || 6000);
+const HEARTBEAT_ACK_TIMEOUT_MS = Math.max(3000, Number(process.env.OBS_BRIDGE_HEARTBEAT_ACK_TIMEOUT_MS) || 10000);
 const HEARTBEAT_LOST_MS = Math.max(10000, Number(process.env.OBS_BRIDGE_HEARTBEAT_LOST_MS) || 20000);
 const HEARTBEAT_OFFLINE_MS = Math.max(20000, Number(process.env.OBS_BRIDGE_HEARTBEAT_OFFLINE_MS) || 45000);
 
@@ -320,6 +327,7 @@ const socketAuth = useRegisteredBridgeAuth
       platform: process.platform,
       bridgeVersion: BRIDGE_VERSION,
       capabilities: BRIDGE_CAPABILITIES,
+      manualResume: true,
     }
   : {
       matchId: MATCH_ID,
@@ -328,6 +336,7 @@ const socketAuth = useRegisteredBridgeAuth
       platform: process.platform,
       bridgeVersion: BRIDGE_VERSION,
       capabilities: BRIDGE_CAPABILITIES,
+      manualResume: true,
     };
 
 logInfo(
@@ -398,6 +407,8 @@ function isValidMediaMTXBinary(candidate) {
   }
 }
 
+let cachedPathLookup = { ts: 0, binName: '', result: '' };
+
 function findMediaMTXExecutable(configuredPath = '') {
   const candidates = [];
   if (configuredPath) candidates.push(configuredPath);
@@ -433,6 +444,14 @@ function findMediaMTXExecutable(configuredPath = '') {
     if (isValidMediaMTXBinary(c)) return path.resolve(c);
   }
 
+  const now = Date.now();
+  if (cachedPathLookup.binName === binName && now - cachedPathLookup.ts < 60_000) {
+    if (cachedPathLookup.result && isValidMediaMTXBinary(cachedPathLookup.result)) {
+      return cachedPathLookup.result;
+    }
+    if (!cachedPathLookup.result) return '';
+  }
+
   try {
     const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
     const out = execFileSync(cmd, [binName], { encoding: 'utf8', timeout: 1500, windowsHide: true });
@@ -440,9 +459,11 @@ function findMediaMTXExecutable(configuredPath = '') {
       .split(/\r?\n/)
       .map((s) => s.trim())
       .find(Boolean);
-    if (first && isValidMediaMTXBinary(first)) return path.resolve(first);
+    const resolved = first && isValidMediaMTXBinary(first) ? path.resolve(first) : '';
+    cachedPathLookup = { ts: now, binName, result: resolved };
+    if (resolved) return resolved;
   } catch {
-    // ignore missing binary in PATH
+    cachedPathLookup = { ts: now, binName, result: '' };
   }
   return '';
 }
@@ -669,108 +690,130 @@ async function stopLocalMediaMTX() {
 }
 
 async function emitObsSnapshot() {
-  if (!socket.connected) return;
-  const mtxStatus = await probeLocalMediaMTX();
-  if (!obsConnected) {
-    const obsLostMs = obsDisconnectedAt ? Date.now() - obsDisconnectedAt : 0;
-    const obsState = obsConnecting
-      ? 'RECONNECTING'
-      : obsLostMs >= HEARTBEAT_OFFLINE_MS
-        ? 'OFFLINE'
-        : obsLostMs >= HEARTBEAT_LOST_MS || obsReconnectAttempts >= 3
-          ? 'CONNECTION_LOST'
-          : lastError
-            ? 'RECONNECTING'
-            : 'DISCONNECTED';
-    socket.emit('agent:obs_state', {
-      bridgeVersion: BRIDGE_VERSION,
-      capabilities: BRIDGE_CAPABILITIES,
-      connectionStatus: obsState,
-      obsConnectionState: obsState === 'DISCONNECTED' ? 'OFFLINE' : obsState,
-      reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
-      lastError,
-      obsScenes: lastObsScenesCache,
-      obsInputs: [],
-      obsMediaStates: {},
-      activeObsScene: lastActiveObsSceneCache,
-      obsStreamActive: obsStreamActiveCache,
-      mediamtx: mtxStatus,
-    });
-    return;
-  }
-
+  if (!socket.connected || isSnapshotRunning) return;
+  isSnapshotRunning = true;
   try {
-    const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
-      withTimeout(obs.call('GetVersion'), 6000, 'GetVersion'),
-      withTimeout(obs.call('GetSceneList'), 6000, 'GetSceneList'),
-      withTimeout(obs.call('GetInputList'), 6000, 'GetInputList').catch(() => ({ inputs: [] })),
-      withTimeout(obs.call('GetStreamStatus'), 6000, 'GetStreamStatus')
-        .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
-      withTimeout(obs.call('GetRecordStatus'), 6000, 'GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
-      withTimeout(obs.call('GetStats'), 6000, 'GetStats').catch(() => null),
-    ]);
-
-    obsStreamActiveCache = Boolean(streamRes.outputActive);
-    lastActiveObsSceneCache = sceneRes.currentProgramSceneName || '';
-    lastObsScenesCache = Array.isArray(sceneRes.scenes)
-      ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
-      : [];
-
-    const obsInputs = Array.isArray(inputRes?.inputs)
-      ? inputRes.inputs
-          .map((inp) => ({
-            inputName: String(inp.inputName || '').trim(),
-            inputKind: String(inp.inputKind || '').trim(),
-            unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
-          }))
-          .filter((inp) => Boolean(inp.inputName))
-      : [];
-
-    const obsMediaStates = {};
-    for (const inp of obsInputs) {
-      if (inp.inputKind === 'ffmpeg_source' || inp.unversionedInputKind === 'ffmpeg_source') {
-        try {
-          const st = await obs.call('GetMediaInputStatus', { inputName: inp.inputName });
-          if (st?.mediaState) obsMediaStates[inp.inputName] = String(st.mediaState);
-        } catch {
-          // ignore
-        }
-      }
+    const mtxStatus = await probeLocalMediaMTX();
+    if (!obsConnected) {
+      const obsLostMs = obsDisconnectedAt ? Date.now() - obsDisconnectedAt : 0;
+      const nonManualState =
+        obsLostMs >= HEARTBEAT_LOST_MS || obsReconnectAttempts >= 3
+          ? 'CONNECTION_LOST'
+          : 'RECONNECTING';
+      const obsState = obsManuallyDisconnected ? 'DISCONNECTED' : nonManualState;
+      socket.emit('agent:obs_state', {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        manualDisconnect: obsManuallyDisconnected,
+        connectionStatus: obsState,
+        obsConnectionState: obsManuallyDisconnected ? 'OFFLINE' : nonManualState,
+        reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
+        lastError,
+        obsScenes: lastObsScenesCache,
+        obsInputs: [],
+        obsMediaStates: {},
+        activeObsScene: lastActiveObsSceneCache,
+        obsStreamActive: obsManuallyDisconnected ? false : obsStreamActiveCache,
+        mediamtx: mtxStatus,
+      });
+      return;
     }
 
-    socket.emit('agent:obs_state', {
-      bridgeVersion: BRIDGE_VERSION,
-      capabilities: BRIDGE_CAPABILITIES,
-      connectionStatus: 'CONNECTED',
-      lastError: '',
-      obsVersion: ver.obsVersion,
-      obsWebSocketVersion: ver.obsWebSocketVersion,
-      activeObsScene: sceneRes.currentProgramSceneName || '',
-      obsScenes: Array.isArray(sceneRes.scenes)
+    try {
+      const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
+        withTimeout(obs.call('GetVersion'), 6000, 'GetVersion'),
+        withTimeout(obs.call('GetSceneList'), 6000, 'GetSceneList'),
+        withTimeout(obs.call('GetInputList'), 6000, 'GetInputList').catch(() => ({ inputs: [] })),
+        withTimeout(obs.call('GetStreamStatus'), 6000, 'GetStreamStatus')
+          .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
+        withTimeout(obs.call('GetRecordStatus'), 6000, 'GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
+        withTimeout(obs.call('GetStats'), 6000, 'GetStats').catch(() => null),
+      ]);
+
+      obsSnapshotFailures = 0;
+      obsStreamActiveCache = Boolean(streamRes.outputActive);
+      lastActiveObsSceneCache = sceneRes.currentProgramSceneName || '';
+      lastObsScenesCache = Array.isArray(sceneRes.scenes)
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
-        : [],
-      obsInputs,
-      obsMediaStates,
-      mediamtx: mtxStatus,
-      obsStreamActive: Boolean(streamRes.outputActive),
-      obsStreamTimecode: String(streamRes.outputTimecode || ''),
-      obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
-      obsStreamDurationMs: typeof streamRes.outputDuration === 'number' ? streamRes.outputDuration : null,
-      obsRecordActive: Boolean(recordRes.outputActive),
-      obsRecordTimecode: String(recordRes.outputTimecode || ''),
-      obsStats: statsRes
-        ? {
-            cpuUsage: Number(statsRes.cpuUsage || 0),
-            activeFps: Number(statsRes.activeFps || 0),
-            outputSkippedFrames: Number(statsRes.outputSkippedFrames || 0),
-            outputTotalFrames: Number(statsRes.outputTotalFrames || 0),
-            averageFrameRenderTime: Number(statsRes.averageFrameRenderTime || 0),
-            memoryUsageMb: Number(statsRes.memoryUsage || 0),
+        : [];
+
+      const obsInputs = Array.isArray(inputRes?.inputs)
+        ? inputRes.inputs
+            .map((inp) => ({
+              inputName: String(inp.inputName || '').trim(),
+              inputKind: String(inp.inputKind || '').trim(),
+              unversionedInputKind: String(inp.unversionedInputKind || '').trim(),
+            }))
+            .filter((inp) => Boolean(inp.inputName))
+        : [];
+
+      const obsMediaStates = {};
+      for (const inp of obsInputs) {
+        if (inp.inputKind === 'ffmpeg_source' || inp.unversionedInputKind === 'ffmpeg_source') {
+          try {
+            const st = await obs.call('GetMediaInputStatus', { inputName: inp.inputName });
+            if (st?.mediaState) obsMediaStates[inp.inputName] = String(st.mediaState);
+          } catch {
+            // ignore
           }
-        : null,
-    });
-  } catch (err) {
-    socket.emit('agent:obs_error', { message: err?.message || 'Failed reading OBS state.' });
+        }
+      }
+
+      socket.emit('agent:obs_state', {
+        bridgeVersion: BRIDGE_VERSION,
+        capabilities: BRIDGE_CAPABILITIES,
+        connectionStatus: 'CONNECTED',
+        obsConnectionState: 'CONNECTED',
+        lastError: '',
+        obsVersion: ver.obsVersion,
+        obsWebSocketVersion: ver.obsWebSocketVersion,
+        activeObsScene: sceneRes.currentProgramSceneName || '',
+        obsScenes: Array.isArray(sceneRes.scenes)
+          ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
+          : [],
+        obsInputs,
+        obsMediaStates,
+        mediamtx: mtxStatus,
+        obsStreamActive: Boolean(streamRes.outputActive),
+        obsStreamTimecode: String(streamRes.outputTimecode || ''),
+        obsStreamBytes: typeof streamRes.outputBytes === 'number' ? streamRes.outputBytes : null,
+        obsStreamDurationMs: typeof streamRes.outputDuration === 'number' ? streamRes.outputDuration : null,
+        obsRecordActive: Boolean(recordRes.outputActive),
+        obsRecordTimecode: String(recordRes.outputTimecode || ''),
+        obsStats: statsRes
+          ? {
+              cpuUsage: Number(statsRes.cpuUsage || 0),
+              activeFps: Number(statsRes.activeFps || 0),
+              outputSkippedFrames: Number(statsRes.outputSkippedFrames || 0),
+              outputTotalFrames: Number(statsRes.outputTotalFrames || 0),
+              averageFrameRenderTime: Number(statsRes.averageFrameRenderTime || 0),
+              memoryUsageMb: Number(statsRes.memoryUsage || 0),
+            }
+          : null,
+      });
+    } catch (err) {
+      obsSnapshotFailures += 1;
+      const errMsg = String(err?.message || 'Failed reading OBS state.');
+      socket.emit('agent:obs_error', { message: errMsg });
+      const looksClosed =
+        !obs.identified ||
+        /not connected|closed|socket|timed out/i.test(errMsg);
+      if (looksClosed && obsSnapshotFailures >= 2 && !obsManuallyDisconnected) {
+        obsSnapshotFailures = 0;
+        emitDiagnostic(
+          'warn',
+          'ws_error',
+          `OBS WebSocket unresponsive (${errMsg}); recycling OBS connection cleanly.`,
+          'obs_rpc_unresponsive'
+        );
+        obsConnected = false;
+        obsConnecting = false;
+        await obs.disconnect().catch(() => {});
+        connectObsLoop().catch(() => {});
+      }
+    }
+  } finally {
+    isSnapshotRunning = false;
   }
 }
 
@@ -831,6 +874,13 @@ async function handleCommand(command, payload) {
   }
   if (command === 'reconnect_obs') {
     logInfo('Operator requested OBS WebSocket reconnect...');
+    obsManuallyDisconnected = false;
+    obsReconnectAttempts = 0;
+    obsDisconnectedAt = 0;
+    if (obsReconnectTimer) {
+      clearTimeout(obsReconnectTimer);
+      obsReconnectTimer = null;
+    }
     try {
       await obs.disconnect().catch(() => {});
     } catch {
@@ -844,6 +894,23 @@ async function handleCommand(command, payload) {
       obsUrl: OBS_URL,
       lastError: obsConnected ? '' : lastError,
     };
+  }
+
+  if (command === 'disconnect_obs') {
+    const reason = String(payload.reason || 'Disconnected by Administrator from Control Room.');
+    logWarn(reason);
+    obsManuallyDisconnected = true;
+    if (obsReconnectTimer) {
+      clearTimeout(obsReconnectTimer);
+      obsReconnectTimer = null;
+    }
+    obsConnected = false;
+    obsConnecting = false;
+    obsStreamActiveCache = false;
+    lastError = reason;
+    await obs.disconnect().catch(() => {});
+    await emitObsSnapshot().catch(() => {});
+    return { disconnected: true, manualDisconnect: true };
   }
 
   if (command === 'mediamtx_status') {
@@ -1331,15 +1398,34 @@ async function handleCommand(command, payload) {
 }
 
 function scheduleObsReconnect(delayMs = 3000) {
-  if (obsReconnectTimer || bridgeRevoked) return;
+  if (obsReconnectTimer || bridgeRevoked || obsManuallyDisconnected) return;
   obsReconnectTimer = setTimeout(() => {
     obsReconnectTimer = null;
     connectObsLoop();
   }, delayMs);
 }
 
+function scheduleServerReconnect(delayMs) {
+  if (serverReconnectTimer || bridgeRevoked || adminDisconnected) return;
+  const waitMs =
+    typeof delayMs === 'number' && delayMs > 0
+      ? delayMs
+      : computeBackoffMs(serverReconnectAttempts, 1500, 30000, 0.25);
+  serverReconnectAttempts += 1;
+  serverReconnectTimer = setTimeout(() => {
+    serverReconnectTimer = null;
+    if (bridgeRevoked || adminDisconnected) return;
+    try {
+      socket.io.opts.reconnection = true;
+      if (!socket.connected) socket.connect();
+    } catch {
+      // ignore
+    }
+  }, waitMs);
+}
+
 async function connectObsLoop() {
-  if (obsConnected || obsConnecting || bridgeRevoked) return;
+  if (obsConnected || obsConnecting || bridgeRevoked || obsManuallyDisconnected) return;
   obsConnecting = true;
   emitObsSnapshot().catch(() => {});
   try {
@@ -1349,10 +1435,12 @@ async function connectObsLoop() {
       'OBS WebSocket connect'
     );
     const wasRetry = obsReconnectAttempts > 0 || Boolean(obsDisconnectedAt);
+    obsManuallyDisconnected = false;
     obsConnected = true;
     obsConnecting = false;
     obsReconnectAttempts = 0;
     obsDisconnectedAt = 0;
+    obsSnapshotFailures = 0;
     lastError = '';
     if (wasRetry) {
       emitDiagnostic(
@@ -1389,7 +1477,9 @@ async function connectObsLoop() {
       socket.emit('agent:obs_error', { message: lastError });
     }
     await emitObsSnapshot();
-    scheduleObsReconnect(nextDelay);
+    if (!obsManuallyDisconnected) {
+      scheduleObsReconnect(nextDelay);
+    }
   }
 }
 
@@ -1404,15 +1494,23 @@ obs.on('ConnectionClosed', (err) => {
   obsConnecting = false;
   if (!obsDisconnectedAt) obsDisconnectedAt = Date.now();
   lastError = formatObsConnectError(err);
+  const willAutoRetry = !obsManuallyDisconnected && !bridgeRevoked;
+  if (!willAutoRetry) {
+    obsStreamActiveCache = false;
+  }
   const nextDelay = computeBackoffMs(obsReconnectAttempts, 1500, 30000, 0.25);
   emitDiagnostic(
     'warn',
     'disconnect_reason',
-    `OBS WebSocket disconnected (${lastError}). Reconnecting in ${Math.round(nextDelay / 1000)}s while keeping OBS running...`,
+    obsManuallyDisconnected
+      ? `OBS WebSocket disconnected by Administrator: ${lastError}`
+      : `OBS WebSocket disconnected (${lastError}). Reconnecting in ${Math.round(nextDelay / 1000)}s while keeping OBS running...`,
     lastError
   );
   emitObsSnapshot().catch(() => {});
-  scheduleObsReconnect(nextDelay);
+  if (willAutoRetry) {
+    scheduleObsReconnect(nextDelay);
+  }
 });
 
 obs.on('CurrentProgramSceneChanged', (ev) => {
@@ -1434,6 +1532,12 @@ obs.on('StreamStateChanged', (ev) => {
 obs.on('RecordStateChanged', () => emitObsSnapshot().catch(() => {}));
 
 socket.on('connect', () => {
+  if (socket.auth) socket.auth.manualResume = false;
+  if (serverReconnectTimer) {
+    clearTimeout(serverReconnectTimer);
+    serverReconnectTimer = null;
+  }
+  adminDisconnected = false;
   const wasReconnect = serverReconnectAttempts > 0 || Boolean(serverDisconnectedAt);
   serverReconnectAttempts = 0;
   missedHeartbeats = 0;
@@ -1454,33 +1558,61 @@ socket.on('connect', () => {
 });
 
 socket.io.on('reconnect_attempt', (attempt) => {
+  if (socket.auth) socket.auth.manualResume = false;
   serverReconnectAttempts = Number(attempt) || (serverReconnectAttempts + 1);
   logInfo(`Reconnecting to MaidanLive backend (attempt #${serverReconnectAttempts})...`);
 });
 
 socket.on('disconnect', (reason) => {
   if (!serverDisconnectedAt) serverDisconnectedAt = Date.now();
+  const cleanReason = String(reason || 'transport closed');
+  if (bridgeRevoked || adminDisconnected) {
+    logWarn(`Bridge connection stopped (${cleanReason}).`);
+    return;
+  }
   emitDiagnostic(
     'warn',
     'disconnect_reason',
-    `Disconnected from MaidanLive backend (${reason}). Auto-reconnecting without interrupting OBS...`,
-    String(reason || 'transport closed')
+    `Disconnected from MaidanLive backend (${cleanReason}). Auto-reconnecting without interrupting OBS...`,
+    cleanReason
   );
+  if (cleanReason === 'io server disconnect' || !socket.active) {
+    scheduleServerReconnect();
+  }
 });
 
 socket.on('connect_error', (err) => {
   const msg = String(err?.message || err);
+  const lower = msg.toLowerCase();
   logErr(`Backend handshake failed: ${msg}`);
-  if (msg.toLowerCase().includes('revoked')) {
+  if (lower.includes('revoked')) {
     bridgeRevoked = true;
     socket.io.opts.reconnection = false;
     logErr('Bridge was REVOKED by Administrator. Generate or reactivate your bridge token in MaidanLive before restarting.');
+    return;
+  }
+  if (lower.includes('disconnected by administrator') || lower.includes('click reconnect in obs bridge')) {
+    adminDisconnected = true;
+    socket.io.opts.reconnection = false;
+    if (serverReconnectTimer) {
+      clearTimeout(serverReconnectTimer);
+      serverReconnectTimer = null;
+    }
+    logWarn('Bridge paused by Administrator disconnect. Restart the bridge agent to resume.');
+    return;
+  }
+  if (!socket.active) {
+    scheduleServerReconnect();
   }
 });
 
 socket.on('server:bridge_revoked', (payload) => {
   bridgeRevoked = true;
   socket.io.opts.reconnection = false;
+  if (serverReconnectTimer) {
+    clearTimeout(serverReconnectTimer);
+    serverReconnectTimer = null;
+  }
   logErr(`Bridge revoked by Administrator: ${payload?.reason || 'Access revoked'}. Stopping bridge.`);
   cleanupLockFile();
   obs.disconnect().catch(() => {});
@@ -1488,7 +1620,17 @@ socket.on('server:bridge_revoked', (payload) => {
 });
 
 socket.on('server:disconnect_bridge', (payload) => {
-  logWarn(`Disconnected by operator: ${payload?.reason || 'Control Room disconnect'}.`);
+  const reason = payload?.reason || 'Control Room disconnect';
+  const isAdminDisconnect = payload?.adminDisconnected !== false;
+  logWarn(`Disconnected by operator: ${reason}.`);
+  if (isAdminDisconnect) {
+    adminDisconnected = true;
+    socket.io.opts.reconnection = false;
+    if (serverReconnectTimer) {
+      clearTimeout(serverReconnectTimer);
+      serverReconnectTimer = null;
+    }
+  }
   socket.disconnect();
 });
 
@@ -1505,61 +1647,75 @@ socket.on('server:obs_command', async (req, ack) => {
 });
 
 async function runHeartbeatTick() {
-  if (bridgeRevoked) return;
-  if (!socket.connected) {
-    missedHeartbeats += 1;
-    return;
-  }
-  let acked = false;
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      if (acked) return;
+  if (isHeartbeatRunning || bridgeRevoked || adminDisconnected) return;
+  isHeartbeatRunning = true;
+  try {
+    if (!socket.connected) {
       missedHeartbeats += 1;
-      emitDiagnostic(
-        'warn',
-        'heartbeat_timeout',
-        `Server heartbeat ack timed out after ${HEARTBEAT_ACK_TIMEOUT_MS}ms (missed=${missedHeartbeats}).`,
-        'heartbeat_timeout'
-      );
-      if (missedHeartbeats >= 2) {
+      if (!socket.active) {
+        scheduleServerReconnect();
+      }
+      return;
+    }
+    let acked = false;
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (acked) return;
+        missedHeartbeats += 1;
         emitDiagnostic(
           'warn',
-          'network_interruption',
-          'Half-open Socket.IO transport detected; refreshing server socket cleanly.',
-          'half_open_socket'
+          'heartbeat_timeout',
+          `Server heartbeat ack timed out after ${HEARTBEAT_ACK_TIMEOUT_MS}ms (missed=${missedHeartbeats}).`,
+          'heartbeat_timeout'
         );
-        try {
-          socket.disconnect();
-          socket.connect();
-        } catch {
-          // ignore
+        if (missedHeartbeats >= 6 && !adminDisconnected && !bridgeRevoked) {
+          emitDiagnostic(
+            'warn',
+            'network_interruption',
+            'Half-open Socket.IO transport detected after 6 missed heartbeats; refreshing server socket cleanly.',
+            'half_open_socket'
+          );
+          missedHeartbeats = 0;
+          try {
+            socket.disconnect();
+            socket.connect();
+          } catch {
+            // ignore
+          }
         }
-      }
-      resolve();
-    }, HEARTBEAT_ACK_TIMEOUT_MS);
-
-    socket.emit(
-      'agent:heartbeat',
-      {
-        bridgeId: BRIDGE_ID || undefined,
-        matchId: MATCH_ID || undefined,
-        obsConnected,
-        obsStreamActive: obsStreamActiveCache,
-        reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
-        sentAtMs: Date.now(),
-      },
-      () => {
-        acked = true;
-        clearTimeout(timer);
-        missedHeartbeats = 0;
-        serverDisconnectedAt = 0;
         resolve();
-      }
-    );
-  });
+      }, HEARTBEAT_ACK_TIMEOUT_MS);
 
-  if (socket.connected) {
-    await emitObsSnapshot().catch(() => {});
+      socket.emit(
+        'agent:heartbeat',
+        {
+          bridgeId: BRIDGE_ID || undefined,
+          matchId: MATCH_ID || undefined,
+          obsConnected,
+          obsConnectionState: obsManuallyDisconnected
+            ? 'OFFLINE'
+            : obsConnected
+              ? 'CONNECTED'
+              : 'RECONNECTING',
+          obsStreamActive: obsStreamActiveCache,
+          reconnectAttempts: serverReconnectAttempts + obsReconnectAttempts,
+          sentAtMs: Date.now(),
+        },
+        () => {
+          acked = true;
+          clearTimeout(timer);
+          missedHeartbeats = 0;
+          serverDisconnectedAt = 0;
+          resolve();
+        }
+      );
+    });
+
+    if (socket.connected) {
+      await emitObsSnapshot().catch(() => {});
+    }
+  } finally {
+    isHeartbeatRunning = false;
   }
 }
 
@@ -1579,12 +1735,14 @@ setInterval(() => {
       `System wake detected (${Math.round(drift / 1000)}s clock jump); verifying server & OBS sockets without touching stream.`,
       'system_resume'
     );
-    if (!socket.connected && !socket.active) {
-      socket.connect();
-    } else if (socket.connected) {
-      runHeartbeatTick().catch(() => {});
+    if (!adminDisconnected) {
+      if (!socket.connected && !socket.active) {
+        socket.connect();
+      } else if (socket.connected) {
+        runHeartbeatTick().catch(() => {});
+      }
     }
-    if (!obsConnected && !obsConnecting) {
+    if (!obsConnected && !obsConnecting && !obsManuallyDisconnected) {
       connectObsLoop();
     }
   }

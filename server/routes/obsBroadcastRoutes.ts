@@ -32,6 +32,7 @@ import {
   assignCameraToObs,
   captureObsPreviewImage,
   connectDirectObs,
+  connectLocalAgentObs,
   controlBridgeMediaMTX,
   controlObsOutput,
   createBridgePairingCode,
@@ -83,6 +84,7 @@ import {
   encryptObsSecret,
   generateScopedToken,
   hashScopedToken,
+  sanitizeVdoPushUrl,
   verifyScopedToken,
 } from '../utils/obsCrypto.ts';
 import { verifyTotpCode } from '../services/totpService.ts';
@@ -326,7 +328,10 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
         broadcastSessionId: cam.broadcastSessionId || profile?.broadcastSessionId || '',
         pushTokenExpiresAt: cam.pushTokenExpiresAt || null,
         vdoPushUrl: vdoLinks?.pushUrl || '',
-        connectionUrl: cam.connectionUrl || '',
+        connectionUrl:
+          cam.sourceType === 'vdoninja'
+            ? sanitizeVdoPushUrl(cam.connectionUrl || '')
+            : cam.connectionUrl || '',
       },
       match: stream
         ? {
@@ -1342,8 +1347,8 @@ router.post(
 
       const profile = await ensureObsProfileForMatch(matchId, req.user!._id as any);
       if (profile.connectionMode === 'local_agent' && req.body.mode !== 'direct_ws') {
-        const snapshot = await refreshObsState(matchId);
-        res.json({ ok: true, profile: formatSafeProfile(profile), snapshot });
+        const result = await connectLocalAgentObs(matchId, req.user!);
+        res.json(result);
         return;
       }
 

@@ -342,6 +342,10 @@ async function startServer() {
   const app = express();
   app.set('trust proxy', 2);
   const httpServer = http.createServer(app);
+  // Keep long-lived WebSocket / reverse-proxy keepalive connections open well past proxy idle windows
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  httpServer.requestTimeout = 0;
   initObsControllerBridge();
   initSocketServer(httpServer);
   initAdScheduleEngine().catch((err) => {

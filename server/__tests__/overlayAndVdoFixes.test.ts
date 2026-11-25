@@ -17,9 +17,16 @@ import {
 } from '../../src/utils/cricketScoring.ts';
 import { buildScoreboardViewModel } from '../../src/components/obs/scoreboardViewModel.ts';
 import { resolveObsTheme } from '../../src/components/obs/obsTheme.ts';
-import { buildVdoNinjaLinks, sanitizeVdoViewUrl } from '../utils/obsCrypto.ts';
+import {
+  buildVdoNinjaLinks,
+  sanitizeVdoPushUrl,
+  sanitizeVdoViewUrl,
+} from '../utils/obsCrypto.ts';
 import { buildObsEnsureInputForCamera } from '../services/obsControllerService.ts';
-import { resolveCameraLiveWebUrl } from '../../src/utils/obsTransformGeometry.ts';
+import {
+  isolateVdoPushUrl,
+  resolveCameraLiveWebUrl,
+} from '../../src/utils/obsTransformGeometry.ts';
 
 const baseStream = {
   id: 'stream_test_1',
@@ -230,6 +237,79 @@ describe('VDO.Ninja Individual Camera Feed Isolation & Overlay Sizing', () => {
     assert.ok(obsInput?.inputSettings?.url.includes('view=cam3_9999'));
     assert.ok(obsInput?.inputSettings?.url.includes('&solo'));
     assert.equal(obsInput?.inputSettings?.url.includes('&scene'), false);
+  });
+
+  it('isolates VDO.Ninja mobile publisher URLs so CAM 1 and CAM 2 never render each other or a room grid', () => {
+    const cam1 = buildVdoNinjaLinks({
+      roomName: 'maidan_match_room',
+      streamId: 'cam1_phone',
+      password: 'room_secret_pw',
+      label: 'CAM 1',
+      facingMode: 'environment',
+    });
+    const cam2 = buildVdoNinjaLinks({
+      roomName: 'maidan_match_room',
+      streamId: 'cam2_phone',
+      password: 'room_secret_pw',
+      label: 'CAM 2',
+      facingMode: 'user',
+    });
+
+    for (const [cam, expectedStream, expectedFacing] of [
+      [cam1, 'cam1_phone', 'environment'],
+      [cam2, 'cam2_phone', 'user'],
+    ] as const) {
+      const parsed = new URL(cam.pushUrl);
+      assert.equal(parsed.searchParams.get('push'), expectedStream);
+      assert.equal(parsed.searchParams.get('room'), 'maidan_match_room');
+      assert.equal(parsed.searchParams.get('password'), 'room_secret_pw');
+      assert.equal(parsed.searchParams.get('facing'), expectedFacing);
+      assert.equal(parsed.searchParams.has('facingmode'), false);
+      // Empty view= + novideo + noaudio + mutespeaker=1 isolate incoming room feeds while keeping local self-preview
+      assert.equal(parsed.searchParams.has('view'), true);
+      assert.equal(parsed.searchParams.get('view'), '');
+      assert.equal(parsed.searchParams.has('novideo'), true);
+      assert.equal(parsed.searchParams.get('novideo'), '');
+      assert.equal(parsed.searchParams.has('noaudio'), true);
+      assert.equal(parsed.searchParams.get('noaudio'), '');
+      assert.equal(parsed.searchParams.get('mutespeaker'), '1');
+      assert.equal(parsed.searchParams.has('showpreview'), true);
+      assert.equal(parsed.searchParams.has('webcam'), true);
+      assert.equal(parsed.searchParams.has('autostart'), true);
+      assert.equal(parsed.searchParams.has('scene'), false);
+      assert.equal(parsed.searchParams.has('broadcast'), false);
+
+      // Push URLs (even with blank view=) must never be treated as viewer URLs in Control Room monitors
+      assert.equal(
+        resolveCameraLiveWebUrl({
+          sourceType: 'vdoninja',
+          connectionUrl: cam.pushUrl,
+        }),
+        ''
+      );
+    }
+
+    // Legacy VDO.Ninja push URLs are normalized cleanly on both server and client
+    const legacyUrl =
+      'https://vdo.ninja/?push=cam9_old&room=room_x&password=pw1&facingmode=environment&noaudio=0&webcam&autostart&broadcast';
+    for (const sanitizer of [sanitizeVdoPushUrl, isolateVdoPushUrl]) {
+      const normalized = new URL(sanitizer(legacyUrl));
+      assert.equal(normalized.searchParams.get('push'), 'cam9_old');
+      assert.equal(normalized.searchParams.get('room'), 'room_x');
+      assert.equal(normalized.searchParams.get('password'), 'pw1');
+      assert.equal(normalized.searchParams.get('facing'), 'environment');
+      assert.equal(normalized.searchParams.has('facingmode'), false);
+      assert.equal(normalized.searchParams.has('broadcast'), false);
+      assert.equal(normalized.searchParams.get('view'), '');
+      assert.equal(normalized.searchParams.get('novideo'), '');
+      assert.equal(normalized.searchParams.get('noaudio'), '');
+      assert.equal(normalized.searchParams.get('mutespeaker'), '1');
+      assert.equal(normalized.searchParams.has('showpreview'), true);
+    }
+
+    // Non-VDO URLs remain untouched
+    assert.equal(sanitizeVdoPushUrl('rtmp://localhost/live/cam1'), 'rtmp://localhost/live/cam1');
+    assert.equal(isolateVdoPushUrl('rtmp://localhost/live/cam1'), 'rtmp://localhost/live/cam1');
   });
 
   it('produces clear bar width and typography scaling across Small, Medium, Large, and customScale', () => {

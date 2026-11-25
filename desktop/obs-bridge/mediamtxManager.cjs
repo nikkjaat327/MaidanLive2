@@ -13,6 +13,8 @@ let lastStartedAt = null;
 let lastError = '';
 let mtxLogs = [];
 let cachedExeVersion = { path: '', mtimeMs: 0, version: '' };
+let cachedPathLookup = { ts: 0, value: '' };
+const PATH_LOOKUP_CACHE_TTL_MS = 60_000;
 
 function redactSensitiveText(raw) {
   let text = String(raw || '');
@@ -159,6 +161,16 @@ function findMediaMTXExecutable(configuredPath, userDataDir) {
     }
   }
 
+  const now = Date.now();
+  if (now - cachedPathLookup.ts < PATH_LOOKUP_CACHE_TTL_MS) {
+    if (cachedPathLookup.value && isValidMediaMTXBinary(cachedPathLookup.value)) {
+      return cachedPathLookup.value;
+    }
+    if (!cachedPathLookup.value) {
+      return '';
+    }
+  }
+
   try {
     const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
     const arg = process.platform === 'win32' ? 'mediamtx.exe' : 'mediamtx';
@@ -168,12 +180,15 @@ function findMediaMTXExecutable(configuredPath, userDataDir) {
       .map((s) => s.trim())
       .find(Boolean);
     if (firstLine && isValidMediaMTXBinary(firstLine)) {
-      return path.resolve(firstLine);
+      const resolved = path.resolve(firstLine);
+      cachedPathLookup = { ts: now, value: resolved };
+      return resolved;
     }
   } catch {
     // Not in PATH; ignore cleanly
   }
 
+  cachedPathLookup = { ts: now, value: '' };
   return '';
 }
 

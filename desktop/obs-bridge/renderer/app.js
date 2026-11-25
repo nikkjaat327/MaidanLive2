@@ -108,20 +108,26 @@ function renderState(state) {
     setPill($('badge-server'), 'MaidanLive: Not Paired', 'pill-muted');
   } else if (state.bridgeRevoked) {
     setPill($('badge-server'), 'MaidanLive: Revoked', 'pill-error');
+  } else if (state.adminDisconnected) {
+    setPill($('badge-server'), 'MaidanLive: Paused (Admin)', 'pill-muted');
   } else if (state.serverConnected) {
     setPill($('badge-server'), 'MaidanLive: Online', 'pill-ok');
-  } else if (state.serverStatus === 'CONNECTING') {
-    setPill($('badge-server'), 'MaidanLive: Connecting...', 'pill-warn');
+  } else if (state.serverStatus === 'CONNECTING' || state.serverStatus === 'RECONNECTING') {
+    setPill($('badge-server'), 'MaidanLive: Reconnecting...', 'pill-warn');
+  } else if (state.serverStatus === 'CONNECTION_LOST') {
+    setPill($('badge-server'), 'MaidanLive: Retrying...', 'pill-warn');
   } else {
     setPill($('badge-server'), 'MaidanLive: Offline', 'pill-error');
   }
 
   if (state.obsConnected) {
     setPill($('badge-obs'), 'OBS Studio: Connected', 'pill-ok');
+  } else if (state.obsManuallyDisconnected) {
+    setPill($('badge-obs'), 'OBS Studio: Paused (Admin)', 'pill-muted');
   } else if (state.obsAuthRequired) {
     setPill($('badge-obs'), 'OBS Studio: Password Needed', 'pill-warn');
-  } else if (state.obsConnecting) {
-    setPill($('badge-obs'), 'OBS Studio: Connecting...', 'pill-warn');
+  } else if (state.obsConnecting || state.obsStatus === 'RECONNECTING' || state.obsStatus === 'CONNECTION_LOST') {
+    setPill($('badge-obs'), 'OBS Studio: Reconnecting...', 'pill-warn');
   } else {
     setPill($('badge-obs'), 'OBS Studio: Disconnected', 'pill-error');
   }
@@ -155,8 +161,10 @@ function renderState(state) {
     $('banner-revoked').classList.add('hidden');
   }
 
-  if (!state.bridgeRevoked && state.serverError) {
-    $('banner-server-error').textContent = state.serverError;
+  if (!state.bridgeRevoked && (state.serverError || state.adminDisconnected)) {
+    $('banner-server-error').textContent = state.adminDisconnected
+      ? 'Paused by Administrator from Control Room. Click "Reconnect MaidanLive" above when ready.'
+      : state.serverError;
     $('banner-server-error').classList.remove('hidden');
   } else {
     $('banner-server-error').classList.add('hidden');
@@ -171,7 +179,9 @@ function renderState(state) {
       : 'Waiting on 4455';
   $('obs-version').textContent = state.obsConnected
     ? `${state.obsVersion || 'OBS'} · ${state.obsStreamActive ? 'LIVE STREAMING' : 'Idle'}`
-    : 'Not Connected';
+    : state.obsManuallyDisconnected
+      ? 'Paused by Admin'
+      : 'Auto-reconnecting...';
 
   if (env.installed && !env.running) {
     $('btn-launch-obs').classList.remove('hidden');
@@ -181,9 +191,11 @@ function renderState(state) {
 
   if (!state.obsConnected) {
     $('obs-setup-guide').classList.remove('hidden');
-    $('lbl-obs-subtitle').textContent = state.obsAuthRequired
-      ? 'Enter your OBS WebSocket Server password below.'
-      : 'Waiting for OBS Studio WebSocket v5 on 127.0.0.1:4455...';
+    $('lbl-obs-subtitle').textContent = state.obsManuallyDisconnected
+      ? 'OBS connection paused by Administrator. Click "Reconnect OBS" when ready.'
+      : state.obsAuthRequired
+        ? 'Enter your OBS WebSocket Server password below.'
+        : 'Waiting for OBS Studio WebSocket v5 on 127.0.0.1:4455 (auto-reconnecting)...';
   } else {
     $('obs-setup-guide').classList.add('hidden');
     $('lbl-obs-subtitle').textContent = `Connected to local OBS (${state.obsUrl}) — Ready for live switching`;

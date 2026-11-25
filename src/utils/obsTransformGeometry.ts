@@ -377,6 +377,38 @@ export function getPreviewMediaStyles(options: {
   };
 }
 
+export function isolateVdoPushUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(
+      trimmed,
+      typeof window !== 'undefined' ? window.location.origin : 'https://maidanlive.local'
+    );
+    const isVdo =
+      parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('push');
+    if (!isVdo || !parsed.searchParams.has('push')) return trimmed;
+
+    const legacyFacing = parsed.searchParams.get('facingmode');
+    if (legacyFacing && !parsed.searchParams.has('facing')) {
+      parsed.searchParams.set('facing', legacyFacing === 'user' ? 'user' : 'environment');
+    }
+    parsed.searchParams.delete('facingmode');
+    parsed.searchParams.delete('scene');
+    parsed.searchParams.delete('broadcast');
+    parsed.searchParams.delete('bc');
+
+    parsed.searchParams.set('view', '');
+    parsed.searchParams.set('novideo', '');
+    parsed.searchParams.set('noaudio', '');
+    parsed.searchParams.set('mutespeaker', '1');
+    parsed.searchParams.set('showpreview', '');
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 export function resolveCameraLiveWebUrl(cam?: {
   sourceType?: string;
   obsBrowserSourceUrl?: string;
@@ -393,13 +425,15 @@ export function resolveCameraLiveWebUrl(cam?: {
     try {
       const parsed = new URL(rawUrl, typeof window !== 'undefined' ? window.location.origin : 'https://maidanlive.local');
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
-      if (parsed.hostname.includes('vdo.ninja') || parsed.searchParams.has('view')) {
-        // Skip push-only camera links; only embed viewer/browser-source links
-        if (parsed.searchParams.has('push') && !parsed.searchParams.has('view')) {
+      const viewTarget = (parsed.searchParams.get('view') || '').trim();
+      if (parsed.hostname.includes('vdo.ninja') || Boolean(viewTarget)) {
+        // Skip push-only camera links (including isolated push links with empty view=);
+        // only embed viewer/browser-source links targeting a stream ID
+        if (parsed.searchParams.has('push') && !viewTarget) {
           continue;
         }
         parsed.searchParams.delete('scene');
-        if (!parsed.searchParams.has('solo')) {
+        if (viewTarget && !parsed.searchParams.has('solo')) {
           parsed.searchParams.set('solo', '1');
         }
         parsed.searchParams.set('muted', '1');

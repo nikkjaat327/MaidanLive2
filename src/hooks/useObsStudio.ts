@@ -167,6 +167,7 @@ export function useObsStudio(matchId?: string) {
                 ...prev.profile,
                 agentOnline: true,
                 bridgeConnectionState: 'CONNECTED',
+                manualDisconnect: false,
                 missedHeartbeats: 0,
                 lastDisconnectReason: '',
                 agentLabel: payload.label || prev.profile.agentLabel,
@@ -198,8 +199,10 @@ export function useObsStudio(matchId?: string) {
 
     const onBridgeHealthChanged = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
-      const nextState = payload?.bridgeConnectionState;
-      if (!nextState) return;
+      const rawState = payload?.bridgeConnectionState;
+      if (!rawState) return;
+      const isManual = payload?.manualDisconnect === true;
+      const nextState = rawState === 'OFFLINE' && !isManual ? 'CONNECTION_LOST' : rawState;
       setStudio((prev) =>
         prev
           ? {
@@ -213,14 +216,16 @@ export function useObsStudio(matchId?: string) {
                     : prev.profile.missedHeartbeats,
                 agentOnline: nextState !== 'OFFLINE',
                 connectionStatus:
-                  nextState === 'OFFLINE'
+                  nextState === 'OFFLINE' && isManual
                     ? 'DISCONNECTED'
                     : nextState === 'CONNECTION_LOST'
                       ? 'CONNECTION_LOST'
-                      : nextState === 'RECONNECTING'
+                      : nextState === 'RECONNECTING' || nextState === 'OFFLINE'
                         ? 'RECONNECTING'
                         : prev.profile.connectionStatus,
-                ...(nextState === 'OFFLINE' ? { obsStreamActive: false } : {}),
+                ...(nextState === 'OFFLINE' && isManual
+                  ? { obsStreamActive: false, manualDisconnect: true }
+                  : {}),
               },
             }
           : prev
@@ -229,9 +234,16 @@ export function useObsStudio(matchId?: string) {
 
     const onBridgeDisconnected = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
-      const nextBridgeState = payload?.bridgeConnectionState || 'OFFLINE';
-      if (nextBridgeState === 'RECONNECTING' || nextBridgeState === 'CONNECTION_LOST') {
-        onBridgeReconnecting(payload);
+      const isExplicit =
+        payload?.manualDisconnect === true ||
+        payload?.reason === 'OPERATOR_DISCONNECT' ||
+        payload?.reason === 'REVOKED';
+      if (!isExplicit) {
+        onBridgeReconnecting({
+          ...payload,
+          bridgeConnectionState:
+            payload?.bridgeConnectionState === 'CONNECTION_LOST' ? 'CONNECTION_LOST' : 'RECONNECTING',
+        });
         return;
       }
       setSwitchingSceneRequest(null);
@@ -243,8 +255,10 @@ export function useObsStudio(matchId?: string) {
                 ...prev.profile,
                 agentOnline: false,
                 bridgeConnectionState: 'OFFLINE',
+                manualDisconnect: payload?.manualDisconnect === true,
                 lastDisconnectReason: payload?.reason || prev.profile.lastDisconnectReason,
                 connectionStatus: 'DISCONNECTED',
+                obsStreamActive: false,
               },
             }
           : prev
@@ -261,6 +275,7 @@ export function useObsStudio(matchId?: string) {
               profile: {
                 ...prev.profile,
                 connectionStatus: 'CONNECTED',
+                manualDisconnect: false,
                 lastError: '',
                 obsScenes: Array.isArray(payload.obsScenes)
                   ? payload.obsScenes
@@ -275,8 +290,13 @@ export function useObsStudio(matchId?: string) {
     const onObsDisconnected = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
       const incomingStatus = payload?.connectionStatus;
+      const isExplicitDisconnect =
+        payload?.manualDisconnect === true ||
+        String(payload?.reason || '').toLowerCase().includes('revoked');
       const isTransientReconnect =
-        incomingStatus === 'RECONNECTING' || incomingStatus === 'CONNECTION_LOST';
+        incomingStatus === 'RECONNECTING' ||
+        incomingStatus === 'CONNECTION_LOST' ||
+        (!isExplicitDisconnect && incomingStatus !== 'DISCONNECTED');
       setSwitchingSceneRequest(null);
       setStudio((prev) =>
         prev
@@ -284,8 +304,14 @@ export function useObsStudio(matchId?: string) {
               ...prev,
               profile: {
                 ...prev.profile,
-                connectionStatus: isTransientReconnect ? incomingStatus : 'DISCONNECTED',
-                ...(isTransientReconnect ? {} : { obsStreamActive: false }),
+                connectionStatus: isTransientReconnect
+                  ? incomingStatus === 'CONNECTION_LOST'
+                    ? 'CONNECTION_LOST'
+                    : 'RECONNECTING'
+                  : 'DISCONNECTED',
+                ...(isExplicitDisconnect
+                  ? { manualDisconnect: true, desiredConnected: false, obsStreamActive: false }
+                  : {}),
                 lastError: payload?.reason || payload?.error || prev.profile.lastError,
               },
             }

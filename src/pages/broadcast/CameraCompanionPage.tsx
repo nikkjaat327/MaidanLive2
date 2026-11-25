@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { isolateVdoPushUrl } from '../../utils/obsTransformGeometry.ts';
 
 interface CompanionState {
   camera: {
@@ -268,13 +269,15 @@ export function CameraCompanionPage() {
     };
   }, [streamingActive, pushHeartbeat, cameraDocId, token, facingMode]);
 
-  // Adjust facing mode & mute state inside VDO.Ninja URL dynamically
+  // Adjust facing mode & mute state inside VDO.Ninja URL dynamically while enforcing publisher isolation
   const effectivePushUrl = useMemo(() => {
     const raw = data?.camera.vdoPushUrl || data?.camera.connectionUrl || '';
     if (!raw) return '';
     try {
-      const u = new URL(raw);
-      if (u.hostname.includes('vdo.ninja')) {
+      const isolated = isolateVdoPushUrl(raw);
+      const u = new URL(isolated);
+      if (u.hostname.toLowerCase().includes('vdo.ninja')) {
+        u.searchParams.delete('facingmode');
         u.searchParams.set('facing', facingMode);
         if (audioMuted) {
           u.searchParams.set('mute', '1');
