@@ -44,14 +44,6 @@ import {
   OverlayScale,
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
-  SPONSOR_AD_TIMING_BOUNDS,
-  TIMEOUT_AD_LAYOUTS,
-  TIMEOUT_AD_POSITIONS,
-  type SponsorAdAnimation,
-  type SponsorAdTransition,
-  type TimeoutAdLayout,
-  type TimeoutAdPosition,
-  type TimeoutDisplayMode,
   computeOverlayMetrics,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
@@ -61,10 +53,6 @@ import {
   resolveMatchTimeoutState,
   resolveTimeoutOverlayDecision,
 } from '../../utils/matchTimeout.ts';
-import {
-  SPONSOR_ANIMATION_OPTIONS,
-  SPONSOR_TRANSITION_OPTIONS,
-} from '../../utils/sponsorAnimation.ts';
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
@@ -1130,276 +1118,20 @@ export function BroadcastOverlayConfigPage() {
                     </button>
                   </div>
 
-                  {sponsors.length > 0 && (
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Select Registered Sponsor
-                      </label>
-                      <select
-                        value={effectiveOverlayConfig.sponsorAdId || ''}
-                        disabled={saving}
-                        onChange={(e) => {
-                          const sp = sponsors.find((item) => item.id === e.target.value);
-                          if (!sp) return;
-                          void persistOverlayPatch({
-                            sponsorAdId: sp.id,
-                            sponsorAdName: sp.name,
-                            sponsorAdTagline: sp.tagline || sp.sponsorshipType || '',
-                            sponsorAdLogoUrl: sp.logoUrl || '',
-                            sponsorAdCta: sp.ctaText || 'SPONSORED',
-                          });
-                        }}
-                        className="w-full min-h-[36px] px-2.5 py-1.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      >
-                        <option value="">-- Choose sponsor or type custom below --</option>
-                        {sponsors.map((sp) => (
-                          <option key={sp.id} value={sp.id}>
-                            {sp.name} ({sp.sponsorshipType})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Sponsor Brand Name
-                      </label>
-                      <input
-                        type="text"
-                        value={effectiveOverlayConfig.sponsorAdName || ''}
-                        disabled={saving}
-                        placeholder="e.g. Apex Sports Co."
-                        onChange={(e) =>
-                          setOverlayConfig(
-                            normalizeOverlayConfig({
-                              ...effectiveOverlayConfig,
-                              sponsorAdName: e.target.value,
-                            })
-                          )
-                        }
-                        onBlur={(e) =>
-                          void persistOverlayPatch({ sponsorAdName: e.target.value.trim() })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Ad Position
-                      </label>
-                      <select
-                        value={effectiveOverlayConfig.sponsorAdPosition || 'top-right'}
-                        disabled={saving}
-                        onChange={(e) =>
-                          void persistOverlayPatch({
-                            sponsorAdPosition: e.target.value as BroadcastOverlayConfig['sponsorAdPosition'],
-                          })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      >
-                        <option value="top-left">Top Left</option>
-                        <option value="top-right">Top Right</option>
-                        <option value="bottom-left">Bottom Left</option>
-                        <option value="bottom-right">Bottom Right</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Tagline / Offer
-                      </label>
-                      <input
-                        type="text"
-                        value={effectiveOverlayConfig.sponsorAdTagline || ''}
-                        disabled={saving}
-                        placeholder="Powered by Title Sponsor"
-                        onChange={(e) =>
-                          setOverlayConfig(
-                            normalizeOverlayConfig({
-                              ...effectiveOverlayConfig,
-                              sponsorAdTagline: e.target.value,
-                            })
-                          )
-                        }
-                        onBlur={(e) =>
-                          void persistOverlayPatch({ sponsorAdTagline: e.target.value.trim() })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        CTA Badge
-                      </label>
-                      <input
-                        type="text"
-                        value={effectiveOverlayConfig.sponsorAdCta || ''}
-                        disabled={saving}
-                        placeholder="SPONSORED"
-                        onChange={(e) =>
-                          setOverlayConfig(
-                            normalizeOverlayConfig({
-                              ...effectiveOverlayConfig,
-                              sponsorAdCta: e.target.value,
-                            })
-                          )
-                        }
-                        onBlur={(e) =>
-                          void persistOverlayPatch({ sponsorAdCta: e.target.value.trim() })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Sponsor Timing, Animation, Transition & Continuous Repeat Controls */}
-                  <div className="pt-2 border-t border-slate-800/90 space-y-2.5">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
-                      Timing, Animation &amp; Repeat Schedule
-                    </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          Show Time (sec)
-                        </label>
-                        <input
-                          type="number"
-                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.min}
-                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdDurationSeconds.max}
-                          value={effectiveOverlayConfig.sponsorAdDurationSeconds}
-                          disabled={saving}
-                          onChange={(e) =>
-                            setOverlayConfig(
-                              normalizeOverlayConfig({
-                                ...effectiveOverlayConfig,
-                                sponsorAdDurationSeconds: Number(e.target.value),
-                              })
-                            )
-                          }
-                          onBlur={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdDurationSeconds: Number(e.target.value) || 12,
-                            })
-                          }
-                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          Repeat After (sec)
-                        </label>
-                        <input
-                          type="number"
-                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.min}
-                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.max}
-                          value={effectiveOverlayConfig.sponsorAdRepeatIntervalSeconds}
-                          disabled={saving}
-                          onChange={(e) =>
-                            setOverlayConfig(
-                              normalizeOverlayConfig({
-                                ...effectiveOverlayConfig,
-                                sponsorAdRepeatIntervalSeconds: Number(e.target.value),
-                              })
-                            )
-                          }
-                          onBlur={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdRepeatIntervalSeconds: Math.max(0, Number(e.target.value) || 0),
-                            })
-                          }
-                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          Transition Time (ms)
-                        </label>
-                        <input
-                          type="number"
-                          step={50}
-                          min={SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.min}
-                          max={SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.max}
-                          value={effectiveOverlayConfig.sponsorAdTransitionMs}
-                          disabled={saving}
-                          onChange={(e) =>
-                            setOverlayConfig(
-                              normalizeOverlayConfig({
-                                ...effectiveOverlayConfig,
-                                sponsorAdTransitionMs: Number(e.target.value),
-                              })
-                            )
-                          }
-                          onBlur={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdTransitionMs: Number(e.target.value) || 450,
-                            })
-                          }
-                          className="w-full min-h-[34px] px-2.5 text-xs font-mono bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          Animation Style
-                        </label>
-                        <select
-                          value={effectiveOverlayConfig.sponsorAdAnimation || 'pulse'}
-                          disabled={saving}
-                          onChange={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdAnimation: e.target.value as SponsorAdAnimation,
-                            })
-                          }
-                          className="w-full min-h-[34px] px-2 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                        >
-                          {SPONSOR_ANIMATION_OPTIONS.map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          Transition Effect
-                        </label>
-                        <select
-                          value={effectiveOverlayConfig.sponsorAdTransition || 'slide-right'}
-                          disabled={saving}
-                          onChange={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdTransition: e.target.value as SponsorAdTransition,
-                            })
-                          }
-                          className="w-full min-h-[34px] px-2 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                        >
-                          {SPONSOR_TRANSITION_OPTIONS.map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900/90 text-[11px] font-semibold text-slate-200 cursor-pointer self-end min-h-[34px]">
-                        <input
-                          type="checkbox"
-                          checked={effectiveOverlayConfig.sponsorAdRepeatContinuously !== false}
-                          disabled={saving}
-                          onChange={(e) =>
-                            void persistOverlayPatch({
-                              sponsorAdRepeatContinuously: e.target.checked,
-                            })
-                          }
-                          className="w-3.5 h-3.5 rounded border-slate-600 text-amber-500 shrink-0"
-                        />
-                        <span className="truncate">Repeat Loop</span>
-                      </label>
-                    </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300">
+                    <span className="font-mono truncate">
+                      Staged: <strong className="text-amber-300">{effectiveOverlayConfig.sponsorAdName || 'Default Sponsor'}</strong>
+                      {' · '}
+                      {effectiveOverlayConfig.sponsorAdPosition || 'top-right'}
+                      {' · '}
+                      {effectiveOverlayConfig.sponsorAdDurationSeconds}s
+                    </span>
+                    <Link
+                      to={matchId ? `/admin/broadcast-studio/${matchId}?tab=ads` : '/admin/sponsors'}
+                      className="font-bold text-[#FB923C] hover:underline whitespace-nowrap"
+                    >
+                      Configure Ads &amp; Timing in Sponsor Studio →
+                    </Link>
                   </div>
                 </div>
 
@@ -1472,74 +1204,18 @@ export function BroadcastOverlayConfigPage() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        When Team Takes Timeout
-                      </label>
-                      <select
-                        value={effectiveOverlayConfig.timeoutDisplayMode || 'fullscreen_ad'}
-                        disabled={saving}
-                        onChange={(e) =>
-                          void persistOverlayPatch({
-                            timeoutDisplayMode: e.target.value as TimeoutDisplayMode,
-                          })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      >
-                        <option value="fullscreen_ad">Show Timeout Ad</option>
-                        <option value="full_scoreboard">Show Full Scoreboard</option>
-                        <option value="none">Keep Normal Lower Scoreboard</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Timeout Ad Layout
-                      </label>
-                      <select
-                        value={effectiveOverlayConfig.timeoutAdLayout || 'fullscreen_card'}
-                        disabled={saving}
-                        onChange={(e) =>
-                          void persistOverlayPatch({
-                            timeoutAdLayout: e.target.value as TimeoutAdLayout,
-                          })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      >
-                        {TIMEOUT_AD_LAYOUTS.map((l) => (
-                          <option key={l} value={l}>
-                            {l === 'fullscreen_card'
-                              ? 'Fullscreen Spotlight'
-                              : l === 'floating_showcase'
-                                ? 'Floating Card'
-                                : 'Banner Strip'}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Timeout Ad Position
-                      </label>
-                      <select
-                        value={effectiveOverlayConfig.timeoutAdPosition || 'center'}
-                        disabled={saving}
-                        onChange={(e) =>
-                          void persistOverlayPatch({
-                            timeoutAdPosition: e.target.value as TimeoutAdPosition,
-                          })
-                        }
-                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                      >
-                        {TIMEOUT_AD_POSITIONS.map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300">
+                    <span className="font-mono truncate">
+                      On Timeout: <strong className="text-sky-300">{effectiveOverlayConfig.timeoutDisplayMode || 'fullscreen_ad'}</strong>
+                      {' · '}
+                      {(effectiveOverlayConfig.timeoutAdLayout || 'fullscreen_card').replace('_', ' ')} ({effectiveOverlayConfig.timeoutAdPosition || 'center'})
+                    </span>
+                    <Link
+                      to={matchId ? `/admin/broadcast-studio/${matchId}?tab=ads` : '/admin/sponsors'}
+                      className="font-bold text-orange-300 hover:underline whitespace-nowrap"
+                    >
+                      Configure Timeout Ad Layout →
+                    </Link>
                   </div>
 
                   {/* 20 Full Scoreboard Designs */}

@@ -9,7 +9,6 @@ import {
   SlidersHorizontal,
   UserCheck,
   UserX,
-  Video,
 } from 'lucide-react';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -363,57 +362,24 @@ export function AdminBroadcastersPage() {
             )}
           </section>
 
-          {/* Recent Broadcast Production Activity */}
-          <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-            <h2 className="font-display text-base font-bold text-slate-900 flex items-center gap-2">
-              <ClipboardList className="w-4 h-4 text-[#EA580C]" />
-              <span>Recent Broadcast Production Audit Logs</span>
-            </h2>
-            {data.recentAuditLogs.length === 0 ? (
-              <p className="text-xs text-slate-500">No broadcast activity logged yet.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-[11px] uppercase text-slate-500">
-                      <th className="py-2 pr-3">Time</th>
-                      <th className="py-2 pr-3">Action</th>
-                      <th className="py-2 pr-3">Operator</th>
-                      <th className="py-2 pr-3">Status</th>
-                      <th className="py-2">Scene / Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.recentAuditLogs.slice(0, 20).map((l) => (
-                      <tr key={l.id}>
-                        <td className="py-2 pr-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                          {new Date(l.timestamp).toLocaleString()}
-                        </td>
-                        <td className="py-2 pr-3 font-mono font-semibold text-slate-800 whitespace-nowrap">
-                          {l.actionType}
-                        </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
-                          {l.userName || 'System'}{' '}
-                          <span className="text-slate-400">({l.userRole || '—'})</span>
-                        </td>
-                        <td className="py-2 pr-3 font-mono">
-                          <span
-                            className={
-                              l.obsStatus === 'SUCCESS' ? 'text-emerald-700' : 'text-red-600'
-                            }
-                          >
-                            {l.obsStatus}
-                          </span>
-                        </td>
-                        <td className="py-2 text-slate-600 truncate max-w-xs">
-                          {l.newScene || l.cameraName || l.errorDetails || '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          {/* Broadcast Audit Logs Summary */}
+          <section className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-sm text-slate-700">
+              <ClipboardList className="w-4 h-4 text-[#EA580C] shrink-0" />
+              <span>
+                <strong className="text-slate-900">Broadcast Production Activity:</strong>{' '}
+                {data.recentAuditLogs.length} recent events recorded
+                {data.recentAuditLogs[0]
+                  ? ` · Latest: ${data.recentAuditLogs[0].actionType} (${new Date(data.recentAuditLogs[0].timestamp).toLocaleString()})`
+                  : ''}
+              </span>
+            </div>
+            <Link
+              to="/admin/audit-logs"
+              className="text-xs font-bold text-[#EA580C] hover:underline whitespace-nowrap"
+            >
+              View Full Audit Logs →
+            </Link>
           </section>
         </>
       )}

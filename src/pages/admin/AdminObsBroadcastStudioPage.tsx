@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Activity,
   AlertTriangle,
   ArrowDown,
   ArrowRightLeft,
@@ -14,7 +13,6 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
-  Clock,
   Copy,
   Download,
   Edit3,
@@ -29,7 +27,6 @@ import {
   Megaphone,
   Mic,
   MicOff,
-  Monitor,
   Plus,
   QrCode,
   Radio,
@@ -41,8 +38,6 @@ import {
   ShieldAlert,
   Sliders,
   SlidersHorizontal,
-  Smartphone,
-  Sparkles,
   Square,
   Star,
   Terminal,
@@ -66,7 +61,6 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
-import { isMatchPreparedDraft } from '../../utils/broadcastWorkflow.ts';
 import { offlineScoreQueue } from '../../utils/offlineScoreQueue.ts';
 import type { BroadcastOverlayConfig, LiveStreamData, StreamingProvider } from '../../types/index.ts';
 import type {
@@ -93,26 +87,11 @@ import type {
 } from '../../types/obs.ts';
 import {
   FULL_SCOREBOARD_STYLES,
-  OVERLAY_MODES,
-  OVERLAY_POSITIONS,
-  OVERLAY_SCALES,
-  OVERLAY_SLIDER_BOUNDS,
-  OVERLAY_THEMES,
-  OverlayMode,
-  OverlayPosition,
-  OverlayScale,
-  OverlayTheme,
-  PRESET_SCALE_MULTIPLIERS,
   SCOREBOARD_STYLES,
-  computeOverlayMetrics,
   normalizeOverlayConfig,
   type FullScoreboardStyleId,
   type ScoreboardStyleId,
 } from '../../utils/overlayConfig.ts';
-import { OBS_THEME_MAP } from '../../components/obs/obsTheme.ts';
-import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
-import { FullScoreboardStyleSelector } from '../../components/obs/FullScoreboardStyleSelector.tsx';
-import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
 import { BroadcastSponsorAndTimeoutTab } from '../../components/obsStudio/BroadcastSponsorAndTimeoutTab.tsx';
 import {
   getLayoutSlotCount,
@@ -125,10 +104,7 @@ import type { DetectedFrameContentInfo } from '../../utils/obsTransformGeometry.
 import { CameraFormModal, SmartphoneWizardModal } from '../../components/obsStudio/CameraSetupModal.tsx';
 import { LarixConnectionModal } from '../../components/obsStudio/LarixConnectionModal.tsx';
 import { CameraPreviewGrid } from '../../components/obsStudio/CameraPreviewGrid.tsx';
-import {
-  ProgramAndCompositionWorkspace,
-  ProgramMonitorMode,
-} from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
+import type { ProgramMonitorMode } from '../../components/obsStudio/ProgramAndCompositionWorkspace.tsx';
 import { ControlRoomWorkflowPanel } from '../../components/obsStudio/ControlRoomWorkflowPanel.tsx';
 import { BroadcastGuideDrawer, GuideJumpTarget } from '../../components/obsStudio/BroadcastGuideDrawer.tsx';
 import { CameraSourceMappingModal } from '../../components/obsStudio/CameraSourceMappingModal.tsx';
@@ -167,6 +143,7 @@ function normalizeStudioTab(raw?: string | null): StudioTab {
     case 'scoreboard':
     case 'dashboard':
     case 'match_control':
+    case 'streaming':
       return 'scoreboard';
     case 'ads':
     case 'sponsor_ads':
@@ -176,7 +153,6 @@ function normalizeStudioTab(raw?: string | null): StudioTab {
     case 'layouts':
       return 'cameras';
     case 'graphics':
-    case 'streaming':
       return 'graphics';
     case 'settings':
     case 'audit':
@@ -297,8 +273,6 @@ export function AdminObsBroadcastStudioPage() {
   const [programSnapshotError, setProgramSnapshotError] = useState<string | null>(null);
   const pollingInFlightRef = useRef(false);
   const programPollingInFlightRef = useRef(false);
-  const overlaySliderDebounceRef = useRef<number | null>(null);
-  const pendingOverlaySliderRef = useRef<Record<string, unknown>>({});
   const notifyTimerRef = useRef<number | null>(null);
 
   // Staged Multi-Cam Composition & Production Desk state (explicit Preview vs Program separation)
@@ -307,7 +281,7 @@ export function AdminObsBroadcastStudioPage() {
   const [stagedLayoutType, setStagedLayoutType] = useState<ObsLayoutType>('SINGLE');
   const [stagedPipPosition, setStagedPipPosition] = useState<PipPosition>('bottom-right');
   const [stagedPipSize, setStagedPipSize] = useState<PipSize>('medium');
-  const [stagedSceneName, setStagedSceneName] = useState<string>('');
+  const [stagedSceneName] = useState<string>('');
   const [stagedIncludeScoreboard, setStagedIncludeScoreboard] = useState<boolean>(true);
   const [quickSwitchMode, setQuickSwitchMode] = useState<boolean>(false);
   const [programMonitorMode, setProgramMonitorMode] = useState<ProgramMonitorMode>('live_video');
@@ -382,9 +356,6 @@ export function AdminObsBroadcastStudioPage() {
   const [savingOverlay, setSavingOverlay] = useState(false);
   const [savingSponsors, setSavingSponsors] = useState(false);
 
-  // Audit log filter
-  const [auditFilter, setAuditFilter] = useState('');
-
   // Dynamic Scene Items & Friendly Scene Labels
   const [sceneItems, setSceneItems] = useState<ObsSceneItemData[]>([]);
   const [sceneItemsSceneName, setSceneItemsSceneName] = useState('');
@@ -447,7 +418,6 @@ export function AdminObsBroadcastStudioPage() {
   const [loadingAdDesigns, setLoadingAdDesigns] = useState(false);
   const [graphicsStudioView, setGraphicsStudioView] = useState<'library' | 'editor'>('library');
   const [editingAdDesign, setEditingAdDesign] = useState<BroadcastAdDesignData | null>(null);
-  const [showLiveQuickAds, setShowLiveQuickAds] = useState(false);
 
   const loadSavedAdDesigns = useCallback(async () => {
     if (!matchId) return;
@@ -686,7 +656,6 @@ export function AdminObsBroadcastStudioPage() {
   const scenes = studio?.scenes || [];
   const obsConnected = profile?.connectionStatus === 'CONNECTED';
   const canManageCameras = studio?.permissions?.canManageCameras !== false;
-  const canManageOverlays = studio?.permissions?.canManageOverlays !== false;
   const canControlStream = studio?.permissions?.canControlStream !== false;
   const canControlRecord = studio?.permissions?.canControlRecord !== false;
   const enabledCameras = useMemo(() => cameras.filter((c) => c.enabled), [cameras]);
@@ -1603,7 +1572,11 @@ export function AdminObsBroadcastStudioPage() {
       return;
     }
     if (target === 'overlay') {
-      setActiveTab('scoreboard');
+      if (!isBroadcasterPortal && matchId) {
+        navigate(`/broadcast/overlay/${matchId}`);
+      } else {
+        setActiveTab('scoreboard');
+      }
       return;
     }
     if (target === 'connection') {
@@ -1721,7 +1694,7 @@ export function AdminObsBroadcastStudioPage() {
   );
 
   useEffect(() => {
-    if (obsConnected && (activeTab === 'control_room' || activeTab === 'cameras' || activeTab === 'graphics')) {
+    if (obsConnected && (activeTab === 'control_room' || activeTab === 'cameras')) {
       loadSceneItems(profile?.activeObsScene || '');
       loadSceneTransforms(profile?.activeObsScene || '');
     } else if (!obsConnected) {
@@ -2443,55 +2416,6 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  function handleOverlaySliderChange(key: 'customScale', val: number) {
-    if (!matchId || !studio?.match) return;
-    const current = normalizeOverlayConfig(studio.match.overlayConfig);
-    const next = normalizeOverlayConfig({ ...current, [key]: val });
-    pendingOverlaySliderRef.current = { ...pendingOverlaySliderRef.current, [key]: val };
-    setStudio((prev) =>
-      prev ? { ...prev, match: { ...prev.match, overlayConfig: next } } : prev
-    );
-    triggerOverlayPreview({
-      matchId,
-      stream: buildPreviewStreamFromStudioMatch(studio.match, next),
-      score: liveMatchScore,
-      config: next,
-      sourceTabKey: activeTab,
-    });
-    if (overlaySliderDebounceRef.current !== null) {
-      window.clearTimeout(overlaySliderDebounceRef.current);
-    }
-    overlaySliderDebounceRef.current = window.setTimeout(async () => {
-      overlaySliderDebounceRef.current = null;
-      const patchToSend = { ...pendingOverlaySliderRef.current };
-      pendingOverlaySliderRef.current = {};
-      if (Object.keys(patchToSend).length === 0) return;
-      try {
-        setSavingOverlay(true);
-        const res = await liveStreamService.updateOverlayConfig(matchId, patchToSend);
-        if (res?.overlayConfig) {
-          setStudio((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  match: {
-                    ...prev.match,
-                    overlayConfig: normalizeOverlayConfig(res.overlayConfig),
-                  },
-                }
-              : prev
-          );
-        }
-        notifySuccess('Scoreboard overlay size synced live to OBS.');
-      } catch (err) {
-        setActionError(extractApiError(err, 'Failed to update scoreboard size.'));
-        await refetch();
-      } finally {
-        setSavingOverlay(false);
-      }
-    }, 160);
-  }
-
   async function handleOneClickSponsorAdToggle(sponsorOverride?: {
     id: string;
     name: string;
@@ -2560,12 +2484,6 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
-  const filteredAuditLogs = useMemo(() => {
-    const logs = studio?.auditLogs || [];
-    if (!auditFilter) return logs;
-    return logs.filter((l) => l.actionType === auditFilter);
-  }, [studio?.auditLogs, auditFilter]);
-
   useEffect(() => {
     if (matchId) {
       setStickyMatchId(matchId);
@@ -2598,7 +2516,6 @@ export function AdminObsBroadcastStudioPage() {
   ]);
 
   const currentOverlay = normalizeOverlayConfig(studio?.match?.overlayConfig);
-  const currentOverlayMetrics = computeOverlayMetrics(currentOverlay, false);
 
   const liveReadyStatus = obsConnected
     ? profile?.obsStreamActive
@@ -2926,47 +2843,7 @@ export function AdminObsBroadcastStudioPage() {
         </div>
       </header>
 
-      {/* Admin-only horizontal tab strip (Broadcaster portal uses its main left sidebar directly) */}
-      {!isBroadcasterPortal && (
-        <div
-          role="tablist"
-          aria-label="Broadcast studio tabs"
-          className="bg-[#0B101B] border-b border-slate-800/90 px-3 py-1.5 flex flex-wrap items-center gap-1.5"
-        >
-          {(
-            [
-              { id: 'control_room', label: 'Control Room', icon: Radio },
-              { id: 'scoreboard', label: 'Match & Scoreboard', icon: Tv },
-              { id: 'ads', label: 'Sponsor & Timeout Ads', icon: Megaphone },
-              { id: 'cameras', label: 'Cameras & Layouts', icon: Camera },
-              { id: 'graphics', label: 'Graphics & Stream', icon: Sparkles },
-              { id: 'settings', label: 'Studio Settings', icon: Settings },
-            ] as const
-          ).map((item) => {
-            const Icon = item.icon;
-            const active = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setActiveTab(item.id)}
-                className={`h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                  active
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'bg-[#121826] text-slate-300 hover:text-white border border-slate-800'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5 shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Main Control Room Content (no duplicate sidebar) */}
+      {/* Main Control Room Content (single sidebar handles tab navigation cleanly) */}
       <div className="min-h-[760px]">
         <div className="p-2 space-y-2.5 bg-[#070A10]">
           {/* Banners */}
@@ -3218,7 +3095,13 @@ export function AdminObsBroadcastStudioPage() {
                     onOpenConnection={() => setActiveTab('settings')}
                     onOpenMapSources={() => setMapSourcesModalOpen(true)}
                     onOpenCamerasTab={() => setActiveTab('cameras')}
-                    onOpenOverlayTab={() => setActiveTab('scoreboard')}
+                    onOpenOverlayTab={() => {
+                      if (!isBroadcasterPortal && matchId) {
+                        navigate(`/broadcast/overlay/${matchId}`);
+                      } else {
+                        setActiveTab('scoreboard');
+                      }
+                    }}
                     onOpenGuide={() => setGuideOpen(true)}
                   />
 
@@ -3441,44 +3324,22 @@ export function AdminObsBroadcastStudioPage() {
               )}
 
               {/* ============================================================== */}
-              {/* CAMERAS & LAYOUTS: MULTI-BOX INSPECTOR & ADVANCED SCENES       */}
+              {/* CAMERAS & INPUTS: CAMERA GRID, SOURCES & SAVED PRESETS        */}
               {/* ============================================================== */}
               {activeTab === 'cameras' && (
                 <div className="space-y-5 text-slate-900">
-                  <ProgramAndCompositionWorkspace
-                    cameras={cameras}
-                    profile={profile}
-                    obsConnected={obsConnected}
-                    previewSnapshots={previewSnapshots}
-                    programSnapshotError={programSnapshotError}
-                    capturingProgramPreview={capturingProgramPreview}
-                    programMonitorMode={programMonitorMode}
-                    onChangeProgramMonitorMode={setProgramMonitorMode}
-                    selectedCameraIds={stagedCameraIds}
-                    mainCameraId={stagedMainCameraId}
-                    layoutType={stagedLayoutType}
-                    pipPosition={stagedPipPosition}
-                    pipSize={stagedPipSize}
-                    customSceneName={stagedSceneName}
-                    includeScoreboardOverlay={stagedIncludeScoreboard}
-                    applying={applyingLayout}
-                    onChangeSelectedCameraIds={setStagedCameraIds}
-                    onChangeMainCameraId={setStagedMainCameraId}
-                    onChangeLayoutType={setStagedLayoutType}
-                    onChangePipPosition={setStagedPipPosition}
-                    onChangePipSize={setStagedPipSize}
-                    onChangeCustomSceneName={setStagedSceneName}
-                    onChangeIncludeScoreboardOverlay={setStagedIncludeScoreboard}
-                    onRefreshProgramPreview={() => handleCaptureActiveScenePreview()}
-                    onApplyLive={handleApplyStagedComposition}
-                    onSavePreset={handleSaveScenePreset}
-                    onOpenConnectionTab={() => setActiveTab('settings')}
-                    obsTransforms={obsTransforms}
-                    detectedContentMap={detectedContentMap}
-                    onFrameContentDetected={handleFrameContentDetected}
-                    updatingTransformCamId={updatingTransformCamId}
-                    onUpdateCameraFraming={handleUpdateCameraFraming}
-                  />
+                  <div className="rounded-xl border border-slate-800 bg-[#0B101B] px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-200">
+                    <span>
+                      Live Program Monitor, Preview Staging &amp; Multi-Cam Layouts (Single, Split, PiP, Grid) are operated in <strong>Control Room</strong>.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('control_room')}
+                      className="h-8 px-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold whitespace-nowrap"
+                    >
+                      Open Control Room →
+                    </button>
+                  </div>
 
                   {/* Visual Connected Camera Panel */}
                   <CameraPreviewGrid
@@ -3546,7 +3407,7 @@ export function AdminObsBroadcastStudioPage() {
                         Advanced OBS Controls, Native Scenes &amp; Saved Presets
                       </p>
                       <p className="text-[11px] text-slate-500 truncate">
-                        {profile.obsScenes.length} OBS scenes · {sceneItems.length} active sources · {scenes.length} saved presets · YouTube Live monitor
+                        {profile.obsScenes.length} OBS scenes · {sceneItems.length} active sources · {scenes.length} saved presets
                       </p>
                     </div>
                   </div>
@@ -3834,124 +3695,8 @@ export function AdminObsBroadcastStudioPage() {
                       </div>
                     )}
                   </section>
-
-                  {/* YouTube Live Broadcast Output & Live Monitor Preview */}
-                  <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
-                          YouTube Live &amp; Broadcast Monitor
-                        </h3>
-                        <p className="text-[11px] text-slate-500">
-                          Associate the ongoing YouTube Live URL / ID for spectators without restarting OBS.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowInlineYtPreview((v) => !v)}
-                        className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0"
-                      >
-                        <Tv className="w-3 h-3 text-[#EA580C]" />
-                        <span>{showInlineYtPreview ? 'Hide Player' : 'Preview Live Feed'}</span>
-                      </button>
-                    </div>
-
-                    <form onSubmit={handleSaveYouTubeOutput} className="space-y-2.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <input
-                          type="text"
-                          value={ytInputDraft}
-                          onChange={(e) => setYtInputDraft(e.target.value)}
-                          placeholder="YouTube Live URL or 11-char ID"
-                          className="sm:col-span-2 min-h-[36px] px-3 text-xs font-mono border border-slate-300 rounded-lg"
-                        />
-                        <select
-                          value={ytProviderDraft}
-                          onChange={(e) => setYtProviderDraft(e.target.value as StreamingProvider)}
-                          className="min-h-[36px] px-2.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
-                        >
-                          <option value="youtube">YouTube Live</option>
-                          <option value="mediamtx">MediaMTX Direct</option>
-                        </select>
-                      </div>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] text-slate-500">
-                          Stream keys stay private inside OBS Studio — never stored in browser code.
-                        </span>
-                        <button
-                          type="submit"
-                          disabled={savingYtOutput}
-                          className="min-h-[32px] px-3.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
-                        >
-                          {savingYtOutput ? 'Saving...' : 'Update Output'}
-                        </button>
-                      </div>
-                    </form>
-
-                    {showInlineYtPreview && (
-                      <div className="relative aspect-video w-full rounded-lg overflow-hidden border border-slate-800 bg-black">
-                        <LiveStreamPlayer
-                          provider={studio.match.activeStreamingProvider}
-                          youtubeVideoId={studio.match.youtubeVideoId || ''}
-                          title={studio.match.matchTitle}
-                        />
-                      </div>
-                    )}
-                  </section>
                 </div>
               </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Collapsible One-Click Saved Ads & Live Graphics Strip right inside Live Desk */}
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setShowLiveQuickAds((v) => !v)}
-                  className="w-full px-4 sm:px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 flex flex-wrap items-center justify-between gap-2 text-left transition-colors"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Sparkles className="w-4 h-4 text-[#EA580C] shrink-0" />
-                    <div className="min-w-0">
-                      <p className="font-display text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide">
-                        Saved Broadcast Ads &amp; One-Click Live Sponsor Overlays
-                      </p>
-                      <p className="text-[11px] text-slate-500 truncate">
-                        {savedAdDesigns.filter((d) => !d.isTemplate).length} saved ads ·{' '}
-                        {studio.graphicsState?.activeSlots?.length || 0} live on OBS ·{' '}
-                        {studio.graphicsState?.queue?.length || 0} queued
-                      </p>
-                    </div>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 shrink-0">
-                    <span>{showLiveQuickAds ? 'Hide Ads Desk' : 'Open Quick Ads'}</span>
-                    {showLiveQuickAds ? (
-                      <ChevronUp className="w-4 h-4" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4" />
-                    )}
-                  </span>
-                </button>
-
-                {showLiveQuickAds && matchId && (
-                  <div className="p-4 sm:p-5 border-t border-slate-200">
-                    <SavedAdsLibraryPanel
-                      compactMode
-                      matchId={matchId}
-                      tournamentId={studio.match.tournamentId}
-                      graphicsState={studio.graphicsState}
-                      designs={savedAdDesigns}
-                      loadingDesigns={loadingAdDesigns}
-                      bridgeOnline={Boolean(profile.agentOnline)}
-                      scheduleRevision={scheduleRevision}
-                      onRefreshDesigns={loadSavedAdDesigns}
-                      onGraphicsStateChange={handleGraphicsStateChange}
-                      onOpenStudioNew={handleOpenGraphicsEditorNew}
-                      onOpenStudioEdit={handleOpenGraphicsEditorEdit}
-                      onNotifySuccess={notifySuccess}
-                      onNotifyError={(msg) => setActionError(msg)}
-                    />
                   </div>
                 )}
               </div>
@@ -4332,32 +4077,87 @@ export function AdminObsBroadcastStudioPage() {
           )}
 
           {/* ============================================================== */}
-          {/* TAB 3: SCOREBOARD OVERLAY & SPONSORS SYNC                       */}
+          {/* TAB 3: STREAM OUTPUT MONITOR & OVERLAY STUDIO SUMMARY          */}
           {/* ============================================================== */}
           {activeTab === 'scoreboard' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 text-slate-900">
-              <section className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 text-slate-900">
+              <section className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
                   <div>
                     <h2 className="font-display text-base font-bold text-slate-900">
-                      MaidanLive Scoreboard Browser Source
+                      Live Output Monitor &amp; MediaMTX Receiver
                     </h2>
                     <p className="text-xs text-slate-500">
-                      Automatically injected above cameras in multi-cam scenes, synced live via Socket.IO.
+                      Verify what spectators currently see on {studio.match.activeStreamingProvider.toUpperCase()} without leaving Stream Output.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInlineYtPreview((v) => !v)}
+                    className="min-h-[34px] px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5"
+                  >
+                    <Tv className="w-3.5 h-3.5 text-[#EA580C]" />
+                    <span>{showInlineYtPreview ? 'Hide Player' : 'Preview Live Feed'}</span>
+                  </button>
+                </div>
+
+                {showInlineYtPreview && (
+                  <div className="relative aspect-video w-full rounded-lg overflow-hidden border border-slate-800 bg-black">
+                    <LiveStreamPlayer
+                      provider={studio.match.activeStreamingProvider}
+                      youtubeVideoId={studio.match.youtubeVideoId || ''}
+                      title={studio.match.matchTitle}
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <span className="text-slate-600 font-medium">MediaMTX Receiver</span>
+                    <span
+                      className={`font-mono font-bold ${
+                        profile.mediamtxState?.running ? 'text-emerald-700' : 'text-slate-500'
+                      }`}
+                    >
+                      {profile.mediamtxState?.running
+                        ? `Running (${profile.mediamtxState.activePathCount ?? profile.mediamtxState.activePaths?.length ?? 0} paths)`
+                        : 'Standby'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <span className="text-slate-600 font-medium">Public Failover &amp; Streams</span>
+                    <Link
+                      to="/admin/live-streams"
+                      className="font-semibold text-[#EA580C] hover:underline"
+                    >
+                      Open Live Streams →
+                    </Link>
+                  </div>
+                </div>
+              </section>
+
+              <section className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-slate-900">
+                      OBS Broadcast Overlay Status
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Style, positioning &amp; scale are managed in Overlay Studio.
                     </p>
                   </div>
                   <Link
                     to={`/broadcast/overlay/${matchId}`}
-                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
+                    className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600"
                   >
                     <Tv className="w-3.5 h-3.5" />
-                    <span>Open Full 16:9 Overlay Customizer</span>
+                    <span>Overlay Studio →</span>
                   </Link>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                    OBS Scoreboard Browser Source URL (1920×1080 Transparent)
+                    OBS Browser Source URL (1920×1080)
                   </label>
                   <div className="flex items-center gap-2">
                     <input
@@ -4365,12 +4165,12 @@ export function AdminObsBroadcastStudioPage() {
                       readOnly
                       value={studio.scoreboardOverlayUrl}
                       onFocus={(e) => e.currentTarget.select()}
-                      className="flex-1 min-h-[38px] px-3 text-xs font-mono border border-slate-300 rounded-lg bg-slate-50"
+                      className="flex-1 min-h-[36px] px-3 text-xs font-mono border border-slate-300 rounded-lg bg-slate-50"
                     />
                     <button
                       type="button"
                       onClick={() => copyText('sbUrl', studio.scoreboardOverlayUrl)}
-                      className="min-h-[38px] inline-flex items-center gap-1.5 px-3 text-xs font-semibold bg-slate-900 text-white rounded-lg"
+                      className="min-h-[36px] inline-flex items-center gap-1.5 px-3 text-xs font-semibold bg-slate-900 text-white rounded-lg"
                     >
                       {copiedKey === 'sbUrl' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       <span>{copiedKey === 'sbUrl' ? 'Copied' : 'Copy'}</span>
@@ -4378,307 +4178,33 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 </div>
 
-                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-700 cursor-pointer hover:bg-slate-100/70">
-                  <input
-                    type="checkbox"
-                    checked={studio.match.showScoreboardOnYoutube !== false}
-                    disabled={togglingScoreboardOnYoutube || studio.match.status === 'ENDED'}
-                    onChange={(e) => handleToggleScoreboardOnYoutube(e.target.checked)}
-                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#EA580C] shrink-0"
-                  />
-                  <span className="leading-snug">
-                    <strong className="text-slate-900 block">
-                      Scoreboard on YouTube (OBS Broadcast Output){' '}
-                      {togglingScoreboardOnYoutube ? '· Saving...' : ''}
-                    </strong>
-                    {studio.match.showScoreboardOnYoutube !== false
-                      ? 'Checked: OBS Browser Source renders the live scoreboard onto YouTube Live and MaidanLive.'
-                      : 'Unchecked: OBS Browser Source stays blank so YouTube stays clean; scoreboard shows only inside MaidanLive embedded video.'}
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="block text-[10px] text-slate-500 uppercase">Style / Mode</span>
+                    <span className="font-bold text-slate-900 truncate block">
+                      {currentOverlay.style} · {currentOverlay.visible ? currentOverlay.mode : 'hidden'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="block text-[10px] text-slate-500 uppercase">Sponsors / Staged</span>
+                    <span className="font-bold text-slate-900 truncate block">
+                      {profile.selectedSponsorIds.length} active · {currentOverlay.sponsorAdName || 'None'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-slate-500">
+                    Configure sponsor banners &amp; timeout ads:
                   </span>
-                </label>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Scoreboard Visibility &amp; Mode
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {OVERLAY_MODES.map((m: OverlayMode) => {
-                        const active = (currentOverlay.visible ? currentOverlay.mode : 'hidden') === m;
-                        return (
-                          <button
-                            key={m}
-                            type="button"
-                            disabled={savingOverlay}
-                            onClick={() =>
-                              handleUpdateOverlay({ mode: m, visible: m !== 'hidden' })
-                            }
-                            className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                              active
-                                ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            {m === 'hidden' ? (
-                              <span className="inline-flex items-center gap-1">
-                                <EyeOff className="w-3.5 h-3.5" /> Hidden
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1">
-                                <Eye className="w-3.5 h-3.5" /> {m.replace('_', ' ').toUpperCase()}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Overlay Position
-                    </label>
-                    <select
-                      value={currentOverlay.position}
-                      disabled={savingOverlay}
-                      onChange={(e) =>
-                        handleUpdateOverlay({ position: e.target.value as OverlayPosition })
-                      }
-                      className="w-full min-h-[38px] px-3 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
-                    >
-                      {OVERLAY_POSITIONS.map((pos) => (
-                        <option key={pos} value={pos}>
-                          {pos}
-                        </option>
-                      ))}
-                    </select>
-
-                    <label className="block text-xs font-semibold text-slate-700 mt-3 mb-1.5">
-                      Broadcast Theme
-                    </label>
-                    <select
-                      value={currentOverlay.theme}
-                      disabled={savingOverlay}
-                      onChange={(e) =>
-                        handleUpdateOverlay({ theme: e.target.value as OverlayTheme })
-                      }
-                      className="w-full min-h-[38px] px-3 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
-                    >
-                      {OVERLAY_THEMES.map((th) => (
-                        <option key={th} value={th}>
-                          {OBS_THEME_MAP[th].label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* 25 Scoreboard Layout Styles + Custom Designer */}
-                <div className="pt-3 border-t border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Scoreboard Design Style (25 Themes + Custom Designer)
-                    </label>
-                    <span className="text-[11px] font-mono text-purple-600 font-bold">
-                      {currentOverlay.style}
-                    </span>
-                  </div>
-                  <ScoreboardStyleSelector
-                    value={currentOverlay.style}
-                    disabled={savingOverlay}
-                    darkSurface={false}
-                    compact
-                    onChange={(style) => void handleUpdateOverlay({ style })}
-                  />
-                </div>
-
-                <div className="pt-3 border-t border-slate-200">
-                  <CustomScoreboardDesigner
-                    config={currentOverlay}
-                    disabled={savingOverlay}
-                    darkSurface={false}
-                    onChange={(patch) => void handleUpdateOverlay(patch)}
-                  />
-                </div>
-
-                {/* OBS Scoreboard Size & Scale Control */}
-                <div className="pt-3 border-t border-slate-200 space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <label className="text-xs font-semibold text-slate-700">
-                      OBS Scoreboard Size Preset &amp; Scale
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-mono text-slate-500">
-                        Width {currentOverlayMetrics.barWidthPct}% · Scale{' '}
-                        {Math.round(currentOverlayMetrics.overallScale * 100)}%
-                      </span>
-                      <button
-                        type="button"
-                        disabled={savingOverlay}
-                        onClick={() =>
-                          handleUpdateOverlay({ scale: 'medium', customScale: 1 })
-                        }
-                        className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-slate-600 bg-slate-100 border border-slate-300 rounded hover:bg-slate-200"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>Reset</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {OVERLAY_SCALES.map((sc: OverlayScale) => {
-                      const active = currentOverlay.scale === sc;
-                      return (
-                        <button
-                          key={sc}
-                          type="button"
-                          disabled={savingOverlay}
-                          onClick={() => handleUpdateOverlay({ scale: sc })}
-                          className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-semibold border capitalize transition-colors ${
-                            active
-                              ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {sc} ({Math.round(PRESET_SCALE_MULTIPLIERS[sc] * 100)}%)
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-slate-700">Fine Size Slider</span>
-                      <span className="font-mono font-bold text-[#EA580C]">
-                        {Math.round(currentOverlay.customScale * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={OVERLAY_SLIDER_BOUNDS.customScale.min}
-                      max={OVERLAY_SLIDER_BOUNDS.customScale.max}
-                      step={OVERLAY_SLIDER_BOUNDS.customScale.step}
-                      value={currentOverlay.customScale}
-                      aria-label="OBS Scoreboard Size Slider"
-                      onChange={(e) =>
-                        handleOverlaySliderChange('customScale', Number(e.target.value))
-                      }
-                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#EA580C]"
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-200 space-y-3">
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoSyncScoreboard}
-                      onChange={(e) => setAutoSyncScoreboard(e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
-                    />
-                    <span>
-                      Auto-create &amp; keep Scoreboard Browser Source on top when creating dynamic OBS scenes
-                    </span>
-                  </label>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      value={scoreboardSourceName}
-                      onChange={(e) => setScoreboardSourceName(e.target.value)}
-                      placeholder="OBS Scoreboard Source Name"
-                      className="flex-1 min-h-[36px] px-3 text-xs font-mono border border-slate-300 rounded-lg"
-                    />
-                    <button
-                      type="button"
-                      disabled={savingConn}
-                      onClick={() => handleSaveConnectionSettings()}
-                      className="min-h-[36px] px-4 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800"
-                    >
-                      Save OBS Overlay Rule
-                    </button>
-                  </div>
-                </div>
-              </section>
-
-              {/* Right Column: 20 Full Scoreboard Designs + Sponsor & Timeout Ads Hub Link */}
-              <section className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                  <div>
-                    <h2 className="font-display text-base font-bold text-slate-900">
-                      Full Scoreboard Designs (20 Sport Themes)
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      Choose from Cricket, Kabaddi, Football, Volleyball, or Multi-Sport full-screen designs.
-                    </p>
-                  </div>
                   <button
                     type="button"
-                    disabled={savingOverlay}
-                    onClick={() =>
-                      void handleUpdateOverlay({
-                        fullScoreboardVisible: !currentOverlay.fullScoreboardVisible,
-                        ...(currentOverlay.fullScoreboardVisible
-                          ? {}
-                          : { timeoutFullscreenSponsorAdActive: false }),
-                      })
-                    }
-                    className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider border transition-colors ${
-                      currentOverlay.fullScoreboardVisible
-                        ? 'bg-sky-500 hover:bg-sky-400 text-slate-950 border-sky-500 shadow'
-                        : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border-slate-900'
-                    }`}
+                    onClick={() => setActiveTab('ads')}
+                    className="min-h-[32px] inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold"
                   >
-                    <Tv className="w-3.5 h-3.5" />
-                    <span>
-                      {currentOverlay.fullScoreboardVisible
-                        ? 'Full Scoreboard ON'
-                        : 'Show Full Scoreboard'}
-                    </span>
+                    <Megaphone className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Sponsor &amp; Timeout Ads →</span>
                   </button>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-semibold text-slate-600">
-                    Active Sport: {studio.match.gameName || 'Multi-Sport'}
-                  </span>
-                  <span className="font-mono text-sky-600 font-bold">
-                    {currentOverlay.fullScoreboardStyle}
-                  </span>
-                </div>
-
-                <FullScoreboardStyleSelector
-                  value={currentOverlay.fullScoreboardStyle}
-                  matchSport={studio.match.gameName}
-                  disabled={savingOverlay}
-                  darkSurface={false}
-                  compact
-                  onChange={(fullScoreboardStyle) =>
-                    void handleUpdateOverlay({ fullScoreboardStyle })
-                  }
-                />
-
-                {/* Handoff Card to Dedicated Sponsor & Timeout Ads Tab */}
-                <div className="pt-3 border-t border-slate-200 space-y-2.5">
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0 space-y-0.5">
-                      <p className="text-xs font-bold text-slate-900">
-                        Sponsor Ad &amp; Timeout Ad Studio
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {profile.selectedSponsorIds.length} active sponsors · Staged:{' '}
-                        <span className="font-semibold text-slate-700">
-                          {currentOverlay.sponsorAdName || 'None selected'}
-                        </span>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('ads')}
-                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold transition-colors shrink-0"
-                    >
-                      <Megaphone className="w-3.5 h-3.5" />
-                      <span>Open Sponsor &amp; Timeout Ads Tab</span>
-                    </button>
-                  </div>
                 </div>
               </section>
             </div>
@@ -5049,41 +4575,6 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 )}
 
-                {/* Dynamic OBS Scenes Quick Switcher (Zero Hardcoded Scenes) */}
-                {profile.obsScenes.length > 0 && (
-                  <div className="pt-2 border-t border-slate-200 space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs font-bold text-slate-800">
-                        Discovered OBS Studio Scenes ({profile.obsScenes.length}) — Click to Switch Live
-                      </p>
-                      <span className="text-[11px] font-mono text-slate-500">
-                        Active Program Scene: <strong className="text-[#EA580C]">{profile.activeObsScene || 'None'}</strong>
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {profile.obsScenes.map((sceneName) => {
-                        const isActive = profile.activeObsScene === sceneName;
-                        const label = profile.sceneLabels?.[sceneName] || sceneName;
-                        return (
-                          <button
-                            key={sceneName}
-                            type="button"
-                            onClick={() => handleSwitchSceneName(sceneName)}
-                            disabled={!obsConnected || switchingKey === sceneName}
-                            className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                              isActive
-                                ? 'bg-[#EA580C] text-white border-[#EA580C]'
-                                : 'bg-slate-50 text-slate-800 border-slate-300 hover:border-[#EA580C]'
-                            } disabled:opacity-50`}
-                          >
-                            <Layers className="w-3.5 h-3.5" />
-                            <span>{label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </section>
 
               {/* Registered Windows Local OBS Bridges Panel (Paired Devices List + Advanced Toggle) */}
@@ -6080,39 +5571,43 @@ export function AdminObsBroadcastStudioPage() {
                 )}
               </section>
 
-              {/* Beginner-Friendly Windows Setup & Verification Checklist */}
+              {/* OBS Browser Source Auto-Injection Rule (OBS Settings) */}
               <section className="lg:col-span-12 bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
-                <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
-                  One-Click Windows Broadcast Setup Guide (Zero-Cost Stack)
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-600">
-                  <div className="space-y-1.5">
-                    <p className="font-bold text-slate-900">1. Install MaidanLive OBS Bridge</p>
-                    <ol className="list-decimal list-inside space-y-1">
-                      <li>Click <strong>Download Windows Bridge</strong> above and run the installer once (no Node.js needed).</li>
-                      <li>Open OBS Studio 28+ (free, built-in WebSocket v5).</li>
-                      <li>Go to Tools → WebSocket Server Settings → Enable WebSocket server (port <strong>4455</strong>) &amp; set a password.</li>
-                      <li>Paste your YouTube Live Stream Key in OBS Settings → Stream → YouTube - RTMPS.</li>
-                    </ol>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wide">
+                      OBS Scoreboard Browser Source Injection Rule
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Configure the OBS source name automatically kept topmost in dynamically created multi-cam scenes.
+                    </p>
                   </div>
-                  <div className="space-y-1.5">
-                    <p className="font-bold text-slate-900">2. Pair in One Click &amp; Connect OBS</p>
-                    <ol className="list-decimal list-inside space-y-1">
-                      <li>Click <strong>Open / Pair Bridge</strong> above (or enter the 8-character Pairing Code / sign in inside the app).</li>
-                      <li>Enter your OBS port 4455 password once inside the desktop app (saved with Windows DPAPI encryption).</li>
-                      <li>Verify status reads <span className="font-mono font-semibold text-emerald-700">OBS CONNECTED</span> and your OBS scenes appear dynamically.</li>
-                      <li>Click Start Streaming once in OBS for a single continuous YouTube Live feed.</li>
-                    </ol>
-                  </div>
-                  <div className="space-y-1.5">
-                    <p className="font-bold text-slate-900">3. Switch Live &amp; Verify Match Page</p>
-                    <ol className="list-decimal list-inside space-y-1">
-                      <li>Paste your YouTube Live URL/ID in Live Switching &amp; Multi-Cam so viewers see your broadcast.</li>
-                      <li>Click any camera or scene button; OBS switches scenes remotely without restarting YouTube Live.</li>
-                      <li>Minimize the Windows Bridge to the System Tray—it runs quietly and auto-reconnects if dropped.</li>
-                      <li>Use <strong>Show Monitor</strong> on a live match row inside Admin Live Streams to preview the broadcast anytime.</li>
-                    </ol>
-                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoSyncScoreboard}
+                      onChange={(e) => setAutoSyncScoreboard(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+                    />
+                    <span>Auto-create &amp; keep Scoreboard Browser Source on top</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={scoreboardSourceName}
+                    onChange={(e) => setScoreboardSourceName(e.target.value)}
+                    placeholder="OBS Scoreboard Source Name"
+                    className="flex-1 min-w-[200px] min-h-[36px] px-3 text-xs font-mono border border-slate-300 rounded-lg"
+                  />
+                  <button
+                    type="button"
+                    disabled={savingConn}
+                    onClick={() => handleSaveConnectionSettings()}
+                    className="min-h-[36px] px-4 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {savingConn ? 'Saving...' : 'Save OBS Overlay Rule'}
+                  </button>
                 </div>
               </section>
             </div>
@@ -6120,274 +5615,24 @@ export function AdminObsBroadcastStudioPage() {
           })()}
 
           {/* ============================================================== */}
-          {/* STREAMING: YOUTUBE LIVE, OBS OUTPUT & MEDIAMTX INGEST          */}
-          {/* ============================================================== */}
-          {activeTab === 'graphics' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-              <section className="lg:col-span-7 rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
-                  <div>
-                    <h2 className="font-display text-base font-bold text-white">
-                      YouTube Live &amp; MediaMTX Output Stream
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Configure the public broadcast destination and control OBS streaming/recording without leaving Control Room.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowInlineYtPreview((v) => !v)}
-                    className="h-8 px-3 rounded-lg bg-[#121826] border border-slate-700 text-xs font-semibold text-slate-200 hover:border-purple-500 inline-flex items-center gap-1.5"
-                  >
-                    <Tv className="w-3.5 h-3.5 text-purple-400" />
-                    <span>{showInlineYtPreview ? 'Hide Player' : 'Preview Live Feed'}</span>
-                  </button>
-                </div>
-
-                <form onSubmit={handleSaveYouTubeOutput} className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      value={ytInputDraft}
-                      onChange={(e) => setYtInputDraft(e.target.value)}
-                      placeholder="YouTube Live URL or 11-char ID"
-                      className="sm:col-span-2 h-9 px-3 text-xs font-mono bg-[#121826] border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
-                    />
-                    <select
-                      value={ytProviderDraft}
-                      onChange={(e) => setYtProviderDraft(e.target.value as StreamingProvider)}
-                      className="h-9 px-2.5 text-xs font-semibold bg-[#121826] border border-slate-700 rounded-lg text-white"
-                    >
-                      <option value="youtube">YouTube Live</option>
-                      <option value="mediamtx">MediaMTX Direct</option>
-                    </select>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] text-slate-400">
-                      OBS Stream keys remain strictly inside local OBS Studio.
-                    </span>
-                    <button
-                      type="submit"
-                      disabled={savingYtOutput}
-                      className="h-8 px-3.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold disabled:opacity-50"
-                    >
-                      {savingYtOutput ? 'Saving...' : 'Save Output Destination'}
-                    </button>
-                  </div>
-                </form>
-
-                {showInlineYtPreview && (
-                  <div className="relative aspect-video w-full rounded-lg overflow-hidden border border-slate-800 bg-black">
-                    <LiveStreamPlayer
-                      provider={studio.match.activeStreamingProvider}
-                      youtubeVideoId={studio.match.youtubeVideoId || ''}
-                      title={studio.match.matchTitle}
-                    />
-                  </div>
-                )}
-
-                <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center gap-2">
-                  {canControlStream && (
-                    <button
-                      type="button"
-                      disabled={!obsConnected || executingObsAction !== null}
-                      onClick={() =>
-                        handleObsOutputAction(profile.obsStreamActive ? 'stop_stream' : 'start_stream')
-                      }
-                      className={`h-9 px-3.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-40 ${
-                        profile.obsStreamActive
-                          ? 'bg-red-600 hover:bg-red-500 text-white'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                      }`}
-                    >
-                      {profile.obsStreamActive ? <Square className="w-3.5 h-3.5" /> : <Radio className="w-3.5 h-3.5" />}
-                      <span>{profile.obsStreamActive ? 'Stop OBS Stream' : 'Start OBS Stream'}</span>
-                    </button>
-                  )}
-                  {canControlRecord && (
-                    <button
-                      type="button"
-                      disabled={!obsConnected || executingObsAction !== null}
-                      onClick={() =>
-                        handleObsOutputAction(profile.obsRecordActive ? 'stop_record' : 'start_record')
-                      }
-                      className={`h-9 px-3.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border disabled:opacity-40 ${
-                        profile.obsRecordActive
-                          ? 'bg-amber-600 border-amber-500 text-white'
-                          : 'bg-[#121826] border-slate-700 text-slate-200 hover:border-purple-500'
-                      }`}
-                    >
-                      <Circle className="w-3.5 h-3.5" />
-                      <span>{profile.obsRecordActive ? 'Stop OBS Recording' : 'Start OBS Recording'}</span>
-                    </button>
-                  )}
-                  {!isBroadcasterRole && !studio.match.broadcastPublished && (
-                    <button
-                      type="button"
-                      disabled={activatingBroadcast}
-                      onClick={handleActivateBroadcast}
-                      className="h-9 px-3.5 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
-                    >
-                      {activatingBroadcast ? 'Publishing...' : 'Publish Match Live'}
-                    </button>
-                  )}
-                </div>
-              </section>
-
-              <section className="lg:col-span-5 rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-3">
-                <h3 className="font-display text-sm font-bold text-white uppercase tracking-wide">
-                  OBS &amp; MediaMTX Stream Telemetry
-                </h3>
-                <div className="space-y-2 text-xs">
-                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
-                    <span className="text-slate-400">OBS Status</span>
-                    <span className={obsConnected ? 'text-emerald-400 font-bold' : 'text-slate-300'}>
-                      {obsConnected ? 'CONNECTED' : profile.connectionStatus}
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
-                    <span className="text-slate-400">FPS / Skipped Frames</span>
-                    <span className="font-mono text-slate-100">
-                      {obsConnected && profile.obsStats
-                        ? `${Math.round(profile.obsStats.activeFps)} fps · ${profile.obsStats.outputSkippedFrames} drop`
-                        : 'Unavailable'}
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-lg bg-[#101624] border border-slate-800 flex justify-between">
-                    <span className="text-slate-400">MediaMTX Receiver</span>
-                    <span className={profile.mediamtxState?.running ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                      {profile.mediamtxState?.running
-                        ? `Running (${profile.mediamtxState.activePathCount ?? profile.mediamtxState.activePaths?.length ?? 0} paths)`
-                        : 'Standby'}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('settings')}
-                  className="w-full h-9 rounded-lg bg-[#121826] border border-slate-700 hover:border-purple-500 text-xs font-semibold text-slate-200"
-                >
-                  Open Bridge &amp; MediaMTX Configuration
-                </button>
-              </section>
-            </div>
-          )}
-
-          {/* ============================================================== */}
-          {/* SETTINGS AUDIT LOGS (ADMIN ONLY)                               */}
+          {/* AUDIT LOGS HANDOFF SUMMARY (ADMIN ONLY)                        */}
           {/* ============================================================== */}
           {activeTab === 'settings' && !isBroadcasterRole && (
-            <section className="bg-white text-slate-900 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Broadcast Production Audit Trail ({studio.auditLogs.length})
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Every OBS connection, camera switch, multi-cam layout change, Admin Override, and rejected request is logged.
-                  </p>
-                </div>
-
-                <select
-                  value={auditFilter}
-                  onChange={(e) => setAuditFilter(e.target.value)}
-                  className="min-h-[36px] px-3 text-xs border border-slate-300 rounded-lg bg-white"
-                >
-                  <option value="">All Actions</option>
-                  <option value="CAMERA_SWITCH">CAMERA_SWITCH</option>
-                  <option value="LAYOUT_SWITCH">LAYOUT_SWITCH</option>
-                  <option value="SCENE_SWITCH">SCENE_SWITCH</option>
-                  <option value="OBS_CONNECT">OBS_CONNECT</option>
-                  <option value="OBS_DISCONNECT">OBS_DISCONNECT</option>
-                  <option value="OBS_STREAM_START">OBS_STREAM_START</option>
-                  <option value="OBS_STREAM_STOP">OBS_STREAM_STOP</option>
-                  <option value="OBS_RECORD_START">OBS_RECORD_START</option>
-                  <option value="OBS_RECORD_STOP">OBS_RECORD_STOP</option>
-                  <option value="CAMERA_AUDIO_TOGGLE">CAMERA_AUDIO_TOGGLE</option>
-                  <option value="CAMERA_DISCONNECTED">CAMERA_DISCONNECTED</option>
-                  <option value="BROADCAST_SESSION_STARTED">BROADCAST_SESSION_STARTED</option>
-                  <option value="BROADCAST_SESSION_ENDED">BROADCAST_SESSION_ENDED</option>
-                  <option value="CONTROLLER_TAKEOVER">CONTROLLER_TAKEOVER</option>
-                  <option value="ADMIN_OVERRIDE_ON">ADMIN_OVERRIDE_ON</option>
-                  <option value="ADMIN_OVERRIDE_OFF">ADMIN_OVERRIDE_OFF</option>
-                  <option value="CAMERA_CREATED">CAMERA_CREATED</option>
-                  <option value="CAMERA_TEST">CAMERA_TEST</option>
-                  <option value="GRAPHICS_SAVED">GRAPHICS_SAVED</option>
-                  <option value="GRAPHICS_SHOWN_LIVE">GRAPHICS_SHOWN_LIVE</option>
-                  <option value="GRAPHICS_HIDDEN">GRAPHICS_HIDDEN</option>
-                  <option value="GRAPHICS_CLEARED">GRAPHICS_CLEARED</option>
-                  <option value="GRAPHICS_QUEUE_UPDATED">GRAPHICS_QUEUE_UPDATED</option>
-                  <option value="GRAPHICS_EVENT_TRIGGERED">GRAPHICS_EVENT_TRIGGERED</option>
-                  <option value="GRAPHICS_ASSET_UPLOADED">GRAPHICS_ASSET_UPLOADED</option>
-                  <option value="GRAPHICS_DELETED">GRAPHICS_DELETED</option>
-                </select>
-              </div>
-
-              {filteredAuditLogs.length === 0 ? (
-                <p className="text-xs text-slate-500 py-6 text-center">
-                  No broadcast audit events recorded for this filter yet.
+            <section className="bg-white text-slate-900 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-sm font-bold text-slate-900">
+                  Broadcast Production Audit Logs ({studio.auditLogs.length} events recorded)
+                </h2>
+                <p className="text-xs text-slate-500">
+                  All OBS connections, camera cuts, layout switches, and override events are centralized in Audit Logs.
                 </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500">
-                        <th className="py-2 pr-3">Timestamp</th>
-                        <th className="py-2 pr-3">Action</th>
-                        <th className="py-2 pr-3">Operator</th>
-                        <th className="py-2 pr-3">Transition</th>
-                        <th className="py-2 pr-3">OBS Status</th>
-                        <th className="py-2">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {filteredAuditLogs.map((log) => (
-                        <tr key={log.id}>
-                          <td className="py-2.5 pr-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </td>
-                          <td className="py-2.5 pr-3 font-mono font-bold text-slate-800 whitespace-nowrap">
-                            {log.actionType}
-                            {log.adminOverride && (
-                              <span className="ml-1.5 px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px]">
-                                OVERRIDE
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2.5 pr-3 whitespace-nowrap">
-                            <span className="font-semibold text-slate-900">{log.userName || 'System'}</span>
-                            {log.userRole && (
-                              <span className="text-[10px] text-slate-500 ml-1">({log.userRole})</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 pr-3 font-mono text-[11px] text-slate-700">
-                            {log.previousScene || log.newScene
-                              ? `${log.previousScene || '—'} → ${log.newScene || '—'}`
-                              : log.cameraName || log.cameraId || '—'}
-                            {log.layoutSelected ? ` [${log.layoutSelected}]` : ''}
-                          </td>
-                          <td className="py-2.5 pr-3 whitespace-nowrap">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                                log.obsStatus === 'SUCCESS'
-                                  ? 'bg-emerald-50 text-emerald-700'
-                                  : log.obsStatus === 'REJECTED'
-                                    ? 'bg-amber-50 text-amber-800'
-                                    : 'bg-red-50 text-red-700'
-                              }`}
-                            >
-                              {log.obsStatus}
-                            </span>
-                          </td>
-                          <td className="py-2.5 text-[11px] text-slate-600 max-w-xs truncate" title={log.errorDetails}>
-                            {log.errorDetails || '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              </div>
+              <Link
+                to="/admin/audit-logs"
+                className="min-h-[34px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold whitespace-nowrap"
+              >
+                <span>Open Audit Logs →</span>
+              </Link>
             </section>
           )}
             </>

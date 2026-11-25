@@ -1,21 +1,15 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
-  Check,
   Clock,
-  Edit3,
+  ExternalLink,
   LayoutTemplate,
   Maximize2,
   Megaphone,
-  Plus,
   Sparkles,
-  Trash2,
 } from 'lucide-react';
-import type {
-  BroadcastOverlayConfig,
-  SponsorData,
-  SponsorPlacement,
-} from '../../types/index.ts';
+import type { BroadcastOverlayConfig } from '../../types/index.ts';
 import type { ObsStudioPayload } from '../../types/obs.ts';
 import {
   OVERLAY_POSITIONS,
@@ -34,9 +28,6 @@ import {
   SPONSOR_ANIMATION_OPTIONS,
   SPONSOR_TRANSITION_OPTIONS,
 } from '../../utils/sponsorAnimation.ts';
-import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
-import { extractApiError } from '../../services/api/httpClient.ts';
-import { ConfirmDialog } from '../common/ConfirmDialog.tsx';
 
 type StudioSponsorItem = ObsStudioPayload['sponsors'][number];
 
@@ -50,36 +41,11 @@ interface BroadcastSponsorAndTimeoutTabProps {
   canManageCatalog: boolean;
   onUpdateOverlay: (patch: Record<string, unknown>) => Promise<void>;
   onToggleMatchSponsor: (sponsorId: string) => Promise<void>;
-  onSponsorsChanged: () => Promise<void>;
+  onSponsorsChanged?: () => Promise<void>;
   onBackToControlRoom: () => void;
   onNotifySuccess: (msg: string) => void;
-  onNotifyError: (msg: string) => void;
+  onNotifyError?: (msg: string) => void;
 }
-
-interface SponsorDraftForm {
-  id?: string;
-  name: string;
-  logoUrl: string;
-  sponsorshipType: string;
-  tagline: string;
-  ctaText: string;
-  websiteUrl: string;
-  placement: SponsorPlacement;
-  isPublished: boolean;
-  isActive: boolean;
-}
-
-const EMPTY_SPONSOR_DRAFT: SponsorDraftForm = {
-  name: '',
-  logoUrl: '',
-  sponsorshipType: 'Title Sponsor',
-  tagline: '',
-  ctaText: 'SPONSORED',
-  websiteUrl: '',
-  placement: 'live_match',
-  isPublished: true,
-  isActive: true,
-};
 
 const POSITION_LABELS: Record<TimeoutAdPosition, string> = {
   center: 'Center',
@@ -119,17 +85,9 @@ export function BroadcastSponsorAndTimeoutTab({
   canManageCatalog,
   onUpdateOverlay,
   onToggleMatchSponsor,
-  onSponsorsChanged,
   onBackToControlRoom,
   onNotifySuccess,
-  onNotifyError,
 }: BroadcastSponsorAndTimeoutTabProps) {
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [draftForm, setDraftForm] = useState<SponsorDraftForm>(EMPTY_SPONSOR_DRAFT);
-  const [savingCatalog, setSavingCatalog] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StudioSponsorItem | null>(null);
-  const [deletingCatalog, setDeletingCatalog] = useState(false);
-
   // Local text input drafts so typing doesn't lag or fight backend sync
   const [sponsorTextDraft, setSponsorTextDraft] = useState<{
     name?: string;
@@ -160,104 +118,6 @@ export function BroadcastSponsorAndTimeoutTab({
   const timeoutBadgeVal = timeoutTextDraft.badgeText ?? effectiveConfig.timeoutAdBadgeText;
   const timeoutCtaVal = timeoutTextDraft.cta ?? effectiveConfig.timeoutAdCta;
   const timeoutLogoVal = timeoutTextDraft.logoUrl ?? effectiveConfig.timeoutAdLogoUrl;
-
-  function openCreateSponsor() {
-    setDraftForm({ ...EMPTY_SPONSOR_DRAFT });
-    setEditorOpen(true);
-  }
-
-  function openEditSponsor(sp: StudioSponsorItem) {
-    const validPlacements: readonly SponsorPlacement[] = [
-      'live_match',
-      'home_feed',
-      'tournament_banner',
-    ];
-    const safePlacement: SponsorPlacement = validPlacements.includes(
-      sp.placement as SponsorPlacement
-    )
-      ? (sp.placement as SponsorPlacement)
-      : 'live_match';
-    setDraftForm({
-      id: sp.id,
-      name: sp.name || '',
-      logoUrl: sp.logoUrl || '',
-      sponsorshipType: sp.sponsorshipType || 'Title Sponsor',
-      tagline: sp.tagline || '',
-      ctaText: sp.ctaText || 'SPONSORED',
-      websiteUrl: sp.websiteUrl || '',
-      placement: safePlacement,
-      isPublished: sp.isPublished !== false,
-      isActive: sp.isActive !== false,
-    });
-    setEditorOpen(true);
-  }
-
-  async function handleSaveSponsorCatalog(e: React.FormEvent) {
-    e.preventDefault();
-    if (!draftForm.name.trim()) {
-      onNotifyError('Sponsor name is required.');
-      return;
-    }
-    try {
-      setSavingCatalog(true);
-      const payload: Partial<SponsorData> = {
-        name: draftForm.name.trim(),
-        logoUrl: draftForm.logoUrl.trim(),
-        sponsorshipType: draftForm.sponsorshipType.trim() || 'Partner',
-        tagline: draftForm.tagline.trim(),
-        ctaText: draftForm.ctaText.trim() || 'SPONSORED',
-        websiteUrl: draftForm.websiteUrl.trim(),
-        placement: draftForm.placement,
-        isPublished: draftForm.isPublished,
-        isActive: draftForm.isActive,
-      };
-      if (draftForm.id) {
-        const updated = await platformOpsService.updateSponsor(draftForm.id, payload);
-        onNotifySuccess(`Updated sponsor "${updated.name}".`);
-        if (effectiveConfig.sponsorAdId === updated.id) {
-          await onUpdateOverlay({
-            sponsorAdName: updated.name,
-            sponsorAdTagline: updated.tagline || updated.sponsorshipType || '',
-            sponsorAdLogoUrl: updated.logoUrl || '',
-            sponsorAdCta: updated.ctaText || 'SPONSORED',
-          });
-        }
-        if (effectiveConfig.timeoutAdSponsorId === updated.id) {
-          await onUpdateOverlay({
-            timeoutAdTitle: updated.name,
-            timeoutAdSubtitle: updated.tagline || updated.sponsorshipType || '',
-            timeoutAdLogoUrl: updated.logoUrl || '',
-            timeoutAdCta: updated.ctaText || 'OFFICIAL PARTNER',
-          });
-        }
-      } else {
-        const created = await platformOpsService.createSponsor(payload);
-        onNotifySuccess(`Created sponsor "${created.name}".`);
-      }
-      setEditorOpen(false);
-      setDraftForm(EMPTY_SPONSOR_DRAFT);
-      await onSponsorsChanged();
-    } catch (err) {
-      onNotifyError(extractApiError(err, 'Failed to save sponsor.'));
-    } finally {
-      setSavingCatalog(false);
-    }
-  }
-
-  async function handleConfirmDeleteSponsor() {
-    if (!deleteTarget) return;
-    try {
-      setDeletingCatalog(true);
-      await platformOpsService.deleteSponsor(deleteTarget.id);
-      onNotifySuccess(`Removed sponsor "${deleteTarget.name}".`);
-      setDeleteTarget(null);
-      await onSponsorsChanged();
-    } catch (err) {
-      onNotifyError(extractApiError(err, 'Failed to delete sponsor.'));
-    } finally {
-      setDeletingCatalog(false);
-    }
-  }
 
   async function stageForSponsorAd(sp: StudioSponsorItem) {
     setSponsorTextDraft({});
@@ -328,7 +188,7 @@ export function BroadcastSponsorAndTimeoutTab({
             </h2>
           </div>
           <p className="text-xs text-slate-400">
-            Select or create sponsors, configure screen positions, duration, timing, and layout here — then use the Control Room <span className="text-amber-300 font-semibold">Sponsor Ad</span> or <span className="text-orange-300 font-semibold">Timeout Ad</span> buttons to trigger live on OBS &amp; player.
+            Select match sponsors, configure screen positions, duration, timing, and layout here — then use the Control Room <span className="text-amber-300 font-semibold">Sponsor Ad</span> or <span className="text-orange-300 font-semibold">Timeout Ad</span> buttons to trigger live on OBS &amp; player.
           </p>
           <p className="text-[11px] font-mono text-slate-300 pt-0.5 truncate">
             Staged Sponsor Ad: <span className="text-amber-300">{activeStagedSponsorName}</span> ({effectiveConfig.sponsorAdPosition}) · Timeout Ad: <span className="text-orange-300">{activeTimeoutTitle}</span> ({effectiveConfig.timeoutAdLayout.replace('_', ' ')} · {effectiveConfig.timeoutAdPosition})
@@ -390,7 +250,7 @@ export function BroadcastSponsorAndTimeoutTab({
         </div>
       </div>
 
-      {/* SECTION 1: SPONSOR CATALOG MANAGER */}
+      {/* SECTION 1: MATCH SPONSOR ASSIGNMENT */}
       <section className="rounded-xl border border-slate-800 bg-[#0B101B] p-4 sm:p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
           <div>
@@ -398,161 +258,19 @@ export function BroadcastSponsorAndTimeoutTab({
               Registered Sponsors ({sponsors.length} available · {selectedSponsorIds.length} active on match)
             </h3>
             <p className="text-xs text-slate-400">
-              Create, edit, or select any sponsor to stage its branding into the Sponsor Ad banner or Timeout Ad spotlight.
+              Select sponsors for this match or stage them directly into the Sponsor Ad banner or Timeout Ad spotlight.
             </p>
           </div>
           {canManageCatalog && (
-            <button
-              type="button"
-              onClick={openCreateSponsor}
-              className="min-h-[36px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#EA580C] hover:bg-orange-500 text-white text-xs font-bold transition-colors shrink-0"
+            <Link
+              to="/admin/sponsors"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-orange-500/60 text-orange-300 text-xs font-bold transition-colors shrink-0 whitespace-nowrap"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Create Sponsor</span>
-            </button>
+              <span>Manage Global Sponsor Catalog</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
           )}
         </div>
-
-        {/* Inline Create / Edit Sponsor Drawer */}
-        {editorOpen && (
-          <form
-            onSubmit={handleSaveSponsorCatalog}
-            className="rounded-xl border border-amber-500/40 bg-slate-950/90 p-4 space-y-3"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-display text-sm font-bold text-amber-300">
-                {draftForm.id ? 'Edit Sponsor Details' : 'Create New Sponsor'}
-              </p>
-              <button
-                type="button"
-                onClick={() => setEditorOpen(false)}
-                className="text-xs font-semibold text-slate-400 hover:text-white"
-              >
-                Cancel
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Sponsor Brand Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={draftForm.name}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g. Apex Energy"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Sponsorship Tier / Type
-                </label>
-                <input
-                  type="text"
-                  value={draftForm.sponsorshipType}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, sponsorshipType: e.target.value }))}
-                  placeholder="Title Sponsor / Co-Partner"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  CTA Badge Text
-                </label>
-                <input
-                  type="text"
-                  value={draftForm.ctaText}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, ctaText: e.target.value }))}
-                  placeholder="OFFICIAL PARTNER"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Sponsor Logo URL
-                </label>
-                <input
-                  type="url"
-                  value={draftForm.logoUrl}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, logoUrl: e.target.value }))}
-                  placeholder="https://cdn.example.com/sponsor-logo.png"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Website URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  value={draftForm.websiteUrl}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, websiteUrl: e.target.value }))}
-                  placeholder="https://brand.com"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Tagline / Offer Copy
-                </label>
-                <input
-                  type="text"
-                  value={draftForm.tagline}
-                  onChange={(e) => setDraftForm((f) => ({ ...f, tagline: e.target.value }))}
-                  placeholder="Powering Champions Across Every Arena"
-                  className="w-full min-h-[36px] px-3 text-xs rounded-lg border border-slate-700 bg-slate-900 text-white"
-                />
-              </div>
-
-              <div className="flex items-end gap-4">
-                <label className="inline-flex items-center gap-2 text-xs text-slate-200 cursor-pointer min-h-[36px]">
-                  <input
-                    type="checkbox"
-                    checked={draftForm.isActive}
-                    onChange={(e) => setDraftForm((f) => ({ ...f, isActive: e.target.checked }))}
-                    className="w-4 h-4 rounded border-slate-600 text-amber-500"
-                  />
-                  <span>Active</span>
-                </label>
-                <label className="inline-flex items-center gap-2 text-xs text-slate-200 cursor-pointer min-h-[36px]">
-                  <input
-                    type="checkbox"
-                    checked={draftForm.isPublished}
-                    onChange={(e) => setDraftForm((f) => ({ ...f, isPublished: e.target.checked }))}
-                    className="w-4 h-4 rounded border-slate-600 text-amber-500"
-                  />
-                  <span>Published</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setEditorOpen(false)}
-                className="min-h-[34px] px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={savingCatalog}
-                className="min-h-[34px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold disabled:opacity-50"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>{savingCatalog ? 'Saving...' : draftForm.id ? 'Update Sponsor' : 'Create Sponsor'}</span>
-              </button>
-            </div>
-          </form>
-        )}
 
         {sponsors.length === 0 ? (
           <div className="p-6 rounded-xl border border-dashed border-slate-800 bg-slate-950/60 text-center space-y-2">
@@ -560,7 +278,7 @@ export function BroadcastSponsorAndTimeoutTab({
               No active sponsors in the catalog yet.
             </p>
             <p className="text-[11px] text-slate-400">
-              Create a sponsor above or configure custom Sponsor Ad &amp; Timeout Ad details directly below.
+              Add sponsors in the Global Sponsor Catalog or configure custom Sponsor Ad &amp; Timeout Ad details directly below.
             </p>
           </div>
         ) : (
@@ -619,29 +337,6 @@ export function BroadcastSponsorAndTimeoutTab({
                         )}
                       </div>
                     </label>
-
-                    {canManageCatalog && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => openEditSponsor(sp)}
-                          title="Edit sponsor"
-                          aria-label={`Edit ${sp.name}`}
-                          className="p-1.5 rounded-md border border-slate-800 bg-slate-900 hover:border-slate-600 text-slate-300 hover:text-white"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(sp)}
-                          title="Delete sponsor"
-                          aria-label={`Delete ${sp.name}`}
-                          className="p-1.5 rounded-md border border-slate-800 bg-slate-900 hover:border-red-500/60 text-slate-400 hover:text-red-400"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/80">
@@ -1395,16 +1090,6 @@ export function BroadcastSponsorAndTimeoutTab({
         </section>
       </div>
 
-      <ConfirmDialog
-        open={Boolean(deleteTarget)}
-        title="Delete Sponsor"
-        message={`Are you sure you want to delete "${deleteTarget?.name || 'this sponsor'}" from the sponsor catalog?`}
-        confirmLabel="Delete Sponsor"
-        variant="danger"
-        loading={deletingCatalog}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => void handleConfirmDeleteSponsor()}
-      />
     </div>
   );
 }
