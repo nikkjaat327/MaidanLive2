@@ -108,6 +108,7 @@ export interface VdoNinjaLinksInput {
   bitrateKbps?: number;
   lowBandwidthMode?: boolean;
   facingMode?: 'environment' | 'user';
+  includeCameraSelection?: boolean;
   cover?: boolean;
   rotationDeg?: number;
 }
@@ -151,7 +152,9 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
     `height=${height}`,
     `fps=${fps}`,
     `maxbitrate=${maxBitrate}`,
-    `videodevice=${input.facingMode === 'user' ? 'front' : 'back'}`,
+    ...(input.includeCameraSelection
+      ? [`videodevice=${input.facingMode === 'user' ? 'front' : 'back'}`]
+      : []),
     input.lowBandwidthMode ? 'codec=vp8&quality=2' : 'quality=1',
     'webcam',
     'autostart',
@@ -183,7 +186,10 @@ export function buildVdoNinjaLinks(input: VdoNinjaLinksInput): {
   };
 }
 
-export function sanitizeVdoPushUrl(rawUrl: string): string {
+export function sanitizeVdoPushUrl(
+  rawUrl: string,
+  options?: { includeCameraSelection?: boolean }
+): string {
   const trimmed = String(rawUrl || '').trim();
   if (!trimmed) return '';
   try {
@@ -191,19 +197,23 @@ export function sanitizeVdoPushUrl(rawUrl: string): string {
     const isVdo = parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('push');
     if (!isVdo || !parsed.searchParams.has('push')) return trimmed;
 
-    // Never keep ?facing= or ?facingmode= on publisher URLs: VDO.Ninja enforces facingMode:{exact}
-    // in grabVideo(), which blocks its built-in flip camera button and postMessage switches.
-    const rawDevice =
-      parsed.searchParams.get('videodevice') ||
-      parsed.searchParams.get('facing') ||
-      parsed.searchParams.get('facingmode') ||
-      '';
-    if (rawDevice) {
-      const lower = rawDevice.trim().toLowerCase();
-      if (lower === 'user' || lower === 'front') {
-        parsed.searchParams.set('videodevice', 'front');
-      } else if (lower === 'environment' || lower === 'back' || lower === 'rear') {
-        parsed.searchParams.set('videodevice', 'back');
+    if (options?.includeCameraSelection === false) {
+      parsed.searchParams.delete('videodevice');
+    } else {
+      // Never keep ?facing= or ?facingmode= on publisher URLs: VDO.Ninja enforces facingMode:{exact}
+      // in grabVideo(), which blocks its built-in flip camera button and postMessage switches.
+      const rawDevice =
+        parsed.searchParams.get('videodevice') ||
+        parsed.searchParams.get('facing') ||
+        parsed.searchParams.get('facingmode') ||
+        '';
+      if (rawDevice) {
+        const lower = rawDevice.trim().toLowerCase();
+        if (lower === 'user' || lower === 'front') {
+          parsed.searchParams.set('videodevice', 'front');
+        } else if (lower === 'environment' || lower === 'back' || lower === 'rear') {
+          parsed.searchParams.set('videodevice', 'back');
+        }
       }
     }
     parsed.searchParams.delete('facing');

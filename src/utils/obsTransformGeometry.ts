@@ -377,7 +377,10 @@ export function getPreviewMediaStyles(options: {
   };
 }
 
-export function isolateVdoPushUrl(rawUrl: string): string {
+export function isolateVdoPushUrl(
+  rawUrl: string,
+  options?: { includeCameraSelection?: boolean }
+): string {
   const trimmed = String(rawUrl || '').trim();
   if (!trimmed) return '';
   try {
@@ -389,17 +392,21 @@ export function isolateVdoPushUrl(rawUrl: string): string {
       parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('push');
     if (!isVdo || !parsed.searchParams.has('push')) return trimmed;
 
-    const rawDevice =
-      parsed.searchParams.get('videodevice') ||
-      parsed.searchParams.get('facing') ||
-      parsed.searchParams.get('facingmode') ||
-      '';
-    if (rawDevice) {
-      const lower = rawDevice.trim().toLowerCase();
-      if (lower === 'user' || lower === 'front') {
-        parsed.searchParams.set('videodevice', 'front');
-      } else if (lower === 'environment' || lower === 'back' || lower === 'rear') {
-        parsed.searchParams.set('videodevice', 'back');
+    if (options?.includeCameraSelection === false) {
+      parsed.searchParams.delete('videodevice');
+    } else {
+      const rawDevice =
+        parsed.searchParams.get('videodevice') ||
+        parsed.searchParams.get('facing') ||
+        parsed.searchParams.get('facingmode') ||
+        '';
+      if (rawDevice) {
+        const lower = rawDevice.trim().toLowerCase();
+        if (lower === 'user' || lower === 'front') {
+          parsed.searchParams.set('videodevice', 'front');
+        } else if (lower === 'environment' || lower === 'back' || lower === 'rear') {
+          parsed.searchParams.set('videodevice', 'back');
+        }
       }
     }
     parsed.searchParams.delete('facing');

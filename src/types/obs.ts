@@ -289,6 +289,7 @@ export interface BroadcastCameraData {
   bitrateKbps: number;
   lowBandwidthMode: boolean;
   facingMode: 'environment' | 'user';
+  vdoCameraSelectionEnabled?: boolean;
   orientationMode?: CameraOrientationMode;
   previewFit?: CameraPreviewFit;
   portraitBackdropFill?: boolean;

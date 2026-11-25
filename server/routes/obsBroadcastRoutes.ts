@@ -301,6 +301,7 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
             bitrateKbps: cam.bitrateKbps,
             lowBandwidthMode: cam.lowBandwidthMode,
             facingMode: cam.facingMode,
+            includeCameraSelection: Boolean(cam.vdoCameraSelectionEnabled),
           })
         : null;
 
@@ -319,6 +320,7 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
         bitrateKbps: cam.bitrateKbps,
         lowBandwidthMode: cam.lowBandwidthMode,
         facingMode: cam.facingMode,
+        vdoCameraSelectionEnabled: Boolean(cam.vdoCameraSelectionEnabled),
         orientationMode: normalizeOrientationMode(cam.orientationMode),
         previewFit: normalizePreviewFit(cam.previewFit),
         portraitBackdropFill: cam.portraitBackdropFill !== false,
@@ -331,7 +333,9 @@ router.get('/camera-connect/:cameraDocId', async (req: Request, res: Response) =
         vdoPushUrl: vdoLinks?.pushUrl || '',
         connectionUrl:
           cam.sourceType === 'vdoninja'
-            ? sanitizeVdoPushUrl(cam.connectionUrl || '')
+            ? sanitizeVdoPushUrl(cam.connectionUrl || '', {
+                includeCameraSelection: Boolean(cam.vdoCameraSelectionEnabled),
+              })
             : cam.connectionUrl || '',
       },
       match: stream
@@ -2161,6 +2165,7 @@ router.post(
         bitrateKbps: Math.max(300, Math.min(12000, Number(req.body.bitrateKbps) || 2000)),
         lowBandwidthMode: Boolean(req.body.lowBandwidthMode),
         facingMode: req.body.facingMode === 'user' ? 'user' : 'environment',
+        vdoCameraSelectionEnabled: Boolean(req.body.vdoCameraSelectionEnabled),
         orientationMode: normalizeOrientationMode(req.body.orientationMode),
         previewFit: normalizePreviewFit(req.body.previewFit),
         portraitBackdropFill: req.body.portraitBackdropFill !== false,
@@ -2283,6 +2288,7 @@ router.post(
           fps: 30,
           bitrateKbps: 2000,
           facingMode: 'environment',
+          vdoCameraSelectionEnabled: Boolean(req.body.vdoCameraSelectionEnabled),
           obsSceneName: `CAM ${num} FULL`,
           obsInputName: `ML_CAM_${num}`,
           status: 'DISCONNECTED',
@@ -2385,6 +2391,9 @@ router.patch(
       if (typeof req.body.lowBandwidthMode === 'boolean') cam.lowBandwidthMode = req.body.lowBandwidthMode;
       const previousFacingMode = cam.facingMode || 'environment';
       if (req.body.facingMode === 'user' || req.body.facingMode === 'environment') cam.facingMode = req.body.facingMode;
+      if (typeof req.body.vdoCameraSelectionEnabled === 'boolean') {
+        cam.vdoCameraSelectionEnabled = req.body.vdoCameraSelectionEnabled;
+      }
       if (req.body.orientationMode !== undefined) cam.orientationMode = normalizeOrientationMode(req.body.orientationMode);
       if (req.body.previewFit !== undefined) cam.previewFit = normalizePreviewFit(req.body.previewFit);
       if (typeof req.body.portraitBackdropFill === 'boolean') cam.portraitBackdropFill = req.body.portraitBackdropFill;

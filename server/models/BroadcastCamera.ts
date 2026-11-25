@@ -83,6 +83,7 @@ export interface IBroadcastCamera extends Document {
   bitrateKbps: number;
   lowBandwidthMode: boolean;
   facingMode: 'environment' | 'user';
+  vdoCameraSelectionEnabled: boolean;
   orientationMode: CameraOrientationMode;
   previewFit: CameraPreviewFit;
   portraitBackdropFill: boolean;
@@ -166,6 +167,7 @@ const broadcastCameraSchema = new Schema<IBroadcastCamera>(
     bitrateKbps: { type: Number, default: 2000, min: 300, max: 12000 },
     lowBandwidthMode: { type: Boolean, default: false },
     facingMode: { type: String, enum: ['environment', 'user'], default: 'environment' },
+    vdoCameraSelectionEnabled: { type: Boolean, default: false },
     orientationMode: {
       type: String,
       enum: ['auto', '0', '90', '180', '270'],

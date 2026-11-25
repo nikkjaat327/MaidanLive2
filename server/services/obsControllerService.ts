@@ -1388,6 +1388,7 @@ export function buildObsEnsureInputForCamera(
       bitrateKbps: camera.bitrateKbps,
       lowBandwidthMode: camera.lowBandwidthMode,
       facingMode: camera.facingMode,
+      includeCameraSelection: Boolean(camera.vdoCameraSelectionEnabled),
     });
     return {
       inputName,
@@ -1693,6 +1694,7 @@ export function formatSafeCamera(
       bitrateKbps: camera.bitrateKbps,
       lowBandwidthMode: camera.lowBandwidthMode,
       facingMode: camera.facingMode,
+      includeCameraSelection: Boolean(camera.vdoCameraSelectionEnabled),
     });
   }
 
@@ -1772,6 +1774,7 @@ export function formatSafeCamera(
     bitrateKbps: Number(camera.bitrateKbps) || 2000,
     lowBandwidthMode: Boolean(camera.lowBandwidthMode),
     facingMode: camera.facingMode || 'environment',
+    vdoCameraSelectionEnabled: Boolean(camera.vdoCameraSelectionEnabled),
     orientationMode: normalizeOrientationMode(camera.orientationMode),
     previewFit: normalizePreviewFit(camera.previewFit),
     portraitBackdropFill: camera.portraitBackdropFill !== false,

@@ -6341,9 +6341,26 @@ export function AdminObsBroadcastStudioPage() {
           setWizardCamera(null);
           setWizardConnectUrl(null);
         }}
-        camera={wizardCamera}
+        camera={
+          wizardCamera
+            ? cameras.find((c) => c.cameraId === wizardCamera.cameraId) || wizardCamera
+            : null
+        }
         mobileConnectUrl={wizardConnectUrl}
         onRotateLink={handleRotatePhoneLink}
+        onUpdateCameraSettings={async (cameraId, patch) => {
+          if (!matchId) return;
+          try {
+            setActionError(null);
+            const res = await obsStudioService.updateCamera(matchId, cameraId, patch);
+            if (res?.camera) {
+              setWizardCamera(res.camera);
+            }
+            await refetch();
+          } catch (err) {
+            setActionError(extractApiError(err, 'Failed to update camera selection setting.'));
+          }
+        }}
       />
 
       {/* Larix Broadcaster + MediaMTX Connection Modal */}

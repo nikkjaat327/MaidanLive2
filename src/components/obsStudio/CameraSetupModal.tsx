@@ -52,6 +52,7 @@ export function CameraFormModal({
   const [bitrateKbps, setBitrateKbps] = useState('2000');
   const [lowBandwidthMode, setLowBandwidthMode] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [vdoCameraSelectionEnabled, setVdoCameraSelectionEnabled] = useState(false);
   const [orientationMode, setOrientationMode] = useState<CameraOrientationMode>('auto');
   const [previewFit, setPreviewFit] = useState<CameraPreviewFit>('contain');
   const [portraitBackdropFill, setPortraitBackdropFill] = useState(true);
@@ -85,6 +86,7 @@ export function CameraFormModal({
       setBitrateKbps(String(editingCamera.bitrateKbps || 2000));
       setLowBandwidthMode(Boolean(editingCamera.lowBandwidthMode));
       setFacingMode(editingCamera.facingMode || 'environment');
+      setVdoCameraSelectionEnabled(Boolean(editingCamera.vdoCameraSelectionEnabled));
       setOrientationMode(editingCamera.orientationMode || 'auto');
       setPreviewFit(editingCamera.previewFit || 'contain');
       setPortraitBackdropFill(editingCamera.portraitBackdropFill !== false);
@@ -110,6 +112,7 @@ export function CameraFormModal({
       setBitrateKbps('2000');
       setLowBandwidthMode(false);
       setFacingMode('environment');
+      setVdoCameraSelectionEnabled(false);
       setOrientationMode('auto');
       setPreviewFit('contain');
       setPortraitBackdropFill(true);
@@ -150,6 +153,7 @@ export function CameraFormModal({
         bitrateKbps: Number(bitrateKbps) || 2000,
         lowBandwidthMode,
         facingMode,
+        vdoCameraSelectionEnabled,
         orientationMode,
         previewFit,
         portraitBackdropFill,
@@ -354,17 +358,43 @@ export function CameraFormModal({
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Lens</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Phone Lens{sourceType === 'vdoninja' && !vdoCameraSelectionEnabled ? ' (Free Switch)' : ''}
+            </label>
             <select
               value={facingMode}
+              disabled={sourceType === 'vdoninja' && !vdoCameraSelectionEnabled}
               onChange={(e) => setFacingMode(e.target.value as 'environment' | 'user')}
-              className="w-full min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
+              className="w-full min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="environment">Rear (Main)</option>
               <option value="user">Front (Selfie)</option>
             </select>
           </div>
         </div>
+
+        {sourceType === 'vdoninja' && (
+          <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+            <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={vdoCameraSelectionEnabled}
+                onChange={(e) => setVdoCameraSelectionEnabled(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+              />
+              <span>
+                <span className="block font-semibold text-slate-900">
+                  Send Camera Selection in VDO.Ninja Link
+                </span>
+                <span className="block text-[11px] text-slate-600 mt-0.5">
+                  {vdoCameraSelectionEnabled
+                    ? 'Checked: MaidanLive passes Phone Lens (Rear/Front) inside the VDO.Ninja link.'
+                    : 'Unchecked: No camera selection parameter is sent in the link — camera person can freely switch cameras in VDO.Ninja.'}
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
@@ -522,6 +552,10 @@ interface SmartphoneWizardModalProps {
   camera: BroadcastCameraData | null;
   mobileConnectUrl: string | null;
   onRotateLink: (cameraId: string, expiresInHours?: number) => Promise<void>;
+  onUpdateCameraSettings?: (
+    cameraId: string,
+    patch: Partial<BroadcastCameraData>
+  ) => Promise<void>;
 }
 
 export function SmartphoneWizardModal({
@@ -530,10 +564,12 @@ export function SmartphoneWizardModal({
   camera,
   mobileConnectUrl,
   onRotateLink,
+  onUpdateCameraSettings,
 }: SmartphoneWizardModalProps) {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
+  const [updatingCameraSelection, setUpdatingCameraSelection] = useState(false);
   const [expiresInHours, setExpiresInHours] = useState(12);
 
   const effectiveUrl = mobileConnectUrl || camera?.vdoPushUrl || '';
@@ -667,6 +703,65 @@ export function SmartphoneWizardModal({
                 For security, the camera companion link token is hashed after generation. Click{' '}
                 <strong>Generate Fresh Phone Link</strong> to mint a new QR code &amp; link, or copy the direct VDO.Ninja push URL below.
               </p>
+            )}
+
+            {camera.sourceType === 'vdoninja' && onUpdateCameraSettings && (
+              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(camera.vdoCameraSelectionEnabled)}
+                    disabled={updatingCameraSelection}
+                    onChange={async (e) => {
+                      const nextChecked = e.target.checked;
+                      try {
+                        setUpdatingCameraSelection(true);
+                        await onUpdateCameraSettings(camera.cameraId, {
+                          vdoCameraSelectionEnabled: nextChecked,
+                        });
+                      } finally {
+                        setUpdatingCameraSelection(false);
+                      }
+                    }}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-[#EA580C]"
+                  />
+                  <span className="text-xs leading-snug">
+                    <span className="block font-semibold text-slate-900">
+                      Send Camera Selection in VDO.Ninja Link
+                    </span>
+                    <span className="block text-[11px] text-slate-600 mt-0.5">
+                      {camera.vdoCameraSelectionEnabled
+                        ? 'Checked: Selected Phone Lens is passed in the VDO.Ninja link.'
+                        : 'Unchecked: No camera selection in link — camera person can switch cameras on phone.'}
+                    </span>
+                  </span>
+                </label>
+                {camera.vdoCameraSelectionEnabled && (
+                  <div className="flex items-center gap-2 pl-6">
+                    <span className="text-[11px] font-semibold text-slate-700">Phone Lens:</span>
+                    <select
+                      aria-label="Phone Lens"
+                      value={camera.facingMode || 'environment'}
+                      disabled={updatingCameraSelection}
+                      onChange={async (e) => {
+                        const nextFacing = e.target.value === 'user' ? 'user' : 'environment';
+                        try {
+                          setUpdatingCameraSelection(true);
+                          await onUpdateCameraSettings(camera.cameraId, {
+                            facingMode: nextFacing,
+                          });
+                        } finally {
+                          setUpdatingCameraSelection(false);
+                        }
+                      }}
+                      className="min-h-[30px] px-2 text-xs border border-slate-300 rounded-md bg-white"
+                    >
+                      <option value="environment">Rear (Main)</option>
+                      <option value="user">Front (Selfie)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
             )}
 
             {camera.vdoPushUrl && (

@@ -37,6 +37,7 @@ interface CompanionState {
     bitrateKbps: number;
     lowBandwidthMode: boolean;
     facingMode: 'environment' | 'user';
+    vdoCameraSelectionEnabled?: boolean;
     enabled: boolean;
     status: string;
     operatorName: string;
@@ -269,16 +270,23 @@ export function CameraCompanionPage() {
     };
   }, [streamingActive, pushHeartbeat, cameraDocId, token, facingMode]);
 
-  // Adjust facing mode & mute state inside VDO.Ninja URL dynamically while enforcing publisher isolation
+  const includeCameraSelection = Boolean(data?.camera.vdoCameraSelectionEnabled);
+
+  // Adjust camera selection & mute state inside VDO.Ninja URL dynamically while enforcing publisher isolation
   const effectivePushUrl = useMemo(() => {
     const raw = data?.camera.vdoPushUrl || data?.camera.connectionUrl || '';
     if (!raw) return '';
     try {
-      const isolated = isolateVdoPushUrl(raw);
+      const isolated = isolateVdoPushUrl(raw, { includeCameraSelection });
       const u = new URL(isolated);
       if (u.hostname.toLowerCase().includes('vdo.ninja')) {
         u.searchParams.delete('facingmode');
-        u.searchParams.set('facing', facingMode);
+        u.searchParams.delete('facing');
+        if (includeCameraSelection) {
+          u.searchParams.set('videodevice', facingMode === 'user' ? 'front' : 'back');
+        } else {
+          u.searchParams.delete('videodevice');
+        }
         if (audioMuted) {
           u.searchParams.set('mute', '1');
         } else {
@@ -289,7 +297,7 @@ export function CameraCompanionPage() {
     } catch {
       return raw;
     }
-  }, [data?.camera.vdoPushUrl, data?.camera.connectionUrl, facingMode, audioMuted]);
+  }, [data?.camera.vdoPushUrl, data?.camera.connectionUrl, includeCameraSelection, facingMode, audioMuted]);
 
   async function handleLockLandscape() {
     setOrientationLockMsg(null);
@@ -451,16 +459,23 @@ export function CameraCompanionPage() {
                     <span>{audioMuted ? 'Mic Muted' : 'Mic Live'}</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))
-                    }
-                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-700 rounded-lg hover:bg-slate-800"
-                  >
-                    <FlipHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
-                    <span>Lens: {facingMode === 'environment' ? 'Rear Main' : 'Front Selfie'}</span>
-                  </button>
+                  {includeCameraSelection ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))
+                      }
+                      className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-700 rounded-lg hover:bg-slate-800"
+                    >
+                      <FlipHorizontal className="w-3.5 h-3.5 text-[#EA580C]" />
+                      <span>Lens: {facingMode === 'environment' ? 'Rear Main' : 'Front Selfie'}</span>
+                    </button>
+                  ) : (
+                    <span className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-950 border border-slate-800 text-slate-300 rounded-lg">
+                      <FlipHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Switch Camera Inside VDO.Ninja</span>
+                    </span>
+                  )}
 
                   <button
                     type="button"
