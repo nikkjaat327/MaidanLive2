@@ -42,7 +42,12 @@ import type {
   CameraPreviewFit,
   ObsSceneTransformItem,
 } from '../../src/utils/obsTransformGeometry.ts';
-import { emitBroadcastStudioEvent, emitRoomOnlyEvent, registerObsAgentHandlers } from '../socket/index.ts';
+import {
+  emitBroadcastStudioEvent,
+  emitCameraCompanionEvent,
+  emitRoomOnlyEvent,
+  registerObsAgentHandlers,
+} from '../socket/index.ts';
 import type { ObsAgentContext } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
 import {
@@ -4139,6 +4144,64 @@ export async function setCameraObsAudioMute(
     camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
     obsSynced,
     obsNote,
+  };
+}
+
+export async function setCameraFacingMode(
+  matchId: string,
+  cameraId: string,
+  facingMode: 'environment' | 'user',
+  actor: IUser,
+  override = false
+) {
+  const profile = await ensureObsProfileForMatch(matchId, actor._id as any);
+  checkAdminOverrideGuard(profile, actor, override);
+
+  const cam = await BroadcastCamera.findOne({ matchId, cameraId });
+  if (!cam) {
+    const err: any = new Error('Camera not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const previousFacingMode = cam.facingMode || 'environment';
+  cam.facingMode = facingMode;
+  await cam.save();
+
+  await writeBroadcastAudit({
+    matchId,
+    tournamentId: profile.tournamentId ? String(profile.tournamentId) : null,
+    actionType: 'CAMERA_FACING_CHANGED',
+    cameraId: cam.cameraId,
+    cameraName: cam.name,
+    actor,
+    adminOverride: Boolean(override),
+    obsStatus: 'SUCCESS',
+    metadata: {
+      previousFacingMode,
+      facingMode: cam.facingMode,
+      vdoStreamIdPreserved: cam.vdoStreamId || '',
+    },
+  });
+
+  emitCameraCompanionEvent(String(cam._id), 'camera:facing_changed', {
+    matchId,
+    cameraId: cam.cameraId,
+    cameraDocId: String(cam._id),
+    facingMode: cam.facingMode,
+    updatedBy: actor.name,
+  });
+
+  emitBroadcastStudioEvent(matchId, 'obs:camera_status', {
+    matchId,
+    cameraId: cam.cameraId,
+    facingMode: cam.facingMode,
+  });
+
+  await emitFullStudioState(matchId);
+
+  return {
+    camera: formatSafeCamera(cam.toObject(), profile, { includePrivateUrls: true }),
   };
 }
 

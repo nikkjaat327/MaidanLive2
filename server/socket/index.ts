@@ -4,6 +4,7 @@ export {
   emitStreamEvent,
   emitRoomOnlyEvent,
   emitBroadcastStudioEvent,
+  emitCameraCompanionEvent,
   registerObsAgentHandlers,
   emitTournamentEvent,
   emitUserNotification,

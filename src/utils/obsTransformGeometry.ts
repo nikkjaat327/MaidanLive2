@@ -389,10 +389,20 @@ export function isolateVdoPushUrl(rawUrl: string): string {
       parsed.hostname.toLowerCase().includes('vdo.ninja') || parsed.searchParams.has('push');
     if (!isVdo || !parsed.searchParams.has('push')) return trimmed;
 
-    const legacyFacing = parsed.searchParams.get('facingmode');
-    if (legacyFacing && !parsed.searchParams.has('facing')) {
-      parsed.searchParams.set('facing', legacyFacing === 'user' ? 'user' : 'environment');
+    const rawDevice =
+      parsed.searchParams.get('videodevice') ||
+      parsed.searchParams.get('facing') ||
+      parsed.searchParams.get('facingmode') ||
+      '';
+    if (rawDevice) {
+      const lower = rawDevice.trim().toLowerCase();
+      if (lower === 'user' || lower === 'front') {
+        parsed.searchParams.set('videodevice', 'front');
+      } else if (lower === 'environment' || lower === 'back' || lower === 'rear') {
+        parsed.searchParams.set('videodevice', 'back');
+      }
     }
+    parsed.searchParams.delete('facing');
     parsed.searchParams.delete('facingmode');
     parsed.searchParams.delete('scene');
     parsed.searchParams.delete('broadcast');
@@ -407,6 +417,98 @@ export function isolateVdoPushUrl(rawUrl: string): string {
   } catch {
     return trimmed;
   }
+}
+
+export interface VdoDeviceInfoLike {
+  deviceId?: string;
+  kind?: string;
+  label?: string;
+}
+
+export function normalizeVdoDeviceLabel(label?: string): string {
+  return String(label || '')
+    .replace(/\W/g, '_')
+    .toLowerCase();
+}
+
+/**
+ * Mirrors VDO.Ninja `gotDevices2` videoinput sorting (`#videoSource3.selectedIndex`)
+ * so `postMessage({ changeVideoDevice: index })` targets the exact physical camera
+ * without reloading the VDO.Ninja iframe or changing the `push` stream ID.
+ */
+export function sortVdoVideoInputs(
+  devices: VdoDeviceInfoLike[],
+  initialVideoDevice?: string
+): VdoDeviceInfoLike[] {
+  const videoInputs = (Array.isArray(devices) ? devices : []).filter(
+    (d) => d && d.kind === 'videoinput'
+  );
+  if (videoInputs.length === 0) return [];
+
+  const regular: VdoDeviceInfoLike[] = [];
+  const ndi: VdoDeviceInfoLike[] = [];
+  for (const d of videoInputs) {
+    const lowerLabel = String(d.label || '').toLowerCase();
+    if (lowerLabel.startsWith('ndi') || lowerLabel.startsWith('newtek')) {
+      ndi.push(d);
+    } else {
+      regular.push(d);
+    }
+  }
+  const ordered = [...regular, ...ndi];
+  const filterKey = normalizeVdoDeviceLabel(initialVideoDevice);
+  if (!filterKey) return ordered;
+
+  const startsWith: VdoDeviceInfoLike[] = [];
+  const includes: VdoDeviceInfoLike[] = [];
+  const rest: VdoDeviceInfoLike[] = [];
+  for (const d of ordered) {
+    const norm = normalizeVdoDeviceLabel(d.label);
+    if (norm.startsWith(filterKey)) {
+      startsWith.push(d);
+    } else if (norm.includes(filterKey)) {
+      includes.push(d);
+    } else {
+      rest.push(d);
+    }
+  }
+  if (startsWith.length === 0 && includes.length === 0) {
+    const exactIdIdx = rest.findIndex((d) => d.deviceId === initialVideoDevice);
+    if (exactIdIdx >= 0) {
+      const [match] = rest.splice(exactIdIdx, 1);
+      return [match, ...rest];
+    }
+  }
+  return [...startsWith, ...includes, ...rest];
+}
+
+export function resolveVdoVideoDeviceIndex(
+  devices: VdoDeviceInfoLike[],
+  targetFacing: 'environment' | 'user',
+  initialFacing?: 'environment' | 'user'
+): number {
+  const initialKey = initialFacing ? (initialFacing === 'user' ? 'front' : 'back') : undefined;
+  const sorted = sortVdoVideoInputs(devices, initialKey);
+  if (sorted.length < 2) return -1;
+
+  const targetRegex =
+    targetFacing === 'user'
+      ? /(^|_)(front|user|selfie|facetime)(_|$)|front|user/i
+      : /(^|_)(back|rear|environment)(_|$)|back|rear/i;
+  const secondaryLensRegex = /wide|ultra|tele|macro|depth|ir|infrared/i;
+
+  let fallbackMatch = -1;
+  for (let i = 0; i < sorted.length; i += 1) {
+    const norm = normalizeVdoDeviceLabel(sorted[i]?.label);
+    if (!norm || !targetRegex.test(norm)) continue;
+    if (!secondaryLensRegex.test(norm)) {
+      return i;
+    }
+    if (fallbackMatch === -1) {
+      fallbackMatch = i;
+    }
+  }
+  return fallbackMatch;
 }
 
 export function resolveCameraLiveWebUrl(cam?: {

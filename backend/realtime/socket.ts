@@ -6,6 +6,8 @@ import { canManageStream, getJwtSecret, hasBroadcastAccess, hasGranularPermissio
 import type { JwtPayload } from '../../server/middleware/auth.ts';
 import { ADMIN_PORTAL_ROLES, User } from '../../server/models/User.ts';
 import { LiveStream } from '../../server/models/LiveStream.ts';
+import { BroadcastCamera } from '../../server/models/BroadcastCamera.ts';
+import { verifyScopedToken } from '../../server/utils/obsCrypto.ts';
 
 let io: SocketIOServer | null = null;
 const SERVER_BOOT_ID = crypto.randomUUID();
@@ -401,6 +403,49 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       socket.leave(`broadcast-studio:${matchId.trim()}`);
     });
 
+    // Scoped Smartphone Camera Companion room (remote Admin Rear <-> Front lens sync)
+    socket.on(
+      'camera-companion:join',
+      async (payload: { cameraDocId?: string; token?: string }) => {
+        const cleanDocId = typeof payload?.cameraDocId === 'string' ? payload.cameraDocId.trim() : '';
+        const cleanToken = typeof payload?.token === 'string' ? payload.token.trim() : '';
+        if (!cleanDocId || !cleanToken) return;
+        try {
+          const cam: any = await BroadcastCamera.findById(cleanDocId)
+            .select('+pushTokenHash matchId cameraId facingMode pushTokenExpiresAt status')
+            .lean();
+          if (!cam || !verifyScopedToken(cleanToken, cam.pushTokenHash || '')) return;
+          if (cam.pushTokenExpiresAt && new Date(cam.pushTokenExpiresAt).getTime() <= Date.now()) {
+            return;
+          }
+          socket.join(`camera-companion:${cleanDocId}`);
+          socket.emit(
+            'camera-companion:joined',
+            attachMeta({
+              cameraDocId: cleanDocId,
+              matchId: String(cam.matchId),
+              cameraId: cam.cameraId,
+              facingMode: cam.facingMode === 'user' ? 'user' : 'environment',
+              status: cam.status,
+            })
+          );
+        } catch {
+          // Ignore invalid companion join attempts
+        }
+      }
+    );
+
+    socket.on('camera-companion:leave', (payload: string | { cameraDocId?: string }) => {
+      const cleanDocId =
+        typeof payload === 'string'
+          ? payload.trim()
+          : typeof payload?.cameraDocId === 'string'
+            ? payload.cameraDocId.trim()
+            : '';
+      if (!cleanDocId) return;
+      socket.leave(`camera-companion:${cleanDocId}`);
+    });
+
     socket.on('user:join', (payload: string | { token?: string; userId?: string }) => {
       let verifiedUserId = '';
       const tokenStr =
@@ -572,6 +617,12 @@ export function emitBroadcastStudioEvent(matchId: string, event: string, payload
   if (!io) return;
   const enriched = attachMeta(payload);
   io.to(`broadcast-studio:${matchId}`).emit(event, enriched);
+}
+
+export function emitCameraCompanionEvent(cameraDocId: string, event: string, payload: unknown): void {
+  if (!io || !cameraDocId) return;
+  const enriched = attachMeta(payload);
+  io.to(`camera-companion:${cameraDocId}`).emit(event, enriched);
 }
 
 export function emitTournamentEvent(tournamentId: string, event: string, payload: unknown): void {

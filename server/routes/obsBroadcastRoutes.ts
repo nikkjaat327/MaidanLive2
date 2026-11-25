@@ -64,6 +64,7 @@ import {
   requestBridgeObsReconnect,
   revokeObsBridge,
   rotateObsBridgeToken,
+  setCameraFacingMode,
   setCameraObsAudioMute,
   switchCameraLive,
   switchObsSceneByName,
@@ -92,7 +93,7 @@ import { LAYOUT_METADATA, MAX_CONTROL_ROOM_CAMERAS } from '../../src/utils/obsLa
 import type { ObsLayoutType, PipPosition, PipSize } from '../../src/utils/obsLayoutGeometry.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { recordActivity } from '../utils/audit.ts';
-import { emitBroadcastStudioEvent, emitStreamEvent } from '../socket/index.ts';
+import { emitBroadcastStudioEvent, emitCameraCompanionEvent, emitStreamEvent } from '../socket/index.ts';
 import {
   buildLarixCameraConfig,
   buildScopedCameraStreamPath,
@@ -393,7 +394,10 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
     cam.status = isCurrentlyActive && nextStatus === 'CONNECTED' ? 'ACTIVE' : nextStatus;
     cam.lastHeartbeatAt = new Date();
     cam.lastError = nextStatus === 'ERROR' ? sanitizeText(req.body.error, 350) : '';
-    if (req.body.facingMode === 'user' || req.body.facingMode === 'environment') {
+    if (
+      req.body.userChangedFacing === true &&
+      (req.body.facingMode === 'user' || req.body.facingMode === 'environment')
+    ) {
       cam.facingMode = req.body.facingMode;
     }
     if (req.body.telemetry && typeof req.body.telemetry === 'object') {
@@ -440,6 +444,7 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
       matchId: String(cam.matchId),
       cameraId: cam.cameraId,
       status: cam.status,
+      facingMode: cam.facingMode || 'environment',
       lastHeartbeatAt: cam.lastHeartbeatAt,
       telemetry: cam.telemetry,
       audioMuted: cam.audioMuted,
@@ -447,7 +452,12 @@ router.post('/camera-connect/:cameraDocId/heartbeat', async (req: Request, res: 
     });
     await emitFullStudioState(String(cam.matchId));
 
-    res.json({ ok: true, status: cam.status, lastHeartbeatAt: cam.lastHeartbeatAt });
+    res.json({
+      ok: true,
+      status: cam.status,
+      facingMode: cam.facingMode || 'environment',
+      lastHeartbeatAt: cam.lastHeartbeatAt,
+    });
   } catch (err) {
     console.error('[OBS Camera Heartbeat] Error:', err);
     res.status(500).json({ message: 'Failed to record camera heartbeat.' });
@@ -2373,6 +2383,7 @@ router.patch(
       if (req.body.fps !== undefined) cam.fps = Math.max(15, Math.min(60, Number(req.body.fps) || 30));
       if (req.body.bitrateKbps !== undefined) cam.bitrateKbps = Math.max(300, Math.min(12000, Number(req.body.bitrateKbps) || 2000));
       if (typeof req.body.lowBandwidthMode === 'boolean') cam.lowBandwidthMode = req.body.lowBandwidthMode;
+      const previousFacingMode = cam.facingMode || 'environment';
       if (req.body.facingMode === 'user' || req.body.facingMode === 'environment') cam.facingMode = req.body.facingMode;
       if (req.body.orientationMode !== undefined) cam.orientationMode = normalizeOrientationMode(req.body.orientationMode);
       if (req.body.previewFit !== undefined) cam.previewFit = normalizePreviewFit(req.body.previewFit);
@@ -2432,6 +2443,20 @@ router.patch(
         actor: req.user!,
         obsStatus: 'SUCCESS',
       });
+      if (cam.facingMode !== previousFacingMode) {
+        emitCameraCompanionEvent(String(cam._id), 'camera:facing_changed', {
+          matchId,
+          cameraId: cam.cameraId,
+          cameraDocId: String(cam._id),
+          facingMode: cam.facingMode,
+          updatedBy: req.user!.name,
+        });
+        emitBroadcastStudioEvent(matchId, 'obs:camera_status', {
+          matchId,
+          cameraId: cam.cameraId,
+          facingMode: cam.facingMode,
+        });
+      }
       await emitFullStudioState(matchId);
 
       const profile = await ObsControllerProfile.findOne({ matchId }).lean();
@@ -3757,6 +3782,38 @@ router.post(
     } catch (err: any) {
       const code = Number(err?.statusCode) || 500;
       res.status(code).json({ ok: false, message: err?.message || 'Failed to toggle camera audio.' });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/cameras/:cameraId/facing - Switch phone camera Rear <-> Front live
+router.post(
+  '/matches/:matchId/cameras/:cameraId/facing',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId, cameraId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const rawFacing = req.body?.facingMode;
+      if (rawFacing !== 'environment' && rawFacing !== 'user') {
+        res.status(400).json({ ok: false, message: 'facingMode must be environment or user.' });
+        return;
+      }
+      const result = await setCameraFacingMode(
+        matchId,
+        cameraId,
+        rawFacing,
+        req.user!,
+        Boolean(req.body?.override)
+      );
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({ ok: true, ...result, ...snapshot, ...(isBroadcaster ? { auditLogs: [] } : {}) });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 500;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to switch camera lens.' });
     }
   }
 );

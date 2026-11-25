@@ -18,6 +18,7 @@ export type BroadcastAuditAction =
   | 'CAMERA_DISCONNECTED'
   | 'CAMERA_RECONNECT'
   | 'CAMERA_AUDIO_TOGGLE'
+  | 'CAMERA_FACING_CHANGED'
   | 'CAMERA_TEST'
   | 'CAMERA_SWITCH'
   | 'CAMERA_OBS_SYNCED'
@@ -105,6 +106,7 @@ const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
         'CAMERA_DISCONNECTED',
         'CAMERA_RECONNECT',
         'CAMERA_AUDIO_TOGGLE',
+        'CAMERA_FACING_CHANGED',
         'CAMERA_TEST',
         'CAMERA_SWITCH',
         'CAMERA_OBS_SYNCED',
