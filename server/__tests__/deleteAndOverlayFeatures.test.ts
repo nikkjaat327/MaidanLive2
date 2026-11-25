@@ -26,7 +26,7 @@ const { Sponsor } = await import('../models/Sponsor.ts');
 const { signAuthToken } = await import('../middleware/auth.ts');
 const liveStreamRoutes = (await import('../routes/liveStreamRoutes.ts')).default;
 const platformOpsRoutes = (await import('../routes/platformOpsRoutes.ts')).default;
-const { applyOverlayQueryParams, normalizeOverlayConfig } = await import(
+const { applyOverlayQueryParams, FULL_SCOREBOARD_STYLES, normalizeOverlayConfig } = await import(
   '../../src/utils/overlayConfig.ts'
 );
 const { resolveMatchTimeoutState, resolveTimeoutOverlayDecision } = await import(
@@ -483,5 +483,85 @@ describe('Match Deletion RBAC, Sponsor Ad Overlay & YouTube Header Link Parsing'
     assert.equal(parsedQuery.sponsorAdRepeatContinuously, false);
     assert.equal(parsedQuery.fullScoreboardVisible, true);
     assert.equal(parsedQuery.timeoutDisplayMode, 'full_scoreboard');
+  });
+
+  it('persists all 20 Full Scoreboard designs and enhanced Sponsor & Timeout Ad position/layout/timing config', async () => {
+    assert.equal(FULL_SCOREBOARD_STYLES.length, 20);
+    for (const sport of ['Cricket', 'Kabaddi', 'Football', 'Volleyball', 'Multi-Sport']) {
+      assert.equal(
+        FULL_SCOREBOARD_STYLES.filter((s) => s.sport === sport).length,
+        4,
+        `Expected 4 Full Scoreboard designs for ${sport}`
+      );
+    }
+
+    const match = await LiveStream.create({
+      matchTitle: 'Full Scoreboard & Timeout Studio Test',
+      teamAName: 'Chennai',
+      teamBName: 'Mumbai',
+      gameName: 'Cricket',
+      status: 'LIVE',
+      activeStreamingProvider: 'youtube',
+    });
+
+    const patchRes = await apiJson(
+      'PATCH',
+      `/api/live/${match._id.toString()}/overlay`,
+      adminToken,
+      {
+        fullScoreboardStyle: 'cricket_ipl_stadium_neon',
+        sponsorAdScale: 1.25,
+        sponsorAdOffsetX: 60,
+        sponsorAdOffsetY: 48,
+        timeoutAdSponsorId: 'sp_timeout_99',
+        timeoutAdTitle: 'Apex Timeout Spotlight',
+        timeoutAdSubtitle: 'Official Energy Drink',
+        timeoutAdLogoUrl: 'https://cdn.example.com/timeout.png',
+        timeoutAdCta: 'SHOP NOW',
+        timeoutAdBadgeText: 'STRATEGIC TIMEOUT',
+        timeoutAdPosition: 'bottom-right',
+        timeoutAdLayout: 'floating_showcase',
+        timeoutAdDurationSeconds: 30,
+        timeoutAdAnimation: 'shimmer',
+        timeoutAdTransition: 'slide-bottom',
+        timeoutAdTransitionMs: 700,
+        timeoutAdScale: 1.15,
+      }
+    );
+    assert.equal(patchRes.status, 200);
+    const saved = patchRes.json.overlayConfig;
+    assert.equal(saved.fullScoreboardStyle, 'cricket_ipl_stadium_neon');
+    assert.equal(saved.sponsorAdScale, 1.25);
+    assert.equal(saved.sponsorAdOffsetX, 60);
+    assert.equal(saved.sponsorAdOffsetY, 48);
+    assert.equal(saved.timeoutAdSponsorId, 'sp_timeout_99');
+    assert.equal(saved.timeoutAdTitle, 'Apex Timeout Spotlight');
+    assert.equal(saved.timeoutAdPosition, 'bottom-right');
+    assert.equal(saved.timeoutAdLayout, 'floating_showcase');
+    assert.equal(saved.timeoutAdDurationSeconds, 30);
+    assert.equal(saved.timeoutAdAnimation, 'shimmer');
+    assert.equal(saved.timeoutAdTransition, 'slide-bottom');
+    assert.equal(saved.timeoutAdTransitionMs, 700);
+    assert.equal(saved.timeoutAdScale, 1.15);
+
+    const invalidFallback = normalizeOverlayConfig({
+      fullScoreboardStyle: 'nonexistent_style' as any,
+      timeoutAdLayout: 'invalid_layout' as any,
+      timeoutAdPosition: 'invalid_pos' as any,
+    });
+    assert.equal(invalidFallback.fullScoreboardStyle, 'multisport_jiohotstar_prime');
+    assert.equal(invalidFallback.timeoutAdLayout, 'fullscreen_card');
+    assert.equal(invalidFallback.timeoutAdPosition, 'center');
+
+    const withParams = applyOverlayQueryParams(
+      normalizeOverlayConfig({}),
+      '?fullScoreboardStyle=kabaddi_pro_mat_fire&timeoutAdPosition=top-center&timeoutAdLayout=banner_strip&timeoutAdDurationSeconds=20&sponsorAdScale=1.3&timeoutAdScale=0.9'
+    );
+    assert.equal(withParams.fullScoreboardStyle, 'kabaddi_pro_mat_fire');
+    assert.equal(withParams.timeoutAdPosition, 'top-center');
+    assert.equal(withParams.timeoutAdLayout, 'banner_strip');
+    assert.equal(withParams.timeoutAdDurationSeconds, 20);
+    assert.equal(withParams.sponsorAdScale, 1.3);
+    assert.equal(withParams.timeoutAdScale, 0.9);
   });
 });

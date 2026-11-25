@@ -41,6 +41,9 @@ export function BroadcastSponsorAdBanner({
     DEFAULT_OVERLAY_CONFIG.sponsorAdRepeatIntervalSeconds;
   const repeatContinuously =
     config?.sponsorAdRepeatContinuously ?? DEFAULT_OVERLAY_CONFIG.sponsorAdRepeatContinuously;
+  const adScale = config?.sponsorAdScale ?? DEFAULT_OVERLAY_CONFIG.sponsorAdScale;
+  const cfgOffsetX = config?.sponsorAdOffsetX ?? DEFAULT_OVERLAY_CONFIG.sponsorAdOffsetX;
+  const cfgOffsetY = config?.sponsorAdOffsetY ?? DEFAULT_OVERLAY_CONFIG.sponsorAdOffsetY;
 
   const hasContent = Boolean(name || tagline || logoUrl);
   const { phase, cycleCount } = useSponsorAdCycle({
@@ -64,25 +67,34 @@ export function BroadcastSponsorAdBanner({
   const pos: OverlayPosition =
     config?.sponsorAdPosition ?? DEFAULT_OVERLAY_CONFIG.sponsorAdPosition;
   const isResponsive = variant === 'responsive';
-  const offsetX = isResponsive ? 12 : 34;
-  const offsetY = isResponsive ? 12 : 28;
+  const offsetX = isResponsive ? Math.max(8, Math.round(cfgOffsetX * 0.35)) : cfgOffsetX;
+  const offsetY = isResponsive ? Math.max(8, Math.round(cfgOffsetY * 0.35)) : cfgOffsetY;
+
+  const isTop = pos.startsWith('top');
+  const isLeft = pos.endsWith('left');
+  const isRight = pos.endsWith('right');
+  const isCenter = !isLeft && !isRight;
 
   const posStyle: CSSProperties = {
     position: 'absolute',
     zIndex,
     pointerEvents: 'none',
+    transformOrigin: `${isTop ? 'top' : 'bottom'} ${isLeft ? 'left' : isRight ? 'right' : 'center'}`,
   };
 
-  if (pos.startsWith('top')) posStyle.top = `${offsetY}px`;
-  else posStyle.bottom = `${isResponsive ? 56 : 168}px`;
+  if (isTop) posStyle.top = `${offsetY}px`;
+  else posStyle.bottom = `${(isResponsive ? 46 : 140) + offsetY}px`;
 
-  if (pos.endsWith('left')) {
+  if (isLeft) {
     posStyle.left = `${offsetX}px`;
-  } else if (pos.endsWith('right')) {
+    if (adScale !== 1) posStyle.transform = `scale(${adScale})`;
+  } else if (isRight) {
     posStyle.right = `${offsetX}px`;
+    if (adScale !== 1) posStyle.transform = `scale(${adScale})`;
   } else {
     posStyle.left = '50%';
-    posStyle.transform = 'translateX(-50%)';
+    posStyle.transform =
+      adScale !== 1 ? `translateX(-50%) scale(${adScale})` : 'translateX(-50%)';
   }
 
   const initials = (name || 'SP').slice(0, 2).toUpperCase();

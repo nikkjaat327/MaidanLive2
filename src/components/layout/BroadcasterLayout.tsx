@@ -8,6 +8,7 @@ import {
   Camera,
   LayoutGrid,
   LogOut,
+  Megaphone,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -72,6 +73,10 @@ function normalizeTabParam(rawTab: string | null): string {
     case 'dashboard':
     case 'match_control':
       return 'scoreboard';
+    case 'ads':
+    case 'sponsor_ads':
+    case 'sponsors':
+      return 'ads';
     case 'cameras':
     case 'layouts':
       return 'cameras';
@@ -438,6 +443,13 @@ export function BroadcasterLayout() {
       label: 'Match & Scoreboard',
       icon: Tv,
       isActive: isControlRoomRoute && activeControlTab === 'scoreboard',
+    },
+    {
+      id: 'ads',
+      to: `${controlRoomBase}?tab=ads`,
+      label: 'Sponsor & Timeout Ads',
+      icon: Megaphone,
+      isActive: isControlRoomRoute && activeControlTab === 'ads',
     },
     {
       id: 'cameras',

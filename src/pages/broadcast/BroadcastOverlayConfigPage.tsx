@@ -45,8 +45,12 @@ import {
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
   SPONSOR_AD_TIMING_BOUNDS,
+  TIMEOUT_AD_LAYOUTS,
+  TIMEOUT_AD_POSITIONS,
   type SponsorAdAnimation,
   type SponsorAdTransition,
+  type TimeoutAdLayout,
+  type TimeoutAdPosition,
   type TimeoutDisplayMode,
   computeOverlayMetrics,
   normalizeOverlayConfig,
@@ -68,6 +72,7 @@ import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscre
 import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
 import { FloatingOverlayScorePanel } from '../../components/obs/FloatingOverlayScorePanel.tsx';
 import { ScoreboardStyleSelector } from '../../components/obs/ScoreboardStyleSelector.tsx';
+import { FullScoreboardStyleSelector } from '../../components/obs/FullScoreboardStyleSelector.tsx';
 import { CustomScoreboardDesigner } from '../../components/obs/CustomScoreboardDesigner.tsx';
 import { HeaderYouTubePreviewControl } from '../../components/streaming/HeaderYouTubePreviewControl.tsx';
 import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
@@ -722,12 +727,7 @@ export function BroadcastOverlayConfigPage() {
 
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 py-6 space-y-6">
         <FeedbackBanner type="error" message={actionError || error} onDismiss={() => setActionError(null)} />
-        {saveNotice && (
-          <div className="px-4 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs font-semibold text-emerald-300 flex items-center gap-2">
-            <Check className="w-4 h-4 shrink-0" />
-            <span>{saveNotice}</span>
-          </div>
-        )}
+        <FeedbackBanner type="success" message={saveNotice} onDismiss={() => setSaveNotice(null)} />
 
         {loading ? (
           <div className="p-10 rounded-xl border border-slate-800 bg-slate-900/70 text-sm text-slate-400">
@@ -1472,24 +1472,96 @@ export function BroadcastOverlayConfigPage() {
                     </button>
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                      When Team Takes Timeout
-                    </label>
-                    <select
-                      value={effectiveOverlayConfig.timeoutDisplayMode || 'fullscreen_ad'}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        When Team Takes Timeout
+                      </label>
+                      <select
+                        value={effectiveOverlayConfig.timeoutDisplayMode || 'fullscreen_ad'}
+                        disabled={saving}
+                        onChange={(e) =>
+                          void persistOverlayPatch({
+                            timeoutDisplayMode: e.target.value as TimeoutDisplayMode,
+                          })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      >
+                        <option value="fullscreen_ad">Show Timeout Ad</option>
+                        <option value="full_scoreboard">Show Full Scoreboard</option>
+                        <option value="none">Keep Normal Lower Scoreboard</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Timeout Ad Layout
+                      </label>
+                      <select
+                        value={effectiveOverlayConfig.timeoutAdLayout || 'fullscreen_card'}
+                        disabled={saving}
+                        onChange={(e) =>
+                          void persistOverlayPatch({
+                            timeoutAdLayout: e.target.value as TimeoutAdLayout,
+                          })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      >
+                        {TIMEOUT_AD_LAYOUTS.map((l) => (
+                          <option key={l} value={l}>
+                            {l === 'fullscreen_card'
+                              ? 'Fullscreen Spotlight'
+                              : l === 'floating_showcase'
+                                ? 'Floating Card'
+                                : 'Banner Strip'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Timeout Ad Position
+                      </label>
+                      <select
+                        value={effectiveOverlayConfig.timeoutAdPosition || 'center'}
+                        disabled={saving}
+                        onChange={(e) =>
+                          void persistOverlayPatch({
+                            timeoutAdPosition: e.target.value as TimeoutAdPosition,
+                          })
+                        }
+                        className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
+                      >
+                        {TIMEOUT_AD_POSITIONS.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* 20 Full Scoreboard Designs */}
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-sky-300">
+                        Full Scoreboard Designs (20 Sport Layouts)
+                      </label>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        {effectiveOverlayConfig.fullScoreboardStyle}
+                      </span>
+                    </div>
+                    <FullScoreboardStyleSelector
+                      value={effectiveOverlayConfig.fullScoreboardStyle}
+                      matchSport={sport}
                       disabled={saving}
-                      onChange={(e) =>
-                        void persistOverlayPatch({
-                          timeoutDisplayMode: e.target.value as TimeoutDisplayMode,
-                        })
+                      darkSurface
+                      compact
+                      onChange={(fullScoreboardStyle) =>
+                        void persistOverlayPatch({ fullScoreboardStyle })
                       }
-                      className="w-full min-h-[34px] px-2.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg"
-                    >
-                      <option value="fullscreen_ad">Show Big Fullscreen Sponsor Ad</option>
-                      <option value="full_scoreboard">Show JioHotstar Full Scoreboard</option>
-                      <option value="none">Keep Normal Lower Scoreboard</option>
-                    </select>
+                    />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">

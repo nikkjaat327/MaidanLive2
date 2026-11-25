@@ -1192,6 +1192,12 @@ router.get(
           logoUrl: sp.logoUrl,
           sponsorshipType: sp.sponsorshipType,
           tagline: sp.tagline,
+          websiteUrl: sp.websiteUrl || '',
+          contactInfo: sp.contactInfo || '',
+          placement: sp.placement || 'GLOBAL',
+          ctaText: sp.ctaText || 'SPONSORED',
+          isPublished: sp.isPublished !== false,
+          isActive: sp.isActive !== false,
         })),
         operators: isBroadcaster
           ? []

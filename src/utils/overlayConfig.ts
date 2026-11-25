@@ -64,6 +64,235 @@ export type SponsorAdTransition =
 
 export type TimeoutDisplayMode = 'fullscreen_ad' | 'full_scoreboard' | 'none';
 
+export type TimeoutAdPosition = 'center' | OverlayPosition;
+
+export type TimeoutAdLayout = 'fullscreen_card' | 'floating_showcase' | 'banner_strip';
+
+export type FullScoreboardSportCategory =
+  | 'Cricket'
+  | 'Kabaddi'
+  | 'Football'
+  | 'Volleyball'
+  | 'Multi-Sport';
+
+export type FullScoreboardStyleId =
+  | 'cricket_broadcast_classic'
+  | 'cricket_world_cup_royal'
+  | 'cricket_ipl_stadium_neon'
+  | 'cricket_test_heritage'
+  | 'kabaddi_pro_mat_fire'
+  | 'kabaddi_championship_gold'
+  | 'kabaddi_dugout_tactical'
+  | 'kabaddi_royal_akhada'
+  | 'football_european_ucl'
+  | 'football_premier_studio'
+  | 'football_world_turf'
+  | 'football_derby_crimson'
+  | 'volleyball_vnl_court'
+  | 'volleyball_olympic_clean'
+  | 'volleyball_beach_sunset'
+  | 'volleyball_neon_net'
+  | 'multisport_jiohotstar_prime'
+  | 'multisport_olympic_medallion'
+  | 'multisport_esports_chamfer'
+  | 'multisport_minimal_broadcast';
+
+export interface FullScoreboardStyleMeta {
+  id: FullScoreboardStyleId;
+  name: string;
+  shortName: string;
+  sport: FullScoreboardSportCategory;
+  accentHex: string;
+  tagline: string;
+}
+
+export const FULL_SCOREBOARD_STYLES: readonly FullScoreboardStyleMeta[] = [
+  // Cricket (4)
+  {
+    id: 'cricket_broadcast_classic',
+    name: 'Cricket Pavilion Classic',
+    shortName: 'Pavilion',
+    sport: 'Cricket',
+    accentHex: '#2563EB',
+    tagline: 'Emerald pitch header, side-by-side batting/bowling ledger & run-rate ribbon',
+  },
+  {
+    id: 'cricket_world_cup_royal',
+    name: 'Cricket World Crown',
+    shortName: 'WC Royal',
+    sport: 'Cricket',
+    accentHex: '#F59E0B',
+    tagline: 'Deep royal indigo arena card with central gold crest medallion',
+  },
+  {
+    id: 'cricket_ipl_stadium_neon',
+    name: 'T20 Floodlight Neon',
+    shortName: 'T20 Neon',
+    sport: 'Cricket',
+    accentHex: '#EC4899',
+    tagline: 'High-contrast magenta & violet T20 scorecard with oversized strike badges',
+  },
+  {
+    id: 'cricket_test_heritage',
+    name: 'Test Match Heritage',
+    shortName: 'Heritage',
+    sport: 'Cricket',
+    accentHex: '#10B981',
+    tagline: 'Crisp cream & forest-green Lords-inspired full innings scorecard',
+  },
+  // Kabaddi (4)
+  {
+    id: 'kabaddi_pro_mat_fire',
+    name: 'Pro Kabaddi Mat Fire',
+    shortName: 'Mat Fire',
+    sport: 'Kabaddi',
+    accentHex: '#EA580C',
+    tagline: 'Fiery saffron & charcoal combat layout spotlighting raid vs tackle breakdown',
+  },
+  {
+    id: 'kabaddi_championship_gold',
+    name: 'Kabaddi Championship Gold',
+    shortName: 'Champ Gold',
+    sport: 'Kabaddi',
+    accentHex: '#EAB308',
+    tagline: 'Obsidian & brushed gold tournament board with court player tokens',
+  },
+  {
+    id: 'kabaddi_dugout_tactical',
+    name: 'Kabaddi Tactical Matrix',
+    shortName: 'Tactical',
+    sport: 'Kabaddi',
+    accentHex: '#06B6D4',
+    tagline: 'Split teal radar deck highlighting super tackles, bonus & do-or-die pressure',
+  },
+  {
+    id: 'kabaddi_royal_akhada',
+    name: 'Royal Akhada Vermilion',
+    shortName: 'Akhada',
+    sport: 'Kabaddi',
+    accentHex: '#DC2626',
+    tagline: 'Bold vermilion & amber traditional arena full-match scorecard',
+  },
+  // Football (4)
+  {
+    id: 'football_european_ucl',
+    name: 'European Starlight UCL',
+    shortName: 'Starlight',
+    sport: 'Football',
+    accentHex: '#38BDF8',
+    tagline: 'Midnight starfield stadium deck with centered match clock & timeline feed',
+  },
+  {
+    id: 'football_premier_studio',
+    name: 'Premier Matchday Studio',
+    shortName: 'Matchday',
+    sport: 'Football',
+    accentHex: '#A855F7',
+    tagline: 'Sharp violet & mint broadcast summary with card/penalty telemetry grid',
+  },
+  {
+    id: 'football_world_turf',
+    name: 'World Cup Pitch Green',
+    shortName: 'Pitch Green',
+    sport: 'Football',
+    accentHex: '#22C55E',
+    tagline: 'Deep stadium turf dark-green theme with crisp horizontal score towers',
+  },
+  {
+    id: 'football_derby_crimson',
+    name: 'Derby Night Crimson',
+    shortName: 'Derby Night',
+    sport: 'Football',
+    accentHex: '#F43F5E',
+    tagline: 'High-drama crimson & obsidian derby plate built for prime-time fixtures',
+  },
+  // Volleyball (4)
+  {
+    id: 'volleyball_vnl_court',
+    name: 'Volleyball Nations Court',
+    shortName: 'VNL Court',
+    sport: 'Volleyball',
+    accentHex: '#3B82F6',
+    tagline: 'Hardwood-amber & sky-blue multi-set scoreboard highlighting active serve',
+  },
+  {
+    id: 'volleyball_olympic_clean',
+    name: 'Olympic Hall Alabaster',
+    shortName: 'Olympic Hall',
+    sport: 'Volleyball',
+    accentHex: '#0EA5E9',
+    tagline: 'High-legibility slate & glacial white indoor court set matrix',
+  },
+  {
+    id: 'volleyball_beach_sunset',
+    name: 'Arena Sunset Rally',
+    shortName: 'Sunset Rally',
+    sport: 'Volleyball',
+    accentHex: '#F97316',
+    tagline: 'Warm sunset coral & navy court scoreboard with bold set-score cards',
+  },
+  {
+    id: 'volleyball_neon_net',
+    name: 'Neon Net Pro Tour',
+    shortName: 'Neon Net',
+    sport: 'Volleyball',
+    accentHex: '#14B8A6',
+    tagline: 'Electric teal & ultraviolet arena tour board for rapid rally tracking',
+  },
+  // Multi-Sport / Universal (4)
+  {
+    id: 'multisport_jiohotstar_prime',
+    name: 'Broadcast Prime Blue',
+    shortName: 'Prime Blue',
+    sport: 'Multi-Sport',
+    accentHex: '#3B82F6',
+    tagline: 'Signature MaidanLive full-screen match center for all sports',
+  },
+  {
+    id: 'multisport_olympic_medallion',
+    name: 'Championship Medallion',
+    shortName: 'Medallion',
+    sport: 'Multi-Sport',
+    accentHex: '#F59E0B',
+    tagline: 'Centered championship emblem flanked by oversized dual team score blocks',
+  },
+  {
+    id: 'multisport_esports_chamfer',
+    name: 'Cyber Chamfer Arena',
+    shortName: 'Chamfer HUD',
+    sport: 'Multi-Sport',
+    accentHex: '#8B5CF6',
+    tagline: 'Razor-angled cyber sports broadcast deck with high-contrast telemetry tiles',
+  },
+  {
+    id: 'multisport_minimal_broadcast',
+    name: 'Clean Monochrome Studio',
+    shortName: 'Monochrome',
+    sport: 'Multi-Sport',
+    accentHex: '#94A3B8',
+    tagline: 'Ultra-crisp obsidian slate broadcast sheet with distraction-free typography',
+  },
+];
+
+export const VALID_FULL_SCOREBOARD_STYLES: readonly FullScoreboardStyleId[] =
+  FULL_SCOREBOARD_STYLES.map((s) => s.id);
+
+export const TIMEOUT_AD_POSITIONS: readonly TimeoutAdPosition[] = [
+  'center',
+  'top-left',
+  'top-center',
+  'top-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+];
+
+export const TIMEOUT_AD_LAYOUTS: readonly TimeoutAdLayout[] = [
+  'fullscreen_card',
+  'floating_showcase',
+  'banner_strip',
+];
+
 export const SPONSOR_AD_ANIMATIONS: readonly SponsorAdAnimation[] = [
   'none',
   'pulse',
@@ -94,6 +323,12 @@ export const SPONSOR_AD_TIMING_BOUNDS = {
   sponsorAdDurationSeconds: { min: 2, max: 300, step: 1, defaultVal: 12 },
   sponsorAdTransitionMs: { min: 100, max: 3000, step: 50, defaultVal: 450 },
   sponsorAdRepeatIntervalSeconds: { min: 0, max: 3600, step: 1, defaultVal: 20 },
+  sponsorAdScale: { min: 0.65, max: 1.5, step: 0.05, defaultVal: 1 },
+  sponsorAdOffsetX: { min: 0, max: 240, step: 4, defaultVal: 34 },
+  sponsorAdOffsetY: { min: 0, max: 240, step: 4, defaultVal: 28 },
+  timeoutAdDurationSeconds: { min: 0, max: 300, step: 1, defaultVal: 0 },
+  timeoutAdTransitionMs: { min: 100, max: 3000, step: 50, defaultVal: 450 },
+  timeoutAdScale: { min: 0.65, max: 1.4, step: 0.05, defaultVal: 1 },
 } as const;
 
 export interface ScoreboardStyleMeta {
@@ -404,9 +639,26 @@ export interface BroadcastOverlayConfig {
   sponsorAdTransitionMs: number;
   sponsorAdRepeatIntervalSeconds: number;
   sponsorAdRepeatContinuously: boolean;
+  sponsorAdScale: number;
+  sponsorAdOffsetX: number;
+  sponsorAdOffsetY: number;
   timeoutDisplayMode: TimeoutDisplayMode;
   timeoutFullscreenSponsorAdActive: boolean;
+  timeoutAdSponsorId: string;
+  timeoutAdTitle: string;
+  timeoutAdSubtitle: string;
+  timeoutAdLogoUrl: string;
+  timeoutAdCta: string;
+  timeoutAdBadgeText: string;
+  timeoutAdPosition: TimeoutAdPosition;
+  timeoutAdLayout: TimeoutAdLayout;
+  timeoutAdDurationSeconds: number;
+  timeoutAdAnimation: SponsorAdAnimation;
+  timeoutAdTransition: SponsorAdTransition;
+  timeoutAdTransitionMs: number;
+  timeoutAdScale: number;
   fullScoreboardVisible: boolean;
+  fullScoreboardStyle: FullScoreboardStyleId;
   customScoreboardDesign: CustomScoreboardDesign;
 }
 
@@ -505,9 +757,26 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   sponsorAdTransitionMs: SPONSOR_AD_TIMING_BOUNDS.sponsorAdTransitionMs.defaultVal,
   sponsorAdRepeatIntervalSeconds: SPONSOR_AD_TIMING_BOUNDS.sponsorAdRepeatIntervalSeconds.defaultVal,
   sponsorAdRepeatContinuously: true,
+  sponsorAdScale: SPONSOR_AD_TIMING_BOUNDS.sponsorAdScale.defaultVal,
+  sponsorAdOffsetX: SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetX.defaultVal,
+  sponsorAdOffsetY: SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetY.defaultVal,
   timeoutDisplayMode: 'fullscreen_ad',
   timeoutFullscreenSponsorAdActive: false,
+  timeoutAdSponsorId: '',
+  timeoutAdTitle: '',
+  timeoutAdSubtitle: '',
+  timeoutAdLogoUrl: '',
+  timeoutAdCta: '',
+  timeoutAdBadgeText: 'TIMEOUT PARTNER SPOTLIGHT',
+  timeoutAdPosition: 'center',
+  timeoutAdLayout: 'fullscreen_card',
+  timeoutAdDurationSeconds: SPONSOR_AD_TIMING_BOUNDS.timeoutAdDurationSeconds.defaultVal,
+  timeoutAdAnimation: 'pulse',
+  timeoutAdTransition: 'zoom',
+  timeoutAdTransitionMs: SPONSOR_AD_TIMING_BOUNDS.timeoutAdTransitionMs.defaultVal,
+  timeoutAdScale: SPONSOR_AD_TIMING_BOUNDS.timeoutAdScale.defaultVal,
   fullScoreboardVisible: false,
+  fullScoreboardStyle: 'multisport_jiohotstar_prime',
   customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
 };
 
@@ -709,6 +978,36 @@ export function normalizeOverlayConfig(
     ? (src.timeoutDisplayMode as TimeoutDisplayMode)
     : DEFAULT_OVERLAY_CONFIG.timeoutDisplayMode;
 
+  const timeoutAdPosition: TimeoutAdPosition = TIMEOUT_AD_POSITIONS.includes(
+    src.timeoutAdPosition as TimeoutAdPosition
+  )
+    ? (src.timeoutAdPosition as TimeoutAdPosition)
+    : DEFAULT_OVERLAY_CONFIG.timeoutAdPosition;
+
+  const timeoutAdLayout: TimeoutAdLayout = TIMEOUT_AD_LAYOUTS.includes(
+    src.timeoutAdLayout as TimeoutAdLayout
+  )
+    ? (src.timeoutAdLayout as TimeoutAdLayout)
+    : DEFAULT_OVERLAY_CONFIG.timeoutAdLayout;
+
+  const timeoutAdAnimation: SponsorAdAnimation = SPONSOR_AD_ANIMATIONS.includes(
+    src.timeoutAdAnimation as SponsorAdAnimation
+  )
+    ? (src.timeoutAdAnimation as SponsorAdAnimation)
+    : DEFAULT_OVERLAY_CONFIG.timeoutAdAnimation;
+
+  const timeoutAdTransition: SponsorAdTransition = SPONSOR_AD_TRANSITIONS.includes(
+    src.timeoutAdTransition as SponsorAdTransition
+  )
+    ? (src.timeoutAdTransition as SponsorAdTransition)
+    : DEFAULT_OVERLAY_CONFIG.timeoutAdTransition;
+
+  const fullScoreboardStyle: FullScoreboardStyleId = VALID_FULL_SCOREBOARD_STYLES.includes(
+    src.fullScoreboardStyle as FullScoreboardStyleId
+  )
+    ? (src.fullScoreboardStyle as FullScoreboardStyleId)
+    : DEFAULT_OVERLAY_CONFIG.fullScoreboardStyle;
+
   const bool = (val: unknown, def: boolean): boolean =>
     typeof val === 'boolean' ? val : def;
 
@@ -840,15 +1139,77 @@ export function normalizeOverlayConfig(
       src.sponsorAdRepeatContinuously,
       DEFAULT_OVERLAY_CONFIG.sponsorAdRepeatContinuously
     ),
+    sponsorAdScale: clampScaleNumber(
+      src.sponsorAdScale,
+      SPONSOR_AD_TIMING_BOUNDS.sponsorAdScale.min,
+      SPONSOR_AD_TIMING_BOUNDS.sponsorAdScale.max,
+      DEFAULT_OVERLAY_CONFIG.sponsorAdScale
+    ),
+    sponsorAdOffsetX: Math.round(
+      clampScaleNumber(
+        src.sponsorAdOffsetX,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetX.min,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetX.max,
+        DEFAULT_OVERLAY_CONFIG.sponsorAdOffsetX
+      )
+    ),
+    sponsorAdOffsetY: Math.round(
+      clampScaleNumber(
+        src.sponsorAdOffsetY,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetY.min,
+        SPONSOR_AD_TIMING_BOUNDS.sponsorAdOffsetY.max,
+        DEFAULT_OVERLAY_CONFIG.sponsorAdOffsetY
+      )
+    ),
     timeoutDisplayMode,
     timeoutFullscreenSponsorAdActive: bool(
       src.timeoutFullscreenSponsorAdActive,
       DEFAULT_OVERLAY_CONFIG.timeoutFullscreenSponsorAdActive
     ),
+    timeoutAdSponsorId:
+      typeof src.timeoutAdSponsorId === 'string' ? src.timeoutAdSponsorId.trim().slice(0, 80) : '',
+    timeoutAdTitle:
+      typeof src.timeoutAdTitle === 'string' ? src.timeoutAdTitle.trim().slice(0, 120) : '',
+    timeoutAdSubtitle:
+      typeof src.timeoutAdSubtitle === 'string' ? src.timeoutAdSubtitle.trim().slice(0, 200) : '',
+    timeoutAdLogoUrl: sanitizeBrandLogoUrl(src.timeoutAdLogoUrl),
+    timeoutAdCta:
+      typeof src.timeoutAdCta === 'string' ? src.timeoutAdCta.trim().slice(0, 60) : '',
+    timeoutAdBadgeText:
+      typeof src.timeoutAdBadgeText === 'string' && src.timeoutAdBadgeText.trim()
+        ? src.timeoutAdBadgeText.trim().slice(0, 60)
+        : DEFAULT_OVERLAY_CONFIG.timeoutAdBadgeText,
+    timeoutAdPosition,
+    timeoutAdLayout,
+    timeoutAdDurationSeconds: Math.round(
+      clampScaleNumber(
+        src.timeoutAdDurationSeconds,
+        SPONSOR_AD_TIMING_BOUNDS.timeoutAdDurationSeconds.min,
+        SPONSOR_AD_TIMING_BOUNDS.timeoutAdDurationSeconds.max,
+        DEFAULT_OVERLAY_CONFIG.timeoutAdDurationSeconds
+      )
+    ),
+    timeoutAdAnimation,
+    timeoutAdTransition,
+    timeoutAdTransitionMs: Math.round(
+      clampScaleNumber(
+        src.timeoutAdTransitionMs,
+        SPONSOR_AD_TIMING_BOUNDS.timeoutAdTransitionMs.min,
+        SPONSOR_AD_TIMING_BOUNDS.timeoutAdTransitionMs.max,
+        DEFAULT_OVERLAY_CONFIG.timeoutAdTransitionMs
+      )
+    ),
+    timeoutAdScale: clampScaleNumber(
+      src.timeoutAdScale,
+      SPONSOR_AD_TIMING_BOUNDS.timeoutAdScale.min,
+      SPONSOR_AD_TIMING_BOUNDS.timeoutAdScale.max,
+      DEFAULT_OVERLAY_CONFIG.timeoutAdScale
+    ),
     fullScoreboardVisible: bool(
       src.fullScoreboardVisible,
       DEFAULT_OVERLAY_CONFIG.fullScoreboardVisible
     ),
+    fullScoreboardStyle,
     customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
   };
 }
@@ -927,6 +1288,40 @@ export function applyOverlayQueryParams(
     next.timeoutDisplayMode = timeoutDisplayMode as TimeoutDisplayMode;
   }
 
+  const timeoutAdPosition = params.get('timeoutAdPosition');
+  if (timeoutAdPosition && TIMEOUT_AD_POSITIONS.includes(timeoutAdPosition as TimeoutAdPosition)) {
+    next.timeoutAdPosition = timeoutAdPosition as TimeoutAdPosition;
+  }
+
+  const timeoutAdLayout = params.get('timeoutAdLayout');
+  if (timeoutAdLayout && TIMEOUT_AD_LAYOUTS.includes(timeoutAdLayout as TimeoutAdLayout)) {
+    next.timeoutAdLayout = timeoutAdLayout as TimeoutAdLayout;
+  }
+
+  const timeoutAdAnimation = params.get('timeoutAdAnimation');
+  if (
+    timeoutAdAnimation &&
+    SPONSOR_AD_ANIMATIONS.includes(timeoutAdAnimation as SponsorAdAnimation)
+  ) {
+    next.timeoutAdAnimation = timeoutAdAnimation as SponsorAdAnimation;
+  }
+
+  const timeoutAdTransition = params.get('timeoutAdTransition');
+  if (
+    timeoutAdTransition &&
+    SPONSOR_AD_TRANSITIONS.includes(timeoutAdTransition as SponsorAdTransition)
+  ) {
+    next.timeoutAdTransition = timeoutAdTransition as SponsorAdTransition;
+  }
+
+  const fullScoreboardStyle = params.get('fullScoreboardStyle');
+  if (
+    fullScoreboardStyle &&
+    VALID_FULL_SCOREBOARD_STYLES.includes(fullScoreboardStyle as FullScoreboardStyleId)
+  ) {
+    next.fullScoreboardStyle = fullScoreboardStyle as FullScoreboardStyleId;
+  }
+
   const boolKeys = [
     'visible',
     'showTournamentName',
@@ -990,6 +1385,10 @@ export function applyOverlayQueryParams(
     'sponsorAdDurationSeconds',
     'sponsorAdTransitionMs',
     'sponsorAdRepeatIntervalSeconds',
+    'sponsorAdOffsetX',
+    'sponsorAdOffsetY',
+    'timeoutAdDurationSeconds',
+    'timeoutAdTransitionMs',
   ] as const;
 
   for (const key of sponsorTimingKeys) {
@@ -997,6 +1396,15 @@ export function applyOverlayQueryParams(
     if (raw !== null) {
       const bounds = SPONSOR_AD_TIMING_BOUNDS[key];
       next[key] = Math.round(clampScaleNumber(raw, bounds.min, bounds.max, next[key]));
+    }
+  }
+
+  const sponsorFloatKeys = ['sponsorAdScale', 'timeoutAdScale'] as const;
+  for (const key of sponsorFloatKeys) {
+    const raw = params.get(key);
+    if (raw !== null) {
+      const bounds = SPONSOR_AD_TIMING_BOUNDS[key];
+      next[key] = clampScaleNumber(raw, bounds.min, bounds.max, next[key]);
     }
   }
 

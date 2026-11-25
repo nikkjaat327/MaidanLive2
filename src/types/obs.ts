@@ -391,6 +391,12 @@ export interface ObsStudioPayload {
     logoUrl: string;
     sponsorshipType: string;
     tagline?: string;
+    websiteUrl?: string;
+    contactInfo?: string;
+    placement?: string;
+    ctaText?: string;
+    isPublished?: boolean;
+    isActive?: boolean;
   }>;
   operators: Array<{
     id: string;
