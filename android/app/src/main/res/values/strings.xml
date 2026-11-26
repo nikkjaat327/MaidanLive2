@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MaidanLive</string>
+    <string name="title_activity_main">MaidanLive</string>
+    <string name="package_name">com.maidanlive.app</string>
+    <string name="custom_url_scheme">com.maidanlive.app</string>
+</resources>
