@@ -12,10 +12,11 @@ export interface ActiveBroadcastEventItem {
   payload: BroadcastEventTriggerPayload;
   durationMs: number;
   instanceKey: string;
+  sticky?: boolean;
 }
 
 const VALID_EVENT_KEY_SET = new Set<string>(BROADCAST_EVENT_KEYS);
-const EXIT_TRANSITION_MS = 420;
+const EXIT_TRANSITION_MS = 440;
 
 export function useBroadcastEventQueue({
   matchId,
@@ -109,12 +110,13 @@ export function useBroadcastEventQueue({
       payload: next,
       durationMs,
       instanceKey: `${next.eventId || next.eventKey}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      sticky: false,
     });
   }, [activeItem, queue]);
 
-  // Run hold -> exit -> advance lifecycle strictly for Admin-configured duration
+  // Run hold -> exit -> advance lifecycle strictly for Admin-configured duration (unless pinned/sticky in studio)
   useEffect(() => {
-    if (!activeItem) return;
+    if (!activeItem || activeItem.sticky) return;
     const exitDelayMs = Math.max(500, activeItem.durationMs - EXIT_TRANSITION_MS);
 
     const exitTimer = window.setTimeout(() => {
@@ -133,17 +135,37 @@ export function useBroadcastEventQueue({
   }, [activeItem]);
 
   const triggerLocalPreview = useCallback(
-    (payload: BroadcastEventTriggerPayload, replaceCurrent = true) => {
+    (
+      payload: BroadcastEventTriggerPayload,
+      replaceCurrent = true,
+      options?: { sticky?: boolean; replayEntry?: boolean; durationMsOverride?: number }
+    ) => {
       if (replaceCurrent) {
         setQueue([]);
         setIsExiting(false);
+        const sticky = Boolean(options?.sticky);
+        const replayEntry = options?.replayEntry !== false;
         const rule = eventAnimationsRef.current[payload.eventKey];
         const durationSec = rule?.durationSeconds ?? 4;
-        const durationMs = Math.max(1500, Math.min(15000, Math.round(durationSec * 1000)));
-        setActiveItem({
-          payload,
-          durationMs,
-          instanceKey: `preview-${payload.eventKey}-${Date.now()}`,
+        const durationMs =
+          typeof options?.durationMsOverride === 'number'
+            ? Math.max(1100, Math.min(15000, Math.round(options.durationMsOverride)))
+            : Math.max(1500, Math.min(15000, Math.round(durationSec * 1000)));
+
+        setActiveItem((prev) => {
+          const keepInstance =
+            !replayEntry &&
+            prev &&
+            prev.payload.eventKey === payload.eventKey &&
+            sticky;
+          return {
+            payload,
+            durationMs,
+            sticky,
+            instanceKey: keepInstance
+              ? prev.instanceKey
+              : `preview-${payload.eventKey}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          };
         });
         return;
       }

@@ -200,6 +200,14 @@ export function BroadcastOverlayConfigPage() {
   const [floatingControlsOpen, setFloatingControlsOpen] = useState(false);
   const [selectedEventKey, setSelectedEventKey] = useState<BroadcastEventKey>('SUPER_RAID');
   const [stagePickActive, setStagePickActive] = useState<boolean>(false);
+  const [pinPreview, setPinPreview] = useState<boolean>(true);
+  const [eventAnimationsDraft, setEventAnimationsDraft] = useState<EventAnimationConfigMap | null>(
+    null
+  );
+
+  useEffect(() => {
+    setEventAnimationsDraft(null);
+  }, [matchId]);
 
   useEffect(() => {
     if (stream?.status === 'LIVE') {
@@ -303,10 +311,14 @@ export function BroadcastOverlayConfigPage() {
     };
   }, [customBackdropUrl]);
 
-  const effectiveOverlayConfig = useMemo(
-    () => (sliderDraft ? normalizeOverlayConfig({ ...overlayConfig, ...sliderDraft }) : overlayConfig),
-    [overlayConfig, sliderDraft]
-  );
+  const effectiveOverlayConfig = useMemo(() => {
+    if (!sliderDraft && !eventAnimationsDraft) return overlayConfig;
+    return normalizeOverlayConfig({
+      ...overlayConfig,
+      ...(sliderDraft || {}),
+      ...(eventAnimationsDraft ? { eventAnimations: eventAnimationsDraft } : {}),
+    });
+  }, [overlayConfig, sliderDraft, eventAnimationsDraft]);
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const timeoutInfo = useMemo(
@@ -372,6 +384,9 @@ export function BroadcastOverlayConfigPage() {
       if (Date.now() - lastSliderEditAtRef.current >= 400) {
         const synced = normalizeOverlayConfig(res.overlayConfig);
         setOverlayConfig(synced);
+      }
+      if (partial.eventAnimations) {
+        setEventAnimationsDraft(null);
       }
       setSaveNotice(customNotice || 'Synced to live OBS sources');
       window.setTimeout(() => setSaveNotice(null), 2400);
@@ -615,36 +630,37 @@ export function BroadcastOverlayConfigPage() {
       Math.min(EVENT_ANIMATION_BOUNDS.yPct.max, Math.max(EVENT_ANIMATION_BOUNDS.yPct.min, rawY))
     );
     const currentMap = normalizeEventAnimationsConfig(effectiveOverlayConfig.eventAnimations);
+    const targetRule = currentMap[selectedEventKey];
     const nextMap: EventAnimationConfigMap = {
       ...currentMap,
       [selectedEventKey]: {
-        ...currentMap[selectedEventKey],
+        ...targetRule,
         positionPreset: 'custom',
         xPct,
         yPct,
       },
     };
-    const nextConfig = normalizeOverlayConfig({
-      ...effectiveOverlayConfig,
-      eventAnimations: nextMap,
-    });
-    setOverlayConfig(nextConfig);
+    setEventAnimationsDraft(nextMap);
     setStagePickActive(false);
     const meta = BROADCAST_EVENT_META[selectedEventKey];
-    triggerLocalPreview({
-      streamId: matchId || '',
-      eventId: `pick-${selectedEventKey}-${Date.now()}`,
-      eventKey: selectedEventKey,
-      sportType: meta.sport,
-      teamSide: 'A',
-      teamName: stream?.teamAName || 'HOME SQUAD',
-      teamColor: effectiveOverlayConfig.teamAColor,
-      subtitle: meta.defaultSubtitle,
-      pointsLabel: meta.badge,
-      triggeredAtIso: new Date().toISOString(),
-      manualOverride: true,
-      previewStyleId: nextMap[selectedEventKey].styleId,
-    });
+    triggerLocalPreview(
+      {
+        streamId: matchId || '',
+        eventId: `pick-${selectedEventKey}-${Date.now()}`,
+        eventKey: selectedEventKey,
+        sportType: meta.sport,
+        teamSide: 'A',
+        teamName: stream?.teamAName || 'HOME SQUAD',
+        teamColor: effectiveOverlayConfig.teamAColor,
+        subtitle: (targetRule.customSubtitle || '').trim() || meta.defaultSubtitle,
+        pointsLabel: (targetRule.customBadgeText || '').trim() || meta.badge,
+        triggeredAtIso: new Date().toISOString(),
+        manualOverride: true,
+        previewStyleId: targetRule.styleId,
+      },
+      true,
+      { sticky: pinPreview, replayEntry: false }
+    );
   }
 
   return (
@@ -1618,38 +1634,42 @@ export function BroadcastOverlayConfigPage() {
                 eventAnimations={normalizeEventAnimationsConfig(
                   effectiveOverlayConfig.eventAnimations
                 )}
+                hasUnsavedChanges={eventAnimationsDraft !== null}
                 saving={saving}
                 selectedEventKey={selectedEventKey}
                 onSelectEventKey={setSelectedEventKey}
                 stagePickActive={stagePickActive}
                 onToggleStagePick={setStagePickActive}
+                pinPreview={pinPreview}
+                onTogglePinPreview={setPinPreview}
                 onLocalConfigChange={(nextMap) => {
-                  setOverlayConfig(
-                    normalizeOverlayConfig({
-                      ...effectiveOverlayConfig,
-                      eventAnimations: nextMap,
-                    })
-                  );
+                  setEventAnimationsDraft(normalizeEventAnimationsConfig(nextMap));
+                }}
+                onDiscardUnsaved={() => {
+                  setEventAnimationsDraft(null);
+                  setSaveNotice('Discarded unsaved event animation edits.');
+                  window.setTimeout(() => setSaveNotice(null), 2200);
                 }}
                 onSaveEventAnimations={async (nextMap, notice) => {
                   await persistOverlayPatch({ eventAnimations: nextMap }, notice);
                 }}
-                onPreviewOnStage={(payload, nextMap) => {
+                onPreviewOnStage={(payload, nextMap, options) => {
                   if (nextMap) {
-                    setOverlayConfig(
-                      normalizeOverlayConfig({
-                        ...effectiveOverlayConfig,
-                        eventAnimations: nextMap,
-                      })
-                    );
+                    setEventAnimationsDraft(normalizeEventAnimationsConfig(nextMap));
                   }
-                  triggerLocalPreview(payload, true);
+                  triggerLocalPreview(payload, true, {
+                    sticky: options?.sticky ?? pinPreview,
+                    replayEntry: options?.replayEntry ?? true,
+                    durationMsOverride: options?.durationMsOverride,
+                  });
                 }}
                 onTriggerLiveBroadcast={async (payload) => {
                   setActionError(null);
                   try {
                     await liveStreamService.triggerEventAnimation(stream.id, payload);
-                    setSaveNotice(`Triggered live "${BROADCAST_EVENT_META[payload.eventKey].label}" animation on OBS & viewer players!`);
+                    setSaveNotice(
+                      `Triggered live "${BROADCAST_EVENT_META[payload.eventKey].label}" animation on OBS & viewer players!`
+                    );
                     window.setTimeout(() => setSaveNotice(null), 2600);
                   } catch (err) {
                     setActionError(

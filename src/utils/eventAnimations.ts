@@ -47,6 +47,88 @@ export type EventPatternStyle =
   | 'cyber_scan'
   | 'gold_foil';
 
+export type EventEntryTransition =
+  | 'slam_3d'
+  | 'ribbon_wipe'
+  | 'pop_blast'
+  | 'slide_left'
+  | 'slide_right'
+  | 'slide_top'
+  | 'slide_bottom'
+  | 'zoom_flip'
+  | 'blur_flash'
+  | 'bounce_drop';
+
+export type EventExitTransition =
+  | 'slam_out'
+  | 'fade_out'
+  | 'slide_left'
+  | 'slide_right'
+  | 'slide_top'
+  | 'slide_bottom'
+  | 'zoom_out'
+  | 'pop_out'
+  | 'blur_out'
+  | 'flip_out';
+
+export type EventIdleAnimation =
+  | 'energy_pulse'
+  | 'badge_float'
+  | 'neon_glow'
+  | 'shimmer_fast'
+  | 'kinetic_shake'
+  | 'radar_spin'
+  | 'none';
+
+export const EVENT_ENTRY_TRANSITIONS: readonly { id: EventEntryTransition; label: string }[] = [
+  { id: 'slam_3d', label: '3D Broadcast Slam' },
+  { id: 'ribbon_wipe', label: 'Skewed TV Wipe' },
+  { id: 'pop_blast', label: 'Starburst Pop' },
+  { id: 'slide_left', label: 'Slide from Left' },
+  { id: 'slide_right', label: 'Slide from Right' },
+  { id: 'slide_top', label: 'Drop from Top' },
+  { id: 'slide_bottom', label: 'Rise from Bottom' },
+  { id: 'zoom_flip', label: '3D Perspective Flip' },
+  { id: 'blur_flash', label: 'Strobe Blur Flash' },
+  { id: 'bounce_drop', label: 'Elastic Bounce Drop' },
+];
+
+export const EVENT_EXIT_TRANSITIONS: readonly { id: EventExitTransition; label: string }[] = [
+  { id: 'slam_out', label: 'Broadcast Slam Out' },
+  { id: 'fade_out', label: 'Smooth Fade' },
+  { id: 'slide_left', label: 'Swipe Left' },
+  { id: 'slide_right', label: 'Swipe Right' },
+  { id: 'slide_top', label: 'Lift Up' },
+  { id: 'slide_bottom', label: 'Drop Down' },
+  { id: 'zoom_out', label: 'Zoom Shrink' },
+  { id: 'pop_out', label: 'Snap Pop Out' },
+  { id: 'blur_out', label: 'Motion Blur Out' },
+  { id: 'flip_out', label: '3D Card Flip Out' },
+];
+
+export const EVENT_IDLE_ANIMATIONS: readonly { id: EventIdleAnimation; label: string }[] = [
+  { id: 'energy_pulse', label: 'Energy Heartbeat' },
+  { id: 'badge_float', label: 'Floating Emblem' },
+  { id: 'neon_glow', label: 'Neon Aura Glow' },
+  { id: 'shimmer_fast', label: 'Hyper Shimmer' },
+  { id: 'kinetic_shake', label: 'Impact Tremor' },
+  { id: 'radar_spin', label: 'Crest Spin Pulse' },
+  { id: 'none', label: 'Static Hold' },
+];
+
+export const EVENT_PATTERN_STYLES: readonly { id: EventPatternStyle; label: string }[] = [
+  { id: 'diagonal_slats', label: 'Diagonal Slats' },
+  { id: 'hex_pulse', label: 'Hexagon Mesh' },
+  { id: 'radial_rays', label: 'Radial Starburst' },
+  { id: 'prism_shards', label: 'Laser Prism Shards' },
+  { id: 'stadium_rings', label: 'Stadium Rings' },
+  { id: 'flame_grid', label: 'Ember Glow Grid' },
+  { id: 'circuit_lines', label: 'Cyber Circuit Lines' },
+  { id: 'crown_crest', label: 'Royal Diagonal Shine' },
+  { id: 'cyber_scan', label: 'HUD Scanlines' },
+  { id: 'gold_foil', label: 'Metallic Foil Sheen' },
+];
+
 export interface EventAnimationOption {
   id: string;
   index: number;
@@ -69,6 +151,35 @@ export interface EventAnimationRuleConfig {
   xPct: number;
   yPct: number;
   scale: number;
+  // Granular Per-Event Styling, Typography, Logo, Container, Color & Motion
+  primaryHex: string;
+  secondaryHex: string;
+  accentHex: string;
+  textColorHex: string;
+  badgeTextColorHex: string;
+  subtitleColorHex: string;
+  borderColorHex: string;
+  bgOpacity: number;
+  logoSizePx: number;
+  badgeTextSizePx: number;
+  teamTextSizePx: number;
+  headlineTextSizePx: number;
+  subtitleTextSizePx: number;
+  containerWidthPx: number;
+  containerPaddingX: number;
+  containerPaddingY: number;
+  containerRadiusPx: number;
+  borderWidthPx: number;
+  entryTransition: EventEntryTransition;
+  exitTransition: EventExitTransition;
+  idleAnimation: EventIdleAnimation;
+  pattern: EventPatternStyle;
+  showShockwaves: boolean;
+  showSparks: boolean;
+  showSheen: boolean;
+  customHeadline: string;
+  customBadgeText: string;
+  customSubtitle: string;
 }
 
 export type EventAnimationConfigMap = Record<BroadcastEventKey, EventAnimationRuleConfig>;
@@ -124,6 +235,17 @@ export const EVENT_ANIMATION_BOUNDS = {
   xPct: { min: 8, max: 92, step: 1, defaultVal: 50 },
   yPct: { min: 10, max: 90, step: 1, defaultVal: 48 },
   scale: { min: 0.5, max: 1.8, step: 0.05, defaultVal: 1 },
+  bgOpacity: { min: 0.35, max: 1, step: 0.05, defaultVal: 0.96 },
+  logoSizePx: { min: 32, max: 140, step: 2, defaultVal: 80 },
+  badgeTextSizePx: { min: 8, max: 24, step: 1, defaultVal: 11 },
+  teamTextSizePx: { min: 8, max: 24, step: 1, defaultVal: 11 },
+  headlineTextSizePx: { min: 18, max: 76, step: 1, defaultVal: 42 },
+  subtitleTextSizePx: { min: 9, max: 28, step: 1, defaultVal: 12 },
+  containerWidthPx: { min: 380, max: 1100, step: 10, defaultVal: 620 },
+  containerPaddingX: { min: 10, max: 56, step: 2, defaultVal: 24 },
+  containerPaddingY: { min: 8, max: 44, step: 2, defaultVal: 16 },
+  containerRadiusPx: { min: 0, max: 48, step: 2, defaultVal: 16 },
+  borderWidthPx: { min: 0, max: 8, step: 1, defaultVal: 2 },
 } as const;
 
 export const EVENT_POSITION_PRESETS: readonly {
@@ -466,17 +588,106 @@ export const EVENT_ANIMATION_PRESETS: Record<BroadcastEventKey, readonly EventAn
     {} as Record<BroadcastEventKey, readonly EventAnimationOption[]>
   );
 
-export function createDefaultEventRule(key: BroadcastEventKey): EventAnimationRuleConfig {
+export function defaultEntryForMotionFamily(family: EventMotionFamily): EventEntryTransition {
+  switch (family) {
+    case 'arena_banner_sweep':
+    case 'gold_ribbon_3d':
+    case 'pkl_ember_wipe':
+      return 'ribbon_wipe';
+    case 'stadium_fireworks':
+    case 'star_shockwave':
+    case 'flame_burst':
+      return 'pop_blast';
+    case 'lightning_arc':
+      return 'blur_flash';
+    case 'royal_crest':
+      return 'zoom_flip';
+    default:
+      return 'slam_3d';
+  }
+}
+
+export function defaultIdleForMotionFamily(family: EventMotionFamily): EventIdleAnimation {
+  switch (family) {
+    case 'royal_crest':
+    case 'gold_ribbon_3d':
+      return 'badge_float';
+    case 'neon_cyber_slam':
+    case 'lightning_arc':
+      return 'neon_glow';
+    case 'laser_prism':
+      return 'shimmer_fast';
+    default:
+      return 'energy_pulse';
+  }
+}
+
+export function createDefaultEventRule(
+  key: BroadcastEventKey,
+  styleIdOverride?: string
+): EventAnimationRuleConfig {
   const meta = BROADCAST_EVENT_META[key];
-  const firstStyle = EVENT_ANIMATION_PRESETS[key][0];
+  const style = resolveEventStyleOption(key, styleIdOverride || EVENT_ANIMATION_PRESETS[key][0].id);
+  const isWide =
+    style.motionFamily === 'arena_banner_sweep' || style.motionFamily === 'gold_ribbon_3d';
   return {
     enabled: true,
-    styleId: firstStyle.id,
+    styleId: style.id,
     durationSeconds: meta.defaultDurationSeconds,
     positionPreset: meta.defaultPositionPreset,
     xPct: meta.defaultXPct,
     yPct: meta.defaultYPct,
     scale: meta.defaultScale,
+    primaryHex: style.primaryHex,
+    secondaryHex: style.secondaryHex,
+    accentHex: style.accentHex,
+    textColorHex: '#FFFFFF',
+    badgeTextColorHex: '#070B18',
+    subtitleColorHex: '#F1F5F9',
+    borderColorHex: style.accentHex,
+    bgOpacity: 0.96,
+    logoSizePx: 80,
+    badgeTextSizePx: 11,
+    teamTextSizePx: 11,
+    headlineTextSizePx: 42,
+    subtitleTextSizePx: 12,
+    containerWidthPx: isWide ? 740 : 620,
+    containerPaddingX: 24,
+    containerPaddingY: 16,
+    containerRadiusPx: 16,
+    borderWidthPx: 2,
+    entryTransition: defaultEntryForMotionFamily(style.motionFamily),
+    exitTransition: 'slam_out',
+    idleAnimation: defaultIdleForMotionFamily(style.motionFamily),
+    pattern: style.pattern,
+    showShockwaves: true,
+    showSparks: true,
+    showSheen: true,
+    customHeadline: '',
+    customBadgeText: '',
+    customSubtitle: '',
+  };
+}
+
+export function applyStyleOptionToRule(
+  rule: EventAnimationRuleConfig,
+  eventKey: BroadcastEventKey,
+  styleId: string
+): EventAnimationRuleConfig {
+  const style = resolveEventStyleOption(eventKey, styleId);
+  const isWide =
+    style.motionFamily === 'arena_banner_sweep' || style.motionFamily === 'gold_ribbon_3d';
+  return {
+    ...rule,
+    styleId: style.id,
+    primaryHex: style.primaryHex,
+    secondaryHex: style.secondaryHex,
+    accentHex: style.accentHex,
+    borderColorHex: style.accentHex,
+    pattern: style.pattern,
+    entryTransition: defaultEntryForMotionFamily(style.motionFamily),
+    idleAnimation: defaultIdleForMotionFamily(style.motionFamily),
+    containerWidthPx: isWide ? Math.max(rule.containerWidthPx, 720) : rule.containerWidthPx,
   };
 }
 
@@ -493,6 +704,22 @@ function clampNum(val: unknown, min: number, max: number, fallback: number): num
   if (!Number.isFinite(n)) return fallback;
   return Math.round(Math.min(max, Math.max(min, n)) * 100) / 100;
 }
+
+function normalizeHex(val: unknown, fallback: string): string {
+  if (typeof val !== 'string') return fallback;
+  const trimmed = val.trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : fallback;
+}
+
+function normalizeTextField(val: unknown, maxLen: number): string {
+  if (typeof val !== 'string') return '';
+  return val.slice(0, maxLen);
+}
+
+const VALID_ENTRY_SET = new Set<string>(EVENT_ENTRY_TRANSITIONS.map((t) => t.id));
+const VALID_EXIT_SET = new Set<string>(EVENT_EXIT_TRANSITIONS.map((t) => t.id));
+const VALID_IDLE_SET = new Set<string>(EVENT_IDLE_ANIMATIONS.map((t) => t.id));
+const VALID_PATTERN_SET = new Set<string>(EVENT_PATTERN_STYLES.map((t) => t.id));
 
 export function getEventPositionPresetCoords(
   preset: EventAnimationPositionPreset
@@ -516,6 +743,9 @@ export function normalizeEventAnimationsConfig(
       typeof entry.styleId === 'string' && validStyleIds.has(entry.styleId)
         ? entry.styleId
         : def.styleId;
+
+    // Derive style-aware baseline so legacy saved rules inherit their preset palette/pattern
+    const styleBase = createDefaultEventRule(key, styleId);
 
     const validPresets = new Set(EVENT_POSITION_PRESETS.map((p) => p.id));
     const positionPreset: EventAnimationPositionPreset =
@@ -556,6 +786,102 @@ export function normalizeEventAnimationsConfig(
         EVENT_ANIMATION_BOUNDS.scale.max,
         def.scale
       ),
+      primaryHex: normalizeHex(entry.primaryHex, styleBase.primaryHex),
+      secondaryHex: normalizeHex(entry.secondaryHex, styleBase.secondaryHex),
+      accentHex: normalizeHex(entry.accentHex, styleBase.accentHex),
+      textColorHex: normalizeHex(entry.textColorHex, styleBase.textColorHex),
+      badgeTextColorHex: normalizeHex(entry.badgeTextColorHex, styleBase.badgeTextColorHex),
+      subtitleColorHex: normalizeHex(entry.subtitleColorHex, styleBase.subtitleColorHex),
+      borderColorHex: normalizeHex(entry.borderColorHex, styleBase.borderColorHex),
+      bgOpacity: clampNum(
+        entry.bgOpacity,
+        EVENT_ANIMATION_BOUNDS.bgOpacity.min,
+        EVENT_ANIMATION_BOUNDS.bgOpacity.max,
+        styleBase.bgOpacity
+      ),
+      logoSizePx: clampNum(
+        entry.logoSizePx,
+        EVENT_ANIMATION_BOUNDS.logoSizePx.min,
+        EVENT_ANIMATION_BOUNDS.logoSizePx.max,
+        styleBase.logoSizePx
+      ),
+      badgeTextSizePx: clampNum(
+        entry.badgeTextSizePx,
+        EVENT_ANIMATION_BOUNDS.badgeTextSizePx.min,
+        EVENT_ANIMATION_BOUNDS.badgeTextSizePx.max,
+        styleBase.badgeTextSizePx
+      ),
+      teamTextSizePx: clampNum(
+        entry.teamTextSizePx,
+        EVENT_ANIMATION_BOUNDS.teamTextSizePx.min,
+        EVENT_ANIMATION_BOUNDS.teamTextSizePx.max,
+        styleBase.teamTextSizePx
+      ),
+      headlineTextSizePx: clampNum(
+        entry.headlineTextSizePx,
+        EVENT_ANIMATION_BOUNDS.headlineTextSizePx.min,
+        EVENT_ANIMATION_BOUNDS.headlineTextSizePx.max,
+        styleBase.headlineTextSizePx
+      ),
+      subtitleTextSizePx: clampNum(
+        entry.subtitleTextSizePx,
+        EVENT_ANIMATION_BOUNDS.subtitleTextSizePx.min,
+        EVENT_ANIMATION_BOUNDS.subtitleTextSizePx.max,
+        styleBase.subtitleTextSizePx
+      ),
+      containerWidthPx: clampNum(
+        entry.containerWidthPx,
+        EVENT_ANIMATION_BOUNDS.containerWidthPx.min,
+        EVENT_ANIMATION_BOUNDS.containerWidthPx.max,
+        styleBase.containerWidthPx
+      ),
+      containerPaddingX: clampNum(
+        entry.containerPaddingX,
+        EVENT_ANIMATION_BOUNDS.containerPaddingX.min,
+        EVENT_ANIMATION_BOUNDS.containerPaddingX.max,
+        styleBase.containerPaddingX
+      ),
+      containerPaddingY: clampNum(
+        entry.containerPaddingY,
+        EVENT_ANIMATION_BOUNDS.containerPaddingY.min,
+        EVENT_ANIMATION_BOUNDS.containerPaddingY.max,
+        styleBase.containerPaddingY
+      ),
+      containerRadiusPx: clampNum(
+        entry.containerRadiusPx,
+        EVENT_ANIMATION_BOUNDS.containerRadiusPx.min,
+        EVENT_ANIMATION_BOUNDS.containerRadiusPx.max,
+        styleBase.containerRadiusPx
+      ),
+      borderWidthPx: clampNum(
+        entry.borderWidthPx,
+        EVENT_ANIMATION_BOUNDS.borderWidthPx.min,
+        EVENT_ANIMATION_BOUNDS.borderWidthPx.max,
+        styleBase.borderWidthPx
+      ),
+      entryTransition:
+        typeof entry.entryTransition === 'string' && VALID_ENTRY_SET.has(entry.entryTransition)
+          ? (entry.entryTransition as EventEntryTransition)
+          : styleBase.entryTransition,
+      exitTransition:
+        typeof entry.exitTransition === 'string' && VALID_EXIT_SET.has(entry.exitTransition)
+          ? (entry.exitTransition as EventExitTransition)
+          : styleBase.exitTransition,
+      idleAnimation:
+        typeof entry.idleAnimation === 'string' && VALID_IDLE_SET.has(entry.idleAnimation)
+          ? (entry.idleAnimation as EventIdleAnimation)
+          : styleBase.idleAnimation,
+      pattern:
+        typeof entry.pattern === 'string' && VALID_PATTERN_SET.has(entry.pattern)
+          ? (entry.pattern as EventPatternStyle)
+          : styleBase.pattern,
+      showShockwaves:
+        typeof entry.showShockwaves === 'boolean' ? entry.showShockwaves : styleBase.showShockwaves,
+      showSparks: typeof entry.showSparks === 'boolean' ? entry.showSparks : styleBase.showSparks,
+      showSheen: typeof entry.showSheen === 'boolean' ? entry.showSheen : styleBase.showSheen,
+      customHeadline: normalizeTextField(entry.customHeadline, 60),
+      customBadgeText: normalizeTextField(entry.customBadgeText, 40),
+      customSubtitle: normalizeTextField(entry.customSubtitle, 120),
     };
   }
 

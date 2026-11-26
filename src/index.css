@@ -502,3 +502,32 @@ html[data-obs-overlay-view="true"] #root {
     opacity: 0;
   }
 }
+
+@keyframes mlEventFlipOut {
+  0% {
+    opacity: 1;
+    transform: perspective(900px) rotateX(0deg) scale3d(1, 1, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: perspective(900px) rotateX(72deg) scale3d(0.88, 0.88, 1);
+  }
+}
+
+@keyframes mlEventNeonGlowLoop {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.35)) brightness(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 22px rgba(250, 204, 21, 0.75)) brightness(1.14);
+  }
+}
+
+@keyframes mlEventShimmerFast {
+  0%, 100% {
+    filter: brightness(1) contrast(1);
+  }
+  50% {
+    filter: brightness(1.22) contrast(1.06);
+  }
+}

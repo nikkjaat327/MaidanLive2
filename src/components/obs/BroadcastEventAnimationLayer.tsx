@@ -4,7 +4,9 @@ import {
   BROADCAST_EVENT_META,
   BroadcastEventKey,
   EventAnimationRuleConfig,
-  EventMotionFamily,
+  EventEntryTransition,
+  EventExitTransition,
+  EventIdleAnimation,
   EventPatternStyle,
   normalizeEventAnimationsConfig,
   resolveEventStyleOption,
@@ -50,18 +52,92 @@ const EMBER_OFFSETS: readonly { left: string; dx: string; delay: string; size: n
   { left: '90%', dx: '-12px', delay: '110ms', size: 4 },
 ];
 
-function getEntryAnimationCss(family: EventMotionFamily): string {
-  switch (family) {
-    case 'arena_banner_sweep':
-    case 'gold_ribbon_3d':
-    case 'pkl_ember_wipe':
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = (hex || '#0f172a').replace('#', '').trim();
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.slice(0, 6).padEnd(6, '0');
+  const num = parseInt(full, 16);
+  if (!Number.isFinite(num)) return `rgba(15, 23, 42, ${alpha})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
+}
+
+function getEntryTransitionCss(transition: EventEntryTransition): string {
+  switch (transition) {
+    case 'ribbon_wipe':
       return 'mlEventRibbonSweep 520ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
-    case 'stadium_fireworks':
-    case 'star_shockwave':
-    case 'flame_burst':
+    case 'pop_blast':
       return 'mlEventPopBlast 540ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'slide_left':
+      return 'mlGfxSlideLeft 460ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'slide_right':
+      return 'mlGfxSlideRight 460ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'slide_top':
+      return 'mlGfxSlideTop 460ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'slide_bottom':
+      return 'mlGfxSlideBottom 460ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'zoom_flip':
+      return 'mlGfxFlipIn 520ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'blur_flash':
+      return 'mlGfxBlurIn 440ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'bounce_drop':
+      return 'mlGfxBounceIn 560ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    case 'slam_3d':
     default:
       return 'mlEventSlamIn 520ms cubic-bezier(0.16, 1, 0.3, 1) forwards';
+  }
+}
+
+function getExitTransitionCss(transition: EventExitTransition): string {
+  switch (transition) {
+    case 'fade_out':
+      return 'mlGfxFadeOut 400ms ease-in forwards';
+    case 'slide_left':
+      return 'mlGfxSlideOutLeft 410ms cubic-bezier(0.4, 0, 1, 1) forwards';
+    case 'slide_right':
+      return 'mlGfxSlideOutRight 410ms cubic-bezier(0.4, 0, 1, 1) forwards';
+    case 'slide_top':
+      return 'mlGfxSlideOutTop 410ms cubic-bezier(0.4, 0, 1, 1) forwards';
+    case 'slide_bottom':
+      return 'mlGfxSlideOutBottom 410ms cubic-bezier(0.4, 0, 1, 1) forwards';
+    case 'zoom_out':
+      return 'mlGfxZoomOut 400ms ease-in forwards';
+    case 'pop_out':
+      return 'mlGfxPopOut 410ms ease-in forwards';
+    case 'blur_out':
+      return 'mlGfxBlurOut 410ms ease-in forwards';
+    case 'flip_out':
+      return 'mlEventFlipOut 420ms ease-in forwards';
+    case 'slam_out':
+    default:
+      return 'mlEventSlamOut 410ms cubic-bezier(0.4, 0, 1, 1) forwards';
+  }
+}
+
+function getIdleAnimationCss(idle: EventIdleAnimation): string {
+  switch (idle) {
+    case 'badge_float':
+      return 'mlEventBadgeFloat 2.1s ease-in-out infinite';
+    case 'neon_glow':
+      return 'mlEventNeonGlowLoop 1.6s ease-in-out infinite';
+    case 'shimmer_fast':
+      return 'mlEventShimmerFast 1.2s ease-in-out infinite';
+    case 'kinetic_shake':
+      return 'mlGfxShake 0.85s ease-in-out infinite';
+    case 'radar_spin':
+      return 'mlEventEnergyPulse 2s ease-in-out infinite';
+    case 'none':
+      return 'none';
+    case 'energy_pulse':
+    default:
+      return 'mlEventEnergyPulse 1.8s ease-in-out infinite';
   }
 }
 
@@ -200,17 +276,26 @@ function EventSportEmblemSvg({
   eventKey,
   accentHex,
   primaryHex,
+  sizePx,
 }: {
   eventKey: BroadcastEventKey;
   accentHex: string;
   primaryHex: string;
+  sizePx: number;
 }) {
+  const iconStyle = {
+    width: sizePx,
+    height: sizePx,
+    filter: `drop-shadow(0 0 12px ${accentHex}77)`,
+  };
+  const gradId = `mlEmblemGrad_${eventKey}`;
+
   switch (eventKey) {
     case 'SUPER_RAID':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_12px_rgba(255,255,255,0.45)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <defs>
-            <linearGradient id="mlEmblemGrad" x1="0" y1="0" x2="1" y2="1">
+            <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
               <stop offset="0%" stopColor={accentHex} />
               <stop offset="100%" stopColor={primaryHex} />
             </linearGradient>
@@ -218,7 +303,7 @@ function EventSportEmblemSvg({
           <polygon
             points="32,3 58,17 58,47 32,61 6,47 6,17"
             fill="rgba(8,12,24,0.85)"
-            stroke="url(#mlEmblemGrad)"
+            stroke={`url(#${gradId})`}
             strokeWidth="3"
           />
           <path
@@ -231,7 +316,7 @@ function EventSportEmblemSvg({
       );
     case 'DO_OR_DIE_RAID':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_12px_rgba(244,63,94,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <polygon
             points="32,6 60,54 4,54"
             fill="rgba(24,6,14,0.9)"
@@ -245,7 +330,7 @@ function EventSportEmblemSvg({
       );
     case 'SUPER_TACKLE':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_12px_rgba(34,211,238,0.5)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <path
             d="M32 5 L55 14 V31 C55 45 45 55 32 60 C19 55 9 45 9 31 V14 Z"
             fill="rgba(8,16,32,0.9)"
@@ -264,7 +349,7 @@ function EventSportEmblemSvg({
       );
     case 'ALL_OUT':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(250,204,21,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(20,8,8,0.9)" stroke={accentHex} strokeWidth="3" />
           <path
             d="M32 13 C38 22 44 26 44 35 C44 43 38 49 32 49 C26 49 20 43 20 35 C20 29 24 24 27 21 C27 26 30 28 31 28 C30 22 31 17 32 13 Z"
@@ -275,7 +360,7 @@ function EventSportEmblemSvg({
       );
     case 'SIX':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(250,204,21,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(10,16,38,0.9)" stroke={accentHex} strokeWidth="3" />
           <text
             x="32"
@@ -292,7 +377,7 @@ function EventSportEmblemSvg({
       );
     case 'FOUR':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_12px_rgba(34,211,238,0.5)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <rect
             x="7"
             y="7"
@@ -318,7 +403,7 @@ function EventSportEmblemSvg({
       );
     case 'WICKET':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(239,68,68,0.6)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(26,6,10,0.9)" stroke={accentHex} strokeWidth="3" />
           <rect x="20" y="20" width="4" height="28" rx="1.5" fill="#ffffff" transform="rotate(-8 22 34)" />
           <rect x="30" y="18" width="4" height="30" rx="1.5" fill="#ffffff" />
@@ -329,7 +414,7 @@ function EventSportEmblemSvg({
       );
     case 'NO_BALL':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(245,158,11,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(28,12,6,0.92)" stroke={accentHex} strokeWidth="3" />
           <circle cx="32" cy="32" r="15" fill="none" stroke="#ffffff" strokeWidth="3" />
           <line x1="21" y1="43" x2="43" y2="21" stroke={accentHex} strokeWidth="4" strokeLinecap="round" />
@@ -337,7 +422,7 @@ function EventSportEmblemSvg({
       );
     case 'GOAL':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(16,185,129,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(6,24,18,0.9)" stroke={accentHex} strokeWidth="3" />
           <circle cx="32" cy="32" r="17" fill="#f8fafc" stroke="#0f172a" strokeWidth="2" />
           <polygon points="32,21 40,27 37,37 27,37 24,27" fill="#0f172a" />
@@ -350,7 +435,7 @@ function EventSportEmblemSvg({
       );
     case 'FOUL':
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_12px_rgba(234,179,8,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <rect
             x="16"
             y="12"
@@ -378,7 +463,7 @@ function EventSportEmblemSvg({
     case 'SET_WIN':
     default:
       return (
-        <svg viewBox="0 0 64 64" className="w-12 h-12 drop-shadow-[0_0_14px_rgba(250,204,21,0.55)]">
+        <svg viewBox="0 0 64 64" style={iconStyle}>
           <circle cx="32" cy="32" r="27" fill="rgba(10,16,36,0.9)" stroke={accentHex} strokeWidth="3" />
           <path
             d="M21 18 H43 V27 C43 34 38 39 32 40 C26 39 21 34 21 27 Z"
@@ -446,17 +531,58 @@ export function BroadcastEventAnimationLayer({
     ? resolveEventStyleOption(eventKey, payload?.previewStyleId || rule?.styleId)
     : undefined;
 
-  const isWideRibbon =
-    styleOpt?.motionFamily === 'arena_banner_sweep' ||
-    styleOpt?.motionFamily === 'gold_ribbon_3d';
-
   const finalScale = Math.max(0.25, (rule?.scale ?? 1) * responsiveFactor);
   const xPct = rule?.xPct ?? 50;
   const yPct = rule?.yPct ?? 48;
 
-  const headline = styleOpt?.headlineOverride || meta?.defaultHeadline || '';
-  const badgeLabel = payload?.pointsLabel || styleOpt?.badgeText || meta?.badge || '';
-  const subtitle = payload?.subtitle || meta?.defaultSubtitle || '';
+  const primaryHex = rule?.primaryHex || styleOpt?.primaryHex || '#EA580C';
+  const secondaryHex = rule?.secondaryHex || styleOpt?.secondaryHex || '#1E293B';
+  const accentHex = rule?.accentHex || styleOpt?.accentHex || '#FACC15';
+  const borderColorHex = rule?.borderColorHex || accentHex;
+  const textColorHex = rule?.textColorHex || '#FFFFFF';
+  const badgeTextColorHex = rule?.badgeTextColorHex || '#070B18';
+  const subtitleColorHex = rule?.subtitleColorHex || '#F1F5F9';
+  const bgOpacity = rule?.bgOpacity ?? 0.96;
+  const pattern = rule?.pattern || styleOpt?.pattern || 'diagonal_slats';
+
+  const logoBoxSize = rule?.logoSizePx ?? 80;
+  const logoSvgSize = Math.max(20, Math.round(logoBoxSize * 0.62));
+  const logoRadius = Math.min(28, Math.max(8, Math.round(logoBoxSize * 0.22)));
+
+  const badgeSizePx = rule?.badgeTextSizePx ?? 11;
+  const teamSizePx = rule?.teamTextSizePx ?? 11;
+  const headlineSizePx = rule?.headlineTextSizePx ?? 42;
+  const subtitleSizePx = rule?.subtitleTextSizePx ?? 12;
+
+  const plateWidthPx = rule?.containerWidthPx ?? 620;
+  const platePadX = rule?.containerPaddingX ?? 24;
+  const platePadY = rule?.containerPaddingY ?? 16;
+  const plateRadiusPx = rule?.containerRadiusPx ?? 16;
+  const borderWidthPx = rule?.borderWidthPx ?? 2;
+
+  const entryTransition = rule?.entryTransition || 'slam_3d';
+  const exitTransition = rule?.exitTransition || 'slam_out';
+  const idleAnimation = rule?.idleAnimation || 'energy_pulse';
+  const showShockwaves = rule?.showShockwaves ?? true;
+  const showSparks = rule?.showSparks ?? true;
+  const showSheen = rule?.showSheen ?? true;
+
+  const headline =
+    (rule?.customHeadline || '').trim() ||
+    styleOpt?.headlineOverride ||
+    meta?.defaultHeadline ||
+    '';
+  const badgeLabel =
+    (rule?.customBadgeText || '').trim() ||
+    payload?.pointsLabel ||
+    styleOpt?.badgeText ||
+    meta?.badge ||
+    '';
+  const subtitle =
+    (rule?.customSubtitle || '').trim() ||
+    payload?.subtitle ||
+    meta?.defaultSubtitle ||
+    '';
 
   return (
     <div
@@ -497,210 +623,267 @@ export function BroadcastEventAnimationLayer({
           }}
           className="absolute"
         >
+          {/* Outer Entry / Exit Wrapper */}
           <div
             style={{
               animation: isExiting
-                ? 'mlEventSlamOut 410ms cubic-bezier(0.4, 0, 1, 1) forwards'
-                : getEntryAnimationCss(styleOpt.motionFamily),
+                ? getExitTransitionCss(exitTransition)
+                : getEntryTransitionCss(entryTransition),
               willChange: 'transform, opacity, filter',
             }}
             className="relative flex items-center justify-center"
           >
             {/* Expanding Dual Shockwave Rings behind plate */}
-            <div
-              style={{
-                borderColor: styleOpt.accentHex,
-                boxShadow: `0 0 36px ${styleOpt.primaryHex}`,
-                animation: 'mlEventShockwave 950ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
-              }}
-              className="absolute left-1/2 top-1/2 w-[360px] h-[360px] rounded-full border-[4px] pointer-events-none"
-            />
-            <div
-              style={{
-                borderColor: styleOpt.primaryHex,
-                animation: 'mlEventShockwaveOuter 1150ms cubic-bezier(0.16, 1, 0.3, 1) 70ms forwards',
-              }}
-              className="absolute left-1/2 top-1/2 w-[420px] h-[420px] rounded-full border-[2px] border-dashed pointer-events-none"
-            />
+            {showShockwaves && (
+              <>
+                <div
+                  style={{
+                    borderColor: accentHex,
+                    boxShadow: `0 0 36px ${primaryHex}`,
+                    animation: 'mlEventShockwave 950ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                  }}
+                  className="absolute left-1/2 top-1/2 w-[360px] h-[360px] rounded-full border-[4px] pointer-events-none"
+                />
+                <div
+                  style={{
+                    borderColor: primaryHex,
+                    animation: 'mlEventShockwaveOuter 1150ms cubic-bezier(0.16, 1, 0.3, 1) 70ms forwards',
+                  }}
+                  className="absolute left-1/2 top-1/2 w-[420px] h-[420px] rounded-full border-[2px] border-dashed pointer-events-none"
+                />
+              </>
+            )}
 
             {/* Radial Pyro Spark Burst */}
-            <div className="absolute left-1/2 top-1/2 pointer-events-none">
-              {SPARK_VECTORS.map((sp, idx) => (
-                <span
-                  key={idx}
-                  style={
-                    {
-                      width: sp.size,
-                      height: sp.size,
-                      background: idx % 2 === 0 ? styleOpt.accentHex : '#ffffff',
-                      boxShadow: `0 0 12px ${styleOpt.accentHex}`,
-                      '--spark-x': sp.x,
-                      '--spark-y': sp.y,
-                      animation: `mlEventSparkBurst 860ms cubic-bezier(0.16, 1, 0.3, 1) ${sp.delay} forwards`,
-                    } as React.CSSProperties
-                  }
-                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
-                />
-              ))}
-            </div>
+            {showSparks && (
+              <div className="absolute left-1/2 top-1/2 pointer-events-none">
+                {SPARK_VECTORS.map((sp, idx) => (
+                  <span
+                    key={idx}
+                    style={
+                      {
+                        width: sp.size,
+                        height: sp.size,
+                        background: idx % 2 === 0 ? accentHex : '#ffffff',
+                        boxShadow: `0 0 12px ${accentHex}`,
+                        '--spark-x': sp.x,
+                        '--spark-y': sp.y,
+                        animation: `mlEventSparkBurst 860ms cubic-bezier(0.16, 1, 0.3, 1) ${sp.delay} forwards`,
+                      } as React.CSSProperties
+                    }
+                    className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
+                  />
+                ))}
+              </div>
+            )}
 
             {/* Ambient Stadium Backlight Aura */}
             <div
               style={{
-                background: `radial-gradient(ellipse at center, ${styleOpt.primaryHex}88 0%, ${styleOpt.secondaryHex}55 45%, transparent 72%)`,
+                background: `radial-gradient(ellipse at center, ${hexToRgba(primaryHex, 0.55 * bgOpacity)} 0%, ${hexToRgba(secondaryHex, 0.36 * bgOpacity)} 45%, transparent 72%)`,
                 animation: 'mlEventEnergyPulse 1.8s ease-in-out infinite',
               }}
               className="absolute -inset-x-16 -inset-y-12 blur-2xl pointer-events-none"
             />
 
-            {/* Main JioHotstar / Pro Kabaddi League Stinger Plate */}
+            {/* Inner Idle Hold Animation Wrapper */}
             <div
               style={{
-                width: isWideRibbon ? 740 : 620,
-                background: `linear-gradient(125deg, ${styleOpt.secondaryHex}f5 0%, #070b18f8 48%, ${styleOpt.primaryHex}e8 125%)`,
-                borderColor: `${styleOpt.accentHex}cc`,
-                boxShadow: `0 22px 60px rgba(0, 0, 0, 0.72), 0 0 38px ${styleOpt.primaryHex}77, inset 0 1px 0 rgba(255,255,255,0.28)`,
+                animation: getIdleAnimationCss(idleAnimation),
+                willChange: 'transform, filter',
               }}
-              className="relative overflow-hidden rounded-2xl border-2"
             >
-              {/* Pattern Backdrop */}
-              {renderPatternBackdrop(styleOpt.pattern, styleOpt.primaryHex, styleOpt.accentHex)}
-
-              {/* Rising Embers */}
-              <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                {EMBER_OFFSETS.map((em, idx) => (
-                  <span
-                    key={idx}
-                    style={
-                      {
-                        left: em.left,
-                        bottom: -4,
-                        width: em.size,
-                        height: em.size,
-                        background: styleOpt.accentHex,
-                        boxShadow: `0 0 10px ${styleOpt.accentHex}`,
-                        '--ember-dx': em.dx,
-                        animation: `mlEventEmberRise 1400ms ease-out ${em.delay} infinite`,
-                      } as React.CSSProperties
-                    }
-                    className="absolute rounded-full"
-                  />
-                ))}
-              </div>
-
-              {/* Diagonal Light Sheen Sweep */}
+              {/* Main JioHotstar / Pro Kabaddi League Stinger Plate */}
               <div
                 style={{
-                  background:
-                    'linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.45) 50%, transparent 80%)',
-                  animation: 'mlEventSheenSweep 1500ms cubic-bezier(0.22, 1, 0.36, 1) 120ms infinite',
+                  width: plateWidthPx,
+                  maxWidth: '94vw',
+                  borderRadius: plateRadiusPx,
+                  borderWidth: borderWidthPx,
+                  borderStyle: borderWidthPx > 0 ? 'solid' : 'none',
+                  borderColor: hexToRgba(borderColorHex, 0.85),
+                  background: `linear-gradient(125deg, ${hexToRgba(secondaryHex, bgOpacity)} 0%, ${hexToRgba('#070B18', Math.min(1, bgOpacity + 0.04))} 48%, ${hexToRgba(primaryHex, bgOpacity * 0.92)} 125%)`,
+                  boxShadow: `0 22px 60px rgba(0, 0, 0, 0.72), 0 0 38px ${hexToRgba(primaryHex, 0.45)}, inset 0 1px 0 rgba(255,255,255,0.28)`,
                 }}
-                className="absolute inset-y-0 w-44 pointer-events-none"
-              />
+                className="relative overflow-hidden"
+              >
+                {/* Pattern Backdrop */}
+                {renderPatternBackdrop(pattern, primaryHex, accentHex)}
 
-              {/* Top Metallic Highlight Rail */}
-              <div
-                style={{
-                  background: `linear-gradient(90deg, transparent, ${styleOpt.accentHex}, #ffffff, ${styleOpt.accentHex}, transparent)`,
-                }}
-                className="h-[3px] w-full"
-              />
-
-              {/* Inner Content Row */}
-              <div className="relative px-6 py-4 flex items-center gap-5">
-                {/* Left Glowing Sport Crest Medallion */}
-                <div
-                  style={{
-                    background: `radial-gradient(circle at 30% 30%, ${styleOpt.primaryHex}, ${styleOpt.secondaryHex})`,
-                    borderColor: styleOpt.accentHex,
-                    boxShadow: `0 0 26px ${styleOpt.primaryHex}bb, inset 0 0 14px rgba(255,255,255,0.22)`,
-                    animation: 'mlEventBadgeFloat 2.1s ease-in-out infinite',
-                  }}
-                  className="shrink-0 w-20 h-20 rounded-2xl border-2 flex items-center justify-center relative"
-                >
-                  <EventSportEmblemSvg
-                    eventKey={eventKey}
-                    accentHex={styleOpt.accentHex}
-                    primaryHex={styleOpt.primaryHex}
-                  />
-                </div>
-
-                {/* Center Typography Stack */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span
-                      style={{
-                        background: styleOpt.accentHex,
-                        color: '#070b18',
-                        boxShadow: `0 0 14px ${styleOpt.accentHex}88`,
-                      }}
-                      className="px-2.5 py-0.5 rounded font-black text-[11px] uppercase tracking-[0.16em]"
-                    >
-                      {badgeLabel}
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-black/50 border border-white/15 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-200">
-                      {meta.sport}
-                    </span>
-                    {payload.teamName && (
+                {/* Rising Embers */}
+                {showSparks && (
+                  <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                    {EMBER_OFFSETS.map((em, idx) => (
                       <span
-                        style={{
-                          borderColor: payload.teamColor || styleOpt.primaryHex,
-                        }}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-slate-950/80 border text-[11px] font-extrabold uppercase tracking-wider text-white truncate max-w-[230px]"
-                      >
-                        <span
-                          style={{ background: payload.teamColor || styleOpt.accentHex }}
-                          className="w-2 h-2 rounded-full shrink-0"
-                        />
-                        <span className="truncate">{payload.teamName}</span>
-                      </span>
-                    )}
+                        key={idx}
+                        style={
+                          {
+                            left: em.left,
+                            bottom: -4,
+                            width: em.size,
+                            height: em.size,
+                            background: accentHex,
+                            boxShadow: `0 0 10px ${accentHex}`,
+                            '--ember-dx': em.dx,
+                            animation: `mlEventEmberRise 1400ms ease-out ${em.delay} infinite`,
+                          } as React.CSSProperties
+                        }
+                        className="absolute rounded-full"
+                      />
+                    ))}
                   </div>
+                )}
 
-                  {/* Hero Kinetic Headline */}
+                {/* Diagonal Light Sheen Sweep */}
+                {showSheen && (
                   <div
                     style={{
-                      backgroundImage: `linear-gradient(180deg, #ffffff 18%, ${styleOpt.accentHex} 98%)`,
-                      WebkitBackgroundClip: 'text',
-                      color: 'transparent',
-                      filter: `drop-shadow(0 4px 12px rgba(0,0,0,0.85))`,
+                      background:
+                        'linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.45) 50%, transparent 80%)',
+                      animation: 'mlEventSheenSweep 1500ms cubic-bezier(0.22, 1, 0.36, 1) 120ms infinite',
                     }}
-                    className="font-display text-4xl sm:text-[42px] font-black italic uppercase tracking-tight leading-none"
-                  >
-                    {headline}
-                  </div>
+                    className="absolute inset-y-0 w-44 pointer-events-none"
+                  />
+                )}
 
-                  {/* Player & Context Ticker */}
-                  <div className="mt-1.5 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-slate-100/95 truncate">
-                    {payload.playerName && (
-                      <span
-                        style={{ color: styleOpt.accentHex }}
-                        className="font-extrabold shrink-0"
-                      >
-                        {payload.playerName} ·
-                      </span>
-                    )}
-                    <span className="truncate">{subtitle}</span>
-                  </div>
-                </div>
-
-                {/* Right Angled Neon Wing Accent */}
+                {/* Top Metallic Highlight Rail */}
                 <div
                   style={{
-                    background: `linear-gradient(180deg, ${styleOpt.accentHex}, ${styleOpt.primaryHex})`,
-                    boxShadow: `0 0 18px ${styleOpt.primaryHex}`,
+                    background: `linear-gradient(90deg, transparent, ${accentHex}, #ffffff, ${accentHex}, transparent)`,
                   }}
-                  className="hidden sm:block shrink-0 w-2.5 h-20 rounded-full opacity-90"
+                  className="h-[3px] w-full"
+                />
+
+                {/* Inner Content Row */}
+                <div
+                  style={{
+                    paddingLeft: platePadX,
+                    paddingRight: platePadX,
+                    paddingTop: platePadY,
+                    paddingBottom: platePadY,
+                    gap: Math.max(12, Math.round(logoBoxSize * 0.25)),
+                  }}
+                  className="relative flex items-center"
+                >
+                  {/* Left Glowing Sport Crest Medallion */}
+                  <div
+                    style={{
+                      width: logoBoxSize,
+                      height: logoBoxSize,
+                      borderRadius: logoRadius,
+                      background: `radial-gradient(circle at 30% 30%, ${primaryHex}, ${secondaryHex})`,
+                      borderColor: borderColorHex,
+                      boxShadow: `0 0 26px ${hexToRgba(primaryHex, 0.75)}, inset 0 0 14px rgba(255,255,255,0.22)`,
+                      animation:
+                        idleAnimation === 'radar_spin'
+                          ? 'mlGfxRotateLoop 6s linear infinite'
+                          : 'mlEventBadgeFloat 2.1s ease-in-out infinite',
+                    }}
+                    className="shrink-0 border-2 flex items-center justify-center relative"
+                  >
+                    <EventSportEmblemSvg
+                      eventKey={eventKey}
+                      accentHex={accentHex}
+                      primaryHex={primaryHex}
+                      sizePx={logoSvgSize}
+                    />
+                  </div>
+
+                  {/* Center Typography Stack */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span
+                        style={{
+                          background: accentHex,
+                          color: badgeTextColorHex,
+                          fontSize: `${badgeSizePx}px`,
+                          lineHeight: 1.25,
+                          boxShadow: `0 0 14px ${hexToRgba(accentHex, 0.55)}`,
+                        }}
+                        className="px-2.5 py-0.5 rounded font-black uppercase tracking-[0.16em]"
+                      >
+                        {badgeLabel}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: `${Math.max(8, badgeSizePx - 1)}px`,
+                          lineHeight: 1.25,
+                        }}
+                        className="px-2 py-0.5 rounded bg-black/50 border border-white/15 font-bold uppercase tracking-[0.18em] text-slate-200"
+                      >
+                        {meta.sport}
+                      </span>
+                      {payload.teamName && (
+                        <span
+                          style={{
+                            borderColor: payload.teamColor || primaryHex,
+                            fontSize: `${teamSizePx}px`,
+                            lineHeight: 1.25,
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-slate-950/80 border font-extrabold uppercase tracking-wider text-white truncate max-w-[260px]"
+                        >
+                          <span
+                            style={{ background: payload.teamColor || accentHex }}
+                            className="w-2 h-2 rounded-full shrink-0"
+                          />
+                          <span className="truncate">{payload.teamName}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Hero Kinetic Headline */}
+                    <div
+                      style={{
+                        color: textColorHex,
+                        fontSize: `${headlineSizePx}px`,
+                        lineHeight: 1.04,
+                        textShadow: `0 4px 14px rgba(0,0,0,0.85), 0 0 22px ${hexToRgba(accentHex, 0.45)}`,
+                      }}
+                      className="font-display font-black italic uppercase tracking-tight"
+                    >
+                      {headline}
+                    </div>
+
+                    {/* Player & Context Ticker */}
+                    <div
+                      style={{
+                        color: subtitleColorHex,
+                        fontSize: `${subtitleSizePx}px`,
+                        lineHeight: 1.35,
+                      }}
+                      className="mt-1.5 flex items-center gap-2 font-bold uppercase tracking-[0.12em] truncate"
+                    >
+                      {payload.playerName && (
+                        <span
+                          style={{ color: accentHex }}
+                          className="font-extrabold shrink-0"
+                        >
+                          {payload.playerName} ·
+                        </span>
+                      )}
+                      <span className="truncate">{subtitle}</span>
+                    </div>
+                  </div>
+
+                  {/* Right Angled Neon Wing Accent */}
+                  <div
+                    style={{
+                      background: `linear-gradient(180deg, ${accentHex}, ${primaryHex})`,
+                      boxShadow: `0 0 18px ${primaryHex}`,
+                      height: Math.max(48, Math.round(logoBoxSize * 0.92)),
+                    }}
+                    className="hidden sm:block shrink-0 w-2.5 rounded-full opacity-90"
+                  />
+                </div>
+
+                {/* Bottom Neon Edge */}
+                <div
+                  style={{
+                    background: `linear-gradient(90deg, ${primaryHex}, ${accentHex}, ${primaryHex})`,
+                  }}
+                  className="h-1 w-full"
                 />
               </div>
-
-              {/* Bottom Neon Edge */}
-              <div
-                style={{
-                  background: `linear-gradient(90deg, ${styleOpt.primaryHex}, ${styleOpt.accentHex}, ${styleOpt.primaryHex})`,
-                }}
-                className="h-1 w-full"
-              />
             </div>
           </div>
         </div>
