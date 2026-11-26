@@ -30,12 +30,20 @@ function getSafeStorages(): Storage[] {
   return storages;
 }
 
+function sanitizeStickyMatchId(raw: string | undefined | null): string {
+  const normalized = typeof raw === 'string' ? raw.trim() : '';
+  if (!normalized) return '';
+  const lower = normalized.toLowerCase();
+  if (lower === 'undefined' || lower === 'null' || lower === 'view') return '';
+  return normalized;
+}
+
 export function getStickyMatchId(): string {
   for (const storage of getSafeStorages()) {
     try {
-      const value = storage.getItem(ACTIVE_MATCH_STORAGE_KEY);
-      if (value && value.trim()) {
-        return value.trim();
+      const clean = sanitizeStickyMatchId(storage.getItem(ACTIVE_MATCH_STORAGE_KEY));
+      if (clean) {
+        return clean;
       }
     } catch {
       // Ignore read errors
@@ -45,7 +53,7 @@ export function getStickyMatchId(): string {
 }
 
 export function setStickyMatchId(matchId: string | undefined | null): string {
-  const normalized = typeof matchId === 'string' ? matchId.trim() : '';
+  const normalized = sanitizeStickyMatchId(matchId);
   if (!normalized) return '';
 
   const previous = getStickyMatchId();

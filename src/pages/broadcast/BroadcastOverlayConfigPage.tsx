@@ -71,6 +71,7 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import stadiumHeroImg from '../../assets/images/stadium_floodlight_hero_1795011087164.jpg';
 import arenaTurfImg from '../../assets/images/arena_turf_empty_1795011087551.jpg';
 import {
+  clearStickyMatchId,
   resolveStickyOrPreferredMatch,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
@@ -192,9 +193,12 @@ export function BroadcastOverlayConfigPage() {
     serverClockOffsetMs,
     loading,
     error,
+    notFound: overlayNotFound,
+    clearError: clearOverlayError,
     connected,
     refetch,
   } = useObsOverlay(matchId);
+  const [streamsLoading, setStreamsLoading] = useState(true);
 
   const location = useLocation();
   const [floatingControlsOpen, setFloatingControlsOpen] = useState(false);
@@ -239,26 +243,64 @@ export function BroadcastOverlayConfigPage() {
   }, [closeOverlayPreview]);
 
   useEffect(() => {
-    if (matchId) {
+    if (matchId && streams.some((s) => s.id === matchId)) {
       setStickyMatchId(matchId);
     }
-  }, [matchId]);
+  }, [matchId, streams]);
 
   useEffect(() => {
+    setStreamsLoading(true);
     liveStreamService
       .listStreams()
       .then((list) => {
         setStreams(list);
-        if (!matchId && list.length > 0) {
-          const targetId = resolveStickyOrPreferredMatch(matchId, list);
+        const hasExact = Boolean(matchId && list.some((s) => s.id === matchId));
+        if (list.length > 0 && (!matchId || !hasExact)) {
+          clearStickyMatchId();
+          clearOverlayError();
+          const targetId = resolveStickyOrPreferredMatch(undefined, list);
           if (targetId) {
             setStickyMatchId(targetId);
-            navigate(`/broadcast/overlay/${targetId}`, { replace: true });
+            navigate(`/broadcast/overlay/${targetId}${location.search}`, { replace: true });
           }
+        } else if (list.length === 0 && matchId) {
+          clearStickyMatchId();
+          clearOverlayError();
+          navigate(`/broadcast/overlay${location.search}`, { replace: true });
         }
       })
-      .catch(() => {});
-  }, [matchId, navigate]);
+      .catch(() => {})
+      .finally(() => setStreamsLoading(false));
+  }, [matchId, navigate, location.search, clearOverlayError]);
+
+  useEffect(() => {
+    if (!overlayNotFound || loading || streamsLoading) return;
+    if (streams.length > 0) {
+      const hasExact = Boolean(matchId && streams.some((s) => s.id === matchId));
+      if (!hasExact) {
+        clearStickyMatchId();
+        clearOverlayError();
+        const targetId = resolveStickyOrPreferredMatch(undefined, streams);
+        if (targetId) {
+          setStickyMatchId(targetId);
+          navigate(`/broadcast/overlay/${targetId}${location.search}`, { replace: true });
+        }
+      }
+    } else if (matchId) {
+      clearStickyMatchId();
+      clearOverlayError();
+      navigate(`/broadcast/overlay${location.search}`, { replace: true });
+    }
+  }, [
+    overlayNotFound,
+    loading,
+    streamsLoading,
+    streams,
+    matchId,
+    navigate,
+    location.search,
+    clearOverlayError,
+  ]);
 
   useEffect(() => {
     platformOpsService
@@ -709,15 +751,18 @@ export function BroadcastOverlayConfigPage() {
 
             {streams.length > 0 && (
               <select
-                value={matchId || ''}
+                value={matchId && streams.some((s) => s.id === matchId) ? matchId : ''}
                 onChange={(e) => {
                   if (!e.target.value) return;
                   setStickyMatchId(e.target.value);
-                  navigate(`/broadcast/overlay/${e.target.value}`);
+                  navigate(`/broadcast/overlay/${e.target.value}${location.search}`);
                 }}
                 aria-label="Switch broadcast match"
                 className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-slate-900 text-slate-100 border border-slate-700 rounded-lg max-w-[240px]"
               >
+                {(!matchId || !streams.some((s) => s.id === matchId)) && (
+                  <option value="">Select broadcast match...</option>
+                )}
                 {streams.map((s) => (
                   <option key={s.id} value={s.id}>
                     [{s.status}] {s.matchTitle || `${s.teamAName || 'Team A'} vs ${s.teamBName || 'Team B'}`}
@@ -796,10 +841,22 @@ export function BroadcastOverlayConfigPage() {
       </header>
 
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 py-6 space-y-6">
-        <FeedbackBanner type="error" message={actionError || error} onDismiss={() => setActionError(null)} />
+        <FeedbackBanner
+          type="error"
+          message={
+            actionError ||
+            (overlayNotFound && (streamsLoading || streams.length === 0 || !streams.some((s) => s.id === matchId))
+              ? null
+              : error)
+          }
+          onDismiss={() => {
+            setActionError(null);
+            clearOverlayError();
+          }}
+        />
         <FeedbackBanner type="success" message={saveNotice} onDismiss={() => setSaveNotice(null)} />
 
-        {loading ? (
+        {loading || streamsLoading ? (
           <div className="p-10 rounded-xl border border-slate-800 bg-slate-900/70 text-sm text-slate-400">
             Loading OBS Broadcast Overlay Studio...
           </div>

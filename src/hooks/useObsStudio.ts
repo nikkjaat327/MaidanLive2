@@ -13,6 +13,7 @@ export function useObsStudio(matchId?: string) {
   const [studio, setStudio] = useState<ObsStudioPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [liveErrorToast, setLiveErrorToast] = useState<string | null>(null);
   const [switchingSceneRequest, setSwitchingSceneRequest] =
@@ -21,9 +22,16 @@ export function useObsStudio(matchId?: string) {
   const matchIdRef = useRef(matchId);
   matchIdRef.current = matchId;
 
+  const clearError = useCallback(() => {
+    setError(null);
+    setErrorStatus(null);
+  }, []);
+
   const refetch = useCallback(async () => {
     if (!matchId) {
       setStudio(null);
+      setError(null);
+      setErrorStatus(null);
       setLoading(false);
       return;
     }
@@ -31,7 +39,10 @@ export function useObsStudio(matchId?: string) {
       const data = await obsStudioService.getStudio(matchId);
       setStudio(data);
       setError(null);
-    } catch (err) {
+      setErrorStatus(null);
+    } catch (err: any) {
+      const status = typeof err?.response?.status === 'number' ? err.response.status : null;
+      setErrorStatus(status);
       setError(extractApiError(err, 'Failed to load OBS Broadcast Control Studio.'));
     } finally {
       setLoading(false);
@@ -42,8 +53,12 @@ export function useObsStudio(matchId?: string) {
     if (!matchId) {
       setLoading(false);
       setStudio(null);
+      setError(null);
+      setErrorStatus(null);
       return;
     }
+    setError(null);
+    setErrorStatus(null);
     setLoading(true);
     refetch();
   }, [matchId, refetch]);
@@ -503,10 +518,13 @@ export function useObsStudio(matchId?: string) {
     setStudio,
     loading,
     error,
+    errorStatus,
+    notFound: errorStatus === 404,
     socketConnected,
     liveErrorToast,
     switchingSceneRequest,
     scheduleRevision,
+    clearError,
     clearLiveErrorToast: () => setLiveErrorToast(null),
     refetch,
   };

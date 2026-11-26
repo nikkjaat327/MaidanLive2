@@ -112,6 +112,7 @@ import {
   CONTROL_ROOM_STATUS_EVENT,
 } from '../../components/layout/BroadcasterLayout.tsx';
 import {
+  clearStickyMatchId,
   resolveStickyOrPreferredMatch,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
@@ -248,13 +249,17 @@ export function AdminObsBroadcastStudioPage() {
     setStudio,
     loading,
     error,
+    notFound: studioNotFound,
     socketConnected,
     liveErrorToast,
     switchingSceneRequest,
     scheduleRevision,
+    clearError: clearStudioError,
     clearLiveErrorToast,
     refetch,
   } = useObsStudio(matchId);
+  const resolvedStudioMatchIdRef = useRef<string | undefined>(undefined);
+  resolvedStudioMatchIdRef.current = studio?.match?.id;
 
   // Busy states
   const [switchingKey, setSwitchingKey] = useState<string | null>(null);
@@ -459,7 +464,7 @@ export function AdminObsBroadcastStudioPage() {
     setActiveTab('graphics');
   }, []);
 
-  // Load match selector list (strictly scoped for Broadcasters)
+  // Load match selector list (strictly scoped for Broadcasters) and auto-recover from stale match IDs
   const loadMatches = useCallback(async () => {
     try {
       setLoadingMatches(true);
@@ -483,23 +488,80 @@ export function AdminObsBroadcastStudioPage() {
         list = await liveStreamService.listStreams();
       }
       setMatches(list);
-      if (!matchId && list.length > 0) {
-        const targetId = resolveStickyOrPreferredMatch(matchId, list);
+
+      const hasExactMatch = Boolean(matchId && list.some((m) => m.id === matchId));
+      if (list.length > 0 && (!matchId || !hasExactMatch)) {
+        // Prefer canonical match ID resolved by backend (e.g. fixture -> stream) if present in list
+        const studioMatchId = resolvedStudioMatchIdRef.current;
+        const resolvedStudioId =
+          studioMatchId && list.some((m) => m.id === studioMatchId)
+            ? studioMatchId
+            : '';
+        clearStickyMatchId();
+        clearStudioError();
+        setActionError(null);
+        const targetId = resolvedStudioId || resolveStickyOrPreferredMatch(undefined, list);
         if (targetId) {
           setStickyMatchId(targetId);
-          navigate(`${studioBaseRoute}/${targetId}`, { replace: true });
+          navigate(`${studioBaseRoute}/${targetId}${location.search}`, { replace: true });
         }
+      } else if (list.length === 0 && matchId) {
+        clearStickyMatchId();
+        clearStudioError();
+        setActionError(null);
+        navigate(`${studioBaseRoute}${location.search}`, { replace: true });
       }
     } catch (err) {
       setActionError(extractApiError(err, 'Failed to load matches list.'));
     } finally {
       setLoadingMatches(false);
     }
-  }, [matchId, navigate, isBroadcasterRole, isBroadcasterPortal, studioBaseRoute]);
+  }, [
+    matchId,
+    navigate,
+    location.search,
+    isBroadcasterRole,
+    isBroadcasterPortal,
+    studioBaseRoute,
+    clearStudioError,
+  ]);
 
   useEffect(() => {
     loadMatches();
   }, [loadMatches]);
+
+  // Immediate fallback if studio lookup 404s after match list already loaded
+  useEffect(() => {
+    if (!studioNotFound || loading || loadingMatches) return;
+    if (matches.length > 0) {
+      const hasExact = Boolean(matchId && matches.some((m) => m.id === matchId));
+      if (!hasExact) {
+        clearStickyMatchId();
+        clearStudioError();
+        setActionError(null);
+        const targetId = resolveStickyOrPreferredMatch(undefined, matches);
+        if (targetId) {
+          setStickyMatchId(targetId);
+          navigate(`${studioBaseRoute}/${targetId}${location.search}`, { replace: true });
+        }
+      }
+    } else if (matchId) {
+      clearStickyMatchId();
+      clearStudioError();
+      setActionError(null);
+      navigate(`${studioBaseRoute}${location.search}`, { replace: true });
+    }
+  }, [
+    studioNotFound,
+    loading,
+    loadingMatches,
+    matches,
+    matchId,
+    navigate,
+    location.search,
+    studioBaseRoute,
+    clearStudioError,
+  ]);
 
   const loadBridges = useCallback(async () => {
     try {
@@ -2485,13 +2547,13 @@ export function AdminObsBroadcastStudioPage() {
   }
 
   useEffect(() => {
-    if (matchId) {
+    if (matchId && (studio?.match?.id === matchId || matches.some((m) => m.id === matchId))) {
       setStickyMatchId(matchId);
     }
     window.dispatchEvent(
       new CustomEvent(CONTROL_ROOM_STATUS_EVENT, {
         detail: {
-          matchId,
+          matchId: studio?.match?.id || (matches.some((m) => m.id === matchId) ? matchId : undefined),
           bridgeOnline: Boolean(studio?.profile?.agentOnline),
           connectionMode: studio?.profile?.connectionMode,
           obsConnected: studio?.profile?.connectionStatus === 'CONNECTED',
@@ -2505,6 +2567,8 @@ export function AdminObsBroadcastStudioPage() {
     );
   }, [
     matchId,
+    matches,
+    studio?.match?.id,
     studio?.profile?.agentOnline,
     studio?.profile?.connectionMode,
     studio?.profile?.connectionStatus,
@@ -2522,9 +2586,17 @@ export function AdminObsBroadcastStudioPage() {
       ? { label: 'ON AIR', dot: 'bg-red-500 animate-pulse', pill: 'bg-red-500/15 text-red-300 border-red-500/40' }
       : { label: 'Live Ready', dot: 'bg-emerald-400', pill: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' }
     : profile?.agentOnline
-      ? { label: 'Bridge Online', dot: 'bg-amber-400', pill: 'bg-amber-500/15 text-amber-300 border-amber-500/40' }
-      : { label: 'OBS Offline', dot: 'bg-slate-500', pill: 'bg-slate-800/90 text-slate-300 border-slate-700' };
+      ? { label: 'Bridge Online · OBS Disconnected', dot: 'bg-amber-400', pill: 'bg-amber-500/15 text-amber-300 border-amber-500/40' }
+      : profile?.connectionStatus === 'RECONNECTING' || profile?.connectionStatus === 'CONNECTION_LOST'
+        ? { label: 'OBS Reconnecting', dot: 'bg-amber-400 animate-pulse', pill: 'bg-amber-500/15 text-amber-300 border-amber-500/40' }
+        : { label: 'OBS Disconnected', dot: 'bg-slate-500', pill: 'bg-slate-800/90 text-slate-300 border-slate-700' };
 
+  const hasExactMatchInList = Boolean(matchId && matches.some((m) => m.id === matchId));
+  const recoveringStaleMatch = Boolean(
+    studioNotFound && (loadingMatches || !hasExactMatchInList || matches.length === 0)
+  );
+  const visibleBannerError =
+    actionError || liveErrorToast || (recoveringStaleMatch ? null : error);
   const selectedMatchObj = matches.find((m) => m.id === matchId);
   const currentMatchLabel =
     studio?.match?.matchTitle ||
@@ -2629,7 +2701,7 @@ export function AdminObsBroadcastStudioPage() {
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <div className="inline-flex items-center gap-1.5">
             <select
-              value={matchId || ''}
+              value={hasExactMatchInList ? matchId || '' : ''}
               disabled={loadingMatches}
               onChange={(e) => {
                 const nextId = e.target.value;
@@ -2637,7 +2709,9 @@ export function AdminObsBroadcastStudioPage() {
                   const prevId = matchId;
                   prevStudioMatchIdRef.current = prevId;
                   setStickyMatchId(nextId);
-                  navigate(`${studioBaseRoute}/${nextId}`);
+                  clearStudioError();
+                  setActionError(null);
+                  navigate(`${studioBaseRoute}/${nextId}${location.search}`);
                   if (autoSwitchObsOnSelect && nextId !== prevId) {
                     void handleOneClickSwitchObsBroadcast(nextId, prevId);
                   }
@@ -2647,7 +2721,11 @@ export function AdminObsBroadcastStudioPage() {
               title={`Match: ${currentMatchLabel}`}
               className="h-9 px-3 rounded-lg bg-[#121826] border border-slate-700/90 text-xs font-semibold text-slate-100 max-w-[230px] focus:outline-none focus:border-purple-500"
             >
-              {matches.length === 0 && <option value="">No matches available</option>}
+              {matches.length === 0 ? (
+                <option value="">No matches available</option>
+              ) : (
+                !hasExactMatchInList && <option value="">Selecting active match...</option>
+              )}
               {matches.map((m) => (
                 <option key={m.id} value={m.id}>
                   Match: {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
@@ -2849,9 +2927,10 @@ export function AdminObsBroadcastStudioPage() {
           {/* Banners */}
           <FeedbackBanner
             type="error"
-            message={actionError || liveErrorToast || error}
+            message={visibleBannerError}
             onDismiss={() => {
               setActionError(null);
+              clearStudioError();
               clearLiveErrorToast();
             }}
           />
@@ -2911,7 +2990,7 @@ export function AdminObsBroadcastStudioPage() {
             </div>
           )}
 
-          {!matchId && !loadingMatches && matches.length === 0 ? (
+          {!loading && !loadingMatches && matches.length === 0 ? (
             <EmptyState
               icon={<Video className="w-6 h-6" />}
               title="No match broadcasts found"
@@ -2937,8 +3016,58 @@ export function AdminObsBroadcastStudioPage() {
                 )
               }
             />
-          ) : loading || !studio || !profile ? (
+          ) : loading || loadingMatches || recoveringStaleMatch ? (
             <TableSkeleton rows={5} />
+          ) : !studio || !profile ? (
+            <EmptyState
+              icon={<Video className="w-6 h-6" />}
+              title={
+                error && !/not found/i.test(error)
+                  ? 'Control Room connection issue'
+                  : 'Select a match to open Control Room'
+              }
+              description={
+                error && !/not found/i.test(error)
+                  ? error
+                  : 'The previously selected match is no longer active. Pick an active match or retry loading.'
+              }
+              action={
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {matches.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const fallbackId = resolveStickyOrPreferredMatch(undefined, matches);
+                        if (fallbackId) {
+                          clearStudioError();
+                          setActionError(null);
+                          setStickyMatchId(fallbackId);
+                          navigate(`${studioBaseRoute}/${fallbackId}${location.search}`, {
+                            replace: true,
+                          });
+                        }
+                      }}
+                      className="min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-500"
+                    >
+                      <Radio className="w-4 h-4" />
+                      <span>Open Active Match</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearStudioError();
+                      setActionError(null);
+                      void refetch();
+                    }}
+                    className="min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Retry</span>
+                  </button>
+                </div>
+              }
+            />
           ) : (
             <>
               {/* ============================================================== */}

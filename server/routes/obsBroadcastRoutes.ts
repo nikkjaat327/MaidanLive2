@@ -17,6 +17,7 @@ import {
 } from '../middleware/auth.ts';
 import type { AuthenticatedRequest, BroadcastAccessPermission } from '../middleware/auth.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { Fixture } from '../models/Fixture.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Sponsor } from '../models/Sponsor.ts';
 import { ADMIN_PORTAL_ROLES, User } from '../models/User.ts';
@@ -237,6 +238,19 @@ async function authorizeBroadcastControl(
     return false;
   }
   return true;
+}
+
+async function resolveLiveStreamDoc(rawMatchId: string) {
+  if (!mongoose.Types.ObjectId.isValid(rawMatchId)) return null;
+  const direct = await LiveStream.findById(rawMatchId).lean();
+  if (direct) return direct;
+  const byFixtureField = await LiveStream.findOne({ fixtureId: rawMatchId }).lean();
+  if (byFixtureField) return byFixtureField;
+  const fixture = await Fixture.findById(rawMatchId).select('liveStreamId').lean();
+  if (fixture?.liveStreamId) {
+    return LiveStream.findById(fixture.liveStreamId).lean();
+  }
+  return null;
 }
 
 function rejectBroadcasterAdminAction(
@@ -1118,14 +1132,20 @@ router.get(
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { matchId } = req.params;
-      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const { matchId: rawMatchId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(rawMatchId)) {
+        res.status(400).json({ message: 'Invalid match ID.' });
+        return;
+      }
 
-      const stream = await LiveStream.findById(matchId).lean();
+      const stream = await resolveLiveStreamDoc(rawMatchId);
       if (!stream) {
         res.status(404).json({ message: 'Match stream not found.' });
         return;
       }
+
+      const matchId = String(stream._id);
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
 
       const isBroadcaster = req.user!.role === 'BROADCASTER';
       const [snapshot, sponsors, operators, canOverride, canManageCameras, canManageOverlays, canControlStream, canControlRecord] = await Promise.all([

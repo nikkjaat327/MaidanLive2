@@ -512,10 +512,15 @@ export function AdminLayout() {
     const matchRoute = location.pathname.match(
       /^\/(?:admin\/(?:scoreboard|broadcast-studio)|broadcast\/overlay)\/([^/?]+)/
     );
-    const routeId = matchRoute?.[1];
-    if (routeId && routeId !== 'view') {
-      setStickyMatchId(routeId);
-      setStickyMatchState(routeId);
+    const routeId = matchRoute?.[1]?.trim();
+    if (
+      routeId &&
+      routeId !== 'view' &&
+      routeId.toLowerCase() !== 'undefined' &&
+      routeId.toLowerCase() !== 'null'
+    ) {
+      const saved = setStickyMatchId(routeId);
+      if (saved) setStickyMatchState(saved);
     }
   }, [location.pathname]);
 

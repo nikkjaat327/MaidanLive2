@@ -28,6 +28,7 @@ import { platformOpsService } from '../../services/platformOps/platformOpsServic
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
 import {
+  clearStickyMatchId,
   resolveStickyOrPreferredMatch,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
@@ -69,31 +70,53 @@ export function AdminScoreboardPage() {
   const {
     stream,
     loading: streamLoading,
+    notFound: streamNotFound,
+    clearError: clearStreamError,
   } = useLiveStream(selectedId || undefined);
   const { score, setScore, history, connected, refetch } = useScoreboard(selectedId || undefined);
 
   useEffect(() => {
-    if (id) {
+    if (id && streams.some((s) => s.id === id)) {
       setStickyMatchId(id);
     }
-  }, [id]);
+  }, [id, streams]);
 
   useEffect(() => {
     liveStreamService
       .listStreams()
       .then((data) => {
         setStreams(data);
-        if (!id && data.length > 0) {
-          const targetId = resolveStickyOrPreferredMatch(id, data);
+        const hasExact = Boolean(id && data.some((s) => s.id === id));
+        if (data.length > 0 && (!id || !hasExact)) {
+          clearStickyMatchId();
+          clearStreamError();
+          const targetId = resolveStickyOrPreferredMatch(undefined, data);
           if (targetId) {
             setStickyMatchId(targetId);
             navigate(`/admin/scoreboard/${targetId}`, { replace: true });
           }
+        } else if (data.length === 0 && id) {
+          clearStickyMatchId();
+          clearStreamError();
+          navigate('/admin/scoreboard', { replace: true });
         }
       })
       .catch((err) => setListError(extractApiError(err, 'Failed to load streams.')))
       .finally(() => setListLoading(false));
-  }, [id, navigate]);
+  }, [id, navigate, clearStreamError]);
+
+  useEffect(() => {
+    if (!streamNotFound || streamLoading || listLoading) return;
+    if (streams.length > 0 && id && !streams.some((s) => s.id === id)) {
+      clearStickyMatchId();
+      clearStreamError();
+      const targetId = resolveStickyOrPreferredMatch(undefined, streams);
+      if (targetId) {
+        setStickyMatchId(targetId);
+        navigate(`/admin/scoreboard/${targetId}`, { replace: true });
+      }
+    }
+  }, [streamNotFound, streamLoading, listLoading, streams, id, navigate, clearStreamError]);
 
   const loadHighlights = useCallback(async () => {
     if (!selectedId) return;

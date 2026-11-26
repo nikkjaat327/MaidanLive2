@@ -8,15 +8,30 @@ export function useLiveStream(streamId?: string, authKey = '') {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(streamId));
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [switchingBanner, setSwitchingBanner] = useState(false);
 
+  const clearError = useCallback(() => {
+    setError(null);
+    setErrorStatus(null);
+  }, []);
+
   const fetchStream = useCallback(async () => {
-    if (!streamId) return;
+    if (!streamId) {
+      setStream(null);
+      setError(null);
+      setErrorStatus(null);
+      setLoading(false);
+      return;
+    }
     try {
       setError(null);
+      setErrorStatus(null);
       const data = await liveStreamService.getStreamById(streamId);
       setStream(data);
-    } catch (err) {
+    } catch (err: any) {
+      const status = typeof err?.response?.status === 'number' ? err.response.status : null;
+      setErrorStatus(status);
       setError(extractApiError(err, 'Unable to load stream.'));
     } finally {
       setLoading(false);
@@ -25,9 +40,14 @@ export function useLiveStream(streamId?: string, authKey = '') {
 
   useEffect(() => {
     if (!streamId) {
+      setStream(null);
+      setError(null);
+      setErrorStatus(null);
       setLoading(false);
       return;
     }
+    setError(null);
+    setErrorStatus(null);
     setLoading(true);
     fetchStream();
   }, [streamId, fetchStream]);
@@ -157,5 +177,15 @@ export function useLiveStream(streamId?: string, authKey = '') {
     };
   }, [streamId, fetchStream]);
 
-  return { stream, setStream, loading, error, switchingBanner, refetch: fetchStream };
+  return {
+    stream,
+    setStream,
+    loading,
+    error,
+    errorStatus,
+    notFound: errorStatus === 404,
+    clearError,
+    switchingBanner,
+    refetch: fetchStream,
+  };
 }

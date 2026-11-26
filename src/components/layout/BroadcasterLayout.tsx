@@ -416,7 +416,11 @@ export function BroadcasterLayout() {
   const pathMatchId = pathMatch?.[1] || '';
 
   useEffect(() => {
-    if (pathMatchId) {
+    if (
+      pathMatchId &&
+      pathMatchId.toLowerCase() !== 'undefined' &&
+      pathMatchId.toLowerCase() !== 'null'
+    ) {
       setStickyMatchId(pathMatchId);
     }
   }, [pathMatchId]);

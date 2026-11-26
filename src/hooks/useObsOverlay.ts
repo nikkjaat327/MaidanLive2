@@ -25,8 +25,14 @@ export function useObsOverlay(matchId?: string) {
   const [brandLogoUrl, setBrandLogoUrl] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(Boolean(matchId));
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [connected, setConnected] = useState<boolean>(() => getSocketClient().connected);
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number>(0);
+
+  const clearError = useCallback(() => {
+    setError(null);
+    setErrorStatus(null);
+  }, []);
 
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const lastSequenceRef = useRef<number>(0);
@@ -44,9 +50,16 @@ export function useObsOverlay(matchId?: string) {
   }, []);
 
   const fetchOverlay = useCallback(async () => {
-    if (!matchId) return;
+    if (!matchId) {
+      setStream(null);
+      setError(null);
+      setErrorStatus(null);
+      setLoading(false);
+      return;
+    }
     try {
       setError(null);
+      setErrorStatus(null);
       const res = await liveStreamService.getOverlayData(matchId);
       syncServerClock(res.serverNowIso);
       setStream(res.stream);
@@ -70,7 +83,9 @@ export function useObsOverlay(matchId?: string) {
       if (typeof res.brandLogoUrl === 'string' && res.brandLogoUrl.trim()) {
         setBrandLogoUrl(res.brandLogoUrl.trim());
       }
-    } catch (err) {
+    } catch (err: any) {
+      const status = typeof err?.response?.status === 'number' ? err.response.status : null;
+      setErrorStatus(status);
       setError(extractApiError(err, 'Unable to load match broadcast overlay.'));
     } finally {
       setLoading(false);
@@ -86,9 +101,13 @@ export function useObsOverlay(matchId?: string) {
       setScore(null);
       setGraphicsState(null);
       setObsLayout(null);
+      setError(null);
+      setErrorStatus(null);
       setLoading(false);
       return;
     }
+    setError(null);
+    setErrorStatus(null);
     setLoading(true);
     fetchOverlay();
   }, [matchId, fetchOverlay]);
@@ -330,6 +349,9 @@ export function useObsOverlay(matchId?: string) {
     serverClockOffsetMs,
     loading,
     error,
+    errorStatus,
+    notFound: errorStatus === 404,
+    clearError,
     connected,
     refetch: fetchOverlay,
   };
