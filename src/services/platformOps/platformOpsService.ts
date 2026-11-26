@@ -54,6 +54,9 @@ export const platformOpsService = {
     const { data } = await publicApi.get<{ sponsors: SponsorData[] }>('/v1/sponsors/public', {
       params,
     });
+    if (!Array.isArray(data?.sponsors)) {
+      throw new Error('Invalid response from server: expected a sponsors array.');
+    }
     return data.sponsors;
   },
   async trackSponsorImpression(id: string): Promise<void> {

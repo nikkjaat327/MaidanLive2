@@ -11,6 +11,15 @@ const CONFIGURED_API_BASE = (import.meta.env.VITE_API_URL as string | undefined)
 export const API_BASE_URL = CONFIGURED_API_BASE
   ? (CONFIGURED_API_BASE.endsWith('/api') ? CONFIGURED_API_BASE : `${CONFIGURED_API_BASE}/api`)
   : '/api';
+export const API_ORIGIN = CONFIGURED_API_BASE
+  ? (() => {
+      try {
+        return new URL(CONFIGURED_API_BASE).origin;
+      } catch {
+        return undefined;
+      }
+    })()
+  : undefined;
 
 export const publicApi = axios.create({
   baseURL: API_BASE_URL,

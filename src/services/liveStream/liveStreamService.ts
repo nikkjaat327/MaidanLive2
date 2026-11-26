@@ -47,6 +47,9 @@ export const liveStreamService = {
     limit?: number;
   }): Promise<LiveStreamData[]> {
     const { data } = await getViewerApi().get<{ streams: LiveStreamData[] }>('/live', { params });
+    if (!Array.isArray(data?.streams)) {
+      throw new Error('Invalid response from server: expected a streams array.');
+    }
     return data.streams;
   },
 
@@ -67,6 +70,9 @@ export const liveStreamService = {
         ...(gameName ? { gameName } : {}),
       },
     });
+    if (!Array.isArray(data?.replays)) {
+      throw new Error('Invalid response from server: expected a replays array.');
+    }
     return data.replays;
   },
 

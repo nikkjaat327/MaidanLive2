@@ -1,10 +1,13 @@
 import { io, Socket } from 'socket.io-client';
+import { API_ORIGIN } from '../api/httpClient.ts';
 
 let socketInstance: Socket | null = null;
 
 export function getSocketClient(): Socket {
   if (!socketInstance) {
-    const socketOrigin = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim().replace(/\/+$/, '');
+    const socketOrigin =
+      (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim().replace(/\/+$/, '') ||
+      API_ORIGIN;
     const opts = {
       path: '/socket.io',
       transports: ['polling', 'websocket'],
