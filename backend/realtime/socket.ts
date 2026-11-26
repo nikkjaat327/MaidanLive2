@@ -646,6 +646,8 @@ export function getActiveRoomViewerCount(streamId: string): number {
   return io.sockets.adapter.rooms.get(`stream:${streamId}`)?.size || 0;
 }
 
+
+
 export function getAllActiveViewerCounts(): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const [bucketKey, sessions] of activeViewerSessions.entries()) {
