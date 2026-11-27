@@ -54,6 +54,7 @@ import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
 import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
 import { ActivePlayersCard } from '../scoreboard/ActivePlayersCard.tsx';
+import { MatchStatisticsWidget } from '../scoreboard/MatchStatisticsWidget.tsx';
 import { MatchTimelineWidget } from '../scoreboard/MatchTimelineWidget.tsx';
 import { CricketScorecardPanel } from '../scoreboard/CricketScorecardPanel.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
@@ -1570,6 +1571,14 @@ export function LiveBroadcastView({
         {broadcast.sport === 'Cricket' && (
           <ActivePlayersCard matchId={broadcast.id} stream={stream} score={score} />
         )}
+
+        {/* Match Statistics (Live Cumulative Data) */}
+        <MatchStatisticsWidget
+          matchId={broadcast.id}
+          stream={stream}
+          score={score}
+          history={history}
+        />
 
         {/* Match Timeline (Last 5 Major Events) */}
         <MatchTimelineWidget

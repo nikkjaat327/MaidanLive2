@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
@@ -16,6 +17,8 @@ export interface ActivePlayersCardProps {
   className?: string;
 }
 
+type PlayerSlotKey = 'striker' | 'nonStriker' | 'bowler';
+
 export function ActivePlayersCard({
   matchId,
   stream,
@@ -26,6 +29,15 @@ export function ActivePlayersCard({
     externalScore ?? null
   );
   const [loading, setLoading] = useState<boolean>(!externalScore && Boolean(matchId));
+  const [expandedStats, setExpandedStats] = useState<Record<PlayerSlotKey, boolean>>({
+    striker: false,
+    nonStriker: false,
+    bowler: false,
+  });
+
+  const toggleSlotStats = (slot: PlayerSlotKey) => {
+    setExpandedStats((prev) => ({ ...prev, [slot]: !prev[slot] }));
+  };
 
   useEffect(() => {
     if (externalScore !== undefined) {
@@ -181,33 +193,65 @@ export function ActivePlayersCard({
         >
           <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
             <span className="text-orange-300">Striker</span>
-            <span className="font-mono text-slate-400">R (B)</span>
+            <span className="text-slate-400 font-normal normal-case">
+              {expandedStats.striker ? 'Mini-stats open' : 'Click name for stats'}
+            </span>
           </div>
           {crease.batsman1 ? (
-            <div className="mt-1.5 flex items-baseline justify-between gap-2">
-              <span
-                className={`font-display text-sm sm:text-base font-bold text-white truncate ${
-                  flash.strikerFlash ? 'ml-player-change' : ''
-                }`}
+            <>
+              <button
+                type="button"
+                onClick={() => toggleSlotStats('striker')}
+                aria-expanded={expandedStats.striker}
+                aria-controls="active-player-stats-striker"
+                className="mt-1 w-full min-h-[36px] flex items-center justify-between gap-2 text-left rounded-md px-1 -mx-1 py-1 hover:bg-orange-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 transition-colors cursor-pointer"
               >
-                {crease.batsman1.name}
-                <span className="text-orange-400 ml-0.5">*</span>
-              </span>
-              <span className="font-mono tabular-nums text-sm font-extrabold text-orange-200 shrink-0">
-                {crease.batsman1.runs}{' '}
-                <span className="text-xs font-normal text-slate-300">
-                  ({crease.batsman1.balls})
+                <span
+                  className={`font-display text-sm sm:text-base font-bold text-white truncate ${
+                    flash.strikerFlash ? 'ml-player-change' : ''
+                  }`}
+                >
+                  {crease.batsman1.name}
+                  <span className="text-orange-400 ml-0.5">*</span>
                 </span>
-              </span>
-            </div>
+                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-orange-200 shrink-0">
+                  <span>{expandedStats.striker ? 'Hide' : 'Stats'}</span>
+                  {expandedStats.striker ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
+              </button>
+
+              {expandedStats.striker && (
+                <div
+                  id="active-player-stats-striker"
+                  className="mt-1.5 pt-2 border-t border-orange-500/25 grid grid-cols-4 gap-2 font-mono tabular-nums text-[11px]"
+                >
+                  <div>
+                    <span className="block text-[10px] text-slate-400">Runs (B)</span>
+                    <span className="font-bold text-orange-200">
+                      {crease.batsman1.runs} ({crease.batsman1.balls})
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">4s</span>
+                    <span className="font-bold text-white">{crease.batsman1.fours}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">6s</span>
+                    <span className="font-bold text-white">{crease.batsman1.sixes}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">SR</span>
+                    <span className="font-bold text-white">{crease.batsman1.strikeRate}</span>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <p className="mt-1.5 text-xs text-slate-500">Not selected</p>
-          )}
-          {crease.batsman1 && (
-            <p className="mt-1 font-mono text-[11px] tabular-nums text-slate-400">
-              4s: {crease.batsman1.fours} · 6s: {crease.batsman1.sixes} · SR{' '}
-              {crease.batsman1.strikeRate}
-            </p>
           )}
           {strikerSubNote && (
             <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">
@@ -227,32 +271,64 @@ export function ActivePlayersCard({
         >
           <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
             <span className="text-slate-300">Non-Striker</span>
-            <span className="font-mono text-slate-400">R (B)</span>
+            <span className="text-slate-400 font-normal normal-case">
+              {expandedStats.nonStriker ? 'Mini-stats open' : 'Click name for stats'}
+            </span>
           </div>
           {crease.batsman2 ? (
-            <div className="mt-1.5 flex items-baseline justify-between gap-2">
-              <span
-                className={`font-display text-sm sm:text-base font-bold text-slate-100 truncate ${
-                  flash.nonStrikerFlash ? 'ml-player-change' : ''
-                }`}
+            <>
+              <button
+                type="button"
+                onClick={() => toggleSlotStats('nonStriker')}
+                aria-expanded={expandedStats.nonStriker}
+                aria-controls="active-player-stats-nonstriker"
+                className="mt-1 w-full min-h-[36px] flex items-center justify-between gap-2 text-left rounded-md px-1 -mx-1 py-1 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 transition-colors cursor-pointer"
               >
-                {crease.batsman2.name}
-              </span>
-              <span className="font-mono tabular-nums text-sm font-extrabold text-white shrink-0">
-                {crease.batsman2.runs}{' '}
-                <span className="text-xs font-normal text-slate-400">
-                  ({crease.batsman2.balls})
+                <span
+                  className={`font-display text-sm sm:text-base font-bold text-slate-100 truncate ${
+                    flash.nonStrikerFlash ? 'ml-player-change' : ''
+                  }`}
+                >
+                  {crease.batsman2.name}
                 </span>
-              </span>
-            </div>
+                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-slate-300 shrink-0">
+                  <span>{expandedStats.nonStriker ? 'Hide' : 'Stats'}</span>
+                  {expandedStats.nonStriker ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
+              </button>
+
+              {expandedStats.nonStriker && (
+                <div
+                  id="active-player-stats-nonstriker"
+                  className="mt-1.5 pt-2 border-t border-slate-800 grid grid-cols-4 gap-2 font-mono tabular-nums text-[11px]"
+                >
+                  <div>
+                    <span className="block text-[10px] text-slate-400">Runs (B)</span>
+                    <span className="font-bold text-white">
+                      {crease.batsman2.runs} ({crease.batsman2.balls})
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">4s</span>
+                    <span className="font-bold text-white">{crease.batsman2.fours}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">6s</span>
+                    <span className="font-bold text-white">{crease.batsman2.sixes}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">SR</span>
+                    <span className="font-bold text-white">{crease.batsman2.strikeRate}</span>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <p className="mt-1.5 text-xs text-slate-500">Not selected</p>
-          )}
-          {crease.batsman2 && (
-            <p className="mt-1 font-mono text-[11px] tabular-nums text-slate-400">
-              4s: {crease.batsman2.fours} · 6s: {crease.batsman2.sixes} · SR{' '}
-              {crease.batsman2.strikeRate}
-            </p>
           )}
           {nonStrikerSubNote && (
             <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">
@@ -272,29 +348,66 @@ export function ActivePlayersCard({
         >
           <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
             <span className="text-sky-300">Bowler</span>
-            <span className="font-mono text-slate-400">O-M-R-W</span>
+            <span className="text-slate-400 font-normal normal-case">
+              {expandedStats.bowler ? 'Mini-stats open' : 'Click name for stats'}
+            </span>
           </div>
           {crease.bowler ? (
-            <div className="mt-1.5 flex items-baseline justify-between gap-2">
-              <span
-                className={`font-display text-sm sm:text-base font-bold text-white truncate ${
-                  flash.bowlerFlash ? 'ml-player-change' : ''
-                }`}
+            <>
+              <button
+                type="button"
+                onClick={() => toggleSlotStats('bowler')}
+                aria-expanded={expandedStats.bowler}
+                aria-controls="active-player-stats-bowler"
+                className="mt-1 w-full min-h-[36px] flex items-center justify-between gap-2 text-left rounded-md px-1 -mx-1 py-1 hover:bg-sky-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 transition-colors cursor-pointer"
               >
-                {crease.bowler.name}
-              </span>
-              <span className="font-mono tabular-nums text-sm font-extrabold text-sky-200 shrink-0">
-                {crease.bowler.overs}-{crease.bowler.maidens}-{crease.bowler.runsConceded}-
-                {crease.bowler.wickets}
-              </span>
-            </div>
+                <span
+                  className={`font-display text-sm sm:text-base font-bold text-white truncate ${
+                    flash.bowlerFlash ? 'ml-player-change' : ''
+                  }`}
+                >
+                  {crease.bowler.name}
+                </span>
+                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-sky-200 shrink-0">
+                  <span>{expandedStats.bowler ? 'Hide' : 'Stats'}</span>
+                  {expandedStats.bowler ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
+              </button>
+
+              {expandedStats.bowler && (
+                <div
+                  id="active-player-stats-bowler"
+                  className="mt-1.5 pt-2 border-t border-sky-500/25 grid grid-cols-4 gap-2 font-mono tabular-nums text-[11px]"
+                >
+                  <div>
+                    <span className="block text-[10px] text-slate-400">O-M</span>
+                    <span className="font-bold text-sky-200">
+                      {crease.bowler.overs}-{crease.bowler.maidens}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">R-W</span>
+                    <span className="font-bold text-white">
+                      {crease.bowler.runsConceded}-{crease.bowler.wickets}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">Econ</span>
+                    <span className="font-bold text-white">{crease.bowler.economy}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400">Dots</span>
+                    <span className="font-bold text-white">{crease.bowler.dotBalls ?? 0}</span>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <p className="mt-1.5 text-xs text-slate-500">Not selected</p>
-          )}
-          {crease.bowler && (
-            <p className="mt-1 font-mono text-[11px] tabular-nums text-slate-400">
-              Econ {crease.bowler.economy}
-            </p>
           )}
           {bowlerSubNote && (
             <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">

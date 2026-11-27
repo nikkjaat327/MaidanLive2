@@ -1700,6 +1700,9 @@ export interface CricketCreaseBowlerStat {
   runsConceded: number;
   wickets: number;
   economy: string;
+  dotBalls?: number;
+  wides?: number;
+  noBalls?: number;
 }
 
 export interface CricketCreaseSummary {
@@ -1757,6 +1760,9 @@ export function getCricketCreaseSummary(
               runsConceded: 0,
               wickets: 0,
               economy: '0.00',
+              dotBalls: 0,
+              wides: 0,
+              noBalls: 0,
             }
           : null),
     };
@@ -1814,6 +1820,9 @@ export function getCricketCreaseSummary(
         runsConceded: bwRow?.runsConceded ?? 0,
         wickets: bwRow?.wickets ?? 0,
         economy: bwRow?.economy ?? '0.00',
+        dotBalls: bwRow?.dotBalls ?? 0,
+        wides: bwRow?.wides ?? 0,
+        noBalls: bwRow?.noBalls ?? 0,
       }
     : null;
 
