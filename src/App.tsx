@@ -121,6 +121,10 @@ function AndroidBackButtonHandler() {
     let listenerHandle: any;
 
     CapacitorApp.addListener("backButton", () => {
+      if (document.documentElement.dataset.broadcastFullscreen === "true") {
+        window.dispatchEvent(new CustomEvent("maidanlive:exit-fullscreen"));
+        return;
+      }
       if (location.pathname !== "/") {
         navigate(-1);
         return;

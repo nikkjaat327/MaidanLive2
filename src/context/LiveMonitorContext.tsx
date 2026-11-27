@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { LiveStreamData } from '../types/index.ts';
 import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { useAuth } from '../hooks/useAuth.ts';
+import { getSocketClient } from '../services/socket/socketClient.ts';
 import {
   getStickyMatchId,
   resolveStickyOrPreferredMatch,
@@ -36,7 +37,7 @@ function upsertStreamSnapshot(
   if (!sid) return prev;
   const exists = prev.some((s) => String(s.id || s._id || '') === sid);
   if (exists) {
-    return prev.map((s) => (String(s.id || s._id || '') === sid ? snapshot : s));
+    return prev.map((s) => (String(s.id || s._id || '') === sid ? { ...s, ...snapshot } : s));
   }
   return [snapshot, ...prev];
 }
@@ -77,10 +78,7 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
         const order: Record<string, number> = { LIVE: 0, UPCOMING: 1, ENDED: 2 };
         return (order[a.status] ?? 3) - (order[b.status] ?? 3);
       });
-      setStreams((prev) => {
-        if (liveFirst.length === 0 && prev.length > 0) return prev;
-        return liveFirst;
-      });
+      setStreams(liveFirst);
       setSelectedStreamIdState((prev) => {
         const normalizedList = liveFirst.map((s) => ({
           id: String(s.id || s._id || ''),
@@ -106,6 +104,35 @@ export function LiveMonitorProvider({ children }: { children: React.ReactNode })
       setIsOpen(false);
     }
   }, [hasAdminSession, isOpen]);
+
+  // Keep admin stream list synced on login + live socket updates so Header Preview detects active embeds
+  useEffect(() => {
+    if (!hasAdminSession) {
+      setStreams([]);
+      return;
+    }
+
+    refreshStreams();
+
+    const socket = getSocketClient();
+    const handleStreamSync = (payload: any) => {
+      if (payload && typeof payload === 'object' && (payload.id || payload._id)) {
+        setStreams((prev) => upsertStreamSnapshot(prev, payload as LiveStreamData));
+      } else {
+        refreshStreams();
+      }
+    };
+
+    socket.on('stream:updated', handleStreamSync);
+    socket.on('stream:created', handleStreamSync);
+    socket.on('streaming_provider_changed', handleStreamSync);
+
+    return () => {
+      socket.off('stream:updated', handleStreamSync);
+      socket.off('stream:created', handleStreamSync);
+      socket.off('streaming_provider_changed', handleStreamSync);
+    };
+  }, [hasAdminSession, refreshStreams]);
 
   useEffect(() => {
     if (isOpen && hasAdminSession) {

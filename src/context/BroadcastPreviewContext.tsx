@@ -2,11 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ReactNode } from 'react';
 import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../types/index.ts';
 import { extractYouTubeVideoId } from '../utils/youtube.ts';
+import type { AdminEmbedPreviewTarget } from '../utils/mediaPlayerUtils.ts';
 
 export interface YouTubeFloatingPreviewState {
   open: boolean;
   videoId: string;
   rawInput: string;
+  provider?: 'youtube' | 'mediamtx';
+  streamId?: string;
+  title?: string;
+  mediamtxPlaybackUrl?: string;
+  mediamtxWebrtcUrl?: string;
   width: number;
   height: number;
   x: number;
@@ -43,6 +49,8 @@ export interface OverlayPreviewPosition {
 interface BroadcastPreviewContextValue {
   youtubePreview: YouTubeFloatingPreviewState;
   openYouTubePreview: (input: string) => { valid: boolean; videoId: string | null; error?: string };
+  openEmbedPreview: (target: AdminEmbedPreviewTarget) => void;
+  toggleEmbedPreview: (target: AdminEmbedPreviewTarget) => void;
   setYouTubeInputDraft: (input: string) => void;
   updateYouTubeGeometry: (
     patch: Partial<Pick<YouTubeFloatingPreviewState, 'x' | 'y' | 'width' | 'height'>>
@@ -83,6 +91,11 @@ function getDefaultYouTubeState(): YouTubeFloatingPreviewState {
     open: false,
     videoId: '',
     rawInput: '',
+    provider: 'youtube',
+    streamId: '',
+    title: '',
+    mediamtxPlaybackUrl: '',
+    mediamtxWebrtcUrl: '',
     width,
     height,
     x: Math.max(16, vw - width - 20),
@@ -100,10 +113,21 @@ function getDefaultYouTubeState(): YouTubeFloatingPreviewState {
     const y =
       typeof parsed.y === 'number' ? Math.max(8, Math.min(vh - h - 8, parsed.y)) : base.y;
     const videoId = typeof parsed.videoId === 'string' ? parsed.videoId : '';
+    const provider = parsed.provider === 'mediamtx' ? 'mediamtx' : 'youtube';
+    const hasFeed = Boolean(
+      videoId || parsed.mediamtxPlaybackUrl || parsed.mediamtxWebrtcUrl
+    );
     return {
-      open: Boolean(parsed.open && videoId),
+      open: Boolean(parsed.open && hasFeed),
       videoId,
       rawInput: typeof parsed.rawInput === 'string' ? parsed.rawInput : '',
+      provider,
+      streamId: typeof parsed.streamId === 'string' ? parsed.streamId : '',
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+      mediamtxPlaybackUrl:
+        typeof parsed.mediamtxPlaybackUrl === 'string' ? parsed.mediamtxPlaybackUrl : '',
+      mediamtxWebrtcUrl:
+        typeof parsed.mediamtxWebrtcUrl === 'string' ? parsed.mediamtxWebrtcUrl : '',
       width: w,
       height: h,
       x,
@@ -194,7 +218,9 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
       const x = Math.max(8, Math.min(vw - w - 8, prev.x || vw - w - 20));
       const y = Math.max(8, Math.min(vh - h - 8, prev.y || 76));
       return {
+        ...prev,
         open: true,
+        provider: 'youtube',
         videoId: parsed.videoId!,
         rawInput: trimmed,
         width: w,
@@ -205,6 +231,67 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
     });
     return { valid: true, videoId: parsed.videoId };
   }, []);
+
+  const openEmbedPreview = useCallback((target: AdminEmbedPreviewTarget) => {
+    setYoutubePreview((prev) => {
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const w = Math.max(280, Math.min(vw - 16, prev.width || 480));
+      const h = Math.max(195, Math.min(vh - 16, prev.height || 316));
+      const x = Math.max(8, Math.min(vw - w - 8, prev.x || vw - w - 20));
+      const y = Math.max(8, Math.min(vh - h - 8, prev.y || 76));
+      return {
+        open: true,
+        provider: target.provider,
+        streamId: target.streamId,
+        title: target.title,
+        videoId: target.youtubeVideoId,
+        rawInput: target.youtubeVideoId,
+        mediamtxPlaybackUrl: target.mediamtxPlaybackUrl,
+        mediamtxWebrtcUrl: target.mediamtxWebrtcUrl,
+        width: w,
+        height: h,
+        x,
+        y,
+      };
+    });
+  }, []);
+
+  const toggleEmbedPreview = useCallback(
+    (target: AdminEmbedPreviewTarget) => {
+      setYoutubePreview((prev) => {
+        const sameTarget =
+          prev.open &&
+          prev.streamId === target.streamId &&
+          prev.provider === target.provider &&
+          prev.videoId === target.youtubeVideoId;
+        if (sameTarget) {
+          return { ...prev, open: false };
+        }
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const w = Math.max(280, Math.min(vw - 16, prev.width || 480));
+        const h = Math.max(195, Math.min(vh - 16, prev.height || 316));
+        const x = Math.max(8, Math.min(vw - w - 8, prev.x || vw - w - 20));
+        const y = Math.max(8, Math.min(vh - h - 8, prev.y || 76));
+        return {
+          open: true,
+          provider: target.provider,
+          streamId: target.streamId,
+          title: target.title,
+          videoId: target.youtubeVideoId,
+          rawInput: target.youtubeVideoId,
+          mediamtxPlaybackUrl: target.mediamtxPlaybackUrl,
+          mediamtxWebrtcUrl: target.mediamtxWebrtcUrl,
+          width: w,
+          height: h,
+          x,
+          y,
+        };
+      });
+    },
+    []
+  );
 
   const updateYouTubeGeometry = useCallback(
     (patch: Partial<Pick<YouTubeFloatingPreviewState, 'x' | 'y' | 'width' | 'height'>>) => {
@@ -282,6 +369,8 @@ export function BroadcastPreviewProvider({ children }: { children: ReactNode }) 
       value={{
         youtubePreview,
         openYouTubePreview,
+        openEmbedPreview,
+        toggleEmbedPreview,
         setYouTubeInputDraft,
         updateYouTubeGeometry,
         closeYouTubePreview,

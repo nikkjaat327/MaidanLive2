@@ -1,8 +1,13 @@
-import { useState } from 'react';
-import type React from 'react';
-import { Play, X, Youtube } from 'lucide-react';
-import { extractYouTubeVideoId } from '../../utils/youtube.ts';
+import { useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Play, Tv } from 'lucide-react';
 import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
+import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
+import { useAuth } from '../../hooks/useAuth.ts';
+import {
+  isAdminPanelPath,
+  resolveAdminEmbedPreviewTarget,
+} from '../../utils/mediaPlayerUtils.ts';
 
 interface HeaderYouTubePreviewControlProps {
   tone?: 'light' | 'dark';
@@ -10,94 +15,57 @@ interface HeaderYouTubePreviewControlProps {
   className?: string;
 }
 
+/**
+ * Replaces the legacy manual YouTube URL input box with an automatic Header "Preview"
+ * button whenever an embedded broadcast video (YouTube or MediaMTX) is started in
+ * MaidanLive. Restricted strictly to the Admin Panel.
+ */
 export function HeaderYouTubePreviewControl({
   tone = 'dark',
   compact = false,
   className = '',
 }: HeaderYouTubePreviewControlProps) {
-  const { youtubePreview, openYouTubePreview, setYouTubeInputDraft } = useBroadcastPreview();
-  const [invalidFlash, setInvalidFlash] = useState(false);
+  const { adminUser } = useAuth();
+  const location = useLocation();
+  const { streams, selectedStreamId } = useLiveMonitor();
+  const { youtubePreview, toggleEmbedPreview } = useBroadcastPreview();
 
-  const value = youtubePreview.rawInput;
+  const isAdminPanel = Boolean(adminUser) && isAdminPanelPath(location.pathname);
 
-  const tryAutoOpen = (nextVal: string) => {
-    setYouTubeInputDraft(nextVal);
-    setInvalidFlash(false);
-    const trimmed = nextVal.trim();
-    if (!trimmed) return;
-    const parsed = extractYouTubeVideoId(trimmed);
-    if (parsed.valid && parsed.videoId) {
-      openYouTubePreview(trimmed);
-    }
-  };
+  const activeTarget = useMemo(
+    () => (isAdminPanel ? resolveAdminEmbedPreviewTarget(streams, selectedStreamId) : null),
+    [isAdminPanel, streams, selectedStreamId]
+  );
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = openYouTubePreview(value);
-    if (!res.valid) {
-      setInvalidFlash(true);
-      window.setTimeout(() => setInvalidFlash(false), 1600);
-    }
-  };
+  if (!isAdminPanel || !activeTarget) {
+    return null;
+  }
 
   const isDark = tone === 'dark';
+  const isOpenForTarget =
+    youtubePreview.open && youtubePreview.streamId === activeTarget.streamId;
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className={`inline-flex items-center gap-1 rounded-lg border px-2 transition-colors ${
-        invalidFlash
-          ? 'border-red-500 ring-1 ring-red-500/40'
+    <button
+      type="button"
+      onClick={() => toggleEmbedPreview(activeTarget)}
+      aria-pressed={isOpenForTarget}
+      aria-label={`Preview live embedded video: ${activeTarget.title}`}
+      title={`Open draggable & resizable preview: ${activeTarget.title}`}
+      className={`inline-flex items-center gap-1.5 rounded-lg border font-semibold transition-colors cursor-pointer shrink-0 ${
+        compact ? 'min-h-[34px] px-2.5 text-xs' : 'min-h-[36px] px-3 text-xs'
+      } ${
+        isOpenForTarget
+          ? 'bg-[#EA580C] border-[#EA580C] text-white shadow-sm'
           : isDark
-            ? 'border-slate-700/90 bg-slate-900/90 focus-within:border-red-500/70'
-            : 'border-slate-300 bg-slate-50/90 focus-within:border-[#EA580C]'
-      } ${compact ? 'h-[34px] max-w-[190px] sm:max-w-[230px]' : 'h-[36px] max-w-[210px] sm:max-w-[250px]'} ${className}`}
-      title="Paste any YouTube live or video link to open a floating resizable preview"
+            ? 'bg-slate-900 border-slate-700 text-slate-100 hover:bg-slate-800 hover:border-slate-600'
+            : 'bg-slate-100 border-slate-300 text-slate-900 hover:bg-slate-200'
+      } ${className}`}
     >
-      <Youtube className="w-3.5 h-3.5 text-red-500 shrink-0" />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => tryAutoOpen(e.target.value)}
-        onPaste={(e) => {
-          const pasted = e.clipboardData?.getData('text');
-          if (pasted) {
-            const parsed = extractYouTubeVideoId(pasted);
-            if (parsed.valid && parsed.videoId) {
-              e.preventDefault();
-              openYouTubePreview(pasted);
-            }
-          }
-        }}
-        placeholder="YouTube preview link..."
-        aria-label="YouTube embed preview link"
-        className={`w-full min-w-[90px] bg-transparent text-[11px] font-medium outline-none ${
-          isDark
-            ? 'text-slate-100 placeholder:text-slate-500'
-            : 'text-slate-800 placeholder:text-slate-400'
-        }`}
-      />
-      {value.trim() && (
-        <button
-          type="button"
-          onClick={() => setYouTubeInputDraft('')}
-          aria-label="Clear YouTube link"
-          className={`p-0.5 rounded transition-colors shrink-0 ${
-            isDark ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-700'
-          }`}
-        >
-          <X className="w-3 h-3" />
-        </button>
-      )}
-      <button
-        type="submit"
-        aria-label="Open floating YouTube preview"
-        title="Preview YouTube Live"
-        className="px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold inline-flex items-center gap-0.5 shrink-0"
-      >
-        <Play className="w-2.5 h-2.5 fill-current" />
-        <span className="hidden md:inline">Live</span>
-      </button>
-    </form>
+      <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse shrink-0" aria-hidden="true" />
+      <Tv className="w-3.5 h-3.5 shrink-0" />
+      <span>Preview</span>
+      <Play className="w-3 h-3 fill-current opacity-85 shrink-0" />
+    </button>
   );
 }

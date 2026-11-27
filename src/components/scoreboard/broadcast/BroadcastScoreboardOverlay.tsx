@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Trophy } from 'lucide-react';
 import { LiveScoreData, LiveStreamData } from '../../../types/index.ts';
 import { CricketBroadcastBar } from './CricketBroadcastBar.tsx';
@@ -5,26 +6,52 @@ import { KabaddiBroadcastBar } from './KabaddiBroadcastBar.tsx';
 import { VolleyballBroadcastBar } from './VolleyballBroadcastBar.tsx';
 import { FootballBroadcastBar } from './FootballBroadcastBar.tsx';
 import { GenericBroadcastBar } from './GenericBroadcastBar.tsx';
+import { BroadcastScoreboard } from '../../broadcast/BroadcastScoreboard.tsx';
+import { normalizeBroadcast } from '../../../utils/normalizeBroadcast.ts';
 
 interface BroadcastScoreboardOverlayProps {
   stream: LiveStreamData;
   score: LiveScoreData;
   compact?: boolean;
+  layoutMode?: 'portrait' | 'landscape';
 }
 
 export function BroadcastScoreboardOverlay({
   stream,
   score,
   compact = false,
+  layoutMode = 'landscape',
 }: BroadcastScoreboardOverlayProps) {
   const resultDeclared = Boolean(score.resultStatus && score.resultStatus !== 'NOT_DECLARED');
+  const portraitNormalized = useMemo(
+    () => (layoutMode === 'portrait' ? normalizeBroadcast(stream, score) : null),
+    [layoutMode, stream, score]
+  );
 
   const renderSportBar = () => {
+    if (layoutMode === 'portrait' && portraitNormalized) {
+      return (
+        <BroadcastScoreboard
+          broadcast={portraitNormalized}
+          compact
+          layoutMode="portrait"
+          className="w-full max-w-[360px]"
+        />
+      );
+    }
+
     switch (score.sportType) {
       case 'Cricket':
         return <CricketBroadcastBar stream={stream} score={score} compact={compact} />;
       case 'Kabaddi':
-        return <KabaddiBroadcastBar stream={stream} score={score} compact={compact} />;
+        return (
+          <KabaddiBroadcastBar
+            stream={stream}
+            score={score}
+            compact={compact}
+            isPortrait={false}
+          />
+        );
       case 'Volleyball':
         return <VolleyballBroadcastBar stream={stream} score={score} compact={compact} />;
       case 'Football':
@@ -35,7 +62,10 @@ export function BroadcastScoreboardOverlay({
   };
 
   return (
-    <div className="flex flex-col items-start gap-1 max-w-full">
+    <div
+      data-overlay-mode={layoutMode}
+      className="flex flex-col items-start gap-1 max-w-full"
+    >
       {renderSportBar()}
       {resultDeclared && (
         <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[10px] sm:text-[11px] font-bold tracking-wide shadow-md max-w-full">

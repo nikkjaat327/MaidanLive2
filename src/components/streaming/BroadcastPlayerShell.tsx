@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ExternalLink,
   Eye,
   EyeOff,
+  Lock,
   Maximize2,
   Minimize2,
+  SlidersHorizontal,
+  Unlock,
 } from 'lucide-react';
 import {
   LiveScoreData,
@@ -27,6 +30,7 @@ import {
 } from '../../utils/matchTimeout.ts';
 import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
 import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
+import { useImmersivePlayer } from '../../hooks/useImmersivePlayer.ts';
 
 interface BroadcastPlayerShellProps {
   stream: LiveStreamData;
@@ -39,24 +43,6 @@ interface BroadcastPlayerShellProps {
   sponsorOverlays?: SponsorOverlayData[];
 }
 
-function canUseElementFullscreen(el: HTMLElement | null): boolean {
-  if (!el) return false;
-  const doc = document as Document & {
-    webkitFullscreenEnabled?: boolean;
-  };
-  const node = el as HTMLElement & {
-    webkitRequestFullscreen?: () => Promise<void> | void;
-  };
-  const enabled =
-    typeof document.fullscreenEnabled === 'boolean'
-      ? document.fullscreenEnabled
-      : Boolean(doc.webkitFullscreenEnabled);
-  return (
-    enabled &&
-    (typeof el.requestFullscreen === 'function' || typeof node.webkitRequestFullscreen === 'function')
-  );
-}
-
 export function BroadcastPlayerShell({
   stream,
   score,
@@ -67,7 +53,6 @@ export function BroadcastPlayerShell({
   jumpKey = 0,
   sponsorOverlays = [],
 }: BroadcastPlayerShellProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const storageKey = `maidanlive_sb_vis_${stream.id || stream._id || videoId}`;
 
   const [scoreboardVisible, setScoreboardVisible] = useState<boolean>(() => {
@@ -82,9 +67,28 @@ export function BroadcastPlayerShell({
   });
 
   const [showUpcomingVideoPreview, setShowUpcomingVideoPreview] = useState(false);
-  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
-  const [isExpandedFallback, setIsExpandedFallback] = useState(false);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+
+  const {
+    stageRef: containerRef,
+    controlsVisible,
+    touchLocked,
+    lockedHintVisible,
+    isNativeFullscreen,
+    isExpandedFallback,
+    isFullscreenActive: activeExpanded,
+    layout,
+    showControlsTemporarily,
+    hideControls,
+    notifyUserInteraction,
+    toggleTouchLock,
+    showLockedHintBriefly,
+    toggleFullscreen,
+  } = useImmersivePlayer({
+    autoHideMs: 3000,
+    initiallyVisible: true,
+    onFullscreenFallbackNotice: setFallbackNotice,
+  });
 
   useEffect(() => {
     try {
@@ -101,32 +105,6 @@ export function BroadcastPlayerShell({
     }
   }, [storageKey, stream.scoreboardVisibleByDefault]);
 
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      const doc = document as Document & { webkitFullscreenElement?: Element | null };
-      const fsEl = document.fullscreenElement || doc.webkitFullscreenElement || null;
-      setIsNativeFullscreen(Boolean(fsEl && fsEl === containerRef.current));
-    };
-
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isExpandedFallback) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsExpandedFallback(false);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isExpandedFallback]);
-
   const toggleScoreboard = useCallback(() => {
     setScoreboardVisible((prev) => {
       const next = !prev;
@@ -139,55 +117,6 @@ export function BroadcastPlayerShell({
     });
   }, [storageKey]);
 
-  const toggleFullscreen = useCallback(async () => {
-    const doc = document as Document & {
-      webkitFullscreenElement?: Element | null;
-      webkitExitFullscreen?: () => Promise<void> | void;
-    };
-
-    if (isNativeFullscreen || doc.fullscreenElement || doc.webkitFullscreenElement) {
-      try {
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if (doc.webkitExitFullscreen) {
-          await doc.webkitExitFullscreen();
-        }
-      } catch {
-        setIsNativeFullscreen(false);
-      }
-      return;
-    }
-
-    if (isExpandedFallback) {
-      setIsExpandedFallback(false);
-      return;
-    }
-
-    const el = containerRef.current as
-      | (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void })
-      | null;
-
-    if (canUseElementFullscreen(el) && el) {
-      try {
-        setFallbackNotice(null);
-        if (el.requestFullscreen) {
-          await el.requestFullscreen();
-        } else if (el.webkitRequestFullscreen) {
-          await el.webkitRequestFullscreen();
-        }
-        return;
-      } catch {
-        // Fall back to Expanded Theater View
-      }
-    }
-
-    setIsExpandedFallback(true);
-    setFallbackNotice(
-      'Expanded Broadcast View active (native container fullscreen is unavailable in this browser; overlays cannot appear inside iOS native player fullscreen).'
-    );
-  }, [isNativeFullscreen, isExpandedFallback]);
-
-  const activeExpanded = isNativeFullscreen || isExpandedFallback;
   const position: ScoreboardPosition = stream.scoreboardPosition || 'BOTTOM';
   const normalizedOverlayConfig = normalizeOverlayConfig(stream.overlayConfig);
   const timeoutInfo = resolveMatchTimeoutState(stream, score);
@@ -200,23 +129,27 @@ export function BroadcastPlayerShell({
   const getScoreboardAnchorClass = () => {
     switch (position) {
       case 'BOTTOM':
-        // Sits cleanly centered above YouTube's bottom player control bar
-        return 'bottom-12 left-2 right-2 sm:left-3 sm:right-3 flex justify-center';
+        return 'bottom-12 left-2 right-2 sm:left-3 sm:right-3 flex justify-center safe-pb safe-px';
       case 'LEFT':
-        return 'top-12 left-2 sm:left-3 max-w-[85%] sm:max-w-[65%]';
+        return 'top-14 left-2 sm:left-3 max-w-[85%] sm:max-w-[65%]';
       case 'RIGHT':
-        return 'top-12 right-2 sm:right-3 max-w-[85%] sm:max-w-[65%] flex justify-end';
+        return 'top-14 right-2 sm:right-3 max-w-[85%] sm:max-w-[65%] flex justify-end';
       case 'TOP':
       default:
-        return 'top-2 left-2 right-28 sm:top-3 sm:left-3 sm:right-48';
+        return 'top-14 left-2 right-2 flex justify-center';
     }
   };
+
+  const showHud = controlsVisible && !touchLocked;
 
   return (
     <div className="w-full bg-slate-950 rounded-xl overflow-hidden border border-slate-800">
       {/* Shared Parent Container for YouTube Iframe + Broadcast Scoreboard Overlay */}
       <div
         ref={containerRef}
+        onMouseMove={() => {
+          if (!touchLocked) showControlsTemporarily();
+        }}
         className={
           isExpandedFallback
             ? 'fixed inset-0 z-50 bg-black flex items-center justify-center'
@@ -243,69 +176,182 @@ export function BroadcastPlayerShell({
             />
           )}
 
-          {/* Top-Right Viewer Controls: Show/Hide Scoreboard + Custom Container Fullscreen */}
-          <div className="pointer-events-none absolute top-2 right-2 sm:top-3 sm:right-3 z-30 flex items-center gap-1.5">
-            {stream.status === 'UPCOMING' && showUpcomingVideoPreview && (
+          {/* Tap-to-hide backdrop while unified overlay is visible */}
+          {showHud && (
+            <div
+              data-player-backdrop="true"
+              aria-hidden="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                hideControls();
+              }}
+              className="absolute inset-0 z-25 cursor-pointer"
+            />
+          )}
+
+          {/* Non-blocking wake controls when auto-hidden */}
+          {!controlsVisible && !touchLocked && (
+            <>
+              <div
+                aria-hidden="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showControlsTemporarily();
+                }}
+                className="absolute top-0 inset-x-0 h-14 z-25 cursor-pointer"
+              />
               <button
                 type="button"
-                onClick={() => setShowUpcomingVideoPreview(false)}
-                className="pointer-events-auto min-h-[34px] px-2.5 py-1 rounded bg-amber-400 text-slate-950 text-[11px] font-bold cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showControlsTemporarily();
+                }}
+                aria-label="Show player controls"
+                className="absolute top-2.5 right-2.5 z-30 min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-lg bg-slate-950/60 hover:bg-slate-950/90 text-white/80 hover:text-white border border-white/15 backdrop-blur-sm opacity-75 hover:opacity-100 transition-opacity cursor-pointer"
               >
-                PRE-MATCH CARD
+                <SlidersHorizontal className="w-4 h-4" />
               </button>
-            )}
-            {score && (
+            </>
+          )}
+
+          {/* Unified Auto-Hide Top Viewer Controls */}
+          <div
+            data-unified-hud="true"
+            className={`pointer-events-none absolute inset-x-0 top-0 z-30 transition-opacity duration-200 ${
+              showHud ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className={`${
+                showHud ? 'pointer-events-auto' : 'pointer-events-none'
+              } bg-gradient-to-b from-black/75 via-black/35 to-transparent p-2 sm:p-3 pb-5 flex items-center justify-end gap-1.5 safe-pt safe-px`}
+            >
+              {stream.status === 'UPCOMING' && showUpcomingVideoPreview && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowUpcomingVideoPreview(false);
+                    notifyUserInteraction();
+                  }}
+                  className="min-h-[38px] sm:min-h-[34px] px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 text-[11px] font-bold cursor-pointer"
+                >
+                  PRE-MATCH CARD
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={toggleScoreboard}
-                aria-pressed={scoreboardVisible}
-                title={scoreboardVisible ? 'Hide live scoreboard' : 'Show live scoreboard'}
-                className="pointer-events-auto min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold tracking-wide border border-white/15 backdrop-blur-md transition-colors cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleTouchLock();
+                }}
+                title="Lock screen against accidental taps"
+                aria-label="Lock player controls"
+                className="min-h-[40px] sm:min-h-[36px] min-w-[40px] sm:min-w-[36px] inline-flex items-center justify-center rounded-lg bg-slate-950/85 hover:bg-slate-900 text-slate-200 border border-white/15 backdrop-blur-md cursor-pointer"
               >
-                {scoreboardVisible ? (
+                <Lock className="w-3.5 h-3.5" />
+              </button>
+
+              {score && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleScoreboard();
+                    notifyUserInteraction();
+                  }}
+                  aria-pressed={scoreboardVisible}
+                  title={scoreboardVisible ? 'Hide live scoreboard' : 'Show live scoreboard'}
+                  className="min-h-[40px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold tracking-wide border border-white/15 backdrop-blur-md transition-colors cursor-pointer"
+                >
+                  {scoreboardVisible ? (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 text-slate-300" />
+                      <span className="hidden sm:inline">HIDE SCORE</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="hidden sm:inline">SCORE</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFullscreen();
+                }}
+                aria-label={activeExpanded ? 'Exit broadcast fullscreen' : 'Broadcast fullscreen'}
+                title={
+                  activeExpanded
+                    ? 'Exit Fullscreen (keeps scoreboard overlay)'
+                    : 'Fullscreen with Live Scoreboard Overlay'
+                }
+                className="min-h-[44px] sm:min-h-[36px] min-w-[44px] sm:min-w-[36px] inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md transition-colors cursor-pointer"
+              >
+                {activeExpanded ? (
                   <>
-                    <EyeOff className="w-3.5 h-3.5 text-slate-300" />
-                    <span>HIDE SCORE</span>
+                    <Minimize2 className="w-4 h-4 text-emerald-400" />
+                    <span className="hidden sm:inline">EXIT</span>
                   </>
                 ) : (
                   <>
-                    <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>SCORE</span>
+                    <Maximize2 className="w-4 h-4 text-emerald-400" />
+                    <span className="hidden sm:inline">FULLSCREEN</span>
                   </>
                 )}
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={toggleFullscreen}
-              aria-label={activeExpanded ? 'Exit broadcast fullscreen' : 'Broadcast fullscreen'}
-              title={
-                activeExpanded
-                  ? 'Exit Fullscreen (keeps scoreboard overlay)'
-                  : 'Fullscreen with Live Scoreboard Overlay'
-              }
-              className="pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md transition-colors cursor-pointer"
-            >
-              {activeExpanded ? (
-                <>
-                  <Minimize2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">EXIT</span>
-                </>
-              ) : (
-                <>
-                  <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">FULLSCREEN</span>
-                </>
-              )}
-            </button>
+            </div>
           </div>
 
-          {/* Smart Positioned Scoreboard Overlay */}
+          {/* Touch Lock Protective Shield */}
+          {touchLocked && (
+            <div
+              data-touch-lock-shield="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                showLockedHintBriefly();
+              }}
+              className="absolute inset-0 z-40 flex items-end justify-center pb-8 safe-pb cursor-pointer"
+            >
+              {lockedHintVisible && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-slate-950/92 border border-white/20 text-white text-xs font-semibold shadow-2xl backdrop-blur-md"
+                >
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Screen Locked</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleTouchLock();
+                    }}
+                    className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>Unlock</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Smart Positioned Container-Aware Scoreboard Overlay */}
           {scoreboardVisible && score && (
             <div className={`pointer-events-none absolute z-20 ${getScoreboardAnchorClass()}`}>
               <div className="pointer-events-auto inline-block max-w-full">
-                <BroadcastScoreboardOverlay stream={stream} score={score} compact={false} />
+                <BroadcastScoreboardOverlay
+                  stream={stream}
+                  score={score}
+                  compact={layout.isCompactStage}
+                  layoutMode={layout.stageOrientation}
+                />
               </div>
             </div>
           )}
@@ -324,7 +370,7 @@ export function BroadcastPlayerShell({
             suppress={timeoutDecision.isAnyTakeoverActive}
           />
 
-          {/* Active Sponsor Overlay Strip (positioned away from scoreboard when possible) */}
+          {/* Active Sponsor Overlay Strip */}
           {sponsorOverlays.length > 0 && (
             <div
               className={`pointer-events-none absolute z-20 ${
@@ -373,7 +419,7 @@ export function BroadcastPlayerShell({
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-900 text-xs text-slate-300 border-t border-slate-800">
         <span className="truncate">
           {fallbackNotice ||
-            'Adaptive YouTube quality: click the gear icon in player for 360p/480p on slower networks. Use Fullscreen above to keep scoreboard visible.'}
+            'Adaptive YouTube quality: click the gear icon in player for 360p/480p on slower networks. Use Fullscreen above for landscape overlay.'}
         </span>
         <a
           href={`https://www.youtube.com/watch?v=${videoId}`}

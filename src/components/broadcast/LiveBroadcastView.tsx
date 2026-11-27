@@ -16,9 +16,11 @@ import {
   Maximize2,
   Minimize2,
   Radio,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Trophy,
+  Unlock,
   Users,
   Video,
   VideoOff,
@@ -76,6 +78,8 @@ import {
 } from '../../utils/matchTimeout.ts';
 import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
 import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
+import { useImmersivePlayer } from '../../hooks/useImmersivePlayer.ts';
+import { extractRecentImportantEvent } from '../../utils/mediaPlayerUtils.ts';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -97,22 +101,6 @@ interface LiveBroadcastViewProps {
   authLoading?: boolean;
   onJumpHighlight: (seconds: number) => void;
   onOpenReport: () => void;
-}
-
-function canUseElementFullscreen(el: HTMLElement | null): boolean {
-  if (!el) return false;
-  const doc = document as Document & { webkitFullscreenEnabled?: boolean };
-  const node = el as HTMLElement & {
-    webkitRequestFullscreen?: () => Promise<void> | void;
-  };
-  const enabled =
-    typeof document.fullscreenEnabled === 'boolean'
-      ? document.fullscreenEnabled
-      : Boolean(doc.webkitFullscreenEnabled);
-  return (
-    enabled &&
-    (typeof el.requestFullscreen === 'function' || typeof node.webkitRequestFullscreen === 'function')
-  );
 }
 
 function buildGoogleMapsUrl(venue: VenueData | null, fallbackLocation?: string): string | null {
@@ -161,10 +149,32 @@ export function LiveBroadcastView({
   const { t } = useLanguage();
   const location = useLocation();
   const { customerUser, adminUser, updateCustomerUser } = useAuth();
-  const stageRef = useRef<HTMLDivElement | null>(null);
   const resolvedAuth = isAuthenticated ?? Boolean(customerUser || adminUser);
   const canPlayVideo = resolvedAuth && !stream.playbackLocked;
   const returnPath = `${location.pathname}${location.search}`;
+  const [fullscreenNotice, setFullscreenNotice] = useState<string | null>(null);
+
+  const {
+    stageRef,
+    controlsVisible,
+    touchLocked,
+    lockedHintVisible,
+    isNativeFullscreen,
+    isExpandedFallback,
+    isFullscreenActive,
+    layout,
+    showControlsTemporarily,
+    hideControls,
+    toggleControls,
+    notifyUserInteraction,
+    toggleTouchLock,
+    showLockedHintBriefly,
+    toggleFullscreen,
+  } = useImmersivePlayer({
+    autoHideMs: 3000,
+    initiallyVisible: true,
+    onFullscreenFallbackNotice: setFullscreenNotice,
+  });
 
   const kabaddiDetails = useMemo<KabaddiDetails | null>(() => {
     const sport = score?.sportType || stream.gameName;
@@ -232,8 +242,6 @@ export function LiveBroadcastView({
     return broadcast.scoreboardVisibleByDefault;
   });
 
-  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
-  const [isExpandedFallback, setIsExpandedFallback] = useState(false);
   const [showUpcomingPreview, setShowUpcomingPreview] = useState(false);
   const [lowDataMode, setLowDataMode] = useState(false);
   const [videoDisabled, setVideoDisabled] = useState(false);
@@ -247,6 +255,21 @@ export function LiveBroadcastView({
   const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>(
     () => initialMatchStats || []
   );
+
+  const recentImportantEvent = useMemo(
+    () => extractRecentImportantEvent(history, broadcast.sport),
+    [history, broadcast.sport]
+  );
+  const [visibleRecentEventKey, setVisibleRecentEventKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recentImportantEvent) {
+      setVisibleRecentEventKey(null);
+      return;
+    }
+    setVisibleRecentEventKey(recentImportantEvent.key);
+    const id = window.setTimeout(() => setVisibleRecentEventKey(null), 4500);
+    return () => window.clearTimeout(id);
+  }, [recentImportantEvent]);
 
   const kabaddiStatRows = useMemo(() => {
     if (!kabaddiDetails) return [];
@@ -348,7 +371,6 @@ export function LiveBroadcastView({
   const [followBusyId, setFollowBusyId] = useState<string | null>(null);
   const [followFeedback, setFollowFeedback] = useState<string | null>(null);
 
-  const isFullscreenActive = isNativeFullscreen || isExpandedFallback;
   const activeVideoId =
     wantsReplay && broadcast.replayPublished && broadcast.replayVideoId
       ? broadcast.replayVideoId
@@ -365,58 +387,6 @@ export function LiveBroadcastView({
       setScoreboardVisible(broadcast.scoreboardVisibleByDefault);
     }
   }, [storageKey, broadcast.scoreboardVisibleByDefault]);
-
-  // Sync documentElement fullscreen attribute for nav hiding + body scroll lock
-  useEffect(() => {
-    if (isFullscreenActive) {
-      document.documentElement.dataset.broadcastFullscreen = 'true';
-    } else {
-      delete document.documentElement.dataset.broadcastFullscreen;
-    }
-    return () => {
-      delete document.documentElement.dataset.broadcastFullscreen;
-    };
-  }, [isFullscreenActive]);
-
-  // Listen to native fullscreenchange
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      const doc = document as Document & { webkitFullscreenElement?: Element | null };
-      const fsEl = document.fullscreenElement || doc.webkitFullscreenElement || null;
-      const active = Boolean(fsEl && fsEl === stageRef.current);
-      setIsNativeFullscreen(active);
-      if (!active) {
-        try {
-          (screen.orientation as any)?.unlock?.();
-        } catch {
-          // Ignore unsupported unlock
-        }
-      }
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
-    };
-  }, []);
-
-  // Esc key closes CSS fallback fullscreen
-  useEffect(() => {
-    if (!isExpandedFallback) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsExpandedFallback(false);
-        try {
-          (screen.orientation as any)?.unlock?.();
-        } catch {
-          // Ignore
-        }
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isExpandedFallback]);
 
   useEffect(() => {
     if (initialPublicSponsors) setPublicSponsors(initialPublicSponsors);
@@ -529,64 +499,6 @@ export function LiveBroadcastView({
     });
   }, [storageKey]);
 
-  const toggleFullscreen = useCallback(async () => {
-    const doc = document as Document & {
-      webkitFullscreenElement?: Element | null;
-      webkitExitFullscreen?: () => Promise<void> | void;
-    };
-
-    if (isNativeFullscreen || doc.fullscreenElement || doc.webkitFullscreenElement) {
-      try {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
-      } catch {
-        setIsNativeFullscreen(false);
-      }
-      try {
-        (screen.orientation as any)?.unlock?.();
-      } catch {
-        // Ignore
-      }
-      return;
-    }
-
-    if (isExpandedFallback) {
-      setIsExpandedFallback(false);
-      try {
-        (screen.orientation as any)?.unlock?.();
-      } catch {
-        // Ignore
-      }
-      return;
-    }
-
-    const el = stageRef.current as
-      | (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void })
-      | null;
-
-    if (canUseElementFullscreen(el) && el) {
-      try {
-        if (el.requestFullscreen) await el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-        try {
-          await (screen.orientation as any)?.lock?.('landscape');
-        } catch {
-          // Safe fallback if browser does not support orientation lock
-        }
-        return;
-      } catch {
-        // Fall through to CSS fixed fullscreen fallback (e.g. iOS Safari)
-      }
-    }
-
-    setIsExpandedFallback(true);
-    try {
-      await (screen.orientation as any)?.lock?.('landscape');
-    } catch {
-      // Safe fallback
-    }
-  }, [isNativeFullscreen, isExpandedFallback]);
-
   async function handleToggleFollow(teamId: string, teamName: string) {
     if (!customerUser) {
       setFollowFeedback('Sign in on the Player Portal to follow teams.');
@@ -644,12 +556,30 @@ export function LiveBroadcastView({
         stream.backupScorerId === adminUser.id)
   );
 
+  const activePlayerProvider =
+    wantsReplay && broadcast.replayPublished ? 'youtube' : broadcast.activeProvider;
+  const hasReconnectingAlert =
+    !connected || playerSignal === 'error' || playerSignal === 'reconnecting';
+  const showHud = controlsVisible && !touchLocked;
+
   return (
     <div className="space-y-4">
       {/* 1. PERSISTENT VIDEO STAGE (NEVER REMOUNTS ON ORIENTATION / FULLSCREEN / SCORE TOGGLE) */}
       <div className="bg-slate-950 sm:rounded-xl overflow-hidden border border-slate-800 shadow-lg">
         <div
           ref={stageRef}
+          onMouseMove={() => {
+            if (!touchLocked) showControlsTemporarily();
+          }}
+          onClick={() => {
+            if (touchLocked) {
+              showLockedHintBriefly();
+              return;
+            }
+            if (activePlayerProvider === 'mediamtx' || videoDisabled || broadcast.status === 'UPCOMING') {
+              toggleControls();
+            }
+          }}
           className={
             isExpandedFallback
               ? 'fixed inset-0 z-50 bg-black flex items-center justify-center'
@@ -662,7 +592,7 @@ export function LiveBroadcastView({
             {canPlayVideo ? (
               <>
                 <LiveStreamPlayer
-                  provider={wantsReplay && broadcast.replayPublished ? 'youtube' : broadcast.activeProvider}
+                  provider={activePlayerProvider}
                   youtubeVideoId={activeVideoId}
                   mediamtxPlaybackUrl={broadcast.mediamtxPlaybackUrl}
                   mediamtxWebrtcUrl={broadcast.mediamtxWebrtcUrl}
@@ -671,6 +601,7 @@ export function LiveBroadcastView({
                   jumpKey={jumpKey}
                   lowDataMode={lowDataMode}
                   videoDisabled={videoDisabled}
+                  controlsVisible={showHud}
                   onEnableVideo={() => setVideoDisabled(false)}
                   switchingBanner={switchingBanner}
                   onPlaybackHealthChange={setPlayerSignal}
@@ -722,112 +653,290 @@ export function LiveBroadcastView({
               </div>
             )}
 
-            {/* Top-Left Live / Viewer / Stream Connectivity Indicator */}
-            <div className="pointer-events-none absolute top-2.5 left-2.5 z-30 flex flex-wrap items-center gap-1.5">
-              <MatchStatusBadge stream={stream} score={score} dark compact />
-              {canSeeViewers && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-950/85 border border-white/15 text-white font-mono text-[10px] font-semibold tabular-nums backdrop-blur-md">
-                  <Users className="w-3 h-3 text-emerald-400" />
-                  <span>{broadcast.activeViewers}</span>
-                </span>
-              )}
-              {canPlayVideo && (
+            {/* Tap-to-Hide Backdrop when Unified Controls are Visible (leaves buttons unobstructed) */}
+            {canPlayVideo && showHud && (
+              <div
+                data-player-backdrop="true"
+                aria-hidden="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hideControls();
+                }}
+                className="absolute inset-0 z-25 cursor-pointer"
+              />
+            )}
+
+            {/* Non-Blocking Top Wake Strip & Corner Toggle when Controls are Hidden (keeps YouTube native center/bottom clickable) */}
+            {canPlayVideo && !controlsVisible && !touchLocked && (
+              <>
+                <div
+                  data-player-wake-strip="true"
+                  aria-hidden="true"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    showControlsTemporarily();
+                  }}
+                  className="absolute top-0 inset-x-0 h-14 z-25 cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    showControlsTemporarily();
+                  }}
+                  aria-label="Show player controls"
+                  title="Show MaidanLive controls"
+                  className="absolute top-2.5 right-2.5 z-30 min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-lg bg-slate-950/60 hover:bg-slate-950/90 text-white/80 hover:text-white border border-white/15 backdrop-blur-sm opacity-75 hover:opacity-100 transition-opacity cursor-pointer safe-pt"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                </button>
+              </>
+            )}
+
+            {/* Always-Visible Minimal Reconnecting Indicator ONLY when telemetry/video is degraded */}
+            {canPlayVideo && !showHud && hasReconnectingAlert && (
+              <div className="pointer-events-none absolute top-2.5 left-2.5 z-30 flex items-center gap-1.5 safe-pt safe-px">
                 <StreamStatusIndicator
                   stream={stream}
                   socketConnected={connected}
                   playerSignal={playerSignal}
                   dark
                 />
-              )}
-            </div>
+              </div>
+            )}
 
-            {/* Top-Right Viewer Controls */}
-            {canPlayVideo && (
-              <div className="pointer-events-none absolute top-2.5 right-2.5 z-30 flex items-center gap-1.5">
-              {wakeLockSupported && (
-                <button
-                  type="button"
-                  onClick={toggleWakeLock}
-                  title="Keep screen awake while watching"
-                  aria-pressed={wakeLockActive}
-                  className={`pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border backdrop-blur-md transition cursor-pointer ${
-                    wakeLockActive
-                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                      : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
-                  }`}
+            {/* Subtle Real-Time Match Highlight Toast (from genuine score history) */}
+            {canPlayVideo &&
+              !activeEventItem &&
+              recentImportantEvent &&
+              visibleRecentEventKey === recentImportantEvent.key && (
+                <div className="pointer-events-none absolute top-14 left-1/2 -translate-x-1/2 z-30 max-w-[85vw]">
+                  <div
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-md shadow-xl text-xs font-semibold ${
+                      recentImportantEvent.accent === 'red'
+                        ? 'bg-red-950/90 border-red-400/50 text-red-100'
+                        : recentImportantEvent.accent === 'emerald'
+                          ? 'bg-emerald-950/90 border-emerald-400/50 text-emerald-100'
+                          : recentImportantEvent.accent === 'amber'
+                            ? 'bg-amber-950/90 border-amber-400/50 text-amber-100'
+                            : recentImportantEvent.accent === 'sky'
+                              ? 'bg-sky-950/90 border-sky-400/50 text-sky-100'
+                              : 'bg-slate-950/90 border-orange-400/50 text-orange-100'
+                    }`}
+                  >
+                    <span className="font-display font-extrabold uppercase tracking-wider">
+                      {recentImportantEvent.label}
+                    </span>
+                    <span className="text-white/90 truncate max-w-[180px] sm:max-w-[260px]">
+                      {recentImportantEvent.detail}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+            {/* UNIFIED YOUTUBE-STYLE AUTO-HIDE PLAYER OVERLAY HUD */}
+            <div
+              data-unified-hud="true"
+              className={`pointer-events-none absolute inset-x-0 top-0 z-30 transition-opacity duration-200 ${
+                showHud ? 'opacity-100' : 'opacity-0'
+              }`}
+            >
+              <div className="bg-gradient-to-b from-black/80 via-black/40 to-transparent px-2.5 pt-2.5 pb-6 safe-pt safe-px flex flex-wrap items-start justify-between gap-2">
+                {/* Top-Left Live / Viewer / Stream Connectivity Indicator */}
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    notifyUserInteraction();
+                  }}
+                  className={`${
+                    showHud ? 'pointer-events-auto' : 'pointer-events-none'
+                  } flex flex-wrap items-center gap-1.5`}
                 >
-                  <Sun className="w-3 h-3" />
-                  <span className="hidden md:inline">AWAKE</span>
-                </button>
-              )}
+                  <MatchStatusBadge stream={stream} score={score} dark compact />
+                  {canSeeViewers && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-950/85 border border-white/15 text-white font-mono text-[10px] font-semibold tabular-nums backdrop-blur-md">
+                      <Users className="w-3 h-3 text-emerald-400" />
+                      <span>{broadcast.activeViewers}</span>
+                    </span>
+                  )}
+                  {canPlayVideo && (
+                    <StreamStatusIndicator
+                      stream={stream}
+                      socketConnected={connected}
+                      playerSignal={playerSignal}
+                      dark
+                    />
+                  )}
+                </div>
 
-              <button
-                type="button"
-                onClick={() => setVideoDisabled((v) => !v)}
-                title="Disable video and retain live scores only"
-                aria-pressed={videoDisabled}
-                className={`pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border backdrop-blur-md transition cursor-pointer ${
-                  videoDisabled
-                    ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                    : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
-                }`}
-              >
-                {videoDisabled ? <Video className="w-3 h-3" /> : <VideoOff className="w-3 h-3" />}
-                <span className="hidden sm:inline">{videoDisabled ? 'VIDEO ON' : 'SCORE ONLY'}</span>
-              </button>
+                {/* Top-Right Unified Controls */}
+                {canPlayVideo && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className={`${
+                      showHud ? 'pointer-events-auto' : 'pointer-events-none'
+                    } flex flex-wrap items-center justify-end gap-1.5`}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleTouchLock();
+                      }}
+                      title="Lock screen against accidental taps"
+                      aria-label="Lock player touch controls"
+                      aria-pressed={touchLocked}
+                      className="min-h-[40px] sm:min-h-[36px] min-w-[40px] sm:min-w-[36px] inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 text-slate-200 border border-white/15 backdrop-blur-md text-[11px] font-semibold transition cursor-pointer"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span className="hidden lg:inline">Lock</span>
+                    </button>
 
-              <button
-                type="button"
-                onClick={() => setLowDataMode((v) => !v)}
-                title="Toggle Low-Data Mode"
-                className={`pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border backdrop-blur-md transition cursor-pointer ${
-                  lowDataMode
-                    ? 'bg-amber-400 text-slate-950 border-amber-300'
-                    : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
-                }`}
-              >
-                <Wifi className="w-3 h-3" />
-                <span className="hidden sm:inline">LOW DATA</span>
-              </button>
+                    {wakeLockSupported && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleWakeLock();
+                          notifyUserInteraction();
+                        }}
+                        title="Keep screen awake while watching"
+                        aria-pressed={wakeLockActive}
+                        className={`min-h-[40px] sm:min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border backdrop-blur-md transition cursor-pointer ${
+                          wakeLockActive
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                            : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
+                        }`}
+                      >
+                        <Sun className="w-3.5 h-3.5" />
+                        <span className="hidden md:inline">Awake</span>
+                      </button>
+                    )}
 
-              <button
-                type="button"
-                onClick={toggleScoreboard}
-                aria-pressed={scoreboardVisible}
-                className="pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md cursor-pointer"
-              >
-                {scoreboardVisible ? (
-                  <>
-                    <EyeOff className="w-3.5 h-3.5 text-slate-300" />
-                    <span>{t('broadcast.hideScore')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye className="w-3.5 h-3.5 text-[#EA580C]" />
-                    <span>{t('broadcast.score')}</span>
-                  </>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setVideoDisabled((v) => !v);
+                        notifyUserInteraction();
+                      }}
+                      title="Disable video and retain live scores only"
+                      aria-pressed={videoDisabled}
+                      className={`min-h-[40px] sm:min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border backdrop-blur-md transition cursor-pointer ${
+                        videoDisabled
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                          : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
+                      }`}
+                    >
+                      {videoDisabled ? (
+                        <Video className="w-3.5 h-3.5" />
+                      ) : (
+                        <VideoOff className="w-3.5 h-3.5" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {videoDisabled ? 'Video On' : 'Score Only'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLowDataMode((v) => !v);
+                        notifyUserInteraction();
+                      }}
+                      title="Toggle Low-Data Mode"
+                      aria-pressed={lowDataMode}
+                      className={`min-h-[40px] sm:min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border backdrop-blur-md transition cursor-pointer ${
+                        lowDataMode
+                          ? 'bg-amber-400 text-slate-950 border-amber-300'
+                          : 'bg-slate-950/85 text-slate-200 border-white/15 hover:bg-slate-900'
+                      }`}
+                    >
+                      <Wifi className="w-3.5 h-3.5" />
+                      <span className="hidden md:inline">Low Data</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleScoreboard();
+                        notifyUserInteraction();
+                      }}
+                      aria-pressed={scoreboardVisible}
+                      className="min-h-[40px] sm:min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md cursor-pointer"
+                    >
+                      {scoreboardVisible ? (
+                        <>
+                          <EyeOff className="w-3.5 h-3.5 text-slate-300" />
+                          <span className="hidden sm:inline">{t('broadcast.hideScore')}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-3.5 h-3.5 text-[#EA580C]" />
+                          <span className="hidden sm:inline">{t('broadcast.score')}</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFullscreen();
+                      }}
+                      aria-label={isFullscreenActive ? 'Exit fullscreen' : 'Broadcast fullscreen'}
+                      className="min-h-[44px] sm:min-h-[36px] min-w-[44px] sm:min-w-[36px] inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md cursor-pointer"
+                    >
+                      {isFullscreenActive ? (
+                        <>
+                          <Minimize2 className="w-4 h-4 text-orange-400" />
+                          <span className="hidden sm:inline">{t('broadcast.exitFullscreen')}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Maximize2 className="w-4 h-4 text-orange-400" />
+                          <span className="hidden sm:inline">{t('broadcast.fullscreen')}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 )}
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleFullscreen}
-                aria-label={isFullscreenActive ? 'Exit fullscreen' : 'Broadcast fullscreen'}
-                className="pointer-events-auto min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-950/85 hover:bg-slate-900 text-white text-[11px] font-semibold border border-white/15 backdrop-blur-md cursor-pointer"
-              >
-                {isFullscreenActive ? (
-                  <>
-                    <Minimize2 className="w-3.5 h-3.5 text-orange-400" />
-                    <span className="hidden sm:inline">{t('broadcast.exitFullscreen')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Maximize2 className="w-3.5 h-3.5 text-orange-400" />
-                    <span className="hidden sm:inline">{t('broadcast.fullscreen')}</span>
-                  </>
-                )}
-              </button>
+              </div>
             </div>
+
+            {/* Protective Touch-Lock Shield */}
+            {canPlayVideo && touchLocked && (
+              <div
+                data-touch-lock-shield="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showLockedHintBriefly();
+                }}
+                className="absolute inset-0 z-40 flex items-end justify-center pb-8 safe-pb cursor-pointer"
+              >
+                {lockedHintVisible && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-slate-950/92 border border-white/20 text-white text-xs font-semibold shadow-2xl backdrop-blur-md"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Screen Locked</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleTouchLock();
+                      }}
+                      className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white font-bold cursor-pointer"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>Unlock</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Embedded MaidanLive Video Scoreboard Overlay (when Scoreboard on YouTube is unchecked) */}
@@ -842,27 +951,50 @@ export function LiveBroadcastView({
                     !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
                       ? 'bottom-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
                       : stream.scoreboardPosition === 'LEFT'
-                        ? 'top-12 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
+                        ? 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
                         : stream.scoreboardPosition === 'RIGHT'
-                          ? 'top-12 left-2.5 right-2.5 sm:left-auto sm:right-4 justify-end'
-                          : 'top-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
+                          ? 'top-14 left-2.5 right-2.5 sm:left-auto sm:right-4 justify-end'
+                          : 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
                   }`}
                 >
                   <div className="pointer-events-auto max-w-full">
                     {score ? (
-                      <BroadcastScoreboardOverlay stream={stream} score={score} compact />
+                      <BroadcastScoreboardOverlay
+                        stream={stream}
+                        score={score}
+                        compact={layout.isCompactStage}
+                        layoutMode={layout.stageOrientation}
+                      />
                     ) : (
-                      <BroadcastScoreboard broadcast={broadcast} compact />
+                      <BroadcastScoreboard
+                        broadcast={broadcast}
+                        compact
+                        layoutMode={layout.stageOrientation}
+                      />
                     )}
                   </div>
                 </div>
               )}
 
-            {/* Fullscreen Scoreboard Overlay (Bottom Center by default) */}
-            {isFullscreenActive && scoreboardVisible && (
-              <div className="pointer-events-none absolute bottom-12 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center">
-                <div className="pointer-events-auto w-full max-w-2xl">
-                  <BroadcastScoreboard broadcast={broadcast} compact />
+            {/* Fullscreen Scoreboard Overlay (adapts cleanly to Portrait vs Landscape Fullscreen) */}
+            {isFullscreenActive && scoreboardVisible && !videoDisabled && (
+              <div className="pointer-events-none absolute bottom-12 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center safe-pb safe-px">
+                <div className="pointer-events-auto w-full flex justify-center max-w-2xl">
+                  {score && layout.stageOrientation === 'landscape' ? (
+                    <BroadcastScoreboardOverlay
+                      stream={stream}
+                      score={score}
+                      compact
+                      layoutMode="landscape"
+                    />
+                  ) : (
+                    <BroadcastScoreboard
+                      broadcast={broadcast}
+                      compact
+                      layoutMode={layout.stageOrientation}
+                      className="w-full"
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -930,11 +1062,12 @@ export function LiveBroadcastView({
         <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-slate-900 text-[11px] text-slate-300 border-t border-slate-800">
           <div className="flex items-center gap-2 min-w-0">
             <span className="truncate">
-              {broadcast.activeProvider === 'mediamtx'
-                ? 'Streaming via MaidanLive Direct Feed (Low-Latency HLS / WebRTC).'
-                : !broadcast.showScoreboardOnYoutube
-                  ? 'YouTube Live playback · Live scoreboard active inside MaidanLive embedded video.'
-                  : 'Adaptive YouTube Live playback · Use Fullscreen for live scoreboard overlay.'}
+              {fullscreenNotice ||
+                (broadcast.activeProvider === 'mediamtx'
+                  ? 'Streaming via MaidanLive Direct Feed (Low-Latency HLS / WebRTC).'
+                  : !broadcast.showScoreboardOnYoutube
+                    ? 'YouTube Live playback · Live scoreboard active inside MaidanLive embedded video.'
+                    : 'Adaptive YouTube Live playback · Tap video for controls or open landscape fullscreen.')}
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
@@ -961,10 +1094,13 @@ export function LiveBroadcastView({
         </div>
       </div>
 
-      {/* 2. PORTRAIT / DEFAULT HIERARCHY: SCOREBOARD STRIP -> SPORT STRIP -> SUMMARY -> RESULT BAR */}
+      {/* 2. CONTAINER/ORIENTATION-AWARE SCOREBOARD -> SPORT STRIP -> SUMMARY -> RESULT BAR */}
       <div className="px-3 sm:px-0 space-y-3">
         {scoreboardVisible && (broadcast.showScoreboardOnYoutube || videoDisabled) && (
-          <BroadcastScoreboard broadcast={broadcast} />
+          <BroadcastScoreboard
+            broadcast={broadcast}
+            layoutMode={layout.scoreboardMode}
+          />
         )}
         <BroadcastSportStrip broadcast={broadcast} />
         <ScoreboardSummary stream={stream} score={score} variant="detail" />

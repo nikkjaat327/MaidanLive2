@@ -30,6 +30,7 @@ interface LiveStreamPlayerProps {
   jumpKey?: number;
   lowDataMode?: boolean;
   videoDisabled?: boolean;
+  controlsVisible?: boolean;
   onEnableVideo?: () => void;
   switchingBanner?: boolean;
   onPlaybackHealthChange?: (signal: PlayerPlaybackSignal) => void;
@@ -49,6 +50,7 @@ export const LiveStreamPlayer = React.memo(
     jumpKey = 0,
     lowDataMode = false,
     videoDisabled = false,
+    controlsVisible = true,
     onEnableVideo,
     switchingBanner = false,
     onPlaybackHealthChange,
@@ -446,32 +448,37 @@ export const LiveStreamPlayer = React.memo(
             )}
 
             {!mtxError && (
-              <div className="absolute bottom-12 left-3 z-20 flex items-center gap-1.5">
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className={`absolute bottom-14 left-3 z-30 flex items-center gap-1.5 transition-opacity duration-200 ${
+                  controlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+                }`}
+              >
                 {mediamtxWebrtcUrl && (
                   <button
                     type="button"
                     onClick={() => setMtxMode((m) => (m === 'hls' ? 'webrtc' : 'hls'))}
-                    className="px-2 py-1 rounded bg-slate-950/85 border border-white/15 text-[10px] font-semibold text-slate-200 hover:text-white"
+                    className="min-h-[38px] px-2.5 py-1 rounded-lg bg-slate-950/85 border border-white/15 text-[11px] font-semibold text-slate-200 hover:text-white cursor-pointer"
                   >
-                    Mode: {mtxMode === 'webrtc' ? 'WebRTC Ultra-Low' : 'HLS Adaptive'}
+                    {mtxMode === 'webrtc' ? 'WebRTC' : 'HLS'}
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => setMuted((m) => !m)}
                   aria-label={muted ? 'Unmute video' : 'Mute video'}
-                  className="p-1.5 rounded bg-slate-950/85 border border-white/15 text-slate-200 hover:text-white"
+                  className="min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-lg bg-slate-950/85 border border-white/15 text-slate-200 hover:text-white cursor-pointer"
                 >
-                  {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                  {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
                 {pipSupported && (
                   <button
                     type="button"
                     onClick={handleTogglePip}
                     aria-label="Picture in picture"
-                    className="p-1.5 rounded bg-slate-950/85 border border-white/15 text-slate-200 hover:text-white"
+                    className="min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-lg bg-slate-950/85 border border-white/15 text-slate-200 hover:text-white cursor-pointer"
                   >
-                    <PictureInPicture2 className="w-3.5 h-3.5" />
+                    <PictureInPicture2 className="w-4 h-4" />
                   </button>
                 )}
               </div>
@@ -500,5 +507,6 @@ export const LiveStreamPlayer = React.memo(
     prev.jumpKey === next.jumpKey &&
     prev.lowDataMode === next.lowDataMode &&
     prev.videoDisabled === next.videoDisabled &&
+    prev.controlsVisible === next.controlsVisible &&
     prev.switchingBanner === next.switchingBanner
 );

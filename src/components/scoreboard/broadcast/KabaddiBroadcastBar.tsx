@@ -12,17 +12,36 @@ interface KabaddiBroadcastBarProps {
   stream: LiveStreamData;
   score: LiveScoreData;
   compact?: boolean;
+  isPortrait?: boolean;
 }
 
-export function KabaddiBroadcastBar({ stream, score, compact = false }: KabaddiBroadcastBarProps) {
+export function KabaddiBroadcastBar({
+  stream,
+  score,
+  compact = false,
+  isPortrait,
+}: KabaddiBroadcastBarProps) {
   const d = normalizeKabaddiDetails(score.sportSpecificDetails);
   const vis = d.viewerDisplaySettings;
 
+  const isClockActive = Boolean(
+    !d.matchCompleted &&
+      (d.clock.status === 'RUNNING' ||
+        d.clock.status === 'EXTRA_TIME' ||
+        d.clock.status === 'BREAK' ||
+        d.clock.timeoutActive ||
+        d.clock.raidRunning ||
+        d.doOrDie.active ||
+        (d.lastAllOut && d.lastAllOut.triggeredAtIso))
+  );
+
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    if (!isClockActive) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isClockActive]);
   const eff = computeEffectiveKabaddiClock(d, nowMs);
 
   const nameA = stream.teamAName || 'Team A';
@@ -59,8 +78,16 @@ export function KabaddiBroadcastBar({ stream, score, compact = false }: KabaddiB
               {vis.showTeamLogos && <BroadcastLogo logoUrl={stream.teamALogo} alt={shortA} />}
               {vis.showTeamNames && (
                 <span className="font-display font-bold text-xs sm:text-sm uppercase truncate">
-                  <span className="hidden portrait:inline">{shortA}</span>
-                  <span className="portrait:hidden">{nameA}</span>
+                  {isPortrait === true ? (
+                    shortA
+                  ) : isPortrait === false ? (
+                    nameA
+                  ) : (
+                    <>
+                      <span className="hidden portrait:inline">{shortA}</span>
+                      <span className="portrait:hidden">{nameA}</span>
+                    </>
+                  )}
                 </span>
               )}
             </div>
@@ -98,8 +125,16 @@ export function KabaddiBroadcastBar({ stream, score, compact = false }: KabaddiB
             <div className="flex items-center gap-1.5 min-w-0 justify-end">
               {vis.showTeamNames && (
                 <span className="font-display font-bold text-xs sm:text-sm uppercase truncate text-right">
-                  <span className="hidden portrait:inline">{shortB}</span>
-                  <span className="portrait:hidden">{nameB}</span>
+                  {isPortrait === true ? (
+                    shortB
+                  ) : isPortrait === false ? (
+                    nameB
+                  ) : (
+                    <>
+                      <span className="hidden portrait:inline">{shortB}</span>
+                      <span className="portrait:hidden">{nameB}</span>
+                    </>
+                  )}
                 </span>
               )}
               {vis.showTeamLogos && <BroadcastLogo logoUrl={stream.teamBLogo} alt={shortB} />}

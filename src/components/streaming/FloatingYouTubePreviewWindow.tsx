@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import { useLocation } from 'react-router-dom';
-import { ExternalLink, GripHorizontal, Maximize2, Minimize2, X, Youtube } from 'lucide-react';
+import { ExternalLink, GripHorizontal, Maximize2, Minimize2, Tv, X, Youtube } from 'lucide-react';
 import { useBroadcastPreview } from '../../context/BroadcastPreviewContext.tsx';
 import { useAuth } from '../../hooks/useAuth.ts';
+import { LiveStreamPlayer } from '../broadcast/LiveStreamPlayer.tsx';
+import { isAdminPanelPath } from '../../utils/mediaPlayerUtils.ts';
 
 type ResizeDirection = 'se' | 'e' | 's' | 'w' | 'sw';
 
@@ -32,10 +34,8 @@ export function FloatingYouTubePreviewWindow() {
     origH: 316,
   });
 
-  // Never render floating preview chrome on pure OBS Browser Source or Camera Companion routes
-  const isIsolatedRoute =
-    location.pathname.startsWith('/broadcast/overlay/view') ||
-    location.pathname.startsWith('/camera-connect');
+  // Render strictly inside the Admin Panel only (never customer portal or isolated views)
+  const isAdminPanel = Boolean(adminUser) && isAdminPanelPath(location.pathname);
 
   useEffect(() => {
     if (interaction === 'idle') return;
@@ -97,7 +97,14 @@ export function FloatingYouTubePreviewWindow() {
     };
   }, [interaction, updateYouTubeGeometry]);
 
-  if (!adminUser || isIsolatedRoute || !youtubePreview.open || !youtubePreview.videoId) {
+  const isMediaMtx = youtubePreview.provider === 'mediamtx';
+  const hasFeed = Boolean(
+    isMediaMtx
+      ? youtubePreview.mediamtxPlaybackUrl || youtubePreview.mediamtxWebrtcUrl
+      : youtubePreview.videoId
+  );
+
+  if (!isAdminPanel || !youtubePreview.open || !hasFeed) {
     return null;
   }
 
@@ -141,13 +148,15 @@ export function FloatingYouTubePreviewWindow() {
     updateYouTubeGeometry({ width: clampedW, height: targetH });
   };
 
-  const embedSrc = `https://www.youtube.com/embed/${encodeURIComponent(
-    youtubePreview.videoId
-  )}?autoplay=1&rel=0&playsinline=1&modestbranding=1`;
+  const embedSrc = youtubePreview.videoId
+    ? `https://www.youtube.com/embed/${encodeURIComponent(
+        youtubePreview.videoId
+      )}?autoplay=1&rel=0&playsinline=1&modestbranding=1`
+    : '';
 
   return (
     <aside
-      aria-label="Floating Live YouTube Video Preview"
+      aria-label="Floating Admin Broadcast Video Preview"
       style={{
         left: youtubePreview.x,
         top: youtubePreview.y,
@@ -165,13 +174,19 @@ export function FloatingYouTubePreviewWindow() {
       >
         <div className="flex items-center gap-2 min-w-0">
           <GripHorizontal className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          <Youtube className="w-4 h-4 text-red-500 shrink-0" />
+          {isMediaMtx ? (
+            <Tv className="w-4 h-4 text-[#EA580C] shrink-0" />
+          ) : (
+            <Youtube className="w-4 h-4 text-red-500 shrink-0" />
+          )}
           <span className="text-xs font-bold tracking-tight truncate">
-            YouTube Live Preview
+            {youtubePreview.title || (isMediaMtx ? 'Direct Embed Preview' : 'Live Video Preview')}
           </span>
-          <span className="hidden sm:inline font-mono text-[10px] text-slate-400 px-1.5 py-0.5 rounded bg-slate-800">
-            {youtubePreview.videoId}
-          </span>
+          {!isMediaMtx && youtubePreview.videoId && (
+            <span className="hidden sm:inline font-mono text-[10px] text-slate-400 px-1.5 py-0.5 rounded bg-slate-800">
+              {youtubePreview.videoId}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -179,7 +194,7 @@ export function FloatingYouTubePreviewWindow() {
             type="button"
             onClick={() => applyPresetSize(340)}
             title="Compact Size"
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800"
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
           >
             S
           </button>
@@ -187,7 +202,7 @@ export function FloatingYouTubePreviewWindow() {
             type="button"
             onClick={() => applyPresetSize(520)}
             title="Medium Size"
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800"
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
           >
             M
           </button>
@@ -195,25 +210,27 @@ export function FloatingYouTubePreviewWindow() {
             type="button"
             onClick={() => applyPresetSize(760)}
             title="Large Size"
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800"
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
           >
             <Maximize2 className="w-3 h-3" />
           </button>
-          <a
-            href={`https://www.youtube.com/watch?v=${youtubePreview.videoId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open on YouTube"
-            className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          {!isMediaMtx && youtubePreview.videoId && (
+            <a
+              href={`https://www.youtube.com/watch?v=${youtubePreview.videoId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open on YouTube"
+              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
           <button
             type="button"
             onClick={closeYouTubePreview}
-            aria-label="Close YouTube preview"
-            title="Close YouTube preview"
-            className="p-1 rounded bg-red-600/20 text-red-300 hover:bg-red-600 hover:text-white transition-colors"
+            aria-label="Close live video preview"
+            title="Close live video preview"
+            className="p-1 rounded bg-red-600/20 text-red-300 hover:bg-red-600 hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -222,16 +239,28 @@ export function FloatingYouTubePreviewWindow() {
 
       {/* Live Video Player Container */}
       <div className="relative flex-1 bg-black overflow-hidden">
-        <iframe
-          key={youtubePreview.videoId}
-          title={`YouTube Preview ${youtubePreview.videoId}`}
-          src={embedSrc}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-          className="w-full h-full border-0"
-        />
+        {isMediaMtx ? (
+          <LiveStreamPlayer
+            provider="mediamtx"
+            youtubeVideoId=""
+            mediamtxPlaybackUrl={youtubePreview.mediamtxPlaybackUrl}
+            mediamtxWebrtcUrl={youtubePreview.mediamtxWebrtcUrl}
+            title={youtubePreview.title || 'MaidanLive Embed Preview'}
+            autoplay
+            controlsVisible
+          />
+        ) : (
+          <iframe
+            key={youtubePreview.videoId}
+            title={`Video Preview ${youtubePreview.videoId}`}
+            src={embedSrc}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            className="w-full h-full border-0"
+          />
+        )}
 
-        {/* Prevent iframe from swallowing pointermove/pointerup while dragging or resizing */}
+        {/* Prevent iframe/video from swallowing pointermove/pointerup while dragging or resizing */}
         {interaction !== 'idle' && (
           <div className="absolute inset-0 z-20 bg-slate-950/20 flex items-end justify-start p-2">
             <span className="px-2 py-0.5 rounded bg-black/80 border border-white/15 font-mono text-[10px] font-bold text-white">
@@ -265,7 +294,7 @@ export function FloatingYouTubePreviewWindow() {
       <div
         onPointerDown={startResize('se')}
         title="Drag to resize window"
-        aria-label="Resize YouTube preview window"
+        aria-label="Resize video preview window"
         className="absolute right-0 bottom-0 w-5 h-5 cursor-nwse-resize z-30 flex items-end justify-end p-0.5 text-slate-300 hover:text-white bg-slate-900/75 rounded-tl-md border-t border-l border-slate-700"
       >
         <Minimize2 className="w-3 h-3 rotate-90" />

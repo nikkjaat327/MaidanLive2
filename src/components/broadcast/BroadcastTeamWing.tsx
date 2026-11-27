@@ -11,6 +11,7 @@ interface BroadcastTeamWingProps {
   badgeText?: string;
   compact?: boolean;
   isPortrait?: boolean;
+  pulseScore?: boolean;
 }
 
 export function BroadcastTeamWing({
@@ -23,6 +24,7 @@ export function BroadcastTeamWing({
   badgeText,
   compact = false,
   isPortrait,
+  pulseScore = false,
 }: BroadcastTeamWingProps) {
   const isLeft = side === 'left';
   const bgClass = isLeft
@@ -79,9 +81,9 @@ export function BroadcastTeamWing({
 
           <div className="text-right shrink-0">
             <span
-              className={`font-display font-extrabold text-white tabular-nums leading-none ${
+              className={`inline-block font-display font-extrabold text-white tabular-nums leading-none ${
                 compact ? 'text-lg sm:text-2xl' : 'text-xl sm:text-3xl'
-              }`}
+              } ${pulseScore ? 'ml-score-pulse' : ''}`}
             >
               {primaryText}
             </span>
@@ -91,9 +93,9 @@ export function BroadcastTeamWing({
         <>
           <div className="text-left shrink-0">
             <span
-              className={`font-display font-extrabold text-white tabular-nums leading-none ${
+              className={`inline-block font-display font-extrabold text-white tabular-nums leading-none ${
                 compact ? 'text-lg sm:text-2xl' : 'text-xl sm:text-3xl'
-              }`}
+              } ${pulseScore ? 'ml-score-pulse' : ''}`}
             >
               {primaryText}
             </span>
