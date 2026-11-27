@@ -152,6 +152,36 @@ export type CameraConnectionStatus =
   | 'ERROR'
   | 'NOT_CONFIGURED';
 
+export type ObsAudioReadinessStatus =
+  | 'OFFLINE'
+  | 'MUTED'
+  | 'CLIPPING'
+  | 'OPTIMAL'
+  | 'LOW'
+  | 'SILENT';
+
+export interface ObsAudioMeterSnapshot {
+  obsConnected: boolean;
+  primaryInputName: string;
+  availableAudioInputs: string[];
+  channelsDb: number[];
+  magnitudeDb: number;
+  peakDb: number;
+  peakHoldDb: number;
+  muted: boolean;
+  clipping: boolean;
+  status: ObsAudioReadinessStatus | string;
+  label: string;
+  readyForLive: boolean;
+  updatedAtMs: number;
+}
+
+export interface ObsTransitionInfo {
+  transitionName: string;
+  transitionKind?: string;
+  transitionConfigurable?: boolean;
+}
+
 export interface ObsLiveStats {
   cpuUsage: number;
   activeFps: number;
@@ -187,6 +217,13 @@ export interface ObsControllerProfileData {
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
+  previewObsScene?: string;
+  studioModeEnabled?: boolean;
+  currentTransitionName?: string;
+  currentTransitionDurationMs?: number;
+  obsTransitions?: ObsTransitionInfo[];
+  primaryAudioInput?: string;
+  audioMeter?: ObsAudioMeterSnapshot | null;
   activeCameraId: string;
   activeCameraIds?: string[];
   activeLayoutType: ObsLayoutType;
@@ -560,6 +597,13 @@ export interface ObsBridgeData {
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
+  previewObsScene?: string;
+  studioModeEnabled?: boolean;
+  currentTransitionName?: string;
+  currentTransitionDurationMs?: number;
+  obsTransitions?: ObsTransitionInfo[];
+  primaryAudioInput?: string;
+  audioMeter?: ObsAudioMeterSnapshot | null;
   obsScenes: string[];
   obsStreamActive: boolean;
   missedHeartbeats?: number;
@@ -628,6 +672,14 @@ export interface LocalBridgeProbeStatus {
   missedHeartbeats?: number;
   obsVersion?: string;
   activeObsScene?: string;
+  previewObsScene?: string;
+  studioModeEnabled?: boolean;
+  currentTransitionName?: string;
+  currentTransitionDurationMs?: number;
+  obsTransitions?: ObsTransitionInfo[];
+  obsScenes?: string[];
+  primaryAudioInput?: string;
+  audioMeter?: ObsAudioMeterSnapshot | null;
   sceneCount?: number;
   obsDetected?: boolean;
   obsRunning?: boolean;

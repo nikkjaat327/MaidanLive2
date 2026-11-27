@@ -64,6 +64,11 @@ export interface IObsControllerProfile extends Document {
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
+  previewObsScene?: string;
+  studioModeEnabled?: boolean;
+  currentTransitionName?: string;
+  currentTransitionDurationMs?: number | null;
+  obsTransitions?: string[];
   activeCameraId: string;
   activeCameraIds?: string[];
   activeLayoutType: MultiCameraLayoutType;
@@ -72,6 +77,7 @@ export interface IObsControllerProfile extends Document {
   activeSceneId: string;
   obsScenes: string[];
   obsInputs?: IObsDiscoveredInput[];
+  primaryAudioInput?: string;
   sceneLabels?: Map<string, string> | Record<string, string>;
   obsStreamActive: boolean;
   obsStreamTimecode: string;
@@ -151,6 +157,11 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
     obsVersion: { type: String, default: '' },
     obsWebSocketVersion: { type: String, default: '' },
     activeObsScene: { type: String, default: '' },
+    previewObsScene: { type: String, default: '' },
+    studioModeEnabled: { type: Boolean, default: false },
+    currentTransitionName: { type: String, default: '' },
+    currentTransitionDurationMs: { type: Number, default: null },
+    obsTransitions: [{ type: String }],
     activeCameraId: { type: String, default: '' },
     activeCameraIds: [{ type: String }],
     activeLayoutType: {
@@ -190,6 +201,7 @@ const obsControllerProfileSchema = new Schema<IObsControllerProfile>(
         unversionedInputKind: { type: String, default: '' },
       },
     ],
+    primaryAudioInput: { type: String, default: '' },
     sceneLabels: { type: Map, of: String, default: {} },
     obsStreamActive: { type: Boolean, default: false },
     obsStreamTimecode: { type: String, default: '' },

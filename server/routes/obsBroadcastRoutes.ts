@@ -68,11 +68,17 @@ import {
   rotateObsBridgeToken,
   setCameraFacingMode,
   setCameraObsAudioMute,
+  setObsInputMute,
+  setObsPreviewScene,
+  setObsPrimaryAudioInput,
+  setObsStudioMode,
   switchCameraLive,
   switchMatchBroadcastInObs,
   switchObsSceneByName,
   testObsConnection,
   toggleObsSceneItem,
+  triggerBridgeSceneTransition,
+  triggerObsSceneTransition,
   updateCameraTransformInObs,
   updateObsBridge,
   verifyBridgeCredentials,
@@ -1648,6 +1654,43 @@ router.post(
     } catch (err: any) {
       const code = Number(err?.statusCode) || 500;
       res.status(code).json({ message: err?.message || 'Failed to reactivate OBS bridge.' });
+    }
+  }
+);
+
+// POST /api/obs/bridges/:bridgeId/trigger-transition - Trigger OBS WebSocket v5 Studio Mode Scene Transition on bridge
+router.post(
+  '/bridges/:bridgeId/trigger-transition',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { bridgeId } = req.params;
+      const previewSceneName =
+        typeof req.body.previewSceneName === 'string' ? sanitizeText(req.body.previewSceneName, 120) : '';
+      const sceneName =
+        typeof req.body.sceneName === 'string' ? sanitizeText(req.body.sceneName, 120) : '';
+      const transitionName =
+        typeof req.body.transitionName === 'string' ? sanitizeText(req.body.transitionName, 120) : '';
+      const transitionDurationMs = Number.isFinite(Number(req.body.transitionDurationMs))
+        ? Math.max(0, Math.min(5000, Math.round(Number(req.body.transitionDurationMs))))
+        : undefined;
+      const result = await triggerBridgeSceneTransition(
+        bridgeId,
+        {
+          ...(previewSceneName ? { previewSceneName } : {}),
+          ...(sceneName ? { sceneName } : {}),
+          ...(transitionName ? { transitionName } : {}),
+          ...(transitionDurationMs !== undefined ? { transitionDurationMs } : {}),
+          ensureStudioMode: req.body.ensureStudioMode !== false,
+        },
+        req.user!
+      );
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({ ok: false, message: err?.message || 'Failed to trigger OBS scene transition.' });
     }
   }
 );
@@ -3229,6 +3272,188 @@ router.post(
       res.status(code).json({
         ok: false,
         message: err?.message || 'Failed to execute broadcast transition.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/scenes/trigger-transition - Trigger OBS WebSocket v5 Studio Mode Scene Transition
+router.post(
+  '/matches/:matchId/scenes/trigger-transition',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const previewSceneName =
+        typeof req.body.previewSceneName === 'string' ? sanitizeText(req.body.previewSceneName, 120) : '';
+      const sceneName =
+        typeof req.body.sceneName === 'string' ? sanitizeText(req.body.sceneName, 120) : '';
+      const transitionName =
+        typeof req.body.transitionName === 'string' ? sanitizeText(req.body.transitionName, 120) : '';
+      const transitionDurationMs = Number.isFinite(Number(req.body.transitionDurationMs))
+        ? Math.max(0, Math.min(5000, Math.round(Number(req.body.transitionDurationMs))))
+        : undefined;
+      const result = await triggerObsSceneTransition(
+        matchId,
+        {
+          ...(previewSceneName ? { previewSceneName } : {}),
+          ...(sceneName ? { sceneName } : {}),
+          ...(transitionName ? { transitionName } : {}),
+          ...(transitionDurationMs !== undefined ? { transitionDurationMs } : {}),
+          ensureStudioMode: req.body.ensureStudioMode !== false,
+          override: Boolean(req.body.override),
+        },
+        req.user!
+      );
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to trigger OBS scene transition.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/studio-mode - Enable/disable OBS Studio Mode
+router.post(
+  '/matches/:matchId/studio-mode',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const enabled = Boolean(req.body.studioModeEnabled);
+      const result = await setObsStudioMode(matchId, enabled, req.user!, Boolean(req.body.override));
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to update OBS Studio Mode.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/scenes/preview - Set OBS Studio Mode Preview Scene
+router.post(
+  '/matches/:matchId/scenes/preview',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const sceneName = sanitizeText(req.body.sceneName, 120);
+      if (!sceneName) {
+        res.status(400).json({ ok: false, message: 'sceneName is required.' });
+        return;
+      }
+      const result = await setObsPreviewScene(matchId, sceneName, req.user!, Boolean(req.body.override));
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to set OBS preview scene.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/audio/primary-input - Select primary OBS audio input for peak metering
+router.post(
+  '/matches/:matchId/audio/primary-input',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const inputName = sanitizeText(req.body.inputName, 140);
+      if (!inputName) {
+        res.status(400).json({ ok: false, message: 'inputName is required.' });
+        return;
+      }
+      const result = await setObsPrimaryAudioInput(
+        matchId,
+        inputName,
+        req.user!,
+        Boolean(req.body.override)
+      );
+      const isBroadcaster = req.user!.role === 'BROADCASTER';
+      const snapshot = await getStudioSnapshot(matchId, !isBroadcaster);
+      res.json({
+        ok: true,
+        ...result,
+        ...snapshot,
+        ...(isBroadcaster ? { auditLogs: [] } : {}),
+      });
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to select primary OBS audio input.',
+      });
+    }
+  }
+);
+
+// POST /api/obs/matches/:matchId/audio/mute - Mute or unmute an OBS audio input directly
+router.post(
+  '/matches/:matchId/audio/mute',
+  authenticate,
+  requireAdminPortal,
+  broadcastCommandLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { matchId } = req.params;
+      if (!(await authorizeBroadcastControl(req, res, matchId))) return;
+      const inputName = sanitizeText(req.body.inputName, 140);
+      const muted = Boolean(req.body.muted);
+      const result = await setObsInputMute(
+        matchId,
+        inputName,
+        muted,
+        req.user!,
+        Boolean(req.body.override)
+      );
+      res.json(result);
+    } catch (err: any) {
+      const code = Number(err?.statusCode) || 503;
+      res.status(code).json({
+        ok: false,
+        message: err?.message || 'Failed to toggle OBS audio mute.',
       });
     }
   }

@@ -123,7 +123,15 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
           obsManuallyDisconnected: Boolean(st.obsManuallyDisconnected),
           obsVersion: st.obsVersion || '',
           activeObsScene: st.activeObsScene || '',
+          previewObsScene: st.previewObsScene || '',
+          studioModeEnabled: Boolean(st.studioModeEnabled),
+          currentTransitionName: st.currentTransitionName || '',
+          currentTransitionDurationMs: Number(st.currentTransitionDurationMs || 300),
+          obsTransitions: Array.isArray(st.obsTransitions) ? st.obsTransitions : [],
+          obsScenes: Array.isArray(st.obsScenes) ? st.obsScenes : [],
           sceneCount: Array.isArray(st.obsScenes) ? st.obsScenes.length : 0,
+          primaryAudioInput: st.primaryAudioInput || '',
+          audioMeter: st.audioMeter || null,
           obsDetected: Boolean(st.obsEnv?.installed),
           obsRunning: Boolean(st.obsEnv?.running),
           mediamtx: st.mediamtx || null,
@@ -218,6 +226,46 @@ function startLocalBridgeServer({ engine, onActivateFocus }) {
         res.statusCode = 422;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ ok: false, message: err?.message || 'MediaMTX command failed.' }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && reqUrl.pathname === '/transition') {
+      try {
+        const body = await readJsonBody(req);
+        const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : '';
+        const trusted = isTrustedOrigin(originHeader, cfg.serverUrl, serverUrl);
+        if (originHeader && !trusted) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Forbidden origin for OBS transition.' }));
+          return;
+        }
+        writeCorsHeaders(req, res, originHeader || undefined);
+        res.setHeader('Content-Type', 'application/json');
+
+        const result = await engine.handleCommand('trigger_transition', {
+          ...(typeof body.previewSceneName === 'string' && body.previewSceneName.trim()
+            ? { previewSceneName: body.previewSceneName.trim() }
+            : {}),
+          ...(typeof body.sceneName === 'string' && body.sceneName.trim()
+            ? { sceneName: body.sceneName.trim() }
+            : {}),
+          ...(typeof body.transitionName === 'string' && body.transitionName.trim()
+            ? { transitionName: body.transitionName.trim() }
+            : {}),
+          ...(Number.isFinite(Number(body.transitionDurationMs))
+            ? { transitionDurationMs: Number(body.transitionDurationMs) }
+            : {}),
+          ensureStudioMode: body.ensureStudioMode !== false,
+        });
+        res.statusCode = 200;
+        res.end(JSON.stringify({ ok: true, result }));
+      } catch (err) {
+        writeCorsHeaders(req, res, originHeader || undefined);
+        res.statusCode = 422;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: false, message: err?.message || 'Scene transition failed.' }));
       }
       return;
     }

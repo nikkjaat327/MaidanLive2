@@ -251,21 +251,87 @@
             <div>
               <h3>OBS Scenes (<span id="lbl-scene-count">0</span>)</h3>
               <p class="muted">
-                Active Scene: <strong id="lbl-active-scene" class="text-accent">None</strong>
+                Program: <strong id="lbl-active-scene" class="text-accent">None</strong>
+                <span id="lbl-preview-scene-wrap" class="muted"> · Preview: <strong id="lbl-preview-scene">—</strong></span>
               </p>
             </div>
-            <button type="button" id="btn-refresh-scenes" class="btn btn-sm btn-secondary">
-              Refresh Scenes
-            </button>
+            <div class="btn-row">
+              <button type="button" id="btn-toggle-studio-mode" class="btn btn-sm btn-secondary">
+                Studio Mode: Off
+              </button>
+              <button type="button" id="btn-refresh-scenes" class="btn btn-sm btn-secondary">
+                Refresh
+              </button>
+            </div>
           </div>
 
           <div id="scene-grid" class="scene-grid">
             <div class="empty-scenes">Connect OBS Studio to load your scenes dynamically.</div>
           </div>
 
+          <div class="transition-panel top-gap">
+            <div class="transition-controls">
+              <div class="field">
+                <label for="select-preview-scene">Preview Scene (Queued)</label>
+                <select id="select-preview-scene" class="select-control"></select>
+              </div>
+              <div class="field">
+                <label for="select-transition-kind">OBS Transition</label>
+                <select id="select-transition-kind" class="select-control"></select>
+              </div>
+            </div>
+            <div class="transition-action-row">
+              <button type="button" id="btn-trigger-transition" class="btn btn-primary transition-trigger-btn">
+                Trigger Scene Transition
+              </button>
+              <span id="lbl-transition-meta" class="hint mono">OBS WebSocket v5 · 300ms</span>
+            </div>
+            <div id="transition-feedback" class="alert alert-warn hidden"></div>
+          </div>
+
           <div class="tip-box top-gap">
-            Switching scenes inside MaidanLive Control Room or here switches your OBS Program Scene
-            instantly without interrupting your YouTube Live stream.
+            Triggers OBS Studio WebSocket v5 <code>TriggerStudioModeTransition</code> on active scenes
+            cleanly without interrupting your live YouTube stream.
+          </div>
+        </section>
+
+        <!-- Primary OBS Audio Peak Meter (Pre-Live Readiness) -->
+        <section class="card span-2">
+          <div class="section-head">
+            <div>
+              <h3>Primary OBS Audio Peak Meter</h3>
+              <p class="muted">
+                Pre-live OBS input telemetry — keep vocal peaks between <strong>-20 dB</strong> and <strong>-6 dB</strong> before going live.
+              </p>
+            </div>
+            <span id="badge-audio-status" class="status-pill pill-muted">OBS Offline</span>
+          </div>
+
+          <div class="audio-meter-toolbar">
+            <div class="field audio-input-field">
+              <label for="select-primary-audio">Primary OBS Audio Input</label>
+              <select id="select-primary-audio" class="select-control"></select>
+            </div>
+            <div class="audio-metrics-group">
+              <div class="audio-readout">
+                <span class="audio-readout-label">Current Peak</span>
+                <strong id="lbl-audio-peak-db" class="mono audio-readout-value">-60.0 dB</strong>
+              </div>
+              <div class="audio-readout">
+                <span class="audio-readout-label">Peak Hold</span>
+                <strong id="lbl-audio-peak-hold" class="mono audio-readout-value">-60.0 dB</strong>
+              </div>
+              <button type="button" id="btn-toggle-audio-mute" class="btn btn-sm btn-secondary">
+                Mute Input
+              </button>
+            </div>
+          </div>
+
+          <div class="audio-canvas-shell">
+            <canvas id="audio-peak-canvas" width="920" height="72" class="audio-peak-canvas"></canvas>
+          </div>
+          <div id="lbl-audio-guidance" class="audio-guidance muted">
+            Connect OBS Studio to inspect live input dBFS peaks before starting your stream.
           </div>
         </section>
 

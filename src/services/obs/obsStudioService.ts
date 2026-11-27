@@ -188,6 +188,23 @@ export const obsStudioService = {
     return data;
   },
 
+  async triggerBridgeSceneTransition(
+    bridgeId: string,
+    payload?: {
+      previewSceneName?: string;
+      sceneName?: string;
+      transitionName?: string;
+      transitionDurationMs?: number;
+      ensureStudioMode?: boolean;
+    }
+  ): Promise<{ ok: boolean; bridge: ObsBridgeData; result?: any }> {
+    const { data } = await adminApi.post<{ ok: boolean; bridge: ObsBridgeData; result?: any }>(
+      `/obs/bridges/${encodeURIComponent(bridgeId)}/trigger-transition`,
+      payload || {}
+    );
+    return data;
+  },
+
   async getBridgeInstallerStatus(): Promise<ObsBridgeInstallerStatus> {
     const { data } = await adminApi.get<ObsBridgeInstallerStatus>('/obs/bridge/installer/status');
     return data;
@@ -229,6 +246,34 @@ export const obsStudioService = {
       return json;
     } catch {
       return { ok: false };
+    } finally {
+      window.clearTimeout(timer);
+    }
+  },
+
+  async triggerLocalBridgeTransition(payload?: {
+    previewSceneName?: string;
+    sceneName?: string;
+    transitionName?: string;
+    transitionDurationMs?: number;
+    ensureStudioMode?: boolean;
+  }): Promise<{ ok: boolean; data?: any; message?: string }> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch('http://127.0.0.1:44691/transition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+        signal: controller.signal,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, message: json?.message || 'Failed to trigger OBS Scene Transition.' };
+      }
+      return json;
+    } catch {
+      return { ok: false, message: 'Local OBS Bridge is unreachable on 127.0.0.1:44691.' };
     } finally {
       window.clearTimeout(timer);
     }
@@ -548,6 +593,57 @@ export const obsStudioService = {
   async switchScene(matchId: string, sceneName: string, override = false) {
     const { data } = await adminApi.post(`/obs/matches/${matchId}/scenes/switch`, {
       sceneName,
+      override,
+    });
+    return data;
+  },
+
+  async triggerSceneTransition(
+    matchId: string,
+    payload?: {
+      previewSceneName?: string;
+      sceneName?: string;
+      transitionName?: string;
+      transitionDurationMs?: number;
+      ensureStudioMode?: boolean;
+      override?: boolean;
+    }
+  ) {
+    const { data } = await adminApi.post(
+      `/obs/matches/${matchId}/scenes/trigger-transition`,
+      payload || {}
+    );
+    return data;
+  },
+
+  async setStudioMode(matchId: string, studioModeEnabled: boolean, override = false) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/studio-mode`, {
+      studioModeEnabled,
+      override,
+    });
+    return data;
+  },
+
+  async setPreviewScene(matchId: string, sceneName: string, override = false) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/scenes/preview`, {
+      sceneName,
+      override,
+    });
+    return data;
+  },
+
+  async setPrimaryAudioInput(matchId: string, inputName: string, override = false) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/audio/primary-input`, {
+      inputName,
+      override,
+    });
+    return data;
+  },
+
+  async setObsInputMute(matchId: string, inputName: string, muted: boolean, override = false) {
+    const { data } = await adminApi.post(`/obs/matches/${matchId}/audio/mute`, {
+      inputName,
+      muted,
       override,
     });
     return data;

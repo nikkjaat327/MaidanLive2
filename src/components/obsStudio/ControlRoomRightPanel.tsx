@@ -12,9 +12,11 @@ import {
 import type { LiveStreamData } from '../../types/index.ts';
 import type {
   BroadcastCameraData,
+  ObsAudioMeterSnapshot,
   ObsControllerProfileData,
   ObsStudioMatchSummary,
 } from '../../types/obs.ts';
+import { ObsAudioPeakMeter } from './ObsAudioPeakMeter.tsx';
 import {
   getLayoutSlotCount,
   LAYOUT_METADATA,
@@ -42,6 +44,11 @@ interface ControlRoomRightPanelProps {
   onFadeTransition: () => void;
   onRefreshCams: () => void;
   onDisconnectAll: () => void;
+  audioMeter?: ObsAudioMeterSnapshot | null;
+  selectingAudioInput?: boolean;
+  togglingAudioMute?: boolean;
+  onSelectPrimaryAudioInput?: (inputName: string) => void;
+  onTogglePrimaryAudioMute?: (inputName: string, nextMuted: boolean) => void;
 }
 
 const ACTIVE_LAYOUT_OPTIONS: ObsLayoutType[] = [
@@ -94,6 +101,11 @@ export function ControlRoomRightPanel({
   onFadeTransition,
   onRefreshCams,
   onDisconnectAll,
+  audioMeter,
+  selectingAudioInput = false,
+  togglingAudioMute = false,
+  onSelectPrimaryAudioInput,
+  onTogglePrimaryAudioMute,
 }: ControlRoomRightPanelProps) {
   const enabledCount = Math.min(
     MAX_CONTROL_ROOM_CAMERAS,
@@ -297,6 +309,23 @@ export function ControlRoomRightPanel({
           })}
         </div>
       </div>
+
+      {/* PRIMARY OBS AUDIO PEAK METER */}
+      <ObsAudioPeakMeter
+        audioMeter={audioMeter || profile.audioMeter || null}
+        obsConnected={obsConnected}
+        primaryAudioInput={profile.primaryAudioInput || ''}
+        availableAudioInputs={
+          audioMeter?.availableAudioInputs ||
+          (profile.obsInputs || []).map((i) => i.inputName)
+        }
+        theme="dark"
+        compact
+        selectingInput={selectingAudioInput}
+        togglingMute={togglingAudioMute}
+        onSelectPrimaryInput={onSelectPrimaryAudioInput}
+        onToggleMute={onTogglePrimaryAudioMute}
+      />
 
       {/* ACTIONS CARD */}
       <div className="rounded-xl border border-slate-800/90 bg-[#0B101B] p-3.5 space-y-2.5">

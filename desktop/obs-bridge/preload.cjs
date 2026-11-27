@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('bridgeApi', {
   reconnectServer: () => ipcRenderer.invoke('bridge:reconnect-server'),
   refreshScenes: () => ipcRenderer.invoke('bridge:refresh-scenes'),
   switchSceneLocally: (sceneName) => ipcRenderer.invoke('bridge:switch-scene', sceneName),
+  triggerSceneTransition: (payload) => ipcRenderer.invoke('bridge:trigger-transition', payload || {}),
+  setStudioMode: (enabled) => ipcRenderer.invoke('bridge:set-studio-mode', Boolean(enabled)),
+  setPreviewScene: (sceneName) => ipcRenderer.invoke('bridge:set-preview-scene', sceneName),
+  setPrimaryAudioInput: (inputName) => ipcRenderer.invoke('bridge:set-primary-audio-input', inputName),
+  togglePrimaryAudioMute: (payload) => ipcRenderer.invoke('bridge:toggle-audio-mute', payload || {}),
   scanObs: () => ipcRenderer.invoke('bridge:scan-obs'),
   launchObs: () => ipcRenderer.invoke('bridge:launch-obs'),
   setAutoStart: (enabled) => ipcRenderer.invoke('bridge:set-autostart', Boolean(enabled)),
@@ -27,6 +32,11 @@ contextBridge.exposeInMainWorld('bridgeApi', {
     const handler = (_ev, data) => cb(data);
     ipcRenderer.on('bridge:state', handler);
     return () => ipcRenderer.removeListener('bridge:state', handler);
+  },
+  onAudioLevels: (cb) => {
+    const handler = (_ev, data) => cb(data);
+    ipcRenderer.on('bridge:audio-levels', handler);
+    return () => ipcRenderer.removeListener('bridge:audio-levels', handler);
   },
   onLog: (cb) => {
     const handler = (_ev, data) => cb(data);

@@ -1,4 +1,4 @@
-import { Check, Layers, Plus } from 'lucide-react';
+import { ArrowRightLeft, Check, Layers, Loader2, Plus } from 'lucide-react';
 import type { BroadcastSceneData, ObsControllerProfileData } from '../../types/obs.ts';
 
 interface ControlRoomSceneBarProps {
@@ -7,8 +7,10 @@ interface ControlRoomSceneBarProps {
   obsConnected: boolean;
   switchingKey: string | null;
   applyingLayout: boolean;
+  triggeringTransition?: boolean;
   onSwitchObsScene: (sceneName: string) => void;
   onApplySavedScene: (scene: BroadcastSceneData) => void;
+  onTriggerSceneTransition?: () => void;
   onAddSceneClick: () => void;
 }
 
@@ -18,8 +20,10 @@ export function ControlRoomSceneBar({
   obsConnected,
   switchingKey,
   applyingLayout,
+  triggeringTransition = false,
   onSwitchObsScene,
   onApplySavedScene,
+  onTriggerSceneTransition,
   onAddSceneClick,
 }: ControlRoomSceneBarProps) {
   const obsScenes = profile.obsScenes || [];
@@ -36,6 +40,11 @@ export function ControlRoomSceneBar({
       <div className="flex-1 flex flex-wrap items-center gap-2 min-w-0">
         {obsScenes.slice(0, 6).map((sceneName, idx) => {
           const active = obsConnected && profile.activeObsScene === sceneName;
+          const isPreview =
+            obsConnected &&
+            Boolean(profile.studioModeEnabled) &&
+            profile.previewObsScene === sceneName &&
+            !active;
           const busy = switchingKey === `scene:${sceneName}`;
           const friendly = profile.sceneLabels?.[sceneName]?.trim() || sceneName;
           return (
@@ -47,12 +56,14 @@ export function ControlRoomSceneBar({
               className={`min-h-[38px] px-3 py-1.5 rounded-lg border text-left inline-flex items-center gap-2.5 transition-all disabled:opacity-45 ${
                 active
                   ? 'border-purple-500 bg-purple-600/20 text-white shadow-[0_0_12px_rgba(147,51,234,0.28)]'
-                  : 'border-slate-800 bg-[#101624] text-slate-300 hover:border-slate-700 hover:text-white'
+                  : isPreview
+                    ? 'border-emerald-500/70 bg-emerald-600/15 text-emerald-100'
+                    : 'border-slate-800 bg-[#101624] text-slate-300 hover:border-slate-700 hover:text-white'
               }`}
             >
               <div className="min-w-0 leading-tight">
                 <p className="text-[11px] font-bold truncate max-w-[130px]">
-                  Scene {idx + 1}
+                  Scene {idx + 1}{isPreview ? ' (PVW)' : ''}
                 </p>
                 <p className="text-[10px] text-slate-400 truncate max-w-[130px]">
                   {busy ? 'Switching...' : friendly}
@@ -95,6 +106,28 @@ export function ControlRoomSceneBar({
           </span>
         )}
       </div>
+
+      {/* Trigger Studio Mode Scene Transition */}
+      {onTriggerSceneTransition && (
+        <button
+          type="button"
+          disabled={!obsConnected || triggeringTransition || switchingKey !== null}
+          onClick={onTriggerSceneTransition}
+          title={
+            profile.studioModeEnabled && profile.previewObsScene
+              ? `Transition Preview (${profile.previewObsScene}) to Program via OBS Studio Mode`
+              : 'Trigger OBS Studio Mode Scene Transition'
+          }
+          className="min-h-[38px] px-3.5 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors disabled:opacity-45 shadow-md shadow-orange-950/40"
+        >
+          {triggeringTransition ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+          )}
+          <span>{triggeringTransition ? 'Transitioning...' : 'Trigger Scene Transition'}</span>
+        </button>
+      )}
 
       {/* Add Scene */}
       <button

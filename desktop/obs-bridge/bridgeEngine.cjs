@@ -1,7 +1,7 @@
 const { EventEmitter } = require('node:events');
 const os = require('node:os');
 const { io } = require('socket.io-client');
-const { default: OBSWebSocket } = require('obs-websocket-js');
+const { default: OBSWebSocket, EventSubscription } = require('obs-websocket-js');
 const {
   getUserDataDir,
   loadConfig,
@@ -20,10 +20,16 @@ const {
   getMediaMTXLogs,
 } = require('./mediamtxManager.cjs');
 
+const OBS_EVENT_SUBSCRIPTIONS =
+  ((EventSubscription && EventSubscription.All) || 4095) |
+  ((EventSubscription && EventSubscription.InputVolumeMeters) || 65536);
+
 const BRIDGE_VERSION = String(pkg.version || '1.1.0');
 const BRIDGE_CAPABILITIES = [
   'obs_control',
   'obs_scene_switching',
+  'obs_scene_transition',
+  'obs_audio_meter',
   'obs_layout_control',
   'mediamtx_control',
   'mediamtx_detect',
@@ -37,6 +43,10 @@ const BRIDGE_CAPABILITIES = [
 const APPROVED_COMMANDS = new Set([
   'get_snapshot',
   'switch_scene',
+  'trigger_transition',
+  'set_studio_mode',
+  'set_preview_scene',
+  'set_primary_audio_input',
   'apply_layout',
   'update_camera_transform',
   'get_scene_transforms',
@@ -61,6 +71,164 @@ const APPROVED_COMMANDS = new Set([
   'mediamtx_sync_config',
   'mediamtx_logs',
 ]);
+
+const AUDIO_MIN_DB = -60;
+const AUDIO_PEAK_HOLD_MS = 1400;
+const AUDIO_LOCAL_EMIT_INTERVAL_MS = 45;
+const AUDIO_SOCKET_EMIT_INTERVAL_MS = 200;
+
+function linearMulToDb(mul) {
+  const num = Number(mul);
+  if (!Number.isFinite(num) || num <= 0.0001) return AUDIO_MIN_DB;
+  const db = 20 * Math.log10(num);
+  if (!Number.isFinite(db)) return AUDIO_MIN_DB;
+  return Math.max(AUDIO_MIN_DB, Math.min(0, Math.round(db * 10) / 10));
+}
+
+function isLikelyAudioInput(input, specialInputs = {}) {
+  const name = String(input?.inputName || '').trim();
+  if (!name) return false;
+  const specials = Object.values(specialInputs || {}).filter(
+    (v) => typeof v === 'string' && v.trim()
+  );
+  if (specials.includes(name)) return true;
+  const kind = `${String(input?.inputKind || '')} ${String(input?.unversionedInputKind || '')}`.toLowerCase();
+  if (
+    kind.includes('wasapi_') ||
+    kind.includes('coreaudio_') ||
+    kind.includes('pulse_') ||
+    kind.includes('alsa_') ||
+    kind.includes('jack_') ||
+    kind.includes('audio') ||
+    kind.includes('ffmpeg_source') ||
+    kind.includes('vlc_source') ||
+    kind.includes('browser_source') ||
+    kind.includes('dshow_input') ||
+    kind.includes('ndi_source')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function selectPrimaryAudioInput({
+  audioInputs = [],
+  preferredInputName = '',
+  specialInputs = {},
+  meterInputs = [],
+  obsInputs = [],
+} = {}) {
+  const candidateNames = new Set();
+  for (const name of audioInputs) {
+    if (typeof name === 'string' && name.trim()) candidateNames.add(name.trim());
+  }
+  for (const m of meterInputs) {
+    if (m && typeof m.inputName === 'string' && m.inputName.trim()) {
+      candidateNames.add(m.inputName.trim());
+    }
+  }
+  for (const val of Object.values(specialInputs || {})) {
+    if (typeof val === 'string' && val.trim()) candidateNames.add(val.trim());
+  }
+  for (const inp of obsInputs || []) {
+    if (isLikelyAudioInput(inp, specialInputs)) {
+      candidateNames.add(String(inp.inputName).trim());
+    }
+  }
+
+  const orderedCandidates = Array.from(candidateNames);
+  const preferred = String(preferredInputName || '').trim();
+  if (preferred && orderedCandidates.includes(preferred)) {
+    return { primaryInputName: preferred, availableAudioInputs: orderedCandidates };
+  }
+
+  const micPriority = [specialInputs?.mic1, specialInputs?.mic2, specialInputs?.mic3];
+  for (const mic of micPriority) {
+    const clean = typeof mic === 'string' ? mic.trim() : '';
+    if (clean && orderedCandidates.includes(clean)) {
+      return { primaryInputName: clean, availableAudioInputs: orderedCandidates };
+    }
+  }
+
+  const captureFirst = orderedCandidates.find((name) => {
+    const inp = (obsInputs || []).find((i) => i.inputName === name);
+    const kind = `${inp?.inputKind || ''} ${inp?.unversionedInputKind || ''}`.toLowerCase();
+    return (
+      kind.includes('wasapi_input') ||
+      kind.includes('coreaudio_input') ||
+      kind.includes('pulse_input') ||
+      kind.includes('alsa_input') ||
+      /mic|aux|audio/i.test(name)
+    );
+  });
+  if (captureFirst) {
+    return { primaryInputName: captureFirst, availableAudioInputs: orderedCandidates };
+  }
+
+  const desktopPriority = [specialInputs?.desktop1, specialInputs?.desktop2];
+  for (const desk of desktopPriority) {
+    const clean = typeof desk === 'string' ? desk.trim() : '';
+    if (clean && orderedCandidates.includes(clean)) {
+      return { primaryInputName: clean, availableAudioInputs: orderedCandidates };
+    }
+  }
+
+  return {
+    primaryInputName: orderedCandidates[0] || preferred || '',
+    availableAudioInputs: orderedCandidates,
+  };
+}
+
+function evaluateAudioReadiness({
+  obsConnected = false,
+  inputName = '',
+  muted = false,
+  peakDb = AUDIO_MIN_DB,
+  clipping = false,
+} = {}) {
+  if (!obsConnected) {
+    return { status: 'OFFLINE', label: 'OBS Offline', readyForLive: false };
+  }
+  if (!inputName) {
+    return { status: 'OFFLINE', label: 'No Audio Input Detected', readyForLive: false };
+  }
+  if (muted) {
+    return { status: 'MUTED', label: 'Muted in OBS — Unmute Before Live', readyForLive: false };
+  }
+  if (clipping || peakDb >= -1.5) {
+    return { status: 'CLIPPING', label: 'Clipping! Lower Gain Below -3 dB', readyForLive: false };
+  }
+  if (peakDb >= -20) {
+    return { status: 'OPTIMAL', label: 'Broadcast Audio Ready (-20 to -3 dB)', readyForLive: true };
+  }
+  if (peakDb >= -45) {
+    return { status: 'LOW', label: 'Low Level — Aim for -18 to -6 dB', readyForLive: true };
+  }
+  return { status: 'SILENT', label: 'No Audio Signal Detected', readyForLive: false };
+}
+
+function createEmptyAudioMeterState(obsConnected = false, primaryInputName = '') {
+  const readiness = evaluateAudioReadiness({
+    obsConnected,
+    inputName: primaryInputName,
+    muted: false,
+    peakDb: AUDIO_MIN_DB,
+    clipping: false,
+  });
+  return {
+    obsConnected: Boolean(obsConnected),
+    primaryInputName: String(primaryInputName || ''),
+    availableAudioInputs: [],
+    channelsDb: [AUDIO_MIN_DB, AUDIO_MIN_DB],
+    magnitudeDb: AUDIO_MIN_DB,
+    peakDb: AUDIO_MIN_DB,
+    peakHoldDb: AUDIO_MIN_DB,
+    muted: false,
+    clipping: false,
+    ...readiness,
+    updatedAtMs: Date.now(),
+  };
+}
 
 function buildCenterBoxTransform(box) {
   const x = Number.isFinite(Number(box.x)) ? Number(box.x) : 0;
@@ -138,6 +306,12 @@ class BridgeEngine extends EventEmitter {
     this.lastServerHeartbeatAckAt = 0;
     this.serverDisconnectedAt = 0;
     this.obsDisconnectedAt = 0;
+    this.specialInputs = {};
+    this.audioMuteMap = new Map();
+    this.audioPeakHoldMap = new Map();
+    this.latestMeterInputs = [];
+    this.lastLocalAudioEmitAt = 0;
+    this.lastSocketAudioEmitAt = 0;
 
     this.state = {
       bridgeVersion: BRIDGE_VERSION,
@@ -167,8 +341,15 @@ class BridgeEngine extends EventEmitter {
       obsVersion: '',
       obsWebSocketVersion: '',
       activeObsScene: '',
+      previewObsScene: '',
+      studioModeEnabled: false,
+      currentTransitionName: '',
+      currentTransitionDurationMs: 300,
+      obsTransitions: [],
       obsScenes: [],
       obsInputs: [],
+      primaryAudioInput: '',
+      audioMeter: createEmptyAudioMeterState(false, ''),
       obsStreamActive: false,
       obsRecordActive: false,
       hasObsPassword: false,
@@ -289,6 +470,7 @@ class BridgeEngine extends EventEmitter {
       autoStart: Boolean(cfg.autoStart),
       adminDisconnected: Boolean(cfg.adminDisconnected),
       obsManuallyDisconnected: Boolean(cfg.obsManuallyDisconnected),
+      primaryAudioInput: cfg.primaryAudioInput || '',
       mediamtxPath: cfg.mediamtxPath || '',
       mediamtxConfigPath: cfg.mediamtxConfigPath || '',
     });
@@ -670,6 +852,10 @@ class BridgeEngine extends EventEmitter {
       this.obsReconnectTimer = null;
     }
     const cfg = clearPairing();
+    this.specialInputs = {};
+    this.audioMuteMap.clear();
+    this.audioPeakHoldMap.clear();
+    this.latestMeterInputs = [];
     this._setState({
       bridgeRevoked: false,
       adminDisconnected: false,
@@ -684,7 +870,15 @@ class BridgeEngine extends EventEmitter {
       obsConnectionState: 'OFFLINE',
       obsAuthRequired: false,
       obsScenes: [],
+      obsInputs: [],
       activeObsScene: '',
+      previewObsScene: '',
+      studioModeEnabled: false,
+      currentTransitionName: '',
+      currentTransitionDurationMs: 300,
+      obsTransitions: [],
+      primaryAudioInput: '',
+      audioMeter: createEmptyAudioMeterState(false, ''),
       obsVersion: '',
       obsWebSocketVersion: '',
       obsStreamActive: false,
@@ -1010,6 +1204,9 @@ class BridgeEngine extends EventEmitter {
       if (!this.obsDisconnectedAt) this.obsDisconnectedAt = Date.now();
       const isManualObs = Boolean(this.state.obsManuallyDisconnected);
       const willAutoRetry = !isManualObs && !this.state.bridgeRevoked && this.state.paired;
+      this.latestMeterInputs = [];
+      this.audioPeakHoldMap.clear();
+      const offlineMeter = createEmptyAudioMeterState(false, this.state.primaryAudioInput);
       // Preserve active obsStreamActive flag while auto-reconnecting so UI does not falsely drop active YouTube indicator
       this._setState({
         obsConnected: false,
@@ -1023,8 +1220,10 @@ class BridgeEngine extends EventEmitter {
         obsAuthRequired: formatted.authFailed,
         obsError: formatted.message,
         lastDisconnectReason: formatted.message,
+        audioMeter: offlineMeter,
         ...(willAutoRetry ? {} : { obsStreamActive: false, obsRecordActive: false }),
       });
+      this.emit('audio-levels', offlineMeter);
       this.recordDiagnostic(
         'warn',
         'disconnect_reason',
@@ -1049,6 +1248,38 @@ class BridgeEngine extends EventEmitter {
       this.emitObsSnapshot().catch(() => {});
     });
 
+    this.obs.on('CurrentPreviewSceneChanged', (ev) => {
+      const nextPreview = String(ev?.sceneName || '');
+      this._setState({ previewObsScene: nextPreview });
+      this.emitObsSnapshot().catch(() => {});
+    });
+
+    this.obs.on('StudioModeStateChanged', (ev) => {
+      const enabled = Boolean(ev?.studioModeEnabled);
+      this._setState({ studioModeEnabled: enabled });
+      this.log('info', `OBS Studio Mode -> ${enabled ? 'ENABLED' : 'DISABLED'}`);
+      this.emitObsSnapshot().catch(() => {});
+    });
+
+    this.obs.on('CurrentSceneTransitionChanged', (ev) => {
+      this._setState({ currentTransitionName: String(ev?.transitionName || '') });
+      this.emitObsSnapshot().catch(() => {});
+    });
+
+    this.obs.on('CurrentSceneTransitionDurationChanged', (ev) => {
+      if (Number.isFinite(Number(ev?.transitionDuration))) {
+        this._setState({ currentTransitionDurationMs: Number(ev.transitionDuration) });
+      }
+    });
+
+    this.obs.on('SceneTransitionStarted', (ev) => {
+      this.log('info', `OBS scene transition triggered (${String(ev?.transitionName || 'active')})`);
+    });
+
+    this.obs.on('SceneTransitionEnded', () => {
+      this.emitObsSnapshot().catch(() => {});
+    });
+
     this.obs.on('SceneListChanged', () => {
       this.log('info', 'OBS scene list updated — syncing to MaidanLive...');
       this.emitObsSnapshot().catch(() => {});
@@ -1062,6 +1293,19 @@ class BridgeEngine extends EventEmitter {
     });
     this.obs.on('InputNameChanged', () => {
       this.emitObsSnapshot().catch(() => {});
+    });
+
+    this.obs.on('InputMuteStateChanged', (ev) => {
+      const inputName = String(ev?.inputName || '').trim();
+      if (!inputName) return;
+      this.audioMuteMap.set(inputName, Boolean(ev?.inputMuted));
+      this._processAudioVolumeMeters(this.latestMeterInputs, { forceEmit: true });
+    });
+
+    this.obs.on('InputVolumeMeters', (ev) => {
+      if (Array.isArray(ev?.inputs)) {
+        this._processAudioVolumeMeters(ev.inputs);
+      }
     });
 
     this.obs.on('StreamStateChanged', (ev) => {
@@ -1158,7 +1402,10 @@ class BridgeEngine extends EventEmitter {
 
     try {
       await withTimeout(
-        this.obs.connect(cfg.obsUrl, cfg.obsPassword || undefined, { rpcVersion: 1 }),
+        this.obs.connect(cfg.obsUrl, cfg.obsPassword || undefined, {
+          rpcVersion: 1,
+          eventSubscriptions: OBS_EVENT_SUBSCRIPTIONS,
+        }),
         8000,
         'OBS WebSocket connect'
       );
@@ -1233,6 +1480,7 @@ class BridgeEngine extends EventEmitter {
     try {
       const mtxStatus = await this.refreshMediaMTXStatus().catch(() => this.state.mediamtx);
       if (!this.state.obsConnected) {
+        const offlineMeter = createEmptyAudioMeterState(false, this.state.primaryAudioInput);
         if (this.socket && this.socket.connected) {
           const isManual = Boolean(this.state.obsManuallyDisconnected);
           const nonManualStatus =
@@ -1249,6 +1497,13 @@ class BridgeEngine extends EventEmitter {
             obsInputs: this.state.obsInputs || [],
             obsMediaStates: {},
             activeObsScene: this.state.activeObsScene || '',
+            previewObsScene: this.state.previewObsScene || '',
+            studioModeEnabled: Boolean(this.state.studioModeEnabled),
+            currentTransitionName: this.state.currentTransitionName || '',
+            currentTransitionDurationMs: Number(this.state.currentTransitionDurationMs || 300),
+            obsTransitions: this.state.obsTransitions || [],
+            primaryAudioInput: this.state.primaryAudioInput || '',
+            audioMeter: offlineMeter,
             obsStreamActive: isManual ? false : Boolean(this.state.obsStreamActive),
             mediamtx: mtxStatus,
           });
@@ -1257,7 +1512,18 @@ class BridgeEngine extends EventEmitter {
       }
 
     try {
-      const [ver, sceneRes, inputRes, streamRes, recordRes, statsRes] = await Promise.all([
+      const [
+        ver,
+        sceneRes,
+        inputRes,
+        streamRes,
+        recordRes,
+        statsRes,
+        studioRes,
+        transitionListRes,
+        currentTransitionRes,
+        specialInputsRes,
+      ] = await Promise.all([
         withTimeout(this.obs.call('GetVersion'), OBS_RPC_TIMEOUT_MS, 'GetVersion'),
         withTimeout(this.obs.call('GetSceneList'), OBS_RPC_TIMEOUT_MS, 'GetSceneList'),
         withTimeout(this.obs.call('GetInputList'), OBS_RPC_TIMEOUT_MS, 'GetInputList').catch(() => ({ inputs: [] })),
@@ -1265,7 +1531,33 @@ class BridgeEngine extends EventEmitter {
           .catch(() => ({ outputActive: false, outputTimecode: '', outputBytes: null, outputDuration: null })),
         withTimeout(this.obs.call('GetRecordStatus'), OBS_RPC_TIMEOUT_MS, 'GetRecordStatus').catch(() => ({ outputActive: false, outputTimecode: '' })),
         withTimeout(this.obs.call('GetStats'), OBS_RPC_TIMEOUT_MS, 'GetStats').catch(() => null),
+        withTimeout(this.obs.call('GetStudioModeEnabled'), OBS_RPC_TIMEOUT_MS, 'GetStudioModeEnabled').catch(() => ({
+          studioModeEnabled: Boolean(this.state.studioModeEnabled),
+        })),
+        withTimeout(this.obs.call('GetSceneTransitionList'), OBS_RPC_TIMEOUT_MS, 'GetSceneTransitionList').catch(() => ({
+          currentSceneTransitionName: '',
+          transitions: [],
+        })),
+        withTimeout(this.obs.call('GetCurrentSceneTransition'), OBS_RPC_TIMEOUT_MS, 'GetCurrentSceneTransition').catch(() => ({
+          transitionName: '',
+          transitionDuration: 300,
+        })),
+        withTimeout(this.obs.call('GetSpecialInputs'), OBS_RPC_TIMEOUT_MS, 'GetSpecialInputs').catch(() => ({})),
       ]);
+
+      const studioModeEnabled = Boolean(studioRes?.studioModeEnabled);
+      let previewObsScene = '';
+      if (studioModeEnabled) {
+        const prevRes = await withTimeout(
+          this.obs.call('GetCurrentPreviewScene'),
+          OBS_RPC_TIMEOUT_MS,
+          'GetCurrentPreviewScene'
+        ).catch(() => ({ currentPreviewSceneName: '' }));
+        previewObsScene = String(prevRes?.currentPreviewSceneName || prevRes?.sceneName || '');
+      }
+
+      this.specialInputs =
+        specialInputsRes && typeof specialInputsRes === 'object' ? specialInputsRes : {};
 
       const scenes = Array.isArray(sceneRes.scenes)
         ? sceneRes.scenes.map((s) => String(s.sceneName || '')).filter(Boolean)
@@ -1279,6 +1571,24 @@ class BridgeEngine extends EventEmitter {
             }))
             .filter((inp) => Boolean(inp.inputName))
         : [];
+
+      const obsTransitions = Array.isArray(transitionListRes?.transitions)
+        ? transitionListRes.transitions
+            .map((t) => ({
+              transitionName: String(t?.transitionName || '').trim(),
+              transitionKind: String(t?.transitionKind || '').trim(),
+              transitionFixed: Boolean(t?.transitionFixed),
+            }))
+            .filter((t) => Boolean(t.transitionName))
+        : [];
+      const currentTransitionName = String(
+        currentTransitionRes?.transitionName ||
+          transitionListRes?.currentSceneTransitionName ||
+          ''
+      );
+      const currentTransitionDurationMs = Number.isFinite(Number(currentTransitionRes?.transitionDuration))
+        ? Number(currentTransitionRes.transitionDuration)
+        : 300;
 
       const obsMediaStates = {};
       const mediaInputs = obsInputs.filter(
@@ -1299,18 +1609,45 @@ class BridgeEngine extends EventEmitter {
         })
       );
 
+      const audioSelection = selectPrimaryAudioInput({
+        preferredInputName: loadConfig().primaryAudioInput || this.state.primaryAudioInput,
+        specialInputs: this.specialInputs,
+        meterInputs: this.latestMeterInputs,
+        obsInputs,
+      });
+
+      await Promise.all(
+        audioSelection.availableAudioInputs.slice(0, 12).map(async (inputName) => {
+          try {
+            const muteRes = await this.obs.call('GetInputMute', { inputName });
+            this.audioMuteMap.set(inputName, Boolean(muteRes?.inputMuted));
+          } catch {
+            // Skip inputs without mute state
+          }
+        })
+      );
+
+      const audioMeter = this._buildAudioMeterState(this.latestMeterInputs, obsInputs);
       const activeScene = String(sceneRes.currentProgramSceneName || '');
 
       this._setState({
         obsVersion: String(ver.obsVersion || ''),
         obsWebSocketVersion: String(ver.obsWebSocketVersion || ''),
         activeObsScene: activeScene,
+        previewObsScene,
+        studioModeEnabled,
+        currentTransitionName,
+        currentTransitionDurationMs,
+        obsTransitions,
         obsScenes: scenes,
         obsInputs,
+        primaryAudioInput: audioMeter.primaryInputName,
+        audioMeter,
         obsStreamActive: Boolean(streamRes.outputActive),
         obsRecordActive: Boolean(recordRes.outputActive),
         obsError: '',
       });
+      this.emit('audio-levels', audioMeter);
 
       this.obsSnapshotFailures = 0;
       if (this.socket && this.socket.connected) {
@@ -1322,9 +1659,16 @@ class BridgeEngine extends EventEmitter {
           obsVersion: ver.obsVersion,
           obsWebSocketVersion: ver.obsWebSocketVersion,
           activeObsScene: activeScene,
+          previewObsScene,
+          studioModeEnabled,
+          currentTransitionName,
+          currentTransitionDurationMs,
+          obsTransitions,
           obsScenes: scenes,
           obsInputs,
           obsMediaStates,
+          primaryAudioInput: audioMeter.primaryInputName,
+          audioMeter,
           mediamtx: mtxStatus,
           obsStreamActive: Boolean(streamRes.outputActive),
           obsStreamTimecode: String(streamRes.outputTimecode || ''),
@@ -1368,6 +1712,158 @@ class BridgeEngine extends EventEmitter {
     } finally {
       this.isSnapshotRunning = false;
     }
+  }
+
+  _buildAudioMeterState(meterInputs = [], obsInputsOverride = null, nowMs = Date.now()) {
+    const cfg = loadConfig();
+    const obsInputs = Array.isArray(obsInputsOverride) ? obsInputsOverride : this.state.obsInputs || [];
+    const { primaryInputName, availableAudioInputs } = selectPrimaryAudioInput({
+      preferredInputName: cfg.primaryAudioInput || this.state.primaryAudioInput,
+      specialInputs: this.specialInputs,
+      meterInputs,
+      obsInputs,
+    });
+
+    if (!this.state.obsConnected) {
+      return {
+        ...createEmptyAudioMeterState(false, primaryInputName),
+        availableAudioInputs,
+        updatedAtMs: nowMs,
+      };
+    }
+
+    const matchedInput = (Array.isArray(meterInputs) ? meterInputs : []).find(
+      (entry) => String(entry?.inputName || '').trim() === primaryInputName
+    );
+    const rawLevels = Array.isArray(matchedInput?.inputLevelsMul) ? matchedInput.inputLevelsMul : [];
+
+    const channelPairs = rawLevels
+      .slice(0, 2)
+      .map((pair) => (Array.isArray(pair) ? pair : [0, 0, 0]));
+    const leftMul = channelPairs[0] || [0, 0, 0];
+    const rightMul = channelPairs[1] || leftMul;
+    const chDb = [
+      linearMulToDb(leftMul[1] ?? leftMul[0] ?? 0),
+      linearMulToDb(rightMul[1] ?? rightMul[0] ?? 0),
+    ];
+    const magDb = Math.max(
+      linearMulToDb(leftMul[0] ?? 0),
+      linearMulToDb(rightMul[0] ?? 0)
+    );
+    const peakLinear = Math.max(
+      Number(leftMul[1] ?? leftMul[0] ?? 0),
+      Number(rightMul[1] ?? rightMul[0] ?? 0),
+      Number(leftMul[2] ?? 0),
+      Number(rightMul[2] ?? 0)
+    );
+    const peakDb = Math.max(chDb[0], chDb[1]);
+
+    const prevHold = this.audioPeakHoldMap.get(primaryInputName) || {
+      db: AUDIO_MIN_DB,
+      ts: nowMs,
+    };
+    let nextHoldDb = prevHold.db;
+    let nextHoldTs = prevHold.ts;
+    if (peakDb >= prevHold.db) {
+      nextHoldDb = peakDb;
+      nextHoldTs = nowMs;
+    } else if (nowMs - prevHold.ts > AUDIO_PEAK_HOLD_MS) {
+      const elapsedSec = (nowMs - prevHold.ts - AUDIO_PEAK_HOLD_MS) / 1000;
+      nextHoldDb = Math.max(peakDb, Math.round((prevHold.db - elapsedSec * 14) * 10) / 10);
+    }
+    this.audioPeakHoldMap.set(primaryInputName, { db: nextHoldDb, ts: nextHoldTs });
+
+    const muted = Boolean(this.audioMuteMap.get(primaryInputName));
+    const clipping = !muted && (peakDb >= -1.5 || peakLinear >= 0.985);
+    const readiness = evaluateAudioReadiness({
+      obsConnected: true,
+      inputName: primaryInputName,
+      muted,
+      peakDb,
+      clipping,
+    });
+
+    return {
+      obsConnected: true,
+      primaryInputName,
+      availableAudioInputs,
+      channelsDb: chDb,
+      magnitudeDb: magDb,
+      peakDb,
+      peakHoldDb: Math.max(AUDIO_MIN_DB, Math.min(0, nextHoldDb)),
+      muted,
+      clipping,
+      ...readiness,
+      updatedAtMs: nowMs,
+    };
+  }
+
+  _processAudioVolumeMeters(meterInputs = [], opts = {}) {
+    if (Array.isArray(meterInputs)) {
+      this.latestMeterInputs = meterInputs;
+    }
+    const nowMs = Date.now();
+    const meterState = this._buildAudioMeterState(this.latestMeterInputs, null, nowMs);
+    this.state.audioMeter = meterState;
+    if (meterState.primaryInputName && !this.state.primaryAudioInput) {
+      this.state.primaryAudioInput = meterState.primaryInputName;
+    }
+
+    if (opts.forceEmit || nowMs - this.lastLocalAudioEmitAt >= AUDIO_LOCAL_EMIT_INTERVAL_MS) {
+      this.lastLocalAudioEmitAt = nowMs;
+      this.emit('audio-levels', meterState);
+    }
+
+    if (
+      this.socket &&
+      this.socket.connected &&
+      !this.state.bridgeRevoked &&
+      (opts.forceEmit || nowMs - this.lastSocketAudioEmitAt >= AUDIO_SOCKET_EMIT_INTERVAL_MS)
+    ) {
+      this.lastSocketAudioEmitAt = nowMs;
+      try {
+        this.socket.emit('agent:audio_levels', {
+          bridgeId: this.state.bridgeId || undefined,
+          primaryAudioInput: meterState.primaryInputName,
+          audioMeter: meterState,
+        });
+      } catch {
+        // Ignore high-frequency socket errors
+      }
+    }
+    return meterState;
+  }
+
+  async triggerSceneTransition(payload = {}) {
+    return this.handleCommand('trigger_transition', payload);
+  }
+
+  async setStudioMode(enabled) {
+    return this.handleCommand('set_studio_mode', { studioModeEnabled: Boolean(enabled) });
+  }
+
+  async setPreviewScene(sceneName) {
+    return this.handleCommand('set_preview_scene', { sceneName: String(sceneName || '') });
+  }
+
+  async setPrimaryAudioInput(inputName) {
+    return this.handleCommand('set_primary_audio_input', { inputName: String(inputName || '') });
+  }
+
+  async togglePrimaryAudioMute(inputName, inputMuted) {
+    const targetName = String(inputName || this.state.primaryAudioInput || '').trim();
+    if (!targetName) {
+      throw new Error('No primary OBS audio input selected.');
+    }
+    const currentMuted = Boolean(this.audioMuteMap.get(targetName));
+    const nextMuted = typeof inputMuted === 'boolean' ? inputMuted : !currentMuted;
+    const result = await this.handleCommand('set_input_mute', {
+      inputName: targetName,
+      inputMuted: nextMuted,
+    });
+    this.audioMuteMap.set(targetName, Boolean(result.inputMuted));
+    this._processAudioVolumeMeters(this.latestMeterInputs, { forceEmit: true });
+    return result;
   }
 
   async switchSceneLocally(sceneName) {
@@ -1448,6 +1944,9 @@ class BridgeEngine extends EventEmitter {
         clearTimeout(this.obsReconnectTimer);
         this.obsReconnectTimer = null;
       }
+      this.latestMeterInputs = [];
+      this.audioPeakHoldMap.clear();
+      const offlineMeter = createEmptyAudioMeterState(false, this.state.primaryAudioInput);
       this._setState({
         obsManuallyDisconnected: true,
         obsConnected: false,
@@ -1457,7 +1956,9 @@ class BridgeEngine extends EventEmitter {
         obsStreamActive: false,
         obsRecordActive: false,
         obsError: reason,
+        audioMeter: offlineMeter,
       });
+      this.emit('audio-levels', offlineMeter);
       await this.obs.disconnect().catch(() => {});
       await this.emitObsSnapshot().catch(() => {});
       return { disconnected: true, manualDisconnect: true };
@@ -1669,6 +2170,101 @@ class BridgeEngine extends EventEmitter {
       return {
         verifiedScene: verified.currentProgramSceneName,
         obsScenes: (listRes.scenes || []).map((s) => String(s.sceneName || '')).filter(Boolean),
+      };
+    }
+
+    if (command === 'trigger_transition') {
+      const transitionName =
+        typeof payload.transitionName === 'string' ? payload.transitionName.trim() : '';
+      if (transitionName) {
+        await this.obs.call('SetCurrentSceneTransition', { transitionName });
+      }
+      if (Number.isFinite(Number(payload.transitionDurationMs))) {
+        const dur = Math.max(0, Math.min(5000, Math.round(Number(payload.transitionDurationMs))));
+        await this.obs.call('SetCurrentSceneTransitionDuration', { transitionDuration: dur }).catch(() => {});
+      }
+
+      const studioStatus = await this.obs.call('GetStudioModeEnabled').catch(() => ({
+        studioModeEnabled: Boolean(this.state.studioModeEnabled),
+      }));
+      let studioModeEnabled = Boolean(studioStatus?.studioModeEnabled);
+      if (!studioModeEnabled) {
+        if (payload.ensureStudioMode === false) {
+          throw new Error('OBS Studio Mode is disabled. Enable Studio Mode before triggering a transition.');
+        }
+        this.log('info', 'Enabling OBS Studio Mode to trigger Scene Transition...');
+        await this.obs.call('SetStudioModeEnabled', { studioModeEnabled: true });
+        studioModeEnabled = true;
+      }
+
+      const targetPreview = String(payload.previewSceneName || payload.sceneName || '').trim();
+      if (targetPreview) {
+        await this.obs.call('SetCurrentPreviewScene', { sceneName: targetPreview });
+      }
+
+      this.log('info', 'Triggering OBS Studio Mode Scene Transition...');
+      await this.obs.call('TriggerStudioModeTransition');
+      await this.emitObsSnapshot();
+
+      const [programRes, previewRes, curTransitionRes] = await Promise.all([
+        this.obs.call('GetCurrentProgramScene').catch(() => ({ currentProgramSceneName: this.state.activeObsScene })),
+        this.obs.call('GetCurrentPreviewScene').catch(() => ({ currentPreviewSceneName: this.state.previewObsScene })),
+        this.obs.call('GetCurrentSceneTransition').catch(() => ({
+          transitionName: this.state.currentTransitionName,
+          transitionDuration: this.state.currentTransitionDurationMs,
+        })),
+      ]);
+
+      return {
+        triggered: true,
+        studioModeEnabled,
+        activeObsScene: String(programRes?.currentProgramSceneName || this.state.activeObsScene || ''),
+        previewObsScene: String(previewRes?.currentPreviewSceneName || previewRes?.sceneName || ''),
+        currentTransitionName: String(curTransitionRes?.transitionName || transitionName || ''),
+        currentTransitionDurationMs: Number(
+          curTransitionRes?.transitionDuration ?? this.state.currentTransitionDurationMs ?? 300
+        ),
+      };
+    }
+
+    if (command === 'set_studio_mode') {
+      const studioModeEnabled = Boolean(payload.studioModeEnabled);
+      await this.obs.call('SetStudioModeEnabled', { studioModeEnabled });
+      await this.emitObsSnapshot();
+      return {
+        studioModeEnabled: Boolean(this.state.studioModeEnabled),
+        activeObsScene: this.state.activeObsScene || '',
+        previewObsScene: this.state.previewObsScene || '',
+      };
+    }
+
+    if (command === 'set_preview_scene') {
+      const sceneName = String(payload.sceneName || '').trim();
+      if (!sceneName) throw new Error('sceneName is required.');
+      const studioStatus = await this.obs.call('GetStudioModeEnabled').catch(() => ({
+        studioModeEnabled: Boolean(this.state.studioModeEnabled),
+      }));
+      if (!studioStatus?.studioModeEnabled) {
+        await this.obs.call('SetStudioModeEnabled', { studioModeEnabled: true });
+      }
+      await this.obs.call('SetCurrentPreviewScene', { sceneName });
+      await this.emitObsSnapshot();
+      return {
+        studioModeEnabled: true,
+        previewObsScene: this.state.previewObsScene || sceneName,
+        activeObsScene: this.state.activeObsScene || '',
+      };
+    }
+
+    if (command === 'set_primary_audio_input') {
+      const inputName = String(payload.inputName || '').trim();
+      const updatedCfg = saveConfig({ primaryAudioInput: inputName });
+      this._setState({ primaryAudioInput: updatedCfg.primaryAudioInput || '' });
+      const meter = this._processAudioVolumeMeters(this.latestMeterInputs, { forceEmit: true });
+      await this.emitObsSnapshot();
+      return {
+        primaryAudioInput: meter.primaryInputName,
+        audioMeter: meter,
       };
     }
 
@@ -2064,5 +2660,11 @@ module.exports = {
   BRIDGE_VERSION,
   BRIDGE_CAPABILITIES,
   APPROVED_COMMANDS,
+  OBS_EVENT_SUBSCRIPTIONS,
   computeBackoffMs,
+  linearMulToDb,
+  isLikelyAudioInput,
+  selectPrimaryAudioInput,
+  evaluateAudioReadiness,
+  createEmptyAudioMeterState,
 };

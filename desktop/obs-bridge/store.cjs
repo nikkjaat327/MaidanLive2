@@ -33,6 +33,7 @@ function defaultConfig() {
     autoStart: false,
     adminDisconnected: false,
     obsManuallyDisconnected: false,
+    primaryAudioInput: '',
     activeMatch: null,
     pairedAt: null,
   };
@@ -103,6 +104,7 @@ function loadConfig() {
       autoStart: Boolean(parsed.autoStart),
       adminDisconnected: Boolean(parsed.adminDisconnected),
       obsManuallyDisconnected: Boolean(parsed.obsManuallyDisconnected),
+      primaryAudioInput: String(parsed.primaryAudioInput || '').trim(),
       activeMatch: parsed.activeMatch || null,
       pairedAt: parsed.pairedAt || null,
     };
@@ -127,6 +129,7 @@ function saveConfig(patch) {
   next.autoStart = Boolean(next.autoStart);
   next.adminDisconnected = Boolean(next.adminDisconnected);
   next.obsManuallyDisconnected = Boolean(next.obsManuallyDisconnected);
+  next.primaryAudioInput = String(next.primaryAudioInput || '').trim();
 
   const persisted = {
     version: 2,
@@ -141,6 +144,7 @@ function saveConfig(patch) {
     autoStart: next.autoStart,
     adminDisconnected: next.adminDisconnected,
     obsManuallyDisconnected: next.obsManuallyDisconnected,
+    primaryAudioInput: next.primaryAudioInput,
     activeMatch: next.activeMatch || null,
     pairedAt: next.pairedAt || null,
     updatedAt: new Date().toISOString(),

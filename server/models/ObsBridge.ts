@@ -45,8 +45,15 @@ export interface IObsBridge extends Document {
   obsVersion: string;
   obsWebSocketVersion: string;
   activeObsScene: string;
+  previewObsScene?: string;
+  studioModeEnabled?: boolean;
+  currentTransitionName?: string;
+  currentTransitionDurationMs?: number | null;
+  obsTransitions?: string[];
   obsScenes: string[];
   obsStreamActive: boolean;
+  primaryAudioInput?: string;
+  audioMeter?: Record<string, any> | null;
   missedHeartbeats?: number;
   lastDisconnectReason?: string;
   reconnectAttempts?: number;
@@ -136,8 +143,15 @@ const obsBridgeSchema = new Schema<IObsBridge>(
     obsVersion: { type: String, default: '' },
     obsWebSocketVersion: { type: String, default: '' },
     activeObsScene: { type: String, default: '' },
+    previewObsScene: { type: String, default: '' },
+    studioModeEnabled: { type: Boolean, default: false },
+    currentTransitionName: { type: String, default: '' },
+    currentTransitionDurationMs: { type: Number, default: null },
+    obsTransitions: [{ type: String }],
     obsScenes: [{ type: String }],
     obsStreamActive: { type: Boolean, default: false },
+    primaryAudioInput: { type: String, default: '' },
+    audioMeter: { type: Schema.Types.Mixed, default: null },
     missedHeartbeats: { type: Number, default: 0 },
     lastDisconnectReason: { type: String, default: '', maxlength: 300 },
     reconnectAttempts: { type: Number, default: 0 },

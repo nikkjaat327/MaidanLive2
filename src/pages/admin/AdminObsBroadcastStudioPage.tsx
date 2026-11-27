@@ -125,6 +125,7 @@ import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonit
 import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
 import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
 import { ControlRoomSceneBar } from '../../components/obsStudio/ControlRoomSceneBar.tsx';
+import { ObsAudioPeakMeter } from '../../components/obsStudio/ObsAudioPeakMeter.tsx';
 import { SavedAdsLibraryPanel } from '../../components/obsGraphics/SavedAdsLibraryPanel.tsx';
 import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
@@ -250,6 +251,7 @@ export function AdminObsBroadcastStudioPage() {
   const {
     studio,
     setStudio,
+    audioMeter,
     loading,
     error,
     notFound: studioNotFound,
@@ -373,6 +375,12 @@ export function AdminObsBroadcastStudioPage() {
   const [editingSceneLabels, setEditingSceneLabels] = useState(false);
   const [sceneLabelDrafts, setSceneLabelDrafts] = useState<Record<string, string>>({});
   const [savingSceneLabels, setSavingSceneLabels] = useState(false);
+  const [triggeringObsTransition, setTriggeringObsTransition] = useState(false);
+  const [togglingStudioMode, setTogglingStudioMode] = useState(false);
+  const [previewSceneDraft, setPreviewSceneDraft] = useState('');
+  const [selectedTransitionDraft, setSelectedTransitionDraft] = useState('');
+  const [selectingAudioInput, setSelectingAudioInput] = useState(false);
+  const [togglingAudioMute, setTogglingAudioMute] = useState(false);
 
   // Camera Orientation, Preview Fit & OBS SceneItemTransform telemetry
   const [obsTransforms, setObsTransforms] = useState<ObsSceneTransformItem[]>([]);
@@ -614,6 +622,18 @@ export function AdminObsBroadcastStudioPage() {
     void loadMediaMTXConfig();
   }, [checkInstallerAndLocalBridge, loadMediaMTXConfig, activeTab]);
 
+  // Fast loopback poll while on OBS Bridge tab if local bridge is running and socket meter isn't already driving telemetry
+  const profileObsConnected = studio?.profile?.connectionStatus === 'CONNECTED';
+  useEffect(() => {
+    if (activeTab !== 'settings' || !localBridgeProbe?.running) return;
+    if (profileObsConnected && audioMeter?.obsConnected) return;
+    const id = window.setInterval(async () => {
+      const probe = await obsStudioService.probeLocalBridgeStatus().catch(() => null);
+      if (probe) setLocalBridgeProbe(probe);
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, [activeTab, localBridgeProbe?.running, profileObsConnected, audioMeter?.obsConnected]);
+
   useEffect(() => {
     if (!pairingInfo?.expiresAt) {
       setPairingRemainingSec(0);
@@ -643,6 +663,8 @@ export function AdminObsBroadcastStudioPage() {
     setScoreboardSourceName(p.scoreboardSourceName || 'MaidanLive Scoreboard');
     setAutoSyncScoreboard(p.autoSyncScoreboardSource !== false);
     setSceneLabelDrafts(p.sceneLabels || {});
+    setPreviewSceneDraft(p.previewObsScene || '');
+    setSelectedTransitionDraft(p.currentTransitionName || '');
     if (Array.isArray(p.obsInputs)) {
       setDiscoveredObsInputs(p.obsInputs);
     }
@@ -1196,6 +1218,124 @@ export function AdminObsBroadcastStudioPage() {
       setActionError(extractApiError(err, `Failed to switch OBS scene to "${sceneName}".`));
     } finally {
       setSwitchingKey(null);
+    }
+  }
+
+  async function handleTriggerObsSceneTransition(opts?: {
+    previewSceneName?: string;
+    sceneName?: string;
+    transitionName?: string;
+  }) {
+    const chosenPreview =
+      opts?.previewSceneName || previewSceneDraft || profile?.previewObsScene || '';
+    const chosenTransition =
+      opts?.transitionName || selectedTransitionDraft || profile?.currentTransitionName || '';
+    try {
+      setTriggeringObsTransition(true);
+      setActionError(null);
+      if (matchId && obsConnected) {
+        const res = await obsStudioService.triggerSceneTransition(matchId, {
+          ...(chosenPreview ? { previewSceneName: chosenPreview } : {}),
+          ...(opts?.sceneName ? { sceneName: opts.sceneName } : {}),
+          ...(chosenTransition ? { transitionName: chosenTransition } : {}),
+          ensureStudioMode: true,
+          override: Boolean(profile?.adminOverrideLocked),
+        });
+        notifySuccess(
+          `Triggered OBS Studio Mode Scene Transition${
+            res?.activeObsScene ? ` — Program is now "${res.activeObsScene}"` : ''
+          }.`
+        );
+        await refetch();
+        void handleCaptureActiveScenePreview({ background: true });
+      } else if (localBridgeProbe?.running && localBridgeProbe?.obsConnected) {
+        const localRes = await obsStudioService.triggerLocalBridgeTransition({
+          ...(chosenPreview ? { previewSceneName: chosenPreview } : {}),
+          ...(chosenTransition ? { transitionName: chosenTransition } : {}),
+          ensureStudioMode: true,
+        });
+        if (!localRes.ok) {
+          throw new Error(localRes.message || 'Failed to trigger OBS Scene Transition.');
+        }
+        notifySuccess(
+          `Triggered OBS Scene Transition on local bridge${
+            localRes?.data?.activeObsScene ? ` (${localRes.data.activeObsScene})` : ''
+          }.`
+        );
+        await checkInstallerAndLocalBridge();
+      } else {
+        setActionError('Connect OBS Studio or OBS Bridge before triggering a Scene Transition.');
+      }
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to trigger OBS Scene Transition.'));
+    } finally {
+      setTriggeringObsTransition(false);
+    }
+  }
+
+  async function handleSetStudioMode(enabled: boolean) {
+    if (!matchId) return;
+    try {
+      setTogglingStudioMode(true);
+      setActionError(null);
+      await obsStudioService.setStudioMode(matchId, enabled, Boolean(profile?.adminOverrideLocked));
+      notifySuccess(enabled ? 'OBS Studio Mode enabled.' : 'OBS Studio Mode disabled.');
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to update OBS Studio Mode.'));
+    } finally {
+      setTogglingStudioMode(false);
+    }
+  }
+
+  async function handleSetPreviewScene(sceneName: string) {
+    if (!matchId || !sceneName) return;
+    try {
+      setPreviewSceneDraft(sceneName);
+      setActionError(null);
+      await obsStudioService.setPreviewScene(matchId, sceneName, Boolean(profile?.adminOverrideLocked));
+      notifySuccess(`OBS Studio Preview scene set to "${sceneName}".`);
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to stage Preview scene "${sceneName}".`));
+    }
+  }
+
+  async function handleSelectPrimaryAudioInput(inputName: string) {
+    if (!matchId || !inputName) return;
+    try {
+      setSelectingAudioInput(true);
+      setActionError(null);
+      await obsStudioService.setPrimaryAudioInput(
+        matchId,
+        inputName,
+        Boolean(profile?.adminOverrideLocked)
+      );
+      notifySuccess(`Primary OBS audio meter switched to "${inputName}".`);
+      await refetch();
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to select OBS audio input "${inputName}".`));
+    } finally {
+      setSelectingAudioInput(false);
+    }
+  }
+
+  async function handleTogglePrimaryAudioMute(inputName: string, nextMuted: boolean) {
+    if (!matchId || !inputName) return;
+    try {
+      setTogglingAudioMute(true);
+      setActionError(null);
+      await obsStudioService.setObsInputMute(
+        matchId,
+        inputName,
+        nextMuted,
+        Boolean(profile?.adminOverrideLocked)
+      );
+      notifySuccess(nextMuted ? `Muted "${inputName}" in OBS.` : `Unmuted "${inputName}" in OBS.`);
+    } catch (err) {
+      setActionError(extractApiError(err, `Failed to toggle mute for "${inputName}".`));
+    } finally {
+      setTogglingAudioMute(false);
     }
   }
 
@@ -2366,6 +2506,31 @@ export function AdminObsBroadcastStudioPage() {
     }
   }
 
+  async function handleTriggerBridgeSceneTransition(bridge: ObsBridgeData) {
+    try {
+      setBusyBridgeId(bridge.bridgeId);
+      setActionError(null);
+      const res = await obsStudioService.triggerBridgeSceneTransition(bridge.bridgeId, {
+        ...(previewSceneDraft ? { previewSceneName: previewSceneDraft } : {}),
+        ...(selectedTransitionDraft ? { transitionName: selectedTransitionDraft } : {}),
+        ensureStudioMode: true,
+      });
+      notifySuccess(
+        `Triggered OBS Scene Transition on ${bridge.bridgeId}${
+          res?.bridge?.activeObsScene ? ` (${res.bridge.activeObsScene})` : ''
+        }.`
+      );
+      await loadBridges();
+      await refetch();
+    } catch (err) {
+      setActionError(
+        extractApiError(err, `Failed triggering OBS Scene Transition on ${bridge.bridgeId}.`)
+      );
+    } finally {
+      setBusyBridgeId(null);
+    }
+  }
+
   // Admin Override toggle
   async function handleConfirmOverride(locked: boolean) {
     if (!matchId) return;
@@ -3168,6 +3333,13 @@ export function AdminObsBroadcastStudioPage() {
                         onFadeTransition={() => void handleCutOrFade('fade')}
                         onRefreshCams={() => void handleRefreshAllCams()}
                         onDisconnectAll={() => setDisconnectAllConfirmOpen(true)}
+                        audioMeter={audioMeter}
+                        selectingAudioInput={selectingAudioInput}
+                        togglingAudioMute={togglingAudioMute}
+                        onSelectPrimaryAudioInput={(name) => void handleSelectPrimaryAudioInput(name)}
+                        onTogglePrimaryAudioMute={(name, next) =>
+                          void handleTogglePrimaryAudioMute(name, next)
+                        }
                       />
                     </div>
                   </div>
@@ -3179,7 +3351,9 @@ export function AdminObsBroadcastStudioPage() {
                     obsConnected={obsConnected}
                     switchingKey={switchingKey}
                     applyingLayout={applyingLayout}
+                    triggeringTransition={triggeringObsTransition}
                     onSwitchObsScene={(sceneName) => void handleSwitchSceneName(sceneName)}
+                    onTriggerSceneTransition={() => void handleTriggerObsSceneTransition()}
                     onApplySavedScene={(sc) =>
                       void handleApplyLayout({
                         layoutType: sc.layoutType,
@@ -3570,6 +3744,40 @@ export function AdminObsBroadcastStudioPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={!obsConnected || triggeringObsTransition}
+                        onClick={() => void handleTriggerObsSceneTransition()}
+                        title="Trigger OBS WebSocket v5 Studio Mode Scene Transition"
+                        className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-[11px] font-bold disabled:opacity-40 whitespace-nowrap shrink-0"
+                      >
+                        {triggeringObsTransition ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <ArrowRightLeft className="w-3 h-3" />
+                        )}
+                        <span>
+                          {triggeringObsTransition ? 'Transitioning...' : 'Trigger Scene Transition'}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!obsConnected || togglingStudioMode}
+                        onClick={() => void handleSetStudioMode(!profile.studioModeEnabled)}
+                        className={`min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold disabled:opacity-40 whitespace-nowrap shrink-0 ${
+                          profile.studioModeEnabled
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>
+                          {togglingStudioMode
+                            ? 'Updating...'
+                            : profile.studioModeEnabled
+                              ? 'Studio Mode: ON'
+                              : 'Enable Studio Mode'}
+                        </span>
+                      </button>
                       <button
                         type="button"
                         onClick={handleSyncObsState}
@@ -4552,6 +4760,187 @@ export function AdminObsBroadcastStudioPage() {
                   </div>
                 </div>
 
+                {/* Live Primary Audio Peak Meter & Studio Mode Scene Transition Deck */}
+                {(() => {
+                  const effectiveMeter =
+                    (obsConnected ? audioMeter || profile.audioMeter : null) ||
+                    (localBridgeProbe?.obsConnected ? localBridgeProbe?.audioMeter : null) ||
+                    null;
+                  const effectiveObsConnected = Boolean(
+                    obsConnected || (localBridgeProbe?.running && localBridgeProbe?.obsConnected)
+                  );
+                  const availableSceneNames =
+                    profile.obsScenes && profile.obsScenes.length > 0
+                      ? profile.obsScenes
+                      : activeMatchBridge?.obsScenes && activeMatchBridge.obsScenes.length > 0
+                        ? activeMatchBridge.obsScenes
+                        : localBridgeProbe?.obsScenes || [];
+                  const availableTransitions =
+                    profile.obsTransitions && profile.obsTransitions.length > 0
+                      ? profile.obsTransitions
+                      : activeMatchBridge?.obsTransitions && activeMatchBridge.obsTransitions.length > 0
+                        ? activeMatchBridge.obsTransitions
+                        : localBridgeProbe?.obsTransitions || [];
+                  const effectiveStudioMode = Boolean(
+                    profile.studioModeEnabled ??
+                      activeMatchBridge?.studioModeEnabled ??
+                      localBridgeProbe?.studioModeEnabled
+                  );
+                  const effectivePreviewScene =
+                    previewSceneDraft ||
+                    profile.previewObsScene ||
+                    activeMatchBridge?.previewObsScene ||
+                    localBridgeProbe?.previewObsScene ||
+                    '';
+                  const effectiveProgramScene =
+                    profile.activeObsScene ||
+                    activeMatchBridge?.activeObsScene ||
+                    localBridgeProbe?.activeObsScene ||
+                    'None';
+                  const effectiveTransition =
+                    selectedTransitionDraft ||
+                    profile.currentTransitionName ||
+                    activeMatchBridge?.currentTransitionName ||
+                    localBridgeProbe?.currentTransitionName ||
+                    '';
+
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                      <div className="lg:col-span-7">
+                        <ObsAudioPeakMeter
+                          audioMeter={effectiveMeter}
+                          obsConnected={effectiveObsConnected}
+                          primaryAudioInput={
+                            profile.primaryAudioInput || localBridgeProbe?.primaryAudioInput || ''
+                          }
+                          availableAudioInputs={
+                            effectiveMeter?.availableAudioInputs ||
+                            (profile.obsInputs || []).map((i) => i.inputName)
+                          }
+                          theme="light"
+                          selectingInput={selectingAudioInput}
+                          togglingMute={togglingAudioMute}
+                          onSelectPrimaryInput={(name) => void handleSelectPrimaryAudioInput(name)}
+                          onToggleMute={(name, next) =>
+                            void handleTogglePrimaryAudioMute(name, next)
+                          }
+                        />
+                      </div>
+
+                      <div className="lg:col-span-5 rounded-xl border border-slate-200 bg-slate-50 p-3.5 flex flex-col justify-between gap-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <ArrowRightLeft className="w-4 h-4 text-[#EA580C]" />
+                            <div>
+                              <p className="text-xs font-bold text-slate-900">
+                                OBS Scene Transition (WebSocket v5)
+                              </p>
+                              <p className="text-[11px] text-slate-500">
+                                Program: <strong className="font-mono text-slate-800">{effectiveProgramScene}</strong>
+                                {effectivePreviewScene ? (
+                                  <>
+                                    {' · '}Preview:{' '}
+                                    <strong className="font-mono text-emerald-700">{effectivePreviewScene}</strong>
+                                  </>
+                                ) : null}
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={!obsConnected || togglingStudioMode}
+                            onClick={() => void handleSetStudioMode(!effectiveStudioMode)}
+                            className={`min-h-[28px] px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold border disabled:opacity-45 ${
+                              effectiveStudioMode
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                            }`}
+                          >
+                            {togglingStudioMode
+                              ? 'SYNCING...'
+                              : effectiveStudioMode
+                                ? 'STUDIO MODE ON'
+                                : 'STUDIO MODE OFF'}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                              Preview Scene
+                            </label>
+                            <select
+                              aria-label="OBS Preview Scene"
+                              value={effectivePreviewScene}
+                              disabled={!effectiveObsConnected || availableSceneNames.length === 0}
+                              onChange={(e) => {
+                                const nextScene = e.target.value;
+                                setPreviewSceneDraft(nextScene);
+                                if (obsConnected && nextScene) {
+                                  void handleSetPreviewScene(nextScene);
+                                }
+                              }}
+                              className="w-full min-h-[34px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-900 disabled:opacity-50"
+                            >
+                              {availableSceneNames.length === 0 ? (
+                                <option value="">No OBS scenes</option>
+                              ) : (
+                                availableSceneNames.map((scene) => (
+                                  <option key={scene} value={scene}>
+                                    {scene}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                              Transition
+                            </label>
+                            <select
+                              aria-label="OBS Scene Transition"
+                              value={effectiveTransition}
+                              disabled={!effectiveObsConnected || availableTransitions.length === 0}
+                              onChange={(e) => setSelectedTransitionDraft(e.target.value)}
+                              className="w-full min-h-[34px] px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-900 disabled:opacity-50"
+                            >
+                              {availableTransitions.length === 0 ? (
+                                <option value="">Active OBS Transition</option>
+                              ) : (
+                                availableTransitions.map((t) => (
+                                  <option key={t.transitionName} value={t.transitionName}>
+                                    {t.transitionName}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={!effectiveObsConnected || triggeringObsTransition}
+                          onClick={() => void handleTriggerObsSceneTransition()}
+                          className="w-full min-h-[38px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold disabled:opacity-45 transition-colors"
+                        >
+                          {triggeringObsTransition ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <ArrowRightLeft className="w-4 h-4" />
+                          )}
+                          <span>
+                            {triggeringObsTransition
+                              ? 'Triggering OBS Transition...'
+                              : 'Trigger Scene Transition'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Primary Beginner Action Row */}
                 <div className="flex flex-wrap items-center gap-2.5">
                   {installerStatus?.available ? (
@@ -5003,15 +5392,28 @@ export function AdminObsBroadcastStudioPage() {
                             {!isRevoked ? (
                               <>
                                 {isOnline && (
-                                  <button
-                                    type="button"
-                                    disabled={busy}
-                                    onClick={() => handleReconnectBridgeObs(br)}
-                                    className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
-                                  >
-                                    <RefreshCw className="w-3 h-3" />
-                                    <span>Reconnect OBS</span>
-                                  </button>
+                                  <>
+                                    {br.obsStatus === 'CONNECTED' && (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => void handleTriggerBridgeSceneTransition(br)}
+                                        className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[#EA580C] text-white border border-[#EA580C] hover:bg-orange-600 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                      >
+                                        <ArrowRightLeft className="w-3 h-3" />
+                                        <span>Trigger Transition</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => handleReconnectBridgeObs(br)}
+                                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      <RefreshCw className="w-3 h-3" />
+                                      <span>Reconnect OBS</span>
+                                    </button>
+                                  </>
                                 )}
                                 {(isOnline || isAutoRecovering) && !isManualBridgeDisconnect && (
                                   <button

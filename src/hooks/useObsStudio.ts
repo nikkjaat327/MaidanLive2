@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 import { obsStudioService } from '../services/obs/obsStudioService.ts';
 import { ADMIN_TOKEN_KEY, extractApiError } from '../services/api/httpClient.ts';
-import type { ObsStudioPayload } from '../types/obs.ts';
+import type { ObsAudioMeterSnapshot, ObsStudioPayload } from '../types/obs.ts';
 
 export interface SceneSwitchRequestState {
   targetScene: string;
@@ -19,6 +19,7 @@ export function useObsStudio(matchId?: string) {
   const [switchingSceneRequest, setSwitchingSceneRequest] =
     useState<SceneSwitchRequestState | null>(null);
   const [scheduleRevision, setScheduleRevision] = useState(0);
+  const [audioMeter, setAudioMeter] = useState<ObsAudioMeterSnapshot | null>(null);
   const matchIdRef = useRef(matchId);
   matchIdRef.current = matchId;
 
@@ -38,6 +39,7 @@ export function useObsStudio(matchId?: string) {
     try {
       const data = await obsStudioService.getStudio(matchId);
       setStudio(data);
+      setAudioMeter(data?.profile?.audioMeter || null);
       setError(null);
       setErrorStatus(null);
     } catch (err: any) {
@@ -53,12 +55,14 @@ export function useObsStudio(matchId?: string) {
     if (!matchId) {
       setLoading(false);
       setStudio(null);
+      setAudioMeter(null);
       setError(null);
       setErrorStatus(null);
       return;
     }
     setError(null);
     setErrorStatus(null);
+    setAudioMeter(null);
     setLoading(true);
     refetch();
   }, [matchId, refetch]);
@@ -101,6 +105,11 @@ export function useObsStudio(matchId?: string) {
                 : incoming.larixConfig || existing.larixConfig || null,
             };
           });
+        }
+        if (payload.profile?.audioMeter) {
+          setAudioMeter(payload.profile.audioMeter);
+        } else if (payload.profile?.connectionStatus && payload.profile.connectionStatus !== 'CONNECTED') {
+          setAudioMeter(null);
         }
         return {
           ...prev,
@@ -313,6 +322,9 @@ export function useObsStudio(matchId?: string) {
         incomingStatus === 'CONNECTION_LOST' ||
         (!isExplicitDisconnect && incomingStatus !== 'DISCONNECTED');
       setSwitchingSceneRequest(null);
+      if (isExplicitDisconnect) {
+        setAudioMeter(null);
+      }
       setStudio((prev) =>
         prev
           ? {
@@ -325,7 +337,7 @@ export function useObsStudio(matchId?: string) {
                     : 'RECONNECTING'
                   : 'DISCONNECTED',
                 ...(isExplicitDisconnect
-                  ? { manualDisconnect: true, desiredConnected: false, obsStreamActive: false }
+                  ? { manualDisconnect: true, desiredConnected: false, obsStreamActive: false, audioMeter: null }
                   : {}),
                 lastError: payload?.reason || payload?.error || prev.profile.lastError,
               },
@@ -453,6 +465,13 @@ export function useObsStudio(matchId?: string) {
       );
     };
 
+    const onAudioLevels = (payload: any) => {
+      if (payload?.matchId && payload.matchId !== matchIdRef.current) return;
+      if (payload?.audioMeter && typeof payload.audioMeter === 'object') {
+        setAudioMeter(payload.audioMeter as ObsAudioMeterSnapshot);
+      }
+    };
+
     const onScheduleUpdated = (payload: any) => {
       if (payload?.matchId !== matchIdRef.current) return;
       setScheduleRevision((n) => n + 1);
@@ -463,6 +482,7 @@ export function useObsStudio(matchId?: string) {
     socket.on('connect', joinStudio);
     socket.on('disconnect', onDisconnect);
     socket.on('obs:state', onObsState);
+    socket.on('obs:audio_levels', onAudioLevels);
     socket.on('obs:camera_status', onCameraStatus);
     socket.on('obs:scene_changed', onSceneChanged);
     socket.on('obs:admin_override', onAdminOverride);
@@ -490,6 +510,7 @@ export function useObsStudio(matchId?: string) {
       socket.off('connect', joinStudio);
       socket.off('disconnect', onDisconnect);
       socket.off('obs:state', onObsState);
+      socket.off('obs:audio_levels', onAudioLevels);
       socket.off('obs:camera_status', onCameraStatus);
       socket.off('obs:scene_changed', onSceneChanged);
       socket.off('obs:admin_override', onAdminOverride);
@@ -516,6 +537,7 @@ export function useObsStudio(matchId?: string) {
   return {
     studio,
     setStudio,
+    audioMeter,
     loading,
     error,
     errorStatus,

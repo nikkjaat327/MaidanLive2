@@ -1,7 +1,205 @@
 const $ = (id) => document.getElementById(id);
 
 let currentState = null;
+let currentAudioMeter = null;
 let logs = [];
+
+function dbToNormalized(db) {
+  const clamped = Math.max(-60, Math.min(0, Number.isFinite(Number(db)) ? Number(db) : -60));
+  return (clamped + 60) / 60;
+}
+
+function drawAudioMeterCanvas(meter) {
+  const canvas = $('audio-peak-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const targetWidth = Math.max(320, Math.round((rect.width || 900) * dpr));
+  const targetHeight = Math.max(72, Math.round(72 * dpr));
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+  }
+
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  const width = Math.max(320, rect.width || 900);
+  const height = 72;
+  ctx.clearRect(0, 0, width, height);
+
+  const labelPadLeft = 22;
+  const barWidth = Math.max(120, width - labelPadLeft - 8);
+  const channels = Array.isArray(meter?.channelsDb) && meter.channelsDb.length >= 2
+    ? meter.channelsDb
+    : [meter?.peakDb ?? -60, meter?.peakDb ?? -60];
+  const holdNorm = dbToNormalized(meter?.peakHoldDb ?? -60);
+  const offline = !meter?.obsConnected;
+  const muted = Boolean(meter?.muted);
+
+  const greenEnd = dbToNormalized(-20);
+  const optimalEnd = dbToNormalized(-6);
+  const warnEnd = dbToNormalized(-1.5);
+
+  const barRows = [
+    { label: 'L', y: 8, h: 16, db: channels[0] },
+    { label: 'R', y: 30, h: 16, db: channels[1] },
+  ];
+
+  for (const row of barRows) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = 'bold 11px ui-monospace, Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(row.label, 2, row.y + row.h / 2);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(labelPadLeft, row.y, barWidth, row.h);
+
+    // Subtle zone guides behind meter track
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+    ctx.fillRect(labelPadLeft + barWidth * greenEnd, row.y, barWidth * (optimalEnd - greenEnd), row.h);
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+    ctx.fillRect(labelPadLeft + barWidth * optimalEnd, row.y, barWidth * (warnEnd - optimalEnd), row.h);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.14)';
+    ctx.fillRect(labelPadLeft + barWidth * warnEnd, row.y, barWidth * (1 - warnEnd), row.h);
+
+    const levelNorm = offline || muted ? 0 : dbToNormalized(row.db);
+    const activeW = Math.max(0, barWidth * levelNorm);
+
+    if (activeW > 0) {
+      const lowW = Math.min(activeW, barWidth * optimalEnd);
+      if (lowW > 0) {
+        ctx.fillStyle = levelNorm >= greenEnd ? '#10b981' : '#059669';
+        ctx.fillRect(labelPadLeft, row.y + 2, lowW, row.h - 4);
+      }
+      if (activeW > barWidth * optimalEnd) {
+        const amberStart = barWidth * optimalEnd;
+        const amberW = Math.min(activeW - amberStart, barWidth * (warnEnd - optimalEnd));
+        if (amberW > 0) {
+          ctx.fillStyle = '#f59e0b';
+          ctx.fillRect(labelPadLeft + amberStart, row.y + 2, amberW, row.h - 4);
+        }
+      }
+      if (activeW > barWidth * warnEnd) {
+        const redStart = barWidth * warnEnd;
+        const redW = activeW - redStart;
+        if (redW > 0) {
+          ctx.fillStyle = '#ef4444';
+          ctx.fillRect(labelPadLeft + redStart, row.y + 2, redW, row.h - 4);
+        }
+      }
+    }
+
+    if (!offline && !muted && holdNorm > 0.01) {
+      const hx = labelPadLeft + Math.min(barWidth - 2, barWidth * holdNorm);
+      ctx.fillStyle = meter?.clipping ? '#ef4444' : '#f8fafc';
+      ctx.fillRect(hx, row.y + 1, 2.5, row.h - 2);
+    }
+  }
+
+  // dBFS ruler ticks
+  const ticks = [-60, -40, -20, -12, -6, -3, 0];
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px ui-monospace, Consolas, monospace';
+  ctx.textBaseline = 'top';
+  for (const t of ticks) {
+    const x = labelPadLeft + barWidth * dbToNormalized(t);
+    ctx.fillRect(x, 50, 1, 5);
+    ctx.textAlign = t === -60 ? 'left' : t === 0 ? 'right' : 'center';
+    ctx.fillText(t === 0 ? '0 dB' : `${t}`, x, 57);
+  }
+  ctx.restore();
+}
+
+function renderAudioMeter(meter) {
+  currentAudioMeter = meter || currentAudioMeter;
+  const data = currentAudioMeter || {
+    obsConnected: Boolean(currentState?.obsConnected),
+    primaryInputName: currentState?.primaryAudioInput || '',
+    availableAudioInputs: [],
+    channelsDb: [-60, -60],
+    peakDb: -60,
+    peakHoldDb: -60,
+    muted: false,
+    clipping: false,
+    status: currentState?.obsConnected ? 'SILENT' : 'OFFLINE',
+    label: currentState?.obsConnected ? 'No Audio Signal Detected' : 'OBS Offline',
+  };
+
+  const badge = $('badge-audio-status');
+  if (badge) {
+    const pillKind =
+      data.status === 'OPTIMAL'
+        ? 'pill-ok'
+        : data.status === 'CLIPPING' || data.status === 'MUTED'
+          ? 'pill-error'
+          : data.status === 'LOW' || data.status === 'SILENT'
+            ? 'pill-warn'
+            : 'pill-muted';
+    setPill(badge, data.label || data.status || 'OBS Offline', pillKind);
+  }
+
+  if ($('lbl-audio-peak-db')) {
+    $('lbl-audio-peak-db').textContent = data.obsConnected ? `${Number(data.peakDb ?? -60).toFixed(1)} dB` : 'Offline';
+  }
+  if ($('lbl-audio-peak-hold')) {
+    $('lbl-audio-peak-hold').textContent = data.obsConnected
+      ? `${Number(data.peakHoldDb ?? -60).toFixed(1)} dB`
+      : '—';
+  }
+
+  const muteBtn = $('btn-toggle-audio-mute');
+  if (muteBtn) {
+    muteBtn.disabled = !data.obsConnected || !data.primaryInputName;
+    muteBtn.textContent = data.muted ? 'Unmute Input' : 'Mute Input';
+  }
+
+  const select = $('select-primary-audio');
+  if (select && document.activeElement !== select) {
+    const inputs = Array.isArray(data.availableAudioInputs) ? data.availableAudioInputs : [];
+    const targetVal = data.primaryInputName || '';
+    const existingOptions = Array.from(select.options).map((o) => o.value);
+    const desired = inputs.length ? inputs : targetVal ? [targetVal] : [];
+    if (
+      existingOptions.length !== desired.length ||
+      existingOptions.some((val, idx) => val !== desired[idx])
+    ) {
+      select.textContent = '';
+      if (!desired.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = data.obsConnected ? 'No audio input detected' : 'Connect OBS Studio';
+        select.appendChild(opt);
+      } else {
+        for (const name of desired) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          select.appendChild(opt);
+        }
+      }
+    }
+    if (targetVal && select.value !== targetVal) {
+      select.value = targetVal;
+    }
+    select.disabled = !data.obsConnected || desired.length === 0;
+  }
+
+  if ($('lbl-audio-guidance')) {
+    $('lbl-audio-guidance').textContent = !data.obsConnected
+      ? 'Connect OBS Studio to inspect live input dBFS peaks before starting your stream.'
+      : data.muted
+        ? `Input "${data.primaryInputName}" is currently muted in OBS.`
+        : data.clipping
+          ? `Warning: "${data.primaryInputName}" is peaking near 0 dBFS. Lower OBS gain slightly.`
+          : `Monitoring "${data.primaryInputName}" (${data.label}).`;
+  }
+
+  drawAudioMeterCanvas(data);
+}
 
 function showPairingError(msg) {
   const el = $('pairing-error');
@@ -43,6 +241,87 @@ function renderScenes(state) {
   const scenes = Array.isArray(state.obsScenes) ? state.obsScenes : [];
   $('lbl-scene-count').textContent = String(scenes.length);
   $('lbl-active-scene').textContent = state.activeObsScene || (state.obsConnected ? 'None' : 'OBS Offline');
+  if ($('lbl-preview-scene')) {
+    $('lbl-preview-scene').textContent = state.studioModeEnabled
+      ? state.previewObsScene || state.activeObsScene || 'None'
+      : 'Disabled';
+  }
+  const studioBtn = $('btn-toggle-studio-mode');
+  if (studioBtn) {
+    studioBtn.disabled = !state.obsConnected;
+    studioBtn.textContent = state.studioModeEnabled ? 'Studio Mode: On' : 'Studio Mode: Off';
+    studioBtn.className = `btn btn-sm ${state.studioModeEnabled ? 'btn-accent' : 'btn-secondary'}`;
+  }
+
+  const previewSelect = $('select-preview-scene');
+  if (previewSelect && document.activeElement !== previewSelect) {
+    const existing = Array.from(previewSelect.options).map((o) => o.value);
+    if (existing.length !== scenes.length || existing.some((v, idx) => v !== scenes[idx])) {
+      previewSelect.textContent = '';
+      if (!scenes.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = state.obsConnected ? 'No OBS scenes' : 'OBS Offline';
+        previewSelect.appendChild(opt);
+      } else {
+        for (const sc of scenes) {
+          const opt = document.createElement('option');
+          opt.value = sc;
+          opt.textContent = sc;
+          previewSelect.appendChild(opt);
+        }
+      }
+    }
+    const desiredPreview = state.previewObsScene || state.activeObsScene || scenes[0] || '';
+    if (desiredPreview && scenes.includes(desiredPreview)) {
+      previewSelect.value = desiredPreview;
+    }
+    previewSelect.disabled = !state.obsConnected || scenes.length === 0;
+  }
+
+  const transitionSelect = $('select-transition-kind');
+  const transitions = Array.isArray(state.obsTransitions) ? state.obsTransitions : [];
+  const transitionNames = transitions.map((t) => t.transitionName).filter(Boolean);
+  if (transitionSelect && document.activeElement !== transitionSelect) {
+    const existingT = Array.from(transitionSelect.options).map((o) => o.value);
+    if (
+      existingT.length !== transitionNames.length ||
+      existingT.some((v, idx) => v !== transitionNames[idx])
+    ) {
+      transitionSelect.textContent = '';
+      if (!transitionNames.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = state.currentTransitionName || 'Active OBS Transition';
+        transitionSelect.appendChild(opt);
+      } else {
+        for (const name of transitionNames) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          transitionSelect.appendChild(opt);
+        }
+      }
+    }
+    if (state.currentTransitionName && transitionNames.includes(state.currentTransitionName)) {
+      transitionSelect.value = state.currentTransitionName;
+    }
+    transitionSelect.disabled = !state.obsConnected || transitionNames.length === 0;
+  }
+
+  if ($('btn-trigger-transition')) {
+    $('btn-trigger-transition').disabled = !state.obsConnected || scenes.length === 0;
+  }
+  if ($('lbl-transition-meta')) {
+    const trName = state.currentTransitionName || 'Default';
+    const durMs = Number.isFinite(Number(state.currentTransitionDurationMs))
+      ? Number(state.currentTransitionDurationMs)
+      : 300;
+    $('lbl-transition-meta').textContent = state.obsConnected
+      ? `${trName} · ${durMs}ms${state.studioModeEnabled ? ' · Studio Mode' : ' · Auto Studio Mode'}`
+      : 'OBS WebSocket v5 Offline';
+  }
+
   grid.textContent = '';
 
   if (!state.obsConnected || scenes.length === 0) {
@@ -213,6 +492,7 @@ function renderState(state) {
 
   renderMediaMTX(state);
   renderScenes(state);
+  renderAudioMeter(state.audioMeter || currentAudioMeter);
 }
 
 function renderMediaMTX(state) {
@@ -348,6 +628,78 @@ $('btn-reconnect-obs').addEventListener('click', () => window.bridgeApi.reconnec
 $('btn-refresh-scenes').addEventListener('click', () => window.bridgeApi.refreshScenes());
 $('btn-clear-logs').addEventListener('click', () => window.bridgeApi.clearLogs());
 
+$('btn-toggle-studio-mode').addEventListener('click', async () => {
+  const feedback = $('transition-feedback');
+  feedback.classList.add('hidden');
+  try {
+    await window.bridgeApi.setStudioMode(!currentState?.studioModeEnabled);
+  } catch (err) {
+    feedback.textContent = err?.message || 'Failed toggling OBS Studio Mode.';
+    feedback.classList.remove('hidden');
+  }
+});
+
+$('select-preview-scene').addEventListener('change', async (e) => {
+  const sceneName = String(e.target.value || '').trim();
+  if (!sceneName) return;
+  const feedback = $('transition-feedback');
+  feedback.classList.add('hidden');
+  try {
+    await window.bridgeApi.setPreviewScene(sceneName);
+  } catch (err) {
+    feedback.textContent = err?.message || 'Failed updating preview scene.';
+    feedback.classList.remove('hidden');
+  }
+});
+
+$('btn-trigger-transition').addEventListener('click', async () => {
+  const btn = $('btn-trigger-transition');
+  const feedback = $('transition-feedback');
+  feedback.classList.add('hidden');
+  btn.disabled = true;
+  btn.textContent = 'Transitioning...';
+  try {
+    const previewSceneName = String($('select-preview-scene').value || '').trim();
+    const transitionName = String($('select-transition-kind').value || '').trim();
+    await window.bridgeApi.triggerSceneTransition({
+      ...(previewSceneName ? { previewSceneName } : {}),
+      ...(transitionName ? { transitionName } : {}),
+      ensureStudioMode: true,
+    });
+  } catch (err) {
+    feedback.textContent = err?.message || 'Scene Transition failed.';
+    feedback.classList.remove('hidden');
+  } finally {
+    btn.disabled = !currentState?.obsConnected;
+    btn.textContent = 'Trigger Scene Transition';
+  }
+});
+
+$('select-primary-audio').addEventListener('change', async (e) => {
+  const inputName = String(e.target.value || '').trim();
+  try {
+    const res = await window.bridgeApi.setPrimaryAudioInput(inputName);
+    if (res?.audioMeter) renderAudioMeter(res.audioMeter);
+  } catch (err) {
+    $('obs-error-alert').textContent = err?.message || 'Failed selecting audio input.';
+    $('obs-error-alert').classList.remove('hidden');
+  }
+});
+
+$('btn-toggle-audio-mute').addEventListener('click', async () => {
+  const inputName = currentAudioMeter?.primaryInputName || currentState?.primaryAudioInput || '';
+  if (!inputName) return;
+  try {
+    await window.bridgeApi.togglePrimaryAudioMute({
+      inputName,
+      inputMuted: !currentAudioMeter?.muted,
+    });
+  } catch (err) {
+    $('obs-error-alert').textContent = err?.message || 'Failed toggling audio mute.';
+    $('obs-error-alert').classList.remove('hidden');
+  }
+});
+
 $('btn-mtx-start').addEventListener('click', async () => {
   $('mtx-alert').classList.add('hidden');
   try {
@@ -431,6 +783,7 @@ $('form-obs-settings').addEventListener('submit', async (e) => {
 });
 
 window.bridgeApi.onState((st) => renderState(st));
+window.bridgeApi.onAudioLevels((meter) => renderAudioMeter(meter));
 window.bridgeApi.onLog((entry) => {
   logs.unshift(entry);
   if (logs.length > 200) logs.length = 200;
@@ -451,6 +804,10 @@ window.bridgeApi.onProtocolPrefill((data) => {
   if (data?.error) {
     showPairingError(data.error);
   }
+});
+
+window.addEventListener('resize', () => {
+  if (currentAudioMeter) drawAudioMeterCanvas(currentAudioMeter);
 });
 
 (async function init() {

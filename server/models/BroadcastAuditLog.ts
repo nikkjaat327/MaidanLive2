@@ -27,6 +27,7 @@ export type BroadcastAuditAction =
   | 'MEDIAMTX_CONTROL'
   | 'LAYOUT_SWITCH'
   | 'SCENE_SWITCH'
+  | 'OBS_SCENE_TRANSITION'
   | 'MATCH_BROADCAST_SWITCH'
   | 'OVERLAY_SYNC'
   | 'SCOREBOARD_OVERLAY_TOGGLE'
@@ -116,6 +117,7 @@ const broadcastAuditLogSchema = new Schema<IBroadcastAuditLog>(
         'MEDIAMTX_CONTROL',
         'LAYOUT_SWITCH',
         'SCENE_SWITCH',
+        'OBS_SCENE_TRANSITION',
         'MATCH_BROADCAST_SWITCH',
         'OVERLAY_SYNC',
         'SCOREBOARD_OVERLAY_TOGGLE',

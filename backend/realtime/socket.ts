@@ -41,6 +41,7 @@ export interface ObsAgentRegistrationHandlers {
   onAgentConnected: (socket: any, context: ObsAgentContext) => Promise<void>;
   onAgentDisconnected: (socket: any, context: ObsAgentContext, reason: string) => Promise<void>;
   onAgentStateUpdate: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
+  onAgentAudioLevels?: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
   onAgentHeartbeat?: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
   onAgentDiagnostic?: (context: ObsAgentContext, payload: Record<string, any>) => Promise<void>;
   onAgentError: (context: ObsAgentContext, errorMessage: string) => Promise<void>;
@@ -658,6 +659,12 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     socket.on('agent:obs_state', (payload: Record<string, any>) => {
       if (obsAgentHandlers && payload && typeof payload === 'object') {
         obsAgentHandlers.onAgentStateUpdate(context, payload).catch(() => {});
+      }
+    });
+
+    socket.on('agent:audio_levels', (payload: Record<string, any>) => {
+      if (obsAgentHandlers?.onAgentAudioLevels && payload && typeof payload === 'object') {
+        obsAgentHandlers.onAgentAudioLevels(context, payload).catch(() => {});
       }
     });
 

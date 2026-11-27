@@ -243,6 +243,11 @@ if (!gotSingleLock) {
         mainWindow.webContents.send('bridge:logs-cleared');
       }
     });
+    engine.on('audio-levels', (meter) => {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+        mainWindow.webContents.send('bridge:audio-levels', meter);
+      }
+    });
 
     localServer = startLocalBridgeServer({
       engine,
@@ -356,6 +361,29 @@ ipcMain.handle('bridge:refresh-scenes', async () => {
 
 ipcMain.handle('bridge:switch-scene', async (_ev, sceneName) => {
   return engine.switchSceneLocally(String(sceneName || ''));
+});
+
+ipcMain.handle('bridge:trigger-transition', async (_ev, payload) => {
+  return engine.triggerSceneTransition(payload && typeof payload === 'object' ? payload : {});
+});
+
+ipcMain.handle('bridge:set-studio-mode', async (_ev, enabled) => {
+  return engine.setStudioMode(Boolean(enabled));
+});
+
+ipcMain.handle('bridge:set-preview-scene', async (_ev, sceneName) => {
+  return engine.setPreviewScene(String(sceneName || ''));
+});
+
+ipcMain.handle('bridge:set-primary-audio-input', async (_ev, inputName) => {
+  return engine.setPrimaryAudioInput(String(inputName || ''));
+});
+
+ipcMain.handle('bridge:toggle-audio-mute', async (_ev, payload) => {
+  if (payload && typeof payload === 'object') {
+    return engine.togglePrimaryAudioMute(payload.inputName, payload.inputMuted);
+  }
+  return engine.togglePrimaryAudioMute(String(payload || ''));
 });
 
 ipcMain.handle('bridge:scan-obs', async () => {
