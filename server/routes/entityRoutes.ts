@@ -19,6 +19,7 @@ import { Sponsor, SponsorOverlay } from '../models/Sponsor.ts';
 import {
   authenticate,
   canManageTournament,
+  invalidateAuthUserCache,
   optionalAuthenticate,
   requireAdminPortal,
   requirePermission,
@@ -1887,6 +1888,7 @@ router.patch(
         );
       }
       await user.save();
+      invalidateAuthUserCache(user._id.toString());
 
       await recordActivity(req.user!, 'UPDATE_USER_ROLE', 'User', id, `${user.email} -> ${user.role}`);
       res.json({

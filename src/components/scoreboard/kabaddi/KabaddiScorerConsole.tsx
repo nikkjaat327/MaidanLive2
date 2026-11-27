@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Award,
@@ -56,6 +56,11 @@ import {
   makeClientEventId,
 } from '../../../utils/optimisticScore.ts';
 import { completeScoreTraceApi, startScoreTrace } from '../../../utils/realtimeDiagnostics.ts';
+import {
+  enqueueScoreMutation,
+  getPendingScoreCount,
+  subscribePendingScoreCount,
+} from '../../../utils/scoreMutationQueue.ts';
 
 interface KabaddiScorerConsoleProps {
   stream: LiveStreamData;
@@ -66,6 +71,11 @@ interface KabaddiScorerConsoleProps {
   onScoreChange: (score: LiveScoreData) => void;
   onRefreshHistory: () => void;
   onAddHistoryItem?: (item?: ScoreHistoryItem) => void;
+  onApplyUndoHistory?: (payload: {
+    revertedHistoryId?: string;
+    deletedHistoryId?: string | null;
+    undoHistoryItem?: ScoreHistoryItem | null;
+  }) => boolean;
   onRefreshStats?: () => void;
   onError: (msg: string | null) => void;
   onSuccess: (msg: string | null) => void;
@@ -80,11 +90,15 @@ export function KabaddiScorerConsole({
   onScoreChange,
   onRefreshHistory,
   onAddHistoryItem,
+  onApplyUndoHistory,
   onRefreshStats,
   onError,
   onSuccess,
 }: KabaddiScorerConsoleProps) {
   const [saving, setSaving] = useState(false);
+  const [pendingOps, setPendingOps] = useState(0);
+  const scoreRef = useRef<LiveScoreData | null>(score);
+  const confirmedScoreRef = useRef<LiveScoreData | null>(score);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<KabaddiSidebarTab>('controls');
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -118,11 +132,40 @@ export function KabaddiScorerConsole({
     setScoringMode(details.scorerSettings.defaultScoringMode || 'quick');
   }, [details.scorerSettings.defaultScoringMode]);
 
-  // 250ms smooth server-synced timer tick
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 250);
+    return subscribePendingScoreCount(stream.id, setPendingOps);
+  }, [stream.id]);
+
+  useEffect(() => {
+    if (getPendingScoreCount(stream.id) === 0) {
+      scoreRef.current = score;
+      confirmedScoreRef.current = score;
+    }
+  }, [score, stream.id]);
+
+  const isCompleted = Boolean(details.matchCompleted);
+  const isSuspended = details.clock.status === 'SUSPENDED';
+
+  const isClockTicking = Boolean(
+    !isCompleted &&
+      (details.clock.status === 'RUNNING' ||
+        details.clock.status === 'EXTRA_TIME' ||
+        details.clock.status === 'BREAK' ||
+        details.clock.raidRunning ||
+        details.clock.timeoutActive ||
+        details.doOrDie.active ||
+        (details.lastAllOut?.triggeredAtIso &&
+          Date.now() - Date.parse(details.lastAllOut.triggeredAtIso) <=
+            (details.rules.allOutBannerDurationSec || 5) * 1000))
+  );
+
+  // Smooth timer tick strictly when clock, raid timer, timeout, or stinger banner is active
+  useEffect(() => {
+    if (!isClockTicking) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isClockTicking]);
 
   // Auto-open Winner Screen when match transitions to completed
   const [prevCompleted, setPrevCompleted] = useState(Boolean(details.matchCompleted));
@@ -142,58 +185,66 @@ export function KabaddiScorerConsole({
   const teamBName = stream.teamBName || 'Team B';
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
-  const isCompleted = Boolean(details.matchCompleted);
-  const isSuspended = details.clock.status === 'SUSPENDED';
-  const actionDisabled = saving || isCompleted || isSuspended;
+  // Never lock rapid scoring taps while previous network calls finish; FIFO queue serializes requests
+  const actionDisabled = isCompleted || isSuspended;
+  const terminalBusy = saving || pendingOps > 0;
 
   const undoableCount = history.filter(
     (h) => (!h.entryType || h.entryType === 'SCORE_UPDATE') && !h.reverted
   ).length;
 
   async function dispatchEvent(action: Record<string, unknown>, successFallback?: string) {
-    const prevScore = score;
+    const baseScore = scoreRef.current || score;
     const traceId = makeClientEventId('kbd');
     const apiStartAtMs = Date.now();
     const actionType = String(action?.type || 'Kabaddi Event');
     startScoreTrace(traceId, `Kabaddi: ${actionType}`, apiStartAtMs);
-    if (score && actionType !== 'SYNC_ROSTER') {
-      const optimistic = applyOptimisticKabaddiEngineEvent(score, action as any);
+    if (baseScore && actionType !== 'SYNC_ROSTER') {
+      const optimistic = applyOptimisticKabaddiEngineEvent(baseScore, action as any);
       if (optimistic) {
+        scoreRef.current = optimistic;
         onScoreChange(optimistic);
       }
     }
+    onError(null);
 
-    try {
-      setSaving(true);
-      onError(null);
-      const res = await scoreboardService.recordKabaddiEvent(stream.id, {
-        clientEventId: traceId,
-        traceId,
-        action,
-      });
-      completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
-      onScoreChange(res.score);
-      if (res.historyItem && onAddHistoryItem) {
-        onAddHistoryItem(res.historyItem);
-      } else {
-        onRefreshHistory();
+    return enqueueScoreMutation(stream.id, async () => {
+      try {
+        const res = await scoreboardService.recordKabaddiEvent(stream.id, {
+          clientEventId: traceId,
+          traceId,
+          action,
+        });
+        completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+        confirmedScoreRef.current = res.score;
+        if (getPendingScoreCount(stream.id) <= 1) {
+          scoreRef.current = res.score;
+          onScoreChange(res.score);
+        }
+        if (res.historyItem && onAddHistoryItem) {
+          onAddHistoryItem(res.historyItem);
+        } else {
+          onRefreshHistory();
+        }
+        onRefreshStats?.();
+        if (!res.duplicatePrevented) {
+          onSuccess(res.historyItem?.action || successFallback || 'Kabaddi score updated.');
+        }
+        return res;
+      } catch (err) {
+        if (getPendingScoreCount(stream.id) <= 1) {
+          const rollback = confirmedScoreRef.current || baseScore;
+          if (rollback) {
+            scoreRef.current = rollback;
+            onScoreChange(rollback);
+          }
+        }
+        const msg = extractApiError(err, 'Unable to apply Kabaddi scoring event.');
+        completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+        onError(msg);
+        return null;
       }
-      onRefreshStats?.();
-      if (!res.duplicatePrevented) {
-        onSuccess(res.historyItem?.action || successFallback || 'Kabaddi score updated.');
-      }
-      return res;
-    } catch (err) {
-      if (prevScore) {
-        onScoreChange(prevScore);
-      }
-      const msg = extractApiError(err, 'Unable to apply Kabaddi scoring event.');
-      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-      onError(msg);
-      return null;
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function dispatchClock(command: KabaddiClockCommand) {
@@ -201,8 +252,14 @@ export function KabaddiScorerConsole({
       setSaving(true);
       onError(null);
       const res = await scoreboardService.controlKabaddiClock(stream.id, command);
+      confirmedScoreRef.current = res.score;
+      scoreRef.current = res.score;
       onScoreChange(res.score);
-      onRefreshHistory();
+      if (res.historyItem && onAddHistoryItem) {
+        onAddHistoryItem(res.historyItem);
+      } else {
+        onRefreshHistory();
+      }
       onSuccess(res.historyItem?.action || 'Match clock updated.');
     } catch (err) {
       onError(extractApiError(err, 'Failed to update match clock.'));
@@ -223,8 +280,12 @@ export function KabaddiScorerConsole({
         traceId,
       });
       completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+      confirmedScoreRef.current = res.score;
+      scoreRef.current = res.score;
       onScoreChange(res.score);
-      onRefreshHistory();
+      if (!onApplyUndoHistory?.(res)) {
+        onRefreshHistory();
+      }
       onRefreshStats?.();
       onSuccess(`Undid: ${res.undoneAction}`);
     } catch (err) {
@@ -651,7 +712,7 @@ export function KabaddiScorerConsole({
             {details.clock.status === 'NOT_STARTED' ? (
               <button
                 type="button"
-                disabled={saving || isCompleted}
+                disabled={terminalBusy || isCompleted}
                 onClick={() => dispatchClock({ type: 'START_MATCH' })}
                 className="min-h-[40px] px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
               >
@@ -661,7 +722,7 @@ export function KabaddiScorerConsole({
             ) : details.clock.status === 'RUNNING' || details.clock.status === 'EXTRA_TIME' ? (
               <button
                 type="button"
-                disabled={saving || isCompleted}
+                disabled={terminalBusy || isCompleted}
                 onClick={() => dispatchClock({ type: 'PAUSE' })}
                 className="min-h-[40px] px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
               >
@@ -671,7 +732,7 @@ export function KabaddiScorerConsole({
             ) : (
               <button
                 type="button"
-                disabled={saving || isCompleted}
+                disabled={terminalBusy || isCompleted}
                 onClick={() => dispatchClock({ type: 'RESUME' })}
                 className="min-h-[40px] px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
               >
@@ -773,7 +834,7 @@ export function KabaddiScorerConsole({
 
           <button
             type="button"
-            disabled={saving || undoableCount === 0}
+            disabled={terminalBusy || undoableCount === 0}
             onClick={handleUndoLast}
             className="min-h-[38px] inline-flex items-center gap-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold disabled:opacity-40 whitespace-nowrap"
           >
@@ -793,9 +854,9 @@ export function KabaddiScorerConsole({
           ) : (
             <button
               type="button"
-              disabled={saving}
+              disabled={terminalBusy}
               onClick={() => setCompleteOpen(true)}
-              className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold whitespace-nowrap"
+              className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold whitespace-nowrap disabled:opacity-40"
             >
               <Award className="w-3.5 h-3.5" />
               <span>Complete Match</span>
@@ -826,9 +887,9 @@ export function KabaddiScorerConsole({
           </div>
           <button
             type="button"
-            disabled={saving}
+            disabled={terminalBusy}
             onClick={() => dispatchClock({ type: 'RESUME_MATCH' })}
-            className="min-h-[34px] px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
+            className="min-h-[34px] px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold disabled:opacity-40"
           >
             Resume Match
           </button>
@@ -911,7 +972,7 @@ export function KabaddiScorerConsole({
             history={history}
             players={players}
             playerStats={playerStats}
-            saving={saving}
+            saving={terminalBusy}
             formattedClock={clock.formattedClock}
             activeTab={sidebarTab}
             onChangeTab={setSidebarTab}
@@ -953,7 +1014,7 @@ export function KabaddiScorerConsole({
           ).filter((p) => p.status === 'ON_COURT')}
           defaultMode={scoringMode}
           rules={details.rules}
-          saving={saving}
+          saving={false}
           onSubmit={async (payload) => {
             await dispatchEvent(
               {
@@ -977,7 +1038,7 @@ export function KabaddiScorerConsole({
           teamBName={teamBName}
           courtPlayersA={details.courtPlayersA}
           courtPlayersB={details.courtPlayersB}
-          saving={saving}
+          saving={false}
           onSubmit={async (payload) => {
             await dispatchEvent(
               {
@@ -998,7 +1059,7 @@ export function KabaddiScorerConsole({
         teamAName={teamAName}
         teamBName={teamBName}
         details={details}
-        saving={saving}
+        saving={terminalBusy}
         onStartTimeout={async (team) => {
           await dispatchClock({ type: 'START_TIMEOUT', team });
           setTimeoutOpen(false);
@@ -1034,7 +1095,7 @@ export function KabaddiScorerConsole({
         open={rulesOpen}
         onClose={() => setRulesOpen(false)}
         rules={details.rules}
-        saving={saving}
+        saving={terminalBusy}
         onSaveRules={async (rules) => {
           await handleSaveSettings({ rules });
           setRulesOpen(false);
@@ -1057,7 +1118,7 @@ export function KabaddiScorerConsole({
         scoreA={scoreA}
         scoreB={scoreB}
         details={details}
-        saving={saving}
+        saving={terminalBusy}
         onTimeCorrection={async (minutes, seconds, halfLabel: KabaddiHalfLabel) => {
           await dispatchClock({ type: 'TIME_CORRECTION', minutes, seconds, halfLabel });
           setTimeCorrOpen(false);
@@ -1084,7 +1145,7 @@ export function KabaddiScorerConsole({
         scoreA={scoreA}
         scoreB={scoreB}
         details={details}
-        saving={saving}
+        saving={terminalBusy}
         onComplete={(opts) => handleCompleteMatch(opts)}
         onStartExtraTime={() => dispatchClock({ type: 'EXTRA_TIME', halfNumber: 1 })}
         onStartTieBreaker={() => dispatchClock({ type: 'TIE_BREAKER' })}
@@ -1096,7 +1157,7 @@ export function KabaddiScorerConsole({
         eventItem={correctionItem}
         teamA={teamAName}
         teamB={teamBName}
-        saving={saving}
+        saving={terminalBusy}
         onConfirmCorrection={async (payload) => {
           try {
             setSaving(true);

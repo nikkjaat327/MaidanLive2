@@ -222,9 +222,10 @@ const liveStreamSchema = new Schema<ILiveStream>(
 );
 
 liveStreamSchema.index({ status: 1, startedAt: -1 });
+liveStreamSchema.index({ status: 1, broadcastPublished: 1, startedAt: -1 });
 liveStreamSchema.index({ status: 1, endedAt: -1 });
 liveStreamSchema.index({ youtubeVideoId: 1, status: 1 });
-liveStreamSchema.index({ tournamentId: 1 });
+liveStreamSchema.index({ tournamentId: 1, status: 1 });
 liveStreamSchema.index({ replayPublished: 1, endedAt: -1 });
 liveStreamSchema.index({ venueId: 1 });
 

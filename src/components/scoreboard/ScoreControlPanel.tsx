@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   AlertTriangle,
@@ -70,6 +70,11 @@ import {
   makeClientEventId,
 } from '../../utils/optimisticScore.ts';
 import { completeScoreTraceApi, startScoreTrace } from '../../utils/realtimeDiagnostics.ts';
+import {
+  enqueueScoreMutation,
+  getPendingScoreCount,
+  subscribePendingScoreCount,
+} from '../../utils/scoreMutationQueue.ts';
 
 interface ScoreControlPanelProps {
   stream: LiveStreamData;
@@ -81,6 +86,11 @@ interface ScoreControlPanelProps {
   onScoreChange: (score: LiveScoreData) => void;
   onRefreshHistory: () => void;
   onAddHistoryItem?: (item?: ScoreHistoryItem) => void;
+  onApplyUndoHistory?: (payload: {
+    revertedHistoryId?: string;
+    deletedHistoryId?: string | null;
+    undoHistoryItem?: ScoreHistoryItem | null;
+  }) => boolean;
   onRefreshHighlights?: () => void;
   onRefreshStats?: () => void;
 }
@@ -95,10 +105,12 @@ export function ScoreControlPanel({
   onScoreChange,
   onRefreshHistory,
   onAddHistoryItem,
+  onApplyUndoHistory,
   onRefreshHighlights,
   onRefreshStats,
 }: ScoreControlPanelProps) {
   const [saving, setSaving] = useState(false);
+  const [pendingOps, setPendingOps] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
@@ -142,6 +154,20 @@ export function ScoreControlPanel({
       ? isVolleyballScoringLocked(score?.sportSpecificDetails, score?.resultStatus)
       : { locked: false, reason: '' };
   const controlLocked = volleyballLock.locked;
+  const terminalBusy = saving || pendingOps > 0;
+  const scoreRef = useRef<LiveScoreData | null>(score);
+  const confirmedScoreRef = useRef<LiveScoreData | null>(score);
+
+  useEffect(() => {
+    return subscribePendingScoreCount(stream.id, setPendingOps);
+  }, [stream.id]);
+
+  useEffect(() => {
+    if (getPendingScoreCount(stream.id) === 0) {
+      scoreRef.current = score;
+      confirmedScoreRef.current = score;
+    }
+  }, [score, stream.id]);
 
   useEffect(() => {
     if (score?.matchStatus) setMatchStatusInput(score.matchStatus);
@@ -222,67 +248,75 @@ export function ScoreControlPanel({
     tossDecision?: string;
     action: string;
   }) {
-    const prevScore = score;
+    const baseScore = scoreRef.current || score;
     const clientEventId = makeClientEventId('patch');
     const traceId = clientEventId;
     const apiStartAtMs = Date.now();
     startScoreTrace(traceId, payload.action, apiStartAtMs);
-    const optimistic = applyOptimisticPatch(score, payload);
+    const optimistic = applyOptimisticPatch(baseScore, payload);
     if (optimistic) {
+      scoreRef.current = optimistic;
       onScoreChange(optimistic);
     }
+    setError(null);
 
-    try {
-      setSaving(true);
-      setError(null);
-      const result = await offlineScoreService.submitScorePatch(
-        stream.id,
-        { ...payload, clientEventId, traceId },
-        score
-      );
-      completeScoreTraceApi(traceId, {
-        status: result.queued ? 'queued' : 'synced',
-        apiStartAtMs,
-        diag: result.diag,
-      });
-      if (result.score) {
-        onScoreChange(result.score);
-      }
-
-      if (result.queued) {
-        setSuccessMsg(`Saved offline (${payload.action}) — will sync automatically on reconnect.`);
-        handleAutoCommentaryAfterEvent(
-          payload.action,
-          result.score?.teamAScore ?? 0,
-          result.score?.teamBScore ?? 0,
-          payload.sportSpecificDetails
+    return enqueueScoreMutation(stream.id, async () => {
+      try {
+        const result = await offlineScoreService.submitScorePatch(
+          stream.id,
+          { ...payload, clientEventId, traceId },
+          baseScore
         );
-      } else {
-        if (result.historyItem && onAddHistoryItem) {
-          onAddHistoryItem(result.historyItem);
-        } else {
-          onRefreshHistory();
-        }
-        setSuccessMsg(payload.action);
+        completeScoreTraceApi(traceId, {
+          status: result.queued ? 'queued' : 'synced',
+          apiStartAtMs,
+          diag: result.diag,
+        });
         if (result.score) {
+          confirmedScoreRef.current = result.score;
+          if (getPendingScoreCount(stream.id) <= 1) {
+            scoreRef.current = result.score;
+            onScoreChange(result.score);
+          }
+        }
+
+        if (result.queued) {
+          setSuccessMsg(`Saved offline (${payload.action}) — will sync automatically on reconnect.`);
           handleAutoCommentaryAfterEvent(
             payload.action,
-            result.score.teamAScore,
-            result.score.teamBScore,
-            result.score.sportSpecificDetails
+            result.score?.teamAScore ?? 0,
+            result.score?.teamBScore ?? 0,
+            payload.sportSpecificDetails
           );
+        } else {
+          if (result.historyItem && onAddHistoryItem) {
+            onAddHistoryItem(result.historyItem);
+          } else {
+            onRefreshHistory();
+          }
+          setSuccessMsg(payload.action);
+          if (result.score) {
+            handleAutoCommentaryAfterEvent(
+              payload.action,
+              result.score.teamAScore,
+              result.score.teamBScore,
+              result.score.sportSpecificDetails
+            );
+          }
         }
+      } catch (err) {
+        if (getPendingScoreCount(stream.id) <= 1) {
+          const rollback = confirmedScoreRef.current || baseScore;
+          if (rollback) {
+            scoreRef.current = rollback;
+            onScoreChange(rollback);
+          }
+        }
+        const msg = extractApiError(err, 'Failed to update score.');
+        completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+        setError(msg);
       }
-    } catch (err) {
-      if (prevScore) {
-        onScoreChange(prevScore);
-      }
-      const msg = extractApiError(err, 'Failed to update score.');
-      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-      setError(msg);
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function handleSubmitStructuredEvent(payload: {
@@ -295,87 +329,98 @@ export function ScoreControlPanel({
     assistPlayerName?: string;
     eventPhase?: string;
   }) {
-    const prevScore = score;
+    const baseScore = scoreRef.current || score;
     const traceId = payload.clientEventId || makeClientEventId('evt');
     const apiStartAtMs = Date.now();
     const actionName = String(payload.action?.type || 'Structured Event');
     startScoreTrace(traceId, `${payload.sportType}: ${actionName}`, apiStartAtMs);
-    const optimistic = applyOptimisticStructuredEvent(score, payload.sportType, payload.action);
-    if (optimistic && optimistic !== score) {
+    const optimistic = applyOptimisticStructuredEvent(baseScore, payload.sportType, payload.action);
+    if (optimistic && optimistic !== baseScore) {
+      scoreRef.current = optimistic;
       onScoreChange(optimistic);
     }
+    setError(null);
 
-    try {
-      setSaving(true);
-      setError(null);
-      const result = await offlineScoreService.submitScoreEvent(
-        stream.id,
-        { ...payload, clientEventId: traceId, traceId },
-        score
-      );
-      completeScoreTraceApi(traceId, {
-        status: result.queued ? 'queued' : 'synced',
-        apiStartAtMs,
-        diag: result.diag,
-      });
-      if (result.queued) {
-        if (!optimistic || optimistic === score) {
-          if (payload.sportType === 'Cricket' && score) {
+    return enqueueScoreMutation(stream.id, async () => {
+      try {
+        const result = await offlineScoreService.submitScoreEvent(
+          stream.id,
+          { ...payload, clientEventId: traceId, traceId },
+          baseScore
+        );
+        completeScoreTraceApi(traceId, {
+          status: result.queued ? 'queued' : 'synced',
+          apiStartAtMs,
+          diag: result.diag,
+        });
+        if (result.queued) {
+          if ((!optimistic || optimistic === baseScore) && payload.sportType === 'Cricket' && baseScore) {
             const applied = applyCricketAction(
-              (score.sportSpecificDetails || {}) as Partial<CricketDetails>,
+              (baseScore.sportSpecificDetails || {}) as Partial<CricketDetails>,
               payload.action as any
             );
             const nextStatus = applied.autoCompletedMatch
               ? 'COMPLETED'
               : applied.autoCompletedInnings1
                 ? 'INNINGS BREAK'
-                : score.matchStatus;
-            onScoreChange({
-              ...score,
+                : baseScore.matchStatus;
+            const nextQueuedScore: LiveScoreData = {
+              ...baseScore,
               teamAScore: applied.teamAScore,
               teamBScore: applied.teamBScore,
               matchStatus: nextStatus,
               sportSpecificDetails: applied.details as unknown as Record<string, unknown>,
-            });
+            };
+            confirmedScoreRef.current = nextQueuedScore;
+            if (getPendingScoreCount(stream.id) <= 1) {
+              scoreRef.current = nextQueuedScore;
+              onScoreChange(nextQueuedScore);
+            }
+          }
+          setSuccessMsg(
+            'Scoring event cached in IndexedDB — will sync automatically upon reconnection.'
+          );
+          return;
+        }
+
+        if (result.score) {
+          confirmedScoreRef.current = result.score;
+          if (getPendingScoreCount(stream.id) <= 1) {
+            scoreRef.current = result.score;
+            onScoreChange(result.score);
           }
         }
+        if (result.historyItem && onAddHistoryItem) {
+          onAddHistoryItem(result.historyItem);
+        } else {
+          onRefreshHistory();
+        }
+        onRefreshStats?.();
+        const actionLabel = result.historyItem?.action || 'Structured scoring event recorded.';
         setSuccessMsg(
-          'Scoring event cached in IndexedDB — will sync automatically upon reconnection.'
+          result.duplicatePrevented ? 'Duplicate submission safely ignored.' : actionLabel
         );
-        return;
+        if (!result.duplicatePrevented && result.score) {
+          handleAutoCommentaryAfterEvent(
+            actionLabel,
+            result.score.teamAScore,
+            result.score.teamBScore,
+            result.score.sportSpecificDetails
+          );
+        }
+      } catch (err) {
+        if (getPendingScoreCount(stream.id) <= 1) {
+          const rollback = confirmedScoreRef.current || baseScore;
+          if (rollback) {
+            scoreRef.current = rollback;
+            onScoreChange(rollback);
+          }
+        }
+        const msg = extractApiError(err, 'Failed to record scoring event.');
+        completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+        setError(msg);
       }
-
-      if (result.score) {
-        onScoreChange(result.score);
-      }
-      if (result.historyItem && onAddHistoryItem) {
-        onAddHistoryItem(result.historyItem);
-      } else {
-        onRefreshHistory();
-      }
-      onRefreshStats?.();
-      const actionLabel = result.historyItem?.action || 'Structured scoring event recorded.';
-      setSuccessMsg(
-        result.duplicatePrevented ? 'Duplicate submission safely ignored.' : actionLabel
-      );
-      if (!result.duplicatePrevented && result.score) {
-        handleAutoCommentaryAfterEvent(
-          actionLabel,
-          result.score.teamAScore,
-          result.score.teamBScore,
-          result.score.sportSpecificDetails
-        );
-      }
-    } catch (err) {
-      if (prevScore) {
-        onScoreChange(prevScore);
-      }
-      const msg = extractApiError(err, 'Failed to record scoring event.');
-      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-      setError(msg);
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function handleConfirmEventCorrection(payload: {
@@ -417,8 +462,12 @@ export function ScoreControlPanel({
         traceId,
       });
       completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+      confirmedScoreRef.current = res.score;
+      scoreRef.current = res.score;
       onScoreChange(res.score);
-      onRefreshHistory();
+      if (!onApplyUndoHistory?.(res)) {
+        onRefreshHistory();
+      }
       setUndoOpen(false);
       setSuccessMsg(`Undid: ${res.undoneAction}`);
     } catch (err) {
@@ -435,8 +484,14 @@ export function ScoreControlPanel({
       setSaving(true);
       setError(null);
       const res = await scoreboardService.resetScore(stream.id);
+      confirmedScoreRef.current = res.score;
+      scoreRef.current = res.score;
       onScoreChange(res.score);
-      onRefreshHistory();
+      if (res.resetHistoryItem && onAddHistoryItem) {
+        onAddHistoryItem(res.resetHistoryItem);
+      } else {
+        onRefreshHistory();
+      }
       setResetOpen(false);
       setSuccessMsg('Scoreboard reset to zero.');
     } catch (err) {
@@ -682,7 +737,7 @@ export function ScoreControlPanel({
               </label>
               <select
                 value={sport}
-                disabled={saving || controlLocked}
+                disabled={terminalBusy || controlLocked}
                 title={controlLocked ? volleyballLock.reason : undefined}
                 onChange={(e) => handleSportChange(e.target.value as SportOption)}
                 className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:opacity-50"
@@ -706,7 +761,7 @@ export function ScoreControlPanel({
                       ? matchStatusInput.toUpperCase()
                       : ''
                   }
-                  disabled={saving || controlLocked}
+                  disabled={terminalBusy || controlLocked}
                   onChange={(e) => {
                     if (!e.target.value) return;
                     setMatchStatusInput(e.target.value);
@@ -728,14 +783,14 @@ export function ScoreControlPanel({
                 <input
                   type="text"
                   value={matchStatusInput}
-                  disabled={saving || controlLocked}
+                  disabled={terminalBusy || controlLocked}
                   onChange={(e) => setMatchStatusInput(e.target.value)}
                   placeholder="e.g. Live, Half Time"
                   className="min-h-[42px] px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg w-36 sm:w-44 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:opacity-50"
                 />
                 <button
                   type="button"
-                  disabled={saving || controlLocked}
+                  disabled={terminalBusy || controlLocked}
                   onClick={() =>
                     commitUpdate({
                       matchStatus: matchStatusInput.trim() || 'Live',
@@ -753,16 +808,16 @@ export function ScoreControlPanel({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={saving}
+              disabled={terminalBusy}
               onClick={() => setResultModalOpen(true)}
-              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold tracking-wide uppercase text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 whitespace-nowrap shrink-0"
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold tracking-wide uppercase text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 whitespace-nowrap shrink-0 disabled:opacity-40"
             >
               <Trophy className="w-4 h-4" />
               <span>{resultDeclared ? 'Correct Result' : 'Declare Match Result'}</span>
             </button>
             <button
               type="button"
-              disabled={saving || scoreUpdateCount === 0}
+              disabled={terminalBusy || scoreUpdateCount === 0}
               onClick={() => setUndoOpen(true)}
               className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap shrink-0"
             >
@@ -771,7 +826,7 @@ export function ScoreControlPanel({
             </button>
             <button
               type="button"
-              disabled={saving || controlLocked}
+              disabled={terminalBusy || controlLocked}
               title={controlLocked ? volleyballLock.reason : undefined}
               onClick={() => setResetOpen(true)}
               className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-40 whitespace-nowrap shrink-0"
@@ -877,7 +932,7 @@ export function ScoreControlPanel({
           stream={stream}
           score={score}
           players={players}
-          saving={saving}
+          saving={false}
           locked={controlLocked}
           onSubmitEvent={handleSubmitStructuredEvent}
         />
@@ -890,6 +945,7 @@ export function ScoreControlPanel({
           score={score}
           players={players}
           saving={saving}
+          pendingOps={pendingOps}
           onScoreChange={onScoreChange}
           onRefreshHistory={onRefreshHistory}
           onRefreshStats={onRefreshStats}
@@ -910,6 +966,7 @@ export function ScoreControlPanel({
           onScoreChange={onScoreChange}
           onRefreshHistory={onRefreshHistory}
           onAddHistoryItem={onAddHistoryItem}
+          onApplyUndoHistory={onApplyUndoHistory}
           onRefreshStats={onRefreshStats}
           onError={setError}
           onSuccess={setSuccessMsg}
@@ -926,7 +983,7 @@ export function ScoreControlPanel({
             ...createInitialFootballDetails(),
             ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
           }}
-          saving={saving}
+          saving={false}
           onApply={(next) =>
             commitUpdate({
               teamAScore: next.teamAScore,
@@ -947,7 +1004,8 @@ export function ScoreControlPanel({
           details={normalizeVolleyballDetails(
             (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
           )}
-          saving={saving}
+          saving={false}
+          terminalBusy={terminalBusy}
           locked={controlLocked}
           winnerName={score?.winnerTeamName || ''}
           resultDescription={score?.resultDescription || ''}
@@ -966,7 +1024,7 @@ export function ScoreControlPanel({
           scoreA={score?.teamAScore ?? 0}
           scoreB={score?.teamBScore ?? 0}
           details={score?.sportSpecificDetails || {}}
-          saving={saving}
+          saving={false}
           onCommit={commitUpdate}
         />
       )}
@@ -1339,6 +1397,7 @@ function VolleyballControls({
   scoreB,
   details,
   saving,
+  terminalBusy,
   locked,
   winnerName,
   resultDescription,
@@ -1354,6 +1413,7 @@ function VolleyballControls({
   scoreB: number;
   details: VolleyballDetails;
   saving: boolean;
+  terminalBusy: boolean;
   locked: boolean;
   winnerName: string;
   resultDescription: string;
@@ -1482,7 +1542,7 @@ function VolleyballControls({
           {details.rules.allowMatchReopen && (
             <button
               type="button"
-              disabled={saving}
+              disabled={terminalBusy}
               onClick={() => setReopenModalOpen(true)}
               className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold whitespace-nowrap shrink-0 disabled:opacity-50"
             >
@@ -1505,9 +1565,9 @@ function VolleyballControls({
           </div>
           <button
             type="button"
-            disabled={saving}
+            disabled={terminalBusy}
             onClick={openCompleteModal}
-            className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold whitespace-nowrap shrink-0"
+            className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold whitespace-nowrap shrink-0 disabled:opacity-50"
           >
             <Trophy className="w-3.5 h-3.5" />
             <span>Complete &amp; Lock Match</span>
@@ -1681,7 +1741,7 @@ function VolleyballControls({
             {(details.rules.allowManualWinnerDeclaration || eligibility.thresholdReached) && !locked && (
               <button
                 type="button"
-                disabled={saving}
+                disabled={terminalBusy}
                 onClick={openCompleteModal}
                 className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 disabled:opacity-45"
               >
@@ -1835,9 +1895,9 @@ function VolleyballControls({
 
               <button
                 type="button"
-                disabled={saving || locked}
+                disabled={terminalBusy || locked}
                 onClick={handleSaveRulesDrawer}
-                className="min-h-[38px] px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold whitespace-nowrap shrink-0"
+                className="min-h-[38px] px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 disabled:opacity-45"
               >
                 Save Match Rules
               </button>

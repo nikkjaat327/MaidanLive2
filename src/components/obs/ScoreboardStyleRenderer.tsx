@@ -17,6 +17,7 @@ import { FootballObsOverlay } from './FootballObsOverlay.tsx';
 import { KabaddiObsOverlay } from './KabaddiObsOverlay.tsx';
 import { VolleyballObsOverlay } from './VolleyballObsOverlay.tsx';
 import { GenericObsOverlay } from './GenericObsOverlay.tsx';
+import { normalizeKabaddiDetails } from '../../utils/kabaddiScoring.ts';
 
 interface ScoreboardStyleRendererProps {
   stream: LiveStreamData;
@@ -302,12 +303,29 @@ function AlternativeScoreboardStyles({
   const m = computeOverlayMetrics(config, isPortrait);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isKabaddi = (score?.sportType || stream.gameName) === 'Kabaddi';
+  const kabaddiTickActive = (() => {
+    if (!isKabaddi) return false;
+    const kd = normalizeKabaddiDetails(score?.sportSpecificDetails);
+    if (kd.matchCompleted) return false;
+    return Boolean(
+      kd.clock.status === 'RUNNING' ||
+        kd.clock.status === 'EXTRA_TIME' ||
+        kd.clock.status === 'BREAK' ||
+        kd.clock.raidRunning ||
+        kd.clock.timeoutActive ||
+        kd.doOrDie.active ||
+        (kd.lastAllOut?.triggeredAtIso &&
+          Date.now() - Date.parse(kd.lastAllOut.triggeredAtIso) <=
+            (kd.rules.allOutBannerDurationSec || 5) * 1000)
+    );
+  })();
 
   useEffect(() => {
-    if (!isKabaddi) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 350);
+    if (!kabaddiTickActive) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, [isKabaddi]);
+  }, [kabaddiTickActive]);
 
   const effectiveNowMs = nowMs + serverClockOffsetMs;
   const vm = buildScoreboardViewModel(stream, score, config, theme, effectiveNowMs);

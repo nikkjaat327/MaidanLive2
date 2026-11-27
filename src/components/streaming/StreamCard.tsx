@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Lock, Play, Trophy } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
@@ -17,7 +17,7 @@ interface StreamCardProps {
   showShare?: boolean;
 }
 
-export function StreamCard({
+export const StreamCard = memo(function StreamCard({
   stream,
   to,
   onSelect,
@@ -25,6 +25,8 @@ export function StreamCard({
   showShare = true,
 }: StreamCardProps) {
   const [thumbErr, setThumbErr] = useState(false);
+  const [scorePulseKey, setScorePulseKey] = useState(0);
+  const prevScoreSigRef = useRef<string>('');
 
   const activeVideoId =
     useReplayThumbnail && stream.replayVideoId ? stream.replayVideoId : stream.youtubeVideoId;
@@ -60,6 +62,15 @@ export function StreamCard({
     isCricket && cricketDetails ? `${formatCricketOvers(cricketDetails.teamABalls ?? 0)} ov` : undefined;
   const teamBSec =
     isCricket && cricketDetails ? `${formatCricketOvers(cricketDetails.teamBBalls ?? 0)} ov` : undefined;
+
+  const scoreSig = score ? `${teamAScoreText}|${teamBScoreText}` : '';
+  useEffect(() => {
+    if (!scoreSig) return;
+    if (prevScoreSigRef.current && prevScoreSigRef.current !== scoreSig) {
+      setScorePulseKey((k) => k + 1);
+    }
+    prevScoreSigRef.current = scoreSig;
+  }, [scoreSig]);
 
   const isReplay = useReplayThumbnail || Boolean(stream.replayPublished && stream.status === 'ENDED');
   const canonicalUrl = buildMatchUrl(stream.id, useReplayThumbnail);
@@ -153,6 +164,8 @@ export function StreamCard({
           <img
             src={thumbUrl}
             alt={displayTitle}
+            loading="lazy"
+            decoding="async"
             referrerPolicy="no-referrer"
             onError={() => setThumbErr(true)}
             className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
@@ -184,7 +197,12 @@ export function StreamCard({
           </div>
         )}
         {score && (
-          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs font-mono tabular-nums">
+          <div
+            key={scorePulseKey}
+            className={`absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs font-mono tabular-nums ${
+              scorePulseKey > 0 ? 'ml-score-pulse' : ''
+            }`}
+          >
             <span className="font-semibold truncate">
               {stream.teamAName || 'Team A'}:{' '}
               {isCricket && cricketDetails
@@ -311,4 +329,4 @@ export function StreamCard({
       {shareOverlay}
     </div>
   );
-}
+});

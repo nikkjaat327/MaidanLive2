@@ -31,6 +31,7 @@ import { platformOpsService } from '../../services/platformOps/platformOpsServic
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
 import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { getPublicWebOrigin } from '../../utils/appOrigin.ts';
 import { useObsOverlay } from '../../hooks/useObsOverlay.ts';
 import {
   DEFAULT_OVERLAY_CONFIG,
@@ -373,11 +374,11 @@ export function BroadcastOverlayConfigPage() {
   );
 
   useEffect(() => {
-    if (!timeoutInfo.isTimeout && !timeoutDecision.showFullScoreboard) return;
+    if (!timeoutInfo.isTimeout) return;
     setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, [timeoutInfo.isTimeout, timeoutDecision.showFullScoreboard]);
+  }, [timeoutInfo.isTimeout]);
 
   const pendingSliderPatchRef = useRef<Partial<BroadcastOverlayConfig>>({});
 
@@ -624,7 +625,7 @@ export function BroadcastOverlayConfigPage() {
     window.setTimeout(() => setCopiedKey(null), 1800);
   }
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const origin = getPublicWebOrigin();
   const primaryObsPath = matchId ? `/broadcast/overlay/view/${matchId}` : '';
   const primaryObsUrl = `${origin}${primaryObsPath}`;
   const compactObsUrl = `${primaryObsUrl}?mode=compact`;

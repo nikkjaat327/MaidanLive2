@@ -8,6 +8,7 @@ import { ADMIN_PORTAL_ROLES, User } from '../../server/models/User.ts';
 import { LiveStream } from '../../server/models/LiveStream.ts';
 import { BroadcastCamera } from '../../server/models/BroadcastCamera.ts';
 import { verifyScopedToken } from '../../server/utils/obsCrypto.ts';
+import { corsOriginDelegate } from '../../server/config/cors.ts';
 
 let io: SocketIOServer | null = null;
 const SERVER_BOOT_ID = crypto.randomUUID();
@@ -62,22 +63,104 @@ interface TrackedViewerSession {
 const activeViewerSessions = new Map<string, Map<string, TrackedViewerSession>>();
 const visibilityCache = new Map<string, { value: 'public' | 'admin_only' | 'hidden'; cachedAt: number }>();
 
-function nextMetadata() {
+function nextMetadata(logicalEventId?: string) {
   eventSequence += 1;
   return {
     eventId: crypto.randomUUID(),
+    ...(logicalEventId ? { logicalEventId } : {}),
     emittedAt: new Date().toISOString(),
     sequence: eventSequence,
     serverBootId: SERVER_BOOT_ID,
   };
 }
 
-function attachMeta(payload: unknown): Record<string, unknown> {
-  const meta = nextMetadata();
+function attachMeta(payload: unknown, meta = nextMetadata()): Record<string, unknown> {
   if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
     return { ...(payload as Record<string, unknown>), ...meta };
   }
   return { data: payload, ...meta };
+}
+
+function trimScoreForFeed(score: any): any {
+  if (!score || typeof score !== 'object') return score;
+  const plain = typeof score.toObject === 'function' ? score.toObject() : score;
+  const details = plain.sportSpecificDetails;
+  let slimDetails: Record<string, unknown> | undefined;
+
+  if (details && typeof details === 'object' && !Array.isArray(details)) {
+    const sport = plain.sportType || '';
+    if (sport === 'Cricket') {
+      slimDetails = {
+        battingTeam: details.battingTeam,
+        innings: details.innings,
+        teamARuns: details.teamARuns,
+        teamAWickets: details.teamAWickets,
+        teamABalls: details.teamABalls,
+        teamBRuns: details.teamBRuns,
+        teamBWickets: details.teamBWickets,
+        teamBBalls: details.teamBBalls,
+        oversLimit: details.oversLimit,
+        target: details.target,
+        matchPhase: details.matchPhase,
+      };
+    } else if (sport === 'Kabaddi') {
+      slimDetails = {
+        half: details.half,
+        matchCompleted: details.matchCompleted,
+        activeRaidingTeam: details.activeRaidingTeam,
+        ...(details.clock
+          ? {
+              clock: {
+                halfLabel: details.clock.halfLabel,
+                status: details.clock.status,
+              },
+            }
+          : {}),
+      };
+    } else if (sport === 'Volleyball') {
+      slimDetails = {
+        teamASetsWon: details.teamASetsWon,
+        teamBSetsWon: details.teamBSetsWon,
+        currentSet: details.currentSet,
+        setScores: details.setScores,
+        matchCompleted: details.matchCompleted,
+      };
+    } else if (sport === 'Football') {
+      slimDetails = {
+        currentHalf: details.currentHalf,
+        matchCompleted: details.matchCompleted,
+      };
+    }
+  }
+
+  return {
+    _id: plain._id,
+    id: plain.id || (plain._id ? String(plain._id) : undefined),
+    liveStreamId: plain.liveStreamId,
+    sportType: plain.sportType,
+    teamAScore: plain.teamAScore,
+    teamBScore: plain.teamBScore,
+    matchStatus: plain.matchStatus,
+    resultStatus: plain.resultStatus,
+    resultType: plain.resultType,
+    winnerTeamId: plain.winnerTeamId,
+    winnerTeamName: plain.winnerTeamName,
+    winningMargin: plain.winningMargin,
+    resultDescription: plain.resultDescription,
+    lastUpdatedAt: plain.lastUpdatedAt,
+    ...(slimDetails ? { sportSpecificDetails: slimDetails } : {}),
+  };
+}
+
+function trimPayloadForFeed(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const obj = payload as Record<string, unknown>;
+  if (!obj.score && !obj.historyItem) return payload;
+  return {
+    ...obj,
+    ...(obj.score ? { score: trimScoreForFeed(obj.score) } : {}),
+    ...(obj.historyItem ? { historyItem: undefined } : {}),
+  };
 }
 
 async function getViewerVisibility(streamId: string): Promise<'public' | 'admin_only' | 'hidden'> {
@@ -163,8 +246,9 @@ async function broadcastViewerCounts(targetType: 'match' | 'stream', targetId: s
 export function initSocketServer(httpServer: HttpServer): SocketIOServer {
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin: '*',
+      origin: corsOriginDelegate,
       methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+      credentials: true,
     },
     transports: ['websocket', 'polling'],
     pingInterval: 15_000,
@@ -607,15 +691,29 @@ export function getSocketIO(): SocketIOServer | null {
   return io;
 }
 
-export function emitStreamEvent(streamId: string, event: string, payload: unknown): void {
+export function emitStreamEvent(
+  streamId: string,
+  event: string,
+  payload: unknown,
+  options?: { logicalEventId?: string }
+): void {
   if (!io) return;
-  const enriched = attachMeta(payload);
-  io.to([`stream:${streamId}`, `match:${streamId}`, 'feed']).emit(event, enriched);
+  const meta = nextMetadata(options?.logicalEventId);
+  const enriched = attachMeta(payload, meta);
+  io.to([`stream:${streamId}`, `match:${streamId}`]).emit(event, enriched);
+  const feedPayload = trimPayloadForFeed(payload);
+  const feedEnriched = feedPayload === payload ? enriched : attachMeta(feedPayload, meta);
+  io.to('feed').emit(event, feedEnriched);
 }
 
-export function emitRoomOnlyEvent(streamId: string, event: string, payload: unknown): void {
+export function emitRoomOnlyEvent(
+  streamId: string,
+  event: string,
+  payload: unknown,
+  options?: { logicalEventId?: string }
+): void {
   if (!io) return;
-  const enriched = attachMeta(payload);
+  const enriched = attachMeta(payload, nextMetadata(options?.logicalEventId));
   io.to([`stream:${streamId}`, `match:${streamId}`]).emit(event, enriched);
 }
 

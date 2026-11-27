@@ -108,6 +108,9 @@ export const scoreboardService = {
     streamId: string;
     score: LiveScoreData;
     undoneAction: string;
+    revertedHistoryId?: string;
+    deletedHistoryId?: string | null;
+    undoHistoryItem?: ScoreHistoryItem | null;
     duplicatePrevented?: boolean;
     diag?: ScoreDiagTraceServer;
   }> {
@@ -116,6 +119,9 @@ export const scoreboardService = {
       streamId: string;
       score: LiveScoreData;
       undoneAction: string;
+      revertedHistoryId?: string;
+      deletedHistoryId?: string | null;
+      undoHistoryItem?: ScoreHistoryItem | null;
       duplicatePrevented?: boolean;
       diag?: ScoreDiagTraceServer;
     }>(
@@ -174,10 +180,14 @@ export const scoreboardService = {
     return data;
   },
 
-  async resetScore(streamId: string): Promise<{ streamId: string; score: LiveScoreData }> {
-    const { data } = await adminApi.post<{ streamId: string; score: LiveScoreData }>(
-      `/live/${streamId}/score/reset`
-    );
+  async resetScore(
+    streamId: string
+  ): Promise<{ streamId: string; score: LiveScoreData; resetHistoryItem?: ScoreHistoryItem }> {
+    const { data } = await adminApi.post<{
+      streamId: string;
+      score: LiveScoreData;
+      resetHistoryItem?: ScoreHistoryItem;
+    }>(`/live/${streamId}/score/reset`);
     return data;
   },
 

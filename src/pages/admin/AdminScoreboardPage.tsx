@@ -76,8 +76,15 @@ export function AdminScoreboardPage() {
     notFound: streamNotFound,
     clearError: clearStreamError,
   } = useLiveStream(selectedId || undefined);
-  const { score, setScore, history, connected, refreshHistoryOnly, addHistoryItem } =
-    useScoreboard(selectedId || undefined);
+  const {
+    score,
+    setScore,
+    history,
+    connected,
+    refreshHistoryOnly,
+    addHistoryItem,
+    applyUndoHistory,
+  } = useScoreboard(selectedId || undefined);
 
   useEffect(() => {
     if (id && streams.some((s) => s.id === id)) {
@@ -400,6 +407,7 @@ export function AdminScoreboardPage() {
             onScoreChange={setScore}
             onRefreshHistory={refreshHistoryOnly}
             onAddHistoryItem={addHistoryItem}
+            onApplyUndoHistory={applyUndoHistory}
             onRefreshHighlights={loadHighlights}
             onRefreshStats={loadPlayerStats}
           />

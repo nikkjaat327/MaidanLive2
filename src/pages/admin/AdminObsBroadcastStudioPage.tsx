@@ -58,6 +58,7 @@ import {
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { broadcastGraphicsService } from '../../services/obs/broadcastGraphicsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { getBackendOrigin, resolveApiUrl } from '../../utils/appOrigin.ts';
 import { useObsStudio } from '../../hooks/useObsStudio.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { useLiveMonitor } from '../../context/LiveMonitorContext.tsx';
@@ -918,7 +919,7 @@ export function AdminObsBroadcastStudioPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action,
-              serverUrl: window.location.origin,
+              serverUrl: getBackendOrigin() || window.location.origin,
             }),
             signal: ctrl.signal,
           });
@@ -4556,7 +4557,7 @@ export function AdminObsBroadcastStudioPage() {
                   {installerStatus?.available ? (
                     <>
                       <a
-                        href="/api/obs/bridge/installer/download"
+                        href={resolveApiUrl('/obs/bridge/installer/download')}
                         download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
                         className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-slate-900 rounded-xl hover:bg-slate-800 whitespace-nowrap shrink-0"
                       >
@@ -4570,7 +4571,7 @@ export function AdminObsBroadcastStudioPage() {
                         onClick={() =>
                           copyText(
                             'bridgeInstallerUrl',
-                            `${window.location.origin}/api/obs/bridge/installer/download`
+                            resolveApiUrl('/obs/bridge/installer/download')
                           )
                         }
                         className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 whitespace-nowrap shrink-0"
@@ -5498,7 +5499,7 @@ export function AdminObsBroadcastStudioPage() {
                       {installerStatus?.available && (
                         <>
                           <a
-                            href="/api/obs/bridge/installer/download"
+                            href={resolveApiUrl('/obs/bridge/installer/download')}
                             download={installerStatus.fileName || 'MaidanLive OBS Bridge Setup.exe'}
                             className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
                           >
@@ -5510,7 +5511,7 @@ export function AdminObsBroadcastStudioPage() {
                             onClick={() =>
                               copyText(
                                 'bridgeInstallerUrl',
-                                `${window.location.origin}/api/obs/bridge/installer/download`
+                                resolveApiUrl('/obs/bridge/installer/download')
                               )
                             }
                             className="min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 whitespace-nowrap"

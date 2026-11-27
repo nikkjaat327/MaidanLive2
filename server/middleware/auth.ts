@@ -12,6 +12,128 @@ import { findDocByAnyId } from '../utils/mongoNormalize.ts';
 
 const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 
+const AUTH_CACHE_TTL_MS = 10_000;
+const AUTH_CACHE_MAX = 500;
+const STREAM_AUTH_CACHE_MAX = 200;
+
+const authUserCache = new Map<string, { value: IUser | null; expiresAt: number }>();
+const authSessionCache = new Map<
+  string,
+  { isRevoked: boolean; expiresAtMs: number; cachedUntil: number } | null
+>();
+const streamAuthMetaCache = new Map<
+  string,
+  {
+    value: {
+      _id: any;
+      createdBy?: any;
+      tournamentId?: any;
+      authorizedScorerId?: any;
+      backupScorerId?: any;
+    } | null;
+    expiresAt: number;
+  }
+>();
+
+function setBoundedCache<K, V>(cache: Map<K, V>, key: K, val: V, maxSize: number) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, val);
+  if (cache.size > maxSize) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+}
+
+export function invalidateAuthUserCache(userId?: string): void {
+  if (!userId) {
+    authUserCache.clear();
+    return;
+  }
+  authUserCache.delete(String(userId));
+}
+
+export function invalidateAuthSessionCache(sessionId?: string): void {
+  if (!sessionId) {
+    authSessionCache.clear();
+    return;
+  }
+  authSessionCache.delete(String(sessionId));
+}
+
+export function invalidateStreamAuthCache(streamId?: string): void {
+  if (!streamId) {
+    streamAuthMetaCache.clear();
+    return;
+  }
+  streamAuthMetaCache.delete(String(streamId));
+}
+
+async function loadUserLeanCached(userId: string): Promise<IUser | null> {
+  const key = String(userId);
+  const now = Date.now();
+  const cached = authUserCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const user = await findDocByAnyId(User, key, { lean: true });
+  setBoundedCache(
+    authUserCache,
+    key,
+    { value: user || null, expiresAt: now + AUTH_CACHE_TTL_MS },
+    AUTH_CACHE_MAX
+  );
+  return user || null;
+}
+
+async function checkSessionValidCached(sessionId: string): Promise<boolean> {
+  const key = String(sessionId);
+  const now = Date.now();
+  const cached = authSessionCache.get(key);
+  if (cached !== undefined) {
+    if (cached && cached.cachedUntil > now) {
+      return !cached.isRevoked && cached.expiresAtMs > now;
+    }
+    if (cached === null) {
+      // Do not cache missing session forever; re-check DB
+      authSessionCache.delete(key);
+    }
+  }
+  const session = await findDocByAnyId(UserSession, key, {
+    select: 'isRevoked expiresAt',
+    lean: true,
+  });
+  if (!session) return false;
+  const expiresAtMs = new Date(session.expiresAt).getTime();
+  const isRevoked = Boolean(session.isRevoked);
+  setBoundedCache(
+    authSessionCache,
+    key,
+    { isRevoked, expiresAtMs, cachedUntil: now + AUTH_CACHE_TTL_MS },
+    AUTH_CACHE_MAX
+  );
+  return !isRevoked && expiresAtMs > now;
+}
+
+async function loadStreamAuthMetaCached(streamId: string) {
+  const key = String(streamId);
+  const now = Date.now();
+  const cached = streamAuthMetaCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const stream = await findDocByAnyId(LiveStream, key, {
+    select: 'createdBy tournamentId authorizedScorerId backupScorerId',
+    lean: true,
+  });
+  setBoundedCache(
+    streamAuthMetaCache,
+    key,
+    { value: stream || null, expiresAt: now + AUTH_CACHE_TTL_MS },
+    STREAM_AUTH_CACHE_MAX
+  );
+  return stream || null;
+}
+
 export function getJwtSecret(): string {
   return process.env.JWT_SECRET?.trim() || EPHEMERAL_FALLBACK_SECRET;
 }
@@ -133,22 +255,22 @@ export async function authenticate(
     }
 
     const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload;
-    const user = await findDocByAnyId(User, decoded.sub);
+    const [user, sessionValid] = await Promise.all([
+      loadUserLeanCached(decoded.sub),
+      decoded.sid ? checkSessionValidCached(decoded.sid) : Promise.resolve(true),
+    ]);
 
     if (!user || !user.isActive) {
       res.status(401).json({ message: 'Account is inactive or no longer exists.', code: 'ACCOUNT_INACTIVE' });
       return;
     }
 
-    if (decoded.sid) {
-      const session = await findDocByAnyId(UserSession, decoded.sid, { lean: true });
-      if (!session || session.isRevoked || new Date(session.expiresAt).getTime() <= Date.now()) {
-        res.status(401).json({
-          message: 'Session has been revoked or expired. Please sign in again.',
-          code: 'SESSION_REVOKED',
-        });
-        return;
-      }
+    if (decoded.sid && !sessionValid) {
+      res.status(401).json({
+        message: 'Session has been revoked or expired. Please sign in again.',
+        code: 'SESSION_REVOKED',
+      });
+      return;
     }
 
     req.user = user;
@@ -175,7 +297,7 @@ export async function optionalAuthenticate(
       authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
     if (token) {
       const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload;
-      const user = await findDocByAnyId(User, decoded.sub);
+      const user = await loadUserLeanCached(decoded.sub);
       if (user && user.isActive) {
         req.user = user;
         req.authPortal = decoded.portal;
@@ -313,7 +435,7 @@ export async function hasBroadcastAccess(
     if (user.role === 'BROADCASTER') return false;
     if (user.role === 'ADMIN') return true;
     if (user.role === 'TOURNAMENT_ORGANIZER') {
-      const stream = await findDocByAnyId(LiveStream, matchId);
+      const stream = await loadStreamAuthMetaCached(matchId);
       if (!stream) return false;
       const tourId = stream.tournamentId ? stream.tournamentId.toString() : '';
       if (tourId && (await canManageTournament(user, tourId))) return true;
@@ -325,7 +447,7 @@ export async function hasBroadcastAccess(
     });
   }
 
-  const stream = await findDocByAnyId(LiveStream, matchId);
+  const stream = await loadStreamAuthMetaCached(matchId);
   if (!stream) return false;
   const streamTournamentId = stream.tournamentId ? stream.tournamentId.toString() : '';
 
@@ -521,7 +643,7 @@ export async function canManageStream(
     if (!user.permissions?.manageStreams && !hasExplicitManageStream) return false;
     if (user.role === 'ADMIN') return true;
 
-    const stream = await findDocByAnyId(LiveStream, streamId);
+    const stream = await loadStreamAuthMetaCached(streamId);
     if (!stream) return false;
     if (stream.createdBy?.toString() === user._id.toString()) return true;
     if ((user.assignedStreamIds || []).some((id) => id.toString() === streamId)) return true;
@@ -555,7 +677,7 @@ export async function canManageStream(
   }
   if (user.role === 'SCORER') {
     if (!user.permissions?.manageScores) return false;
-    const stream = await findDocByAnyId(LiveStream, streamId);
+    const stream = await loadStreamAuthMetaCached(streamId);
     if (
       stream &&
       (stream.authorizedScorerId?.toString() === user._id.toString() ||
@@ -568,7 +690,7 @@ export async function canManageStream(
   }
   if (user.role === 'TOURNAMENT_ORGANIZER') {
     if (!user.permissions?.manageScores) return false;
-    const stream = await findDocByAnyId(LiveStream, streamId);
+    const stream = await loadStreamAuthMetaCached(streamId);
     if (!stream) return false;
     if (stream.createdBy?.toString() === user._id.toString()) return true;
     if ((user.assignedStreamIds || []).some((id) => id.toString() === streamId)) return true;

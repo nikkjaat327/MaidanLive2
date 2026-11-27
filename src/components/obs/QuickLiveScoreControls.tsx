@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Clock,
@@ -42,6 +42,11 @@ import {
   makeClientEventId,
 } from '../../utils/optimisticScore.ts';
 import { completeScoreTraceApi, startScoreTrace } from '../../utils/realtimeDiagnostics.ts';
+import {
+  enqueueScoreMutation,
+  getPendingScoreCount,
+  subscribePendingScoreCount,
+} from '../../utils/scoreMutationQueue.ts';
 
 interface QuickLiveScoreControlsProps {
   stream: LiveStreamData;
@@ -69,7 +74,23 @@ export function QuickLiveScoreControls({
   themeVariant = 'dark',
 }: QuickLiveScoreControlsProps) {
   const [busy, setBusy] = useState(false);
+  const [pendingOps, setPendingOps] = useState(0);
+  const scoreRef = useRef<LiveScoreData | null>(score);
+  const confirmedScoreRef = useRef<LiveScoreData | null>(score);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+
+  useEffect(() => {
+    return subscribePendingScoreCount(stream.id, setPendingOps);
+  }, [stream.id]);
+
+  useEffect(() => {
+    if (getPendingScoreCount(stream.id) === 0) {
+      scoreRef.current = score;
+      confirmedScoreRef.current = score;
+    }
+  }, [score, stream.id]);
+
+  const terminalBusy = busy || pendingOps > 0;
 
   // Quick cricket wicket modal state
   const [wicketModalOpen, setWicketModalOpen] = useState(false);
@@ -135,56 +156,66 @@ export function QuickLiveScoreControls({
     successFallback: string,
     sportTypeOverride?: string
   ) {
-    const prevScore = score;
+    const baseScore = scoreRef.current || score;
     const effectiveSport = sportTypeOverride || sport;
     const traceId = makeClientEventId('quick');
     const apiStartAtMs = Date.now();
     startScoreTrace(traceId, successFallback, apiStartAtMs);
-    const optimistic = applyOptimisticStructuredEvent(score, effectiveSport, action);
-    if (optimistic && optimistic !== score) {
+    const optimistic = applyOptimisticStructuredEvent(baseScore, effectiveSport, action);
+    if (optimistic && optimistic !== baseScore) {
+      scoreRef.current = optimistic;
       onScoreChange(optimistic);
     }
+    setFeedback(null);
 
-    try {
-      setBusy(true);
-      setFeedback(null);
-      const res = await offlineScoreService.submitScoreEvent(
-        stream.id,
-        {
-          clientEventId: traceId,
-          traceId,
-          sportType: effectiveSport,
-          action,
-        },
-        score
-      );
-      completeScoreTraceApi(traceId, {
-        status: res.queued ? 'queued' : 'synced',
-        apiStartAtMs,
-        diag: res.diag,
-      });
-      if (res.score) {
-        onScoreChange(res.score);
-      } else if (!res.queued) {
-        onRefresh?.();
+    return enqueueScoreMutation(stream.id, async () => {
+      try {
+        const res = await offlineScoreService.submitScoreEvent(
+          stream.id,
+          {
+            clientEventId: traceId,
+            traceId,
+            sportType: effectiveSport,
+            action,
+          },
+          baseScore
+        );
+        completeScoreTraceApi(traceId, {
+          status: res.queued ? 'queued' : 'synced',
+          apiStartAtMs,
+          diag: res.diag,
+        });
+        if (res.score) {
+          confirmedScoreRef.current = res.score;
+          if (getPendingScoreCount(stream.id) <= 1) {
+            scoreRef.current = res.score;
+            onScoreChange(res.score);
+          }
+        } else if (!res.queued) {
+          onRefresh?.();
+        }
+        setFeedback({
+          type: 'success',
+          text: res.queued
+            ? `Cached offline (${successFallback})`
+            : res.historyItem?.action || successFallback,
+        });
+      } catch (err) {
+        if (getPendingScoreCount(stream.id) <= 1) {
+          const rollback = confirmedScoreRef.current || baseScore;
+          if (rollback) {
+            scoreRef.current = rollback;
+            onScoreChange(rollback);
+          }
+        }
+        const msg = extractApiError(err, 'Failed to update live score.');
+        completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+        setFeedback({
+          type: 'error',
+          text: msg,
+        });
       }
-      setFeedback({
-        type: 'success',
-        text: res.queued
-          ? `Cached offline (${successFallback})`
-          : res.historyItem?.action || successFallback,
-      });
-    } catch (err) {
-      if (prevScore) onScoreChange(prevScore);
-      const msg = extractApiError(err, 'Failed to update live score.');
-      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-      setFeedback({
-        type: 'error',
-        text: msg,
-      });
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   async function submitPatch(payload: {
@@ -194,48 +225,58 @@ export function QuickLiveScoreControls({
     sportSpecificDetails?: Record<string, unknown>;
     action: string;
   }) {
-    const prevScore = score;
+    const baseScore = scoreRef.current || score;
     const traceId = makeClientEventId('quick_patch');
     const apiStartAtMs = Date.now();
     startScoreTrace(traceId, payload.action, apiStartAtMs);
-    const optimistic = applyOptimisticPatch(score, payload);
+    const optimistic = applyOptimisticPatch(baseScore, payload);
     if (optimistic) {
+      scoreRef.current = optimistic;
       onScoreChange(optimistic);
     }
+    setFeedback(null);
 
-    try {
-      setBusy(true);
-      setFeedback(null);
-      const res = await offlineScoreService.submitScorePatch(
-        stream.id,
-        { ...payload, clientEventId: traceId, traceId },
-        score
-      );
-      completeScoreTraceApi(traceId, {
-        status: res.queued ? 'queued' : 'synced',
-        apiStartAtMs,
-        diag: res.diag,
-      });
-      if (res.score) {
-        onScoreChange(res.score);
-      } else if (!res.queued) {
-        onRefresh?.();
+    return enqueueScoreMutation(stream.id, async () => {
+      try {
+        const res = await offlineScoreService.submitScorePatch(
+          stream.id,
+          { ...payload, clientEventId: traceId, traceId },
+          baseScore
+        );
+        completeScoreTraceApi(traceId, {
+          status: res.queued ? 'queued' : 'synced',
+          apiStartAtMs,
+          diag: res.diag,
+        });
+        if (res.score) {
+          confirmedScoreRef.current = res.score;
+          if (getPendingScoreCount(stream.id) <= 1) {
+            scoreRef.current = res.score;
+            onScoreChange(res.score);
+          }
+        } else if (!res.queued) {
+          onRefresh?.();
+        }
+        setFeedback({
+          type: 'success',
+          text: res.queued ? `Cached offline (${payload.action})` : payload.action,
+        });
+      } catch (err) {
+        if (getPendingScoreCount(stream.id) <= 1) {
+          const rollback = confirmedScoreRef.current || baseScore;
+          if (rollback) {
+            scoreRef.current = rollback;
+            onScoreChange(rollback);
+          }
+        }
+        const msg = extractApiError(err, 'Failed to update match score.');
+        completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+        setFeedback({
+          type: 'error',
+          text: msg,
+        });
       }
-      setFeedback({
-        type: 'success',
-        text: res.queued ? `Cached offline (${payload.action})` : payload.action,
-      });
-    } catch (err) {
-      if (prevScore) onScoreChange(prevScore);
-      const msg = extractApiError(err, 'Failed to update match score.');
-      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-      setFeedback({
-        type: 'error',
-        text: msg,
-      });
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   async function handleUndo() {
@@ -251,6 +292,8 @@ export function QuickLiveScoreControls({
       });
       completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
       if (res.score) {
+        confirmedScoreRef.current = res.score;
+        scoreRef.current = res.score;
         onScoreChange(res.score);
       } else {
         onRefresh?.();
@@ -402,7 +445,7 @@ export function QuickLiveScoreControls({
                 ? (score?.matchStatus || 'LIVE').toUpperCase()
                 : ''
             }
-            disabled={busy || volleyballLock.locked}
+            disabled={terminalBusy || volleyballLock.locked}
             onChange={(e) => {
               if (!e.target.value) return;
               submitPatch({
@@ -427,9 +470,9 @@ export function QuickLiveScoreControls({
 
           <button
             type="button"
-            disabled={busy}
+            disabled={terminalBusy}
             onClick={handleUndo}
-            className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${btnNeutral}`}
+            className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap disabled:opacity-40 ${btnNeutral}`}
           >
             <Undo2 className="w-3.5 h-3.5" />
             <span>Undo</span>
@@ -577,7 +620,7 @@ export function QuickLiveScoreControls({
               <button
                 key={b.runs}
                 type="button"
-                disabled={busy || cricketLock.locked}
+                disabled={cricketLock.locked}
                 onClick={() =>
                   submitEvent(
                     {
@@ -598,7 +641,7 @@ export function QuickLiveScoreControls({
 
             <button
               type="button"
-              disabled={busy || cricketLock.locked}
+              disabled={cricketLock.locked}
               onClick={() =>
                 submitEvent(
                   {
@@ -618,7 +661,7 @@ export function QuickLiveScoreControls({
 
             <button
               type="button"
-              disabled={busy || cricketLock.locked}
+              disabled={cricketLock.locked}
               onClick={() =>
                 submitEvent(
                   {
@@ -639,7 +682,7 @@ export function QuickLiveScoreControls({
 
             <button
               type="button"
-              disabled={busy || cricketLock.locked}
+              disabled={cricketLock.locked}
               onClick={() => {
                 setWicketType('CAUGHT');
                 setNewBatsman('');
@@ -653,7 +696,7 @@ export function QuickLiveScoreControls({
 
             <button
               type="button"
-              disabled={busy || cricketLock.locked}
+              disabled={cricketLock.locked}
               onClick={() => submitEvent({ type: 'CHANGE_STRIKER' }, 'Swapped striker')}
               className={`min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 whitespace-nowrap ${btnNeutral}`}
             >
@@ -664,7 +707,7 @@ export function QuickLiveScoreControls({
             {cricketDetails.innings === 1 && !cricketDetails.innings1Completed && (
               <button
                 type="button"
-                disabled={busy}
+                disabled={terminalBusy}
                 onClick={handleCompleteFirstInnings}
                 className="min-h-[42px] px-3 py-2 rounded-lg border border-orange-500/40 bg-[#EA580C]/20 text-orange-300 hover:bg-[#EA580C]/30 text-xs font-semibold disabled:opacity-40 whitespace-nowrap"
               >
@@ -709,7 +752,6 @@ export function QuickLiveScoreControls({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitEvent({ type: 'GOAL', team: 'A', delta: 1 }, `${shortA} Goal (+1)`, 'Football')
             }
@@ -719,7 +761,6 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitEvent({ type: 'GOAL', team: 'A', delta: -1 }, `${shortA} -1`, 'Football')
             }
@@ -729,7 +770,6 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitEvent({ type: 'GOAL', team: 'B', delta: 1 }, `${shortB} Goal (+1)`, 'Football')
             }
@@ -739,7 +779,6 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitEvent({ type: 'GOAL', team: 'B', delta: -1 }, `${shortB} -1`, 'Football')
             }
@@ -771,47 +810,58 @@ export function QuickLiveScoreControls({
             const kd = normalizeKabaddiDetails(score?.sportSpecificDetails);
             const curScore = side === 'A' ? score?.teamAScore ?? 0 : score?.teamBScore ?? 0;
             const courtCount = side === 'A' ? kd.playersOnCourtA : kd.playersOnCourtB;
-            const triggerKabaddi = async (
+            const triggerKabaddi = (
               action: Record<string, unknown>,
               fallbackText: string
             ) => {
-              const prevScore = score;
+              const baseScore = scoreRef.current || score;
               const traceId = makeClientEventId('quick_kbd');
               const apiStartAtMs = Date.now();
               startScoreTrace(traceId, fallbackText, apiStartAtMs);
-              const optimistic = applyOptimisticKabaddiEngineEvent(score, action as any);
+              const optimistic = applyOptimisticKabaddiEngineEvent(baseScore, action as any);
               if (optimistic) {
+                scoreRef.current = optimistic;
                 onScoreChange(optimistic);
               }
-              try {
-                setBusy(true);
-                setFeedback(null);
-                const res = await scoreboardService.recordKabaddiEvent(stream.id, {
-                  clientEventId: traceId,
-                  traceId,
-                  action,
-                });
-                completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
-                if (res.score) {
-                  onScoreChange(res.score);
-                } else {
-                  onRefresh?.();
+              setFeedback(null);
+
+              return enqueueScoreMutation(stream.id, async () => {
+                try {
+                  const res = await scoreboardService.recordKabaddiEvent(stream.id, {
+                    clientEventId: traceId,
+                    traceId,
+                    action,
+                  });
+                  completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+                  if (res.score) {
+                    confirmedScoreRef.current = res.score;
+                    if (getPendingScoreCount(stream.id) <= 1) {
+                      scoreRef.current = res.score;
+                      onScoreChange(res.score);
+                    }
+                  } else {
+                    onRefresh?.();
+                  }
+                  setFeedback({
+                    type: 'success',
+                    text: res.historyItem?.action || fallbackText,
+                  });
+                } catch (err) {
+                  if (getPendingScoreCount(stream.id) <= 1) {
+                    const rollback = confirmedScoreRef.current || baseScore;
+                    if (rollback) {
+                      scoreRef.current = rollback;
+                      onScoreChange(rollback);
+                    }
+                  }
+                  const msg = extractApiError(err, 'Failed to update Kabaddi score.');
+                  completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+                  setFeedback({
+                    type: 'error',
+                    text: msg,
+                  });
                 }
-                setFeedback({
-                  type: 'success',
-                  text: res.historyItem?.action || fallbackText,
-                });
-              } catch (err) {
-                if (prevScore) onScoreChange(prevScore);
-                const msg = extractApiError(err, 'Failed to update Kabaddi score.');
-                completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
-                setFeedback({
-                  type: 'error',
-                  text: msg,
-                });
-              } finally {
-                setBusy(false);
-              }
+              });
             };
             return (
               <div key={side} className={`p-2.5 rounded-lg border space-y-2 ${subBarClass}`}>
@@ -824,7 +874,7 @@ export function QuickLiveScoreControls({
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
-                    disabled={busy || kd.matchCompleted}
+                    disabled={kd.matchCompleted}
                     onClick={() =>
                       triggerKabaddi({ type: 'TOUCH_POINT', team: side }, `${label} Touch Point`)
                     }
@@ -834,7 +884,7 @@ export function QuickLiveScoreControls({
                   </button>
                   <button
                     type="button"
-                    disabled={busy || kd.matchCompleted}
+                    disabled={kd.matchCompleted}
                     onClick={() =>
                       triggerKabaddi(
                         { type: 'TACKLE_POINT', team: side },
@@ -847,7 +897,7 @@ export function QuickLiveScoreControls({
                   </button>
                   <button
                     type="button"
-                    disabled={busy || kd.matchCompleted}
+                    disabled={kd.matchCompleted}
                     onClick={() =>
                       triggerKabaddi({ type: 'EMPTY_RAID', team: side }, `${label} Empty Raid`)
                     }
@@ -857,7 +907,7 @@ export function QuickLiveScoreControls({
                   </button>
                   <button
                     type="button"
-                    disabled={busy || kd.matchCompleted}
+                    disabled={kd.matchCompleted}
                     onClick={() =>
                       triggerKabaddi({ type: 'BONUS_POINT', team: side }, `${label} Bonus Point`)
                     }
@@ -868,7 +918,6 @@ export function QuickLiveScoreControls({
                   <button
                     type="button"
                     disabled={
-                      busy ||
                       kd.matchCompleted ||
                       courtCount > kd.rules.superTackleMaxDefenders
                     }
@@ -900,7 +949,7 @@ export function QuickLiveScoreControls({
               const vd = normalizeVolleyballDetails(
                 (score?.sportSpecificDetails || {}) as Partial<VolleyballDetails>
               );
-              const disabled = busy || volleyballLock.locked;
+              const disabled = volleyballLock.locked;
               return (
                 <>
                   <button
@@ -1035,10 +1084,9 @@ export function QuickLiveScoreControls({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitPatch({
-                teamAScore: (score?.teamAScore ?? 0) + 1,
+                teamAScore: (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) + 1,
                 action: `${shortA} +1`,
               })
             }
@@ -1048,10 +1096,9 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitPatch({
-                teamAScore: Math.max(0, (score?.teamAScore ?? 0) - 1),
+                teamAScore: Math.max(0, (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) - 1),
                 action: `${shortA} -1`,
               })
             }
@@ -1061,10 +1108,9 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitPatch({
-                teamBScore: (score?.teamBScore ?? 0) + 1,
+                teamBScore: (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) + 1,
                 action: `${shortB} +1`,
               })
             }
@@ -1074,10 +1120,9 @@ export function QuickLiveScoreControls({
           </button>
           <button
             type="button"
-            disabled={busy}
             onClick={() =>
               submitPatch({
-                teamBScore: Math.max(0, (score?.teamBScore ?? 0) - 1),
+                teamBScore: Math.max(0, (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) - 1),
                 action: `${shortB} -1`,
               })
             }

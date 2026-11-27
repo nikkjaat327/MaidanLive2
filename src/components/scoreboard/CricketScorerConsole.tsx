@@ -30,6 +30,7 @@ interface CricketScorerConsoleProps {
   score: LiveScoreData | null;
   players: PlayerData[];
   saving: boolean;
+  pendingOps?: number;
   onScoreChange: (score: LiveScoreData) => void;
   onRefreshHistory: () => void;
   onRefreshStats?: () => void;
@@ -67,6 +68,7 @@ export function CricketScorerConsole({
   score,
   players,
   saving,
+  pendingOps = 0,
   onScoreChange,
   onRefreshHistory,
   onRefreshStats,
@@ -90,6 +92,7 @@ export function CricketScorerConsole({
     [details, teamA, teamB]
   );
   const lockState = useMemo(() => isCricketScoringLocked(details), [details]);
+  const terminalBusy = saving || pendingOps > 0;
 
   const [batsman1, setBatsman1] = useState(details.batsman1 || '');
   const [batsman2, setBatsman2] = useState(details.batsman2 || '');
@@ -409,7 +412,7 @@ export function CricketScorerConsole({
 
             <button
               type="button"
-              disabled={saving}
+              disabled={terminalBusy}
               onClick={openSecondInningsModal}
               className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#EA580C] text-white text-sm font-bold hover:bg-orange-700 shadow-sm"
             >
@@ -495,7 +498,7 @@ export function CricketScorerConsole({
             {details.innings === 1 && !details.innings1Completed && !details.innings1Locked && (
               <button
                 type="button"
-                disabled={saving}
+                disabled={terminalBusy}
                 onClick={() => setCompleteInningsConfirmOpen(true)}
                 className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400"
               >
@@ -507,7 +510,7 @@ export function CricketScorerConsole({
             {details.innings === 1 && (details.innings1Completed || details.innings1Locked) && (
               <button
                 type="button"
-                disabled={saving}
+                disabled={terminalBusy}
                 onClick={openSecondInningsModal}
                 className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
               >
@@ -543,8 +546,8 @@ export function CricketScorerConsole({
           </div>
         )}
 
-        {/* Active Scoring Pad (disabled cleanly when locked) */}
-        <fieldset disabled={saving || lockState.locked} className="space-y-4 disabled:opacity-55">
+        {/* Active Scoring Pad (never blocks rapid taps during network latency; locks only on innings/match lock) */}
+        <fieldset disabled={lockState.locked} className="space-y-4 disabled:opacity-55">
           {/* Runs Grid */}
           <div>
             <p className="text-xs font-semibold text-slate-600 mb-2">

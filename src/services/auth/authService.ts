@@ -27,6 +27,9 @@ export interface AuthResponse {
 export interface SetupStatusResponse {
   needsSetup: boolean;
   requiresSetupKey: boolean;
+  dbUnavailable?: boolean;
+  setupDisabled?: boolean;
+  message?: string;
 }
 
 export const authService = {

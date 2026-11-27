@@ -1,12 +1,35 @@
 import {
   BroadcastOverlayConfig,
+  FixtureData,
   LiveScoreData,
   LiveStreamData,
+  MatchHighlightData,
+  PlayerData,
+  PlayerMatchStatRecord,
+  ScoreHistoryItem,
+  SponsorData,
+  SponsorOverlayData,
   StreamHealthData,
   StreamingProvider,
 } from '../../types/index.ts';
 import { adminApi, getViewerApi, publicApi } from '../api/httpClient.ts';
 import type { BroadcastGraphicsStateData } from '../../types/broadcastGraphics.ts';
+
+export interface MatchDetailBundleResponse {
+  stream: LiveStreamData;
+  score: LiveScoreData | null;
+  history: ScoreHistoryItem[];
+  highlights: MatchHighlightData[];
+  sponsorOverlays: SponsorOverlayData[];
+  publicSponsors: SponsorData[];
+  playerStats: PlayerMatchStatRecord[];
+  lineupPlayers: {
+    teamA: PlayerData[];
+    teamB: PlayerData[];
+  };
+  upcomingFixtures: FixtureData[];
+  serverNowIso?: string;
+}
 
 export interface YouTubeVerification {
   validId: boolean;
@@ -79,6 +102,11 @@ export const liveStreamService = {
   async getStreamById(id: string): Promise<LiveStreamData> {
     const { data } = await getViewerApi().get<{ stream: LiveStreamData }>(`/live/${id}`);
     return data.stream;
+  },
+
+  async getMatchDetail(id: string): Promise<MatchDetailBundleResponse> {
+    const { data } = await getViewerApi().get<MatchDetailBundleResponse>(`/live/${id}/detail`);
+    return data;
   },
 
   async verifyYouTubeVideo(youtubeInput: string): Promise<YouTubeVerification> {

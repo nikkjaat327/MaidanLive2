@@ -13,6 +13,7 @@ export function AdminLoginPage() {
   const [checkingSetup, setCheckingSetup] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [requiresSetupKey, setRequiresSetupKey] = useState(false);
+  const [setupCheckFailed, setSetupCheckFailed] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -24,18 +25,32 @@ export function AdminLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    authService
-      .getAdminSetupStatus()
-      .then((res) => {
-        setNeedsSetup(res.needsSetup);
-        setRequiresSetupKey(res.requiresSetupKey);
-      })
-      .catch(() => {
-        setNeedsSetup(false);
-      })
-      .finally(() => setCheckingSetup(false));
+  const checkSetupStatus = React.useCallback(async () => {
+    try {
+      setCheckingSetup(true);
+      setSetupCheckFailed(null);
+      const res = await authService.getAdminSetupStatus();
+      setNeedsSetup(Boolean(res.needsSetup) && !res.dbUnavailable && !res.setupDisabled);
+      setRequiresSetupKey(Boolean(res.requiresSetupKey));
+      if (res.dbUnavailable) {
+        setSetupCheckFailed(
+          res.message || 'Database is temporarily unavailable. Retry once MongoDB is reachable.'
+        );
+      }
+    } catch (err: any) {
+      setNeedsSetup(false);
+      const msg =
+        err?.response?.data?.message ||
+        'Unable to reach the backend API server. Verify your server URL and connection.';
+      setSetupCheckFailed(msg);
+    } finally {
+      setCheckingSetup(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void checkSetupStatus();
+  }, [checkSetupStatus]);
 
   if (!adminLoading && adminUser) {
     const dest = adminUser.role === 'BROADCASTER' ? '/broadcaster' : '/admin/dashboard';
@@ -107,6 +122,18 @@ export function AdminLoginPage() {
 
         <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
         <FeedbackBanner type="info" message={infoMsg} onDismiss={() => setInfoMsg(null)} />
+        {setupCheckFailed && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-950/40 px-3.5 py-2.5 text-xs text-amber-200 flex items-center justify-between gap-3">
+            <span>{setupCheckFailed}</span>
+            <button
+              type="button"
+              onClick={() => void checkSetupStatus()}
+              className="shrink-0 px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 font-semibold text-amber-100"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {checkingSetup ? (
           <div className="py-8 text-center text-sm text-slate-400">

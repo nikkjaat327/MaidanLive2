@@ -56,17 +56,35 @@ export async function applyKabaddiPlayerStatDeltas(params: {
   const { stream, playerStatDeltas, actorId, direction, session } = params;
   if (!playerStatDeltas || typeof playerStatDeltas !== 'object') return;
 
-  for (const [playerId, rawDelta] of Object.entries(playerStatDeltas)) {
-    if (!playerId || !mongoose.Types.ObjectId.isValid(playerId) || !rawDelta) continue;
-    const player = await Player.findById(playerId).session(session);
-    if (!player) continue;
+  const entries = Object.entries(playerStatDeltas).filter(
+    ([playerId, rawDelta]) => Boolean(playerId && mongoose.Types.ObjectId.isValid(playerId) && rawDelta)
+  );
+  if (entries.length === 0) return;
 
-    let statDoc = await PlayerMatchStat.findOne({
+  const validIds = entries.map(([playerId]) => playerId);
+  const [players, existingStats] = await Promise.all([
+    Player.find({ _id: { $in: validIds } }).select('_id teamId').session(session).lean(),
+    PlayerMatchStat.find({
       liveStreamId: stream._id,
-      playerId: player._id,
-    }).session(session);
+      playerId: { $in: validIds },
+    }).session(session),
+  ]);
 
-    if (!statDoc && direction === -1) continue;
+  const playerMap = new Map<string, any>();
+  for (const p of players as any[]) {
+    playerMap.set(String(p._id), p);
+  }
+  const statMap = new Map<string, any>();
+  for (const st of existingStats as any[]) {
+    statMap.set(String(st.playerId), st);
+  }
+
+  const persistStat = async (playerId: string, rawDelta: Record<string, number>) => {
+    const player = playerMap.get(playerId);
+    if (!player) return;
+
+    let statDoc = statMap.get(playerId) || null;
+    if (!statDoc && direction === -1) return;
 
     if (!statDoc) {
       const created = await PlayerMatchStat.create(
@@ -84,6 +102,7 @@ export async function applyKabaddiPlayerStatDeltas(params: {
         { session: session || undefined }
       );
       statDoc = created[0];
+      statMap.set(playerId, statDoc);
     }
 
     let changed = false;
@@ -100,6 +119,14 @@ export async function applyKabaddiPlayerStatDeltas(params: {
       statDoc.updatedBy = actorId;
       await statDoc.save({ session: session || undefined });
     }
+  };
+
+  if (session) {
+    for (const [playerId, rawDelta] of entries) {
+      await persistStat(playerId, rawDelta);
+    }
+  } else {
+    await Promise.all(entries.map(([playerId, rawDelta]) => persistStat(playerId, rawDelta)));
   }
 }
 
@@ -120,8 +147,12 @@ async function resolveKabaddiStream(idOrFixtureId: string, session: any = null) 
   return stream;
 }
 
-async function ensureKabaddiScore(streamId: string, session: any = null) {
-  const stream = await resolveKabaddiStream(streamId, session);
+async function ensureKabaddiScore(
+  streamId: string,
+  session: any = null,
+  preResolvedStream: any = null
+) {
+  const stream = preResolvedStream ?? (await resolveKabaddiStream(streamId, session));
   const resolvedId = stream ? stream._id.toString() : streamId;
   let score = await LiveScore.findOne({
     liveStreamId: buildIdMatchFilter(resolvedId),
@@ -200,7 +231,7 @@ export async function handleKabaddiEventRoute(
       const stream = await resolveKabaddiStream(id, session);
       if (!stream) return null;
 
-      const score = await ensureKabaddiScore(stream._id.toString(), session);
+      const score = await ensureKabaddiScore(stream._id.toString(), session, stream);
       if (!score) return null;
 
       const detailsNorm = normalizeKabaddiDetails(score.sportSpecificDetails as Partial<KabaddiDetails>);
@@ -377,7 +408,8 @@ export async function handleKabaddiEventRoute(
       ...(diag ? { diag } : {}),
     };
 
-    emitStreamEvent(id, 'score:updated', payload);
+    const kabLogicalId = `kbd_${String(txResult.historyId || Date.now())}`;
+    emitStreamEvent(id, 'score:updated', payload, { logicalEventId: kabLogicalId });
     runBackgroundTask(
       'kabaddiEventAudit',
       recordActivity(
@@ -395,11 +427,16 @@ export async function handleKabaddiEventRoute(
         }
       )
     );
-    emitStreamEvent(id, 'kabaddi:state', {
-      streamId: id,
-      score: payload.score,
-      serverNowIso,
-    });
+    emitStreamEvent(
+      id,
+      'kabaddi:state',
+      {
+        streamId: id,
+        score: payload.score,
+        serverNowIso,
+      },
+      { logicalEventId: kabLogicalId }
+    );
     if (txResult.applied.triggeredDoOrDie) {
       emitStreamEvent(id, 'kabaddi:do_or_die', {
         streamId: id,

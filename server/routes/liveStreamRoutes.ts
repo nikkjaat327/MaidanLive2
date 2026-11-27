@@ -22,8 +22,9 @@ import { ChatMessage } from '../models/ChatMessage.ts';
 import { Poll } from '../models/Poll.ts';
 import { ViewerMetric } from '../models/ViewerMetric.ts';
 import { MatchReport } from '../models/MatchReport.ts';
+import { Player } from '../models/Player.ts';
 import { PlayerMatchStat } from '../models/PlayerMatchStat.ts';
-import { SponsorOverlay } from '../models/Sponsor.ts';
+import { Sponsor, SponsorOverlay } from '../models/Sponsor.ts';
 import { BroadcastCamera } from '../models/BroadcastCamera.ts';
 import { BroadcastScene } from '../models/BroadcastScene.ts';
 import { BroadcastAdDesign } from '../models/BroadcastAdDesign.ts';
@@ -33,6 +34,7 @@ import { BroadcastGraphicsState } from '../models/BroadcastGraphicsState.ts';
 import { BroadcastAssignment } from '../models/BroadcastAssignment.ts';
 import { ObsBridge } from '../models/ObsBridge.ts';
 import { ADMIN_PORTAL_ROLES } from '../models/User.ts';
+import { buildIdMatchFilter } from '../utils/mongoNormalize.ts';
 import {
   buildPublicStreamVisibilityQuery,
   isStreamVisibleToPublic,
@@ -53,6 +55,7 @@ import {
   canManageStream,
   hasBroadcastAccess,
   hasGranularPermission,
+  invalidateStreamAuthCache,
   optionalAuthenticate,
   requireAdminPortal,
   requirePermission,
@@ -173,6 +176,41 @@ function redactPlaybackForUnauthenticated(streamObj: any) {
     mediamtxHlsUrl: '',
     playbackLocked: true,
   };
+}
+
+function sanitizePublicDetailPlayer(p: any) {
+  if (!p) return p;
+  const pid = p._id ? String(p._id) : p.id ? String(p.id) : '';
+  return {
+    _id: p._id,
+    id: pid,
+    name: p.name || '',
+    teamId: p.teamId || null,
+    sportType: p.sportType || 'Cricket',
+    role: p.role || '',
+    position: p.position || '',
+    battingStyle: p.battingStyle || '',
+    bowlingStyle: p.bowlingStyle || '',
+    bio: p.bio || '',
+    jerseyNumber: p.jerseyNumber ?? null,
+    avatarUrl: p.avatarUrl || '',
+    isVerified: Boolean(p.isVerified),
+    followersCount: Number(p.followersCount) || 0,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+}
+
+function dedupeByObjectId(items: any[]): any[] {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const item of items) {
+    const key = String(item?._id || item?.id || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 async function attachScoresToStreams(
@@ -711,6 +749,143 @@ router.get('/replays', authenticate, async (req: AuthenticatedRequest, res: Resp
   } catch (err) {
     console.error('[LiveStream] Replays error:', err);
     res.status(500).json({ message: 'Failed to load replays.' });
+  }
+});
+
+// GET /api/live/:id/detail - Unified match detail bootstrap (stream + score + history + highlights + sponsors + stats + lineups + fixtures)
+router.get('/:id/detail', optionalAuthenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid stream ID.' });
+      return;
+    }
+
+    const stream = await LiveStream.findById(id).lean();
+    if (!stream) {
+      res.status(404).json({ message: 'Live stream not found.' });
+      return;
+    }
+
+    const isAdminViewer = Boolean(
+      req.user && req.authPortal === 'admin' && ADMIN_PORTAL_ROLES.includes(req.user.role)
+    );
+    if (!isAdminViewer && !isStreamVisibleToPublic(stream)) {
+      res.status(404).json({ message: 'Broadcast has not been published yet.' });
+      return;
+    }
+
+    const overlayFilter: Record<string, unknown>[] = [{ liveStreamId: id }];
+    if (stream.tournamentId) {
+      overlayFilter.push({ tournamentId: stream.tournamentId, liveStreamId: null });
+    }
+    overlayFilter.push({ liveStreamId: null, tournamentId: null });
+
+    const sponsorQuery: Record<string, unknown> = {
+      isPublished: true,
+      isActive: true,
+      placement: 'live_match',
+      $or: [{ liveStreamId: id }, { liveStreamId: null }],
+    };
+
+    const [
+      score,
+      venue,
+      history,
+      highlightsRaw,
+      overlaysRaw,
+      sponsorsRaw,
+      playerStatsRaw,
+      teamAPlayersRaw,
+      teamBPlayersRaw,
+      fixturesRaw,
+    ] = await Promise.all([
+      LiveScore.findOne({ liveStreamId: stream._id }).lean(),
+      stream.venueId ? Venue.findById(stream.venueId).lean() : Promise.resolve(null),
+      ScoreHistory.find({ liveStreamId: id })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(100)
+        .populate('updatedBy', 'name role')
+        .lean(),
+      req.user
+        ? MatchHighlight.find({ liveStreamId: id })
+            .sort({ videoTimestampSeconds: 1, createdAt: 1 })
+            .lean()
+        : Promise.resolve([]),
+      SponsorOverlay.find({ isVisible: true, $or: overlayFilter })
+        .populate('sponsorId')
+        .sort({ displayOrder: 1, createdAt: 1 })
+        .lean(),
+      Sponsor.find(sponsorQuery).sort({ createdAt: -1 }).lean(),
+      PlayerMatchStat.find({ liveStreamId: id })
+        .populate('playerId', 'name role jerseyNumber avatarUrl')
+        .populate('teamId', 'name shortName')
+        .lean(),
+      stream.teamAId
+        ? Player.find({ teamId: buildIdMatchFilter(String(stream.teamAId)) })
+            .populate('teamId', 'name shortName logoUrl')
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+      stream.teamBId
+        ? Player.find({ teamId: buildIdMatchFilter(String(stream.teamBId)) })
+            .populate('teamId', 'name shortName logoUrl')
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+      stream.tournamentId
+        ? Fixture.find({ tournamentId: stream.tournamentId })
+            .sort({ roundNumber: 1, matchNumber: 1 })
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const formatted = formatPublicStream(
+      stream,
+      {
+        score: score || null,
+        venue: venue ? { ...venue, id: venue._id.toString() } : null,
+      },
+      isAdminViewer
+    );
+    const safeStream = req.user ? formatted : redactPlaybackForUnauthenticated(formatted);
+
+    const sponsorOverlays = overlaysRaw
+      .filter((ov: any) => ov.sponsorId && ov.sponsorId.isActive && ov.sponsorId.isPublished)
+      .map((ov: any) => ({
+        ...ov,
+        id: ov._id.toString(),
+        sponsor: { ...ov.sponsorId, id: ov.sponsorId._id.toString() },
+      }));
+
+    const teamAUnique = dedupeByObjectId(teamAPlayersRaw);
+    const teamBUnique = dedupeByObjectId(teamBPlayersRaw);
+    const mapPlayer = (p: any) =>
+      isAdminViewer ? { ...p, id: p._id.toString() } : sanitizePublicDetailPlayer(p);
+
+    const upcomingFixtures = (fixturesRaw as any[])
+      .filter((f) => f.status === 'SCHEDULED' || f.status === 'LIVE')
+      .slice(0, 6)
+      .map((f) => ({ ...f, id: f._id.toString() }));
+
+    res.json({
+      stream: safeStream,
+      score: score || null,
+      history,
+      highlights: (highlightsRaw as any[]).map((h) => ({ ...h, id: h._id.toString() })),
+      sponsorOverlays,
+      publicSponsors: (sponsorsRaw as any[]).map((s) => ({ ...s, id: s._id.toString() })),
+      playerStats: (playerStatsRaw as any[]).map((s) => ({ ...s, id: s._id.toString() })),
+      lineupPlayers: {
+        teamA: teamAUnique.map(mapPlayer),
+        teamB: teamBUnique.map(mapPlayer),
+      },
+      upcomingFixtures,
+      serverNowIso: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[LiveStream] Detail bundle error:', err);
+    res.status(500).json({ message: 'Failed to load match broadcast details.' });
   }
 });
 
@@ -1675,6 +1850,9 @@ router.patch(
 
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
+      if (req.body.authorizedScorerId !== undefined || req.body.backupScorerId !== undefined) {
+        invalidateStreamAuthCache(id);
+      }
 
       const reqOversLimit =
         req.body.oversLimit !== undefined && req.body.oversLimit !== ''
@@ -2413,6 +2591,7 @@ router.delete(
 
       await LiveStream.deleteOne({ _id: stream._id });
       invalidateViewerVisibilityCache(id);
+      invalidateStreamAuthCache(id);
 
       await recordActivity(
         req.user!,

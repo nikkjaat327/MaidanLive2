@@ -1,7 +1,9 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { getActiveDbEngine } from '../db/engineState.ts';
 import { ADMIN_PORTAL_ROLES, ALL_GRANULAR_PERMISSIONS, User } from '../models/User.ts';
 import { UserSession } from '../models/UserSession.ts';
 import { RoleAssignment } from '../models/RoleAssignment.ts';
@@ -9,6 +11,8 @@ import { SecurityPolicy } from '../models/SecurityPolicy.ts';
 import {
   authenticate,
   getEffectiveGranularPermissions,
+  invalidateAuthSessionCache,
+  invalidateAuthUserCache,
   optionalAuthenticate,
   requireAdminPortal,
   requireRole,
@@ -251,13 +255,57 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
+function getBootstrapGuardState(): {
+  blocked: boolean;
+  setupDisabled?: boolean;
+  dbUnavailable?: boolean;
+  message?: string;
+} {
+  if (process.env.DISABLE_PUBLIC_SUPER_ADMIN_SETUP === 'true') {
+    return {
+      blocked: true,
+      setupDisabled: true,
+      message: 'Public Super Admin setup is disabled by server policy.',
+    };
+  }
+  const hasMongoUri = Boolean(process.env.MONGODB_URI?.trim());
+  if (hasMongoUri && (getActiveDbEngine() !== 'mongodb' || mongoose.connection.readyState !== 1)) {
+    return {
+      blocked: true,
+      dbUnavailable: true,
+      message: 'Primary MongoDB database is currently disconnected. Super Admin setup is locked.',
+    };
+  }
+  return { blocked: false };
+}
+
 // Check whether initial Super Admin bootstrap is required
 router.get('/admin/setup-status', async (_req: Request, res: Response) => {
   try {
+    const guard = getBootstrapGuardState();
+    const requiresSetupKey = Boolean(process.env.ADMIN_SETUP_KEY?.trim());
+    if (guard.setupDisabled) {
+      res.json({
+        needsSetup: false,
+        requiresSetupKey,
+        setupDisabled: true,
+      });
+      return;
+    }
+    if (guard.dbUnavailable) {
+      res.status(503).json({
+        needsSetup: false,
+        requiresSetupKey,
+        dbUnavailable: true,
+        message: guard.message,
+      });
+      return;
+    }
+
     const superAdminCount = await User.countDocuments({ role: 'SUPER_ADMIN' });
     res.json({
       needsSetup: superAdminCount === 0,
-      requiresSetupKey: Boolean(process.env.ADMIN_SETUP_KEY?.trim()),
+      requiresSetupKey,
     });
   } catch (err) {
     console.error('[Auth] Setup status error:', err);
@@ -268,6 +316,16 @@ router.get('/admin/setup-status', async (_req: Request, res: Response) => {
 // Controlled one-time Super Admin bootstrap when DB has 0 Super Admins
 router.post('/admin/bootstrap', async (req: Request, res: Response) => {
   try {
+    const guard = getBootstrapGuardState();
+    if (guard.setupDisabled) {
+      res.status(403).json({ message: guard.message });
+      return;
+    }
+    if (guard.dbUnavailable) {
+      res.status(503).json({ message: guard.message });
+      return;
+    }
+
     const existingSuperAdmin = await User.countDocuments({ role: 'SUPER_ADMIN' });
     if (existingSuperAdmin > 0) {
       res.status(403).json({
@@ -550,6 +608,7 @@ router.post('/logout', optionalAuthenticate, async (req: AuthenticatedRequest, r
         { previousRefreshTokenHash: tokenHash, isRevoked: false },
         { $set: { isRevoked: true, revokedAt } }
       );
+      invalidateAuthSessionCache();
     }
     res.json({ ok: true, message: 'Signed out.' });
   } catch {
@@ -564,6 +623,8 @@ router.post('/logout-all', authenticate, async (req: AuthenticatedRequest, res: 
       { userId: req.user!._id, isRevoked: false },
       { $set: { isRevoked: true, revokedAt: new Date() } }
     );
+    invalidateAuthSessionCache();
+    invalidateAuthUserCache(req.user!._id.toString());
     await recordActivity(
       req.user!,
       'LOGOUT_ALL_SESSIONS',
@@ -629,6 +690,7 @@ router.delete('/sessions/:id', authenticate, async (req: AuthenticatedRequest, r
     session.isRevoked = true;
     session.revokedAt = new Date();
     await session.save();
+    invalidateAuthSessionCache(session._id.toString());
     res.json({ ok: true, message: 'Session revoked.' });
   } catch (err) {
     console.error('[Auth] Revoke session error:', err);
@@ -697,6 +759,8 @@ router.post('/reset-password', async (req: Request, res: Response) => {
       { userId: user._id },
       { $set: { isRevoked: true, revokedAt: new Date() } }
     );
+    invalidateAuthSessionCache();
+    invalidateAuthUserCache(user._id.toString());
     res.json({ ok: true, message: 'Password has been reset successfully. Please sign in.' });
   } catch (err) {
     console.error('[Auth] Reset password error:', err);

@@ -350,10 +350,25 @@ function KabaddiBoard({
   details: KabaddiDetails;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const isClockTicking = Boolean(
+    !details.matchCompleted &&
+      (details.clock.status === 'RUNNING' ||
+        details.clock.status === 'EXTRA_TIME' ||
+        details.clock.status === 'BREAK' ||
+        details.clock.raidRunning ||
+        details.clock.timeoutActive ||
+        details.doOrDie.active ||
+        (details.lastAllOut?.triggeredAtIso &&
+          Date.now() - Date.parse(details.lastAllOut.triggeredAtIso) <=
+            (details.rules.allOutBannerDurationSec || 5) * 1000))
+  );
+
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 400);
+    if (!isClockTicking) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isClockTicking]);
 
   const eff = computeEffectiveKabaddiClock(details, nowMs);
   const vis = details.viewerDisplaySettings;

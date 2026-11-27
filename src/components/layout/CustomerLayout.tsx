@@ -24,6 +24,7 @@ import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { OfflineIndicator } from '../common/OfflineIndicator.tsx';
+import { ServerWakeupBanner } from '../common/ServerWakeupBanner.tsx';
 import { GlobalSearchModal } from '../common/GlobalSearchModal.tsx';
 
 export function CustomerLayout() {
@@ -153,6 +154,7 @@ export function CustomerLayout() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 pb-16 md:pb-0">
       <OfflineIndicator />
+      <ServerWakeupBanner />
 
       {swWaiting && (
         <div className="bg-slate-900 text-white px-4 py-2 text-xs flex items-center justify-center gap-3 border-b border-slate-800">

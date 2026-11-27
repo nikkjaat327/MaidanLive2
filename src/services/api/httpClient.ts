@@ -244,8 +244,60 @@ function attachColdStartGetRetry(instance: typeof publicApi) {
   );
 }
 
+let activeSlowGets = 0;
+let wakeupVisible = false;
+
+function dispatchWakeupEvent(active: boolean) {
+  if (typeof window === 'undefined' || wakeupVisible === active) return;
+  wakeupVisible = active;
+  window.dispatchEvent(new CustomEvent('maidanlive:server-wakeup', { detail: { active } }));
+}
+
+function attachSlowWakeupTracker(instance: typeof publicApi) {
+  instance.interceptors.request.use((config) => {
+    if (typeof window !== 'undefined' && String(config.method || 'get').toLowerCase() === 'get') {
+      const meta = config as Record<string, any>;
+      meta._wakeupTimer = window.setTimeout(() => {
+        meta._wakeupCounted = true;
+        activeSlowGets += 1;
+        dispatchWakeupEvent(true);
+      }, 2500);
+    }
+    return config;
+  });
+
+  const finalize = (cfg: any) => {
+    if (typeof window === 'undefined' || !cfg) return;
+    if (cfg._wakeupTimer) {
+      window.clearTimeout(cfg._wakeupTimer);
+      cfg._wakeupTimer = undefined;
+    }
+    if (cfg._wakeupCounted) {
+      cfg._wakeupCounted = false;
+      activeSlowGets = Math.max(0, activeSlowGets - 1);
+      if (activeSlowGets === 0) {
+        dispatchWakeupEvent(false);
+      }
+    }
+  };
+
+  instance.interceptors.response.use(
+    (response) => {
+      finalize(response?.config);
+      return response;
+    },
+    (error) => {
+      finalize(error?.config);
+      return Promise.reject(error);
+    }
+  );
+}
+
 attachColdStartGetRetry(publicApi);
 attachColdStartGetRetry(customerApi);
+attachSlowWakeupTracker(publicApi);
+attachSlowWakeupTracker(customerApi);
+attachSlowWakeupTracker(adminApi);
 attachAuthInterceptors(customerApi, CUSTOMER_TOKEN_KEY, CUSTOMER_REFRESH_KEY, 'customer');
 attachAuthInterceptors(adminApi, ADMIN_TOKEN_KEY, ADMIN_REFRESH_KEY, 'admin');
 

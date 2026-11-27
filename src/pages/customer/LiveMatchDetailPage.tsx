@@ -1,17 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { MatchHighlightData, SponsorOverlayData } from '../../types/index.ts';
+import {
+  FixtureData,
+  MatchHighlightData,
+  PlayerData,
+  PlayerMatchStatRecord,
+  SponsorData,
+  SponsorOverlayData,
+} from '../../types/index.ts';
 import { useLiveStream } from '../../hooks/useLiveStream.ts';
 import { useScoreboard } from '../../hooks/useScoreboard.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
+import {
+  liveStreamService,
+  type MatchDetailBundleResponse,
+} from '../../services/liveStream/liveStreamService.ts';
+import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { LiveBroadcastView } from '../../components/broadcast/LiveBroadcastView.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { MatchReportModal } from '../../components/engagement/MatchReportModal.tsx';
 import { recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
+import {
+  getCachedViewerData,
+  pickFresherScore,
+  setCachedViewerData,
+} from '../../utils/viewerCache.ts';
 
 export function LiveMatchDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,8 +41,18 @@ export function LiveMatchDetailPage() {
   const authLoading = customerLoading || adminLoading;
   const authKey = `${customerUser?.id || ''}:${adminUser?.id || ''}`;
 
-  const { stream, setStream, loading, error, switchingBanner } = useLiveStream(id, authKey);
-  const { score, history, connected } = useScoreboard(id, {
+  const { stream, setStream, switchingBanner } = useLiveStream(id, authKey, {
+    skipInitialFetch: true,
+  });
+  const {
+    score,
+    setScore,
+    history,
+    setHistory,
+    setLoading: setScoreLoading,
+    connected,
+  } = useScoreboard(id, {
+    skipInitialFetch: true,
     onViewerCountUpdated: (viewers, visibility) => {
       setStream((prev) =>
         prev
@@ -39,8 +66,17 @@ export function LiveMatchDetailPage() {
     },
   });
 
+  const [detailLoading, setDetailLoading] = useState<boolean>(Boolean(id));
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<MatchHighlightData[]>([]);
   const [sponsorOverlays, setSponsorOverlays] = useState<SponsorOverlayData[]>([]);
+  const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>([]);
+  const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>([]);
+  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>({
+    teamA: [],
+    teamB: [],
+  });
+  const [upcomingFixtures, setUpcomingFixtures] = useState<FixtureData[]>([]);
   const [startSeconds, setStartSeconds] = useState<number | null>(
     Number.isFinite(urlStartParam) && urlStartParam > 0 ? Math.floor(urlStartParam) : null
   );
@@ -48,26 +84,68 @@ export function LiveMatchDetailPage() {
   const [reportOpen, setReportOpen] = useState(false);
 
   const sessionKeyRef = useRef<string>('');
+  const detailCacheKey = id ? `match_detail_${id}_${isAuthenticated ? 'auth' : 'pub'}` : '';
 
-  const loadHighlightsAndSponsors = useCallback(async () => {
-    if (!id) return;
-    try {
-      const [hl, overlays] = await Promise.all([
-        isAuthenticated ? engagementService.listHighlights(id) : Promise.resolve([]),
-        platformOpsService.listLiveSponsorOverlays(id),
-      ]);
-      setHighlights(hl);
-      setSponsorOverlays(overlays);
-    } catch {
-      if (!isAuthenticated) {
-        setHighlights([]);
-      }
-    }
-  }, [id, isAuthenticated]);
+  const applyBundle = useCallback(
+    (bundle: MatchDetailBundleResponse, fromCache = false) => {
+      setStream((prev) => {
+        if (!prev) return bundle.stream;
+        return fromCache ? prev : { ...prev, ...bundle.stream };
+      });
+      setScore((prev) => pickFresherScore(prev, bundle.score));
+      setHistory((prev) => (fromCache && prev.length > 0 ? prev : bundle.history || []));
+      setHighlights(bundle.highlights || []);
+      setSponsorOverlays(bundle.sponsorOverlays || []);
+      setPublicSponsors(bundle.publicSponsors || []);
+      setMatchStats(bundle.playerStats || []);
+      setLineupPlayers(bundle.lineupPlayers || { teamA: [], teamB: [] });
+      setUpcomingFixtures(bundle.upcomingFixtures || []);
+      setScoreLoading(false);
+    },
+    [setStream, setScore, setHistory, setScoreLoading]
+  );
 
   useEffect(() => {
-    loadHighlightsAndSponsors();
-  }, [loadHighlightsAndSponsors]);
+    if (!id) {
+      setDetailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDetailError(null);
+
+    const cached = detailCacheKey
+      ? getCachedViewerData<MatchDetailBundleResponse>(detailCacheKey, 3 * 60 * 1000)
+      : null;
+    if (cached && cached.stream) {
+      applyBundle(cached, true);
+      setDetailLoading(false);
+    } else {
+      setDetailLoading(true);
+    }
+
+    liveStreamService
+      .getMatchDetail(id)
+      .then((bundle) => {
+        if (cancelled) return;
+        applyBundle(bundle, false);
+        setDetailLoading(false);
+        if (detailCacheKey) {
+          setCachedViewerData(detailCacheKey, bundle);
+        }
+        (bundle.publicSponsors || []).forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (!cached) {
+          setDetailError(extractApiError(err, 'Unable to load match stream details.'));
+        }
+        setDetailLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, authKey, detailCacheKey, applyBundle]);
 
   useEffect(() => {
     if (!id) return;
@@ -159,7 +237,7 @@ export function LiveMatchDetailPage() {
     setJumpKey((k) => k + 1);
   }
 
-  if (loading) {
+  if (detailLoading) {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-4 animate-pulse">
         <div className="h-6 bg-slate-200 rounded w-44" />
@@ -169,10 +247,10 @@ export function LiveMatchDetailPage() {
     );
   }
 
-  if (error || !stream) {
+  if (detailError || !stream) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10 space-y-4">
-        <FeedbackBanner type="error" message={error || 'Live stream not found.'} />
+        <FeedbackBanner type="error" message={detailError || 'Live stream not found.'} />
         <Link
           to="/live"
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-slate-900"
@@ -209,6 +287,11 @@ export function LiveMatchDetailPage() {
         connected={connected}
         highlights={highlights}
         sponsorOverlays={sponsorOverlays}
+        prefetchedDetailBundle
+        initialPublicSponsors={publicSponsors}
+        initialMatchStats={matchStats}
+        initialLineupPlayers={lineupPlayers}
+        initialUpcomingFixtures={upcomingFixtures}
         wantsReplay={wantsReplay}
         startSeconds={startSeconds}
         jumpKey={jumpKey}

@@ -11,14 +11,20 @@ import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
+import {
+  getCachedViewerData,
+  pickFresherScore,
+  setCachedViewerData,
+} from '../../utils/viewerCache.ts';
 
 export function LiveStreamsPage() {
   const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
   const isAuthenticated = Boolean(customerUser || adminUser);
   const authLoading = customerLoading || adminLoading;
 
-  const [streams, setStreams] = useState<LiveStreamData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedStreams = getCachedViewerData<LiveStreamData[]>('live_streams_list_v1');
+  const [streams, setStreams] = useState<LiveStreamData[]>(() => cachedStreams || []);
+  const [loading, setLoading] = useState(() => !cachedStreams);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'LIVE' | 'UPCOMING' | 'ENDED'>('ALL');
   const [sportFilter, setSportFilter] = useState<string>('ALL');
@@ -28,7 +34,19 @@ export function LiveStreamsPage() {
     try {
       setError(null);
       const data = await liveStreamService.listStreams();
-      setStreams(data);
+      setStreams((prev) => {
+        if (prev.length === 0) return data;
+        const prevMap = new Map(prev.map((s) => [s.id || s._id, s]));
+        return data.map((incoming) => {
+          const existing = prevMap.get(incoming.id || incoming._id);
+          if (!existing?.score || !incoming.score) return incoming;
+          return {
+            ...incoming,
+            score: pickFresherScore(existing.score, incoming.score) || incoming.score,
+          };
+        });
+      });
+      setCachedViewerData('live_streams_list_v1', data);
     } catch (err) {
       setError(extractApiError(err, 'Failed to load live streams.'));
     } finally {

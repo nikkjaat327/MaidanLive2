@@ -111,6 +111,7 @@ async function applyStatUpdateForStructuredEvent(params: {
   session: any;
 }) {
   const { stream, sportType, action, playerId, assistPlayerId, actorId, session } = params;
+  if (!playerId && !assistPlayerId) return;
 
   const incStat = async (
     pid: string,
@@ -118,7 +119,7 @@ async function applyStatUpdateForStructuredEvent(params: {
     incObj: Record<string, number>
   ) => {
     if (!pid || !mongoose.Types.ObjectId.isValid(pid)) return;
-    const player = await Player.findById(pid).session(session);
+    const player: any = await Player.findById(pid).select('_id teamId').session(session).lean();
     if (!player) return;
     const teamId =
       player.teamId ||
@@ -287,7 +288,11 @@ router.get('/:id/score', async (req: Request, res: Response) => {
       return;
     }
 
-    const score = await ensureLiveScore(id);
+    let score: any = await LiveScore.findOne({ liveStreamId: id }).lean();
+    if (!score) {
+      const created = await ensureLiveScore(id);
+      score = created ? (typeof created.toObject === 'function' ? created.toObject() : created) : null;
+    }
     if (!score) {
       res.status(404).json({ message: 'Stream not found.' });
       return;
@@ -1048,8 +1053,9 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         ...(diag ? { diag } : {}),
       };
 
-      emitStreamEvent(id, 'score:event:created', payload);
-      emitStreamEvent(id, 'score:updated', payload);
+      const logicalScoreEventId = `score_${String(txResult.historyId || Date.now())}`;
+      emitStreamEvent(id, 'score:event:created', payload, { logicalEventId: logicalScoreEventId });
+      emitStreamEvent(id, 'score:updated', payload, { logicalEventId: logicalScoreEventId });
       emitStreamEvent(id, 'match:timeline:updated', {
         streamId: id,
         historyItem: resultHistoryItem || populatedHistory,
@@ -1899,6 +1905,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     score.lastUpdatedAt = new Date();
     await score.save();
 
+    let createdUndoDoc: any = null;
     if (score.sportType === 'Kabaddi') {
       // Preserve full audit history for Kabaddi: mark original reverted & log an UNDO audit record
       latestHistory.reverted = true;
@@ -1906,7 +1913,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
 
       const statDeltas = (latestHistory.details as any)?.playerStatDeltas;
       if (statDeltas && typeof statDeltas === 'object' && Object.keys(statDeltas).length > 0) {
-        const streamDoc = await LiveStream.findById(id);
+        const streamDoc = await LiveStream.findById(id).lean();
         if (streamDoc) {
           await applyKabaddiPlayerStatDeltas({
             stream: streamDoc,
@@ -1918,7 +1925,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
         }
       }
 
-      await ScoreHistory.create({
+      createdUndoDoc = await ScoreHistory.create({
         liveStreamId: score.liveStreamId,
         entryType: 'UNDO',
         sportType: 'Kabaddi',
@@ -1970,7 +1977,7 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
         }
       }
 
-      await ScoreHistory.create({
+      createdUndoDoc = await ScoreHistory.create({
         liveStreamId: score.liveStreamId,
         entryType: 'UNDO',
         sportType: 'Volleyball',
@@ -2012,10 +2019,17 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
 
     const dbDoneAtMs = Date.now();
     const diag = buildDiagPayload(req, serverReceivedAtMs, dbDoneAtMs);
+    const revertedHistoryId = String(latestHistory._id);
+    const undoHistoryItem = createdUndoDoc
+      ? buildInMemoryPopulatedHistory(createdUndoDoc, req.user)
+      : null;
     const payload = {
       streamId: id,
       score: score.toObject(),
       undoneAction: latestHistory.action,
+      revertedHistoryId,
+      deletedHistoryId: createdUndoDoc ? null : revertedHistoryId,
+      ...(undoHistoryItem ? { undoHistoryItem } : {}),
       ...(diag ? { diag } : {}),
     };
 
@@ -2028,14 +2042,20 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
       }
     }
 
-    emitStreamEvent(id, 'score:undo', payload);
-    emitStreamEvent(id, 'score:updated', payload);
+    const undoLogicalId = `undo_${revertedHistoryId}_${dbDoneAtMs}`;
+    emitStreamEvent(id, 'score:undo', payload, { logicalEventId: undoLogicalId });
+    emitStreamEvent(id, 'score:updated', payload, { logicalEventId: undoLogicalId });
     if (score.sportType === 'Kabaddi') {
-      emitStreamEvent(id, 'kabaddi:state', {
-        streamId: id,
-        score: payload.score,
-        serverNowIso: new Date().toISOString(),
-      });
+      emitStreamEvent(
+        id,
+        'kabaddi:state',
+        {
+          streamId: id,
+          score: payload.score,
+          serverNowIso: new Date().toISOString(),
+        },
+        { logicalEventId: undoLogicalId }
+      );
     }
     if (revertedAutoResult || revertedVolleyballResult) {
       emitStreamEvent(id, 'match:result:updated', { streamId: id, score: score.toObject(), isCorrection: true });
@@ -2143,7 +2163,7 @@ router.post(
         matchStatus: score.matchStatus,
       };
 
-      await ScoreHistory.create({
+      const resetHistoryDoc = await ScoreHistory.create({
         liveStreamId: score.liveStreamId,
         entryType: 'SCORE_UPDATE',
         sportType: score.sportType,
@@ -2152,14 +2172,21 @@ router.post(
         action: 'Scoreboard reset to zero',
         updatedBy: req.user!._id,
       });
+      const resetHistoryItem = buildInMemoryPopulatedHistory(resetHistoryDoc, req.user);
 
       const payload = {
         streamId: id,
         score: score.toObject(),
+        ...(resetHistoryItem ? { resetHistoryItem } : {}),
       };
 
-      emitStreamEvent(id, 'score:reset', payload);
-      emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+      emitStreamEvent(id, 'score:reset', payload, {
+        logicalEventId: `reset_${String(resetHistoryDoc._id)}`,
+      });
+      emitStreamEvent(id, 'match:timeline:updated', {
+        streamId: id,
+        ...(resetHistoryItem ? { historyItem: resetHistoryItem } : {}),
+      });
       runBackgroundTask(
         'resetScoreAudit',
         recordActivity(

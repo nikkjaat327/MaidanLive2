@@ -7,9 +7,11 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import helmet from 'helmet';
+import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 
 import { connectDatabase, disconnectDatabase, getDatabaseDiagnostics } from './server/config/db.ts';
+import { expressCorsOptionsDelegate } from './server/config/cors.ts';
 import { initSocketServer } from './server/socket/index.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import liveStreamRoutes from './server/routes/liveStreamRoutes.ts';
@@ -23,7 +25,7 @@ import obsBroadcastRoutes from './server/routes/obsBroadcastRoutes.ts';
 import broadcastGraphicsRoutes from './server/routes/broadcastGraphicsRoutes.ts';
 import { initObsControllerBridge } from './server/services/obsControllerService.ts';
 import { initAdScheduleEngine, stopAdScheduleEngine } from './server/services/broadcastAdScheduleService.ts';
-import { User } from './server/models/User.ts';
+import { ALL_GRANULAR_PERMISSIONS, User } from './server/models/User.ts';
 import { Tournament } from './server/models/Tournament.ts';
 import { LiveStream } from './server/models/LiveStream.ts';
 import { LiveScore } from './server/models/LiveScore.ts';
@@ -62,6 +64,7 @@ async function ensureEnvSuperAdminIfConfigured(): Promise<void> {
       manageVenues: true,
       declareResults: true,
     },
+    granularPermissions: [...ALL_GRANULAR_PERMISSIONS],
     isActive: true,
   });
   console.log(`[Auth] Bootstrapped Super Admin from environment for ${email}`);
@@ -352,6 +355,21 @@ async function startServer() {
     console.warn('[AdSchedule] Engine init warning:', err);
   });
 
+  if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET?.trim()) {
+    console.warn('[Auth] WARNING: JWT_SECRET is not set in production — active tokens will reset on server restart.');
+  }
+
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers['x-no-compression']) return false;
+        const accept = String(req.headers.accept || '');
+        if (accept.includes('text/event-stream')) return false;
+        return compression.filter(req, res);
+      },
+    })
+  );
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -359,9 +377,22 @@ async function startServer() {
       frameguard: false,
     })
   );
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(cors(expressCorsOptionsDelegate));
   app.use(express.json({ limit: '4mb' }));
   app.use(cookieParser());
+
+  // Never allow proxies or browsers to serve stale live match scores or overlay state
+  app.use('/api/live', (req, res, next) => {
+    if (
+      req.method === 'GET' &&
+      /\/(?:score(?:\/history|\/result)?|detail|overlay)(?:$|\?)/.test(req.path)
+    ) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+    next();
+  });
 
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -437,18 +468,18 @@ async function startServer() {
     res.status(404).json({ message: 'API endpoint not found.' });
   });
 
-  // Global error fallback for unexpected DB/Mongoose errors
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Global error handler for unexpected DB/Mongoose errors
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (
       err?.name === 'MongooseError' ||
       err?.name === 'MongoNetworkError' ||
       err?.message?.includes('buffering timed out')
     ) {
-      console.warn('[AI Studio] Database offline — returning fallback response');
-      if (req.method === 'GET') {
-        return res.json(req.path.endsWith('s') || req.path.endsWith('s/') ? [] : {});
-      }
-      return res.status(503).json({ error: 'Service temporarily unavailable (database offline)' });
+      console.warn('[MaidanLive] Database offline — returning 503 unavailable');
+      return res.status(503).json({
+        message: 'Service temporarily unavailable (database offline).',
+        error: 'Service temporarily unavailable (database offline)',
+      });
     }
     next(err);
   });

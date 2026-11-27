@@ -121,9 +121,10 @@ export function useObsOverlay(matchId?: string) {
     const socket = getSocketClient();
 
     const shouldAcceptEvent = (payload: any, enforceOrder = true): boolean => {
-      if (payload?.eventId) {
-        if (seenEventIdsRef.current.has(payload.eventId)) return false;
-        seenEventIdsRef.current.add(payload.eventId);
+      const dedupeId = payload?.logicalEventId || payload?.eventId;
+      if (dedupeId) {
+        if (seenEventIdsRef.current.has(dedupeId)) return false;
+        seenEventIdsRef.current.add(dedupeId);
         if (seenEventIdsRef.current.size > 400) {
           const first = seenEventIdsRef.current.values().next().value;
           if (first) seenEventIdsRef.current.delete(first);

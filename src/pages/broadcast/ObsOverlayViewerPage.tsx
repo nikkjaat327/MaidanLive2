@@ -183,11 +183,11 @@ export function ObsOverlayViewerPage() {
   );
 
   useEffect(() => {
-    if (!timeoutInfo.isTimeout && !timeoutDecision.showFullScoreboard) return;
+    if (!timeoutInfo.isTimeout) return;
     setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, [timeoutInfo.isTimeout, timeoutDecision.showFullScoreboard]);
+  }, [timeoutInfo.isTimeout]);
 
   const isPortrait = viewport.h > viewport.w;
 

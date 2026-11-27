@@ -8,6 +8,7 @@ import type {
   GraphicsLayoutPresetId,
   GraphicsShapeKind,
 } from '../types/broadcastGraphics.ts';
+import { getPublicWebOrigin } from './appOrigin.ts';
 
 export const GRAPHICS_RESOLUTION_PRESETS = [
   { id: '1920x1080', label: '1920 × 1080 (Full HD 16:9)', width: 1920, height: 1080 },
@@ -399,9 +400,10 @@ export function createDefaultElement(
   }
 
   if (type === 'qr') {
+    const publicOrigin = getPublicWebOrigin();
     const matchLink = opts?.matchId
-      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/live/${opts.matchId}`
-      : 'https://maidanlive.com';
+      ? `${publicOrigin}/live/${opts.matchId}`
+      : publicOrigin;
     return {
       id: makeElementId('qr'),
       type: 'qr',

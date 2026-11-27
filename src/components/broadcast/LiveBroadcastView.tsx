@@ -84,6 +84,11 @@ interface LiveBroadcastViewProps {
   connected: boolean;
   highlights: MatchHighlightData[];
   sponsorOverlays: SponsorOverlayData[];
+  prefetchedDetailBundle?: boolean;
+  initialPublicSponsors?: SponsorData[];
+  initialMatchStats?: PlayerMatchStatRecord[];
+  initialLineupPlayers?: { teamA: PlayerData[]; teamB: PlayerData[] };
+  initialUpcomingFixtures?: FixtureData[];
   wantsReplay?: boolean;
   startSeconds?: number | null;
   jumpKey?: number;
@@ -139,6 +144,11 @@ export function LiveBroadcastView({
   connected,
   highlights,
   sponsorOverlays,
+  prefetchedDetailBundle = false,
+  initialPublicSponsors,
+  initialMatchStats,
+  initialLineupPlayers,
+  initialUpcomingFixtures,
   wantsReplay = false,
   startSeconds = null,
   jumpKey = 0,
@@ -231,8 +241,12 @@ export function LiveBroadcastView({
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const wakeLockRef = useRef<any>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>('commentary');
-  const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>([]);
-  const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>([]);
+  const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>(
+    () => initialPublicSponsors || []
+  );
+  const [matchStats, setMatchStats] = useState<PlayerMatchStatRecord[]>(
+    () => initialMatchStats || []
+  );
 
   const kabaddiStatRows = useMemo(() => {
     if (!kabaddiDetails) return [];
@@ -325,11 +339,12 @@ export function LiveBroadcastView({
     );
   }, [kabaddiDetails, matchStats, stream.teamAName, stream.teamBName]);
 
-  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>({
-    teamA: [],
-    teamB: [],
-  });
-  const [upcomingFixtures, setUpcomingFixtures] = useState<FixtureData[]>([]);
+  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>(
+    () => initialLineupPlayers || { teamA: [], teamB: [] }
+  );
+  const [upcomingFixtures, setUpcomingFixtures] = useState<FixtureData[]>(
+    () => initialUpcomingFixtures || []
+  );
   const [followBusyId, setFollowBusyId] = useState<string | null>(null);
   const [followFeedback, setFollowFeedback] = useState<string | null>(null);
 
@@ -403,9 +418,25 @@ export function LiveBroadcastView({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isExpandedFallback]);
 
-  // Load live_match sponsors, match player stats, lineups, and upcoming fixtures
   useEffect(() => {
-    if (!broadcast.id) return;
+    if (initialPublicSponsors) setPublicSponsors(initialPublicSponsors);
+  }, [initialPublicSponsors]);
+
+  useEffect(() => {
+    if (initialMatchStats) setMatchStats(initialMatchStats);
+  }, [initialMatchStats]);
+
+  useEffect(() => {
+    if (initialLineupPlayers) setLineupPlayers(initialLineupPlayers);
+  }, [initialLineupPlayers]);
+
+  useEffect(() => {
+    if (initialUpcomingFixtures) setUpcomingFixtures(initialUpcomingFixtures);
+  }, [initialUpcomingFixtures]);
+
+  // Load live_match sponsors, match player stats, lineups, and upcoming fixtures (when not prefetched by /detail bundle)
+  useEffect(() => {
+    if (!broadcast.id || prefetchedDetailBundle) return;
     platformOpsService
       .listPublicSponsors({
         placement: 'live_match',
@@ -449,7 +480,7 @@ export function LiveBroadcastView({
         )
         .catch(() => setUpcomingFixtures([]));
     }
-  }, [broadcast.id, broadcast.tournamentId, broadcast.teamA.id, broadcast.teamB.id]);
+  }, [broadcast.id, broadcast.tournamentId, broadcast.teamA.id, broadcast.teamB.id, prefetchedDetailBundle]);
 
   // Screen Wake Lock lifecycle
   const toggleWakeLock = useCallback(async () => {

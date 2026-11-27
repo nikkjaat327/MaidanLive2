@@ -17,6 +17,11 @@ import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { PWAInstallButton } from '../../components/common/PWAInstallButton.tsx';
 import { RecentMatchEntry, recentlyWatchedStore } from '../../utils/recentlyWatched.ts';
 import { MatchStatusBadge } from '../../components/common/MatchStatusBadge.tsx';
+import {
+  getCachedViewerData,
+  pickFresherScore,
+  setCachedViewerData,
+} from '../../utils/viewerCache.ts';
 
 export function HomePage() {
   const { t } = useLanguage();
@@ -24,16 +29,21 @@ export function HomePage() {
   const isAuthenticated = Boolean(customerUser || adminUser);
   const authLoading = customerLoading || adminLoading;
 
-  const [streams, setStreams] = useState<LiveStreamData[]>([]);
+  const initialStreams = getCachedViewerData<LiveStreamData[]>('home_streams_v1');
+  const [streams, setStreams] = useState<LiveStreamData[]>(() => initialStreams || []);
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
-  const [tournaments, setTournaments] = useState<TournamentData[]>([]);
-  const [homeSponsors, setHomeSponsors] = useState<SponsorData[]>([]);
+  const [tournaments, setTournaments] = useState<TournamentData[]>(
+    () => getCachedViewerData<TournamentData[]>('home_tournaments_v1') || []
+  );
+  const [homeSponsors, setHomeSponsors] = useState<SponsorData[]>(
+    () => getCachedViewerData<SponsorData[]>('home_sponsors_v1') || []
+  );
   const [selectedSport, setSelectedSport] = useState<string>('ALL');
   const [locationFilter, setLocationFilter] = useState<string>('ALL');
   const [recentMatches, setRecentMatches] = useState<RecentMatchEntry[]>(() =>
     recentlyWatchedStore.getMatches()
   );
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialStreams);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -45,10 +55,24 @@ export function HomePage() {
         entityService.listTournaments().catch(() => []),
         platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
       ]);
-      setStreams(allStreams);
+      setStreams((prev) => {
+        if (prev.length === 0) return allStreams;
+        const prevMap = new Map(prev.map((s) => [s.id || s._id, s]));
+        return allStreams.map((incoming) => {
+          const existing = prevMap.get(incoming.id || incoming._id);
+          if (!existing?.score || !incoming.score) return incoming;
+          return {
+            ...incoming,
+            score: pickFresherScore(existing.score, incoming.score) || incoming.score,
+          };
+        });
+      });
       setReplays(publishedReplays);
       setTournaments(allTournaments);
       setHomeSponsors(sponsors);
+      setCachedViewerData('home_streams_v1', allStreams);
+      setCachedViewerData('home_tournaments_v1', allTournaments);
+      setCachedViewerData('home_sponsors_v1', sponsors);
       sponsors.forEach((sp) => platformOpsService.trackSponsorImpression(sp.id));
     } catch (err) {
       setError(extractApiError(err, 'Unable to load broadcasts from server.'));

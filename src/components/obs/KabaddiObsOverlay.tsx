@@ -34,10 +34,24 @@ export function KabaddiObsOverlay({
   const vis = d.viewerDisplaySettings;
 
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const isClockTicking = Boolean(
+    !d.matchCompleted &&
+      (d.clock.status === 'RUNNING' ||
+        d.clock.status === 'EXTRA_TIME' ||
+        d.clock.status === 'BREAK' ||
+        d.clock.raidRunning ||
+        d.clock.timeoutActive ||
+        d.doOrDie.active ||
+        (d.lastAllOut?.triggeredAtIso &&
+          Date.now() - Date.parse(d.lastAllOut.triggeredAtIso) <=
+            (d.rules.allOutBannerDurationSec || 5) * 1000))
+  );
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 350);
+    if (!isClockTicking) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isClockTicking]);
   const effectiveNowMs = nowMs + serverClockOffsetMs;
   const effClock = computeEffectiveKabaddiClock(d, effectiveNowMs);
 

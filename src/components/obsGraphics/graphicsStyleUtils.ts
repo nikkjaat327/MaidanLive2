@@ -8,6 +8,7 @@ import type {
   GraphicsGradientConfig,
   GraphicsImageMask,
 } from '../../types/broadcastGraphics.ts';
+import { getPublicWebOrigin } from '../../utils/appOrigin.ts';
 
 const ANIMATION_KEYFRAME_MAP: Record<GraphicsAnimationStyle, string> = {
   none: '',
@@ -75,10 +76,7 @@ export function resolveQrTargetUrl(
   el: Pick<GraphicsElement, 'qrLinkType' | 'qrUrl' | 'qrTargetId'>,
   context?: { matchId?: string; tournamentId?: string | null }
 ): string {
-  const origin =
-    typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'https://maidanlive.com';
+  const origin = getPublicWebOrigin();
 
   const custom = el.qrUrl?.trim();
   const targetId = el.qrTargetId?.trim();

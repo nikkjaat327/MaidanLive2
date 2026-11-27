@@ -5,6 +5,7 @@ import multer from 'multer';
 import liveStreamRoutes from './liveStreamRoutes.ts';
 import scoreRoutes from './scoreRoutes.ts';
 import { LiveStream } from '../models/LiveStream.ts';
+import { User } from '../models/User.ts';
 import { Tournament } from '../models/Tournament.ts';
 import { Team } from '../models/Team.ts';
 import { Player } from '../models/Player.ts';
@@ -29,6 +30,7 @@ import {
   authenticate,
   canManageTournament,
   hasGranularPermission,
+  invalidateAuthUserCache,
   requireAdminPortal,
 } from '../middleware/auth.ts';
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
@@ -1054,8 +1056,9 @@ router.post(
 
       // Auto-upgrade SPECTATOR account to CAPTAIN on first tournament registration
       if (req.user!.role === 'SPECTATOR') {
+        await User.findByIdAndUpdate(req.user!._id, { role: 'CAPTAIN' });
         req.user!.role = 'CAPTAIN';
-        await req.user!.save();
+        invalidateAuthUserCache(req.user!._id.toString());
       }
 
       const payCfg = resolveTournamentPaymentConfig(tournament);

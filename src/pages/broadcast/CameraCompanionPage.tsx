@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { obsStudioService } from '../../services/obs/obsStudioService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
+import { resolveApiUrl } from '../../utils/appOrigin.ts';
 import { isolateVdoPushUrl } from '../../utils/obsTransformGeometry.ts';
 
 interface CompanionState {
@@ -260,7 +261,10 @@ export function CameraCompanionPage() {
         ],
         { type: 'application/json' }
       );
-      navigator.sendBeacon(`/api/obs/camera-connect/${cameraDocId}/heartbeat`, body);
+      navigator.sendBeacon(
+        resolveApiUrl(`/obs/camera-connect/${cameraDocId}/heartbeat`),
+        body
+      );
     };
     window.addEventListener('beforeunload', onBeforeUnload);
 

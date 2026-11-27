@@ -27,6 +27,7 @@ export interface ProviderSwitchEventPayload {
 export function useScoreboard(
   streamId?: string,
   options?: {
+    skipInitialFetch?: boolean;
     onProviderChanged?: (payload: ProviderSwitchEventPayload) => void;
     onViewerCountUpdated?: (viewers: number | null, visibility: string) => void;
   }
@@ -43,6 +44,7 @@ export function useScoreboard(
   const onViewerCountUpdatedRef = useRef(options?.onViewerCountUpdated);
   onProviderChangedRef.current = options?.onProviderChanged;
   onViewerCountUpdatedRef.current = options?.onViewerCountUpdated;
+  const skipInitialFetch = Boolean(options?.skipInitialFetch);
 
   const fetchScoreAndHistory = useCallback(async () => {
     if (!streamId) return;
@@ -79,6 +81,34 @@ export function useScoreboard(
     });
   }, []);
 
+  const applyUndoHistory = useCallback(
+    (payload?: {
+      revertedHistoryId?: string;
+      deletedHistoryId?: string | null;
+      undoHistoryItem?: ScoreHistoryItem | null;
+    }) => {
+      if (!payload) return false;
+      const { revertedHistoryId, deletedHistoryId, undoHistoryItem } = payload;
+      if (!revertedHistoryId && !deletedHistoryId && !undoHistoryItem) {
+        return false;
+      }
+      setHistory((prev) => {
+        let next = prev;
+        if (deletedHistoryId) {
+          next = next.filter((h) => h._id !== deletedHistoryId);
+        } else if (revertedHistoryId) {
+          next = next.map((h) => (h._id === revertedHistoryId ? { ...h, reverted: true } : h));
+        }
+        if (undoHistoryItem && undoHistoryItem._id && !next.some((h) => h._id === undoHistoryItem._id)) {
+          next = [undoHistoryItem, ...next];
+        }
+        return next.slice(0, 100);
+      });
+      return true;
+    },
+    []
+  );
+
   const { connected, socket } = useSocket(streamId, fetchScoreAndHistory);
   const wasDisconnectedRef = useRef(false);
 
@@ -110,9 +140,12 @@ export function useScoreboard(
       setLoading(false);
       return;
     }
+    if (skipInitialFetch) {
+      return;
+    }
     setLoading(true);
     fetchScoreAndHistory();
-  }, [streamId, fetchScoreAndHistory]);
+  }, [streamId, fetchScoreAndHistory, skipInitialFetch]);
 
   // 25s viewer heartbeat for accurate active session tracking
   useEffect(() => {
@@ -156,9 +189,10 @@ export function useScoreboard(
     if (!streamId) return;
 
     const shouldAcceptEvent = (payload: any, enforceOrder = true): boolean => {
-      if (payload?.eventId) {
-        if (seenEventIdsRef.current.has(payload.eventId)) return false;
-        seenEventIdsRef.current.add(payload.eventId);
+      const dedupeId = payload?.logicalEventId || payload?.eventId;
+      if (dedupeId) {
+        if (seenEventIdsRef.current.has(dedupeId)) return false;
+        seenEventIdsRef.current.add(dedupeId);
         if (seenEventIdsRef.current.size > 400) {
           const first = seenEventIdsRef.current.values().next().value;
           if (first) seenEventIdsRef.current.delete(first);
@@ -180,6 +214,7 @@ export function useScoreboard(
       score: LiveScoreData;
       historyItem?: ScoreHistoryItem;
       correctedEventId?: string;
+      logicalEventId?: string;
       eventId?: string;
       sequence?: number;
       emittedAt?: string;
@@ -205,6 +240,10 @@ export function useScoreboard(
     const handleScoreUndo = (payload: {
       streamId: string;
       score: LiveScoreData;
+      revertedHistoryId?: string;
+      deletedHistoryId?: string | null;
+      undoHistoryItem?: ScoreHistoryItem | null;
+      logicalEventId?: string;
       eventId?: string;
       sequence?: number;
       emittedAt?: string;
@@ -214,19 +253,27 @@ export function useScoreboard(
       if (!shouldAcceptEvent(payload, true)) return;
       recordSocketDiagEvent(payload, 'client');
       setScore(payload.score);
-      scoreboardService.getScoreHistory(streamId).then(setHistory).catch(() => {});
+      if (!applyUndoHistory(payload)) {
+        scoreboardService.getScoreHistory(streamId).then(setHistory).catch(() => {});
+      }
     };
 
     const handleScoreReset = (payload: {
       streamId: string;
       score: LiveScoreData;
+      resetHistoryItem?: ScoreHistoryItem;
+      logicalEventId?: string;
       eventId?: string;
       sequence?: number;
     }) => {
       if (payload.streamId !== streamId) return;
       if (!shouldAcceptEvent(payload, true)) return;
       setScore(payload.score);
-      scoreboardService.getScoreHistory(streamId).then(setHistory).catch(() => {});
+      if (payload.resetHistoryItem) {
+        addHistoryItem(payload.resetHistoryItem);
+      } else {
+        scoreboardService.getScoreHistory(streamId).then(setHistory).catch(() => {});
+      }
     };
 
     const handleCommentaryAdded = (payload: {
@@ -325,17 +372,20 @@ export function useScoreboard(
       socket.off('stream:viewers', handleViewersUpdated);
       socket.off('viewer:count_updated', handleViewersUpdated);
     };
-  }, [streamId, socket]);
+  }, [streamId, socket, applyUndoHistory, addHistoryItem]);
 
   return {
     score,
     setScore,
     history,
+    setHistory,
     loading,
+    setLoading,
     error,
     connected,
     refetch: fetchScoreAndHistory,
     refreshHistoryOnly,
     addHistoryItem,
+    applyUndoHistory,
   };
 }

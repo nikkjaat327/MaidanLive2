@@ -1,26 +1,7 @@
-const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+import { getPublicWebOrigin } from './appOrigin.ts';
 
 export function getPublicAppOrigin(): string {
-  const configured = (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined)?.trim();
-  if (configured) {
-    try {
-      const parsed = new URL(configured);
-      if (
-        (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
-        !LOCALHOST_HOSTS.has(parsed.hostname.toLowerCase())
-      ) {
-        return parsed.origin.replace(/\/+$/, '');
-      }
-    } catch {
-      // Fall through to window.location.origin
-    }
-  }
-
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/+$/, '');
-  }
-
-  return 'https://maidanlive.app';
+  return getPublicWebOrigin();
 }
 
 export function buildPageUrl(path: string): string {

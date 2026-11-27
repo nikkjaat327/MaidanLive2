@@ -4,12 +4,17 @@ import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 
-export function useLiveStream(streamId?: string, authKey = '') {
+export function useLiveStream(
+  streamId?: string,
+  authKey = '',
+  options?: { skipInitialFetch?: boolean }
+) {
   const [stream, setStream] = useState<LiveStreamData | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(streamId));
   const [error, setError] = useState<string | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [switchingBanner, setSwitchingBanner] = useState(false);
+  const skipInitialFetch = Boolean(options?.skipInitialFetch);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -46,11 +51,14 @@ export function useLiveStream(streamId?: string, authKey = '') {
       setLoading(false);
       return;
     }
+    if (skipInitialFetch) {
+      return;
+    }
     setError(null);
     setErrorStatus(null);
     setLoading(true);
     fetchStream();
-  }, [streamId, fetchStream]);
+  }, [streamId, fetchStream, skipInitialFetch]);
 
   const fetchStreamRef = useRef(fetchStream);
   useEffect(() => {
