@@ -7,6 +7,7 @@ import {
   resolveBrandLogoUrl,
   type OverlayPosition,
 } from '../../utils/overlayConfig.ts';
+import { useEnvBrandLogo } from '../../hooks/useEnvBrandLogo.ts';
 import type { ObsThemeTokens } from './obsTheme.ts';
 
 interface ObsBrandMarkProps {
@@ -17,6 +18,7 @@ interface ObsBrandMarkProps {
   fontPx?: number;
   padX?: number;
   padY?: number;
+  serverLogoUrl?: string | null;
 }
 
 export function ObsBrandMark({
@@ -24,14 +26,26 @@ export function ObsBrandMark({
   compact = false,
   accentColor,
   iconPx,
-  fontPx,
   padX,
   padY,
+  serverLogoUrl,
 }: ObsBrandMarkProps) {
+  const envLogo = useEnvBrandLogo(serverLogoUrl);
+  const logoUrl = resolveBrandLogoUrl(null, envLogo);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [logoUrl]);
+
+  if (!logoUrl || failed) {
+    return null;
+  }
+
   const resolvedIcon = iconPx ?? (compact ? 14 : 16);
-  const resolvedFont = fontPx ?? (compact ? 10 : 11);
   const resolvedPadX = padX ?? (compact ? 10 : 12);
   const resolvedPadY = padY ?? (compact ? 6 : 8);
+  const logoHeight = Math.max(16, Math.round(resolvedIcon * 1.4));
 
   return (
     <div
@@ -45,90 +59,16 @@ export function ObsBrandMark({
         paddingTop: resolvedPadY,
         paddingBottom: resolvedPadY,
       }}
-      className="flex items-center gap-1.5 shrink-0 select-none"
+      className="flex items-center justify-center shrink-0 select-none"
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        aria-hidden="true"
-        style={{ width: resolvedIcon, height: resolvedIcon }}
-        className="shrink-0"
-      >
-        <path
-          d="M12 2L20 5.5V11.8C20 16.9 16.6 20.8 12 22.5C7.4 20.8 4 16.9 4 11.8V5.5L12 2Z"
-          fill="currentColor"
-          fillOpacity="0.2"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M8.2 14.8V9.2L12 12.6L15.8 9.2V14.8"
-          stroke="currentColor"
-          strokeWidth="1.9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <span
-        style={{ fontSize: resolvedFont }}
-        className="font-display font-extrabold tracking-wider uppercase leading-none whitespace-nowrap"
-      >
-        MAIDAN<span className="opacity-80">LIVE</span>
-      </span>
-    </div>
-  );
-}
-
-export function MaidanLiveFallbackLogoCrest({
-  height,
-  className = '',
-}: {
-  height: number | string;
-  className?: string;
-}) {
-  return (
-    <div
-      style={{ height }}
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/90 border border-pink-500/60 shadow-[0_0_20px_rgba(236,72,153,0.45),0_6px_18px_rgba(0,0,0,0.75)] backdrop-blur-md select-none ${className}`}
-    >
-      <svg
-        viewBox="0 0 32 32"
-        fill="none"
-        aria-hidden="true"
-        className="h-[78%] w-auto aspect-square shrink-0"
-      >
-        <defs>
-          <linearGradient id="ml-crest-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#EC4899" />
-            <stop offset="55%" stopColor="#8B5CF6" />
-            <stop offset="100%" stopColor="#06B6D4" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M16 2.5L27 7.2V15.4C27 22.1 22.4 27.5 16 29.6C9.6 27.5 5 22.1 5 15.4V7.2L16 2.5Z"
-          fill="url(#ml-crest-grad)"
-          fillOpacity="0.22"
-          stroke="url(#ml-crest-grad)"
-          strokeWidth="2.2"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M10.5 20V11.5L16 16.5L21.5 11.5V20"
-          stroke="#FFFFFF"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <div className="flex flex-col justify-center leading-none pr-0.5">
-        <span className="font-display font-black tracking-wider text-white uppercase whitespace-nowrap text-[clamp(11px,1.9em,22px)]">
-          MAIDAN<span className="text-pink-400">LIVE</span>
-        </span>
-        <span className="font-mono font-bold tracking-[0.2em] text-cyan-300 uppercase whitespace-nowrap text-[clamp(7px,0.75em,10px)] mt-0.5">
-          SPORTS BROADCAST
-        </span>
-      </div>
+      <img
+        src={logoUrl}
+        alt="Broadcast Logo"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        style={{ height: logoHeight, width: 'auto' }}
+        className="object-contain max-w-[96px] shrink-0"
+      />
     </div>
   );
 }
@@ -149,14 +89,15 @@ export function BroadcastBrandLogoBug({
   className = '',
 }: BroadcastBrandLogoBugProps) {
   const show = config?.showBrandLogo ?? DEFAULT_OVERLAY_CONFIG.showBrandLogo;
-  const logoUrl = resolveBrandLogoUrl(config, serverLogoUrl);
+  const envLogo = useEnvBrandLogo(serverLogoUrl);
+  const logoUrl = resolveBrandLogoUrl(config, envLogo);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     setFailed(false);
   }, [logoUrl]);
 
-  if (!show) {
+  if (!show || !logoUrl || failed) {
     return null;
   }
 
@@ -195,19 +136,45 @@ export function BroadcastBrandLogoBug({
 
   return (
     <div style={posStyle} className={`select-none ${className}`} data-obs-brand-logo="true">
-      {logoUrl && !failed ? (
-        <img
-          src={logoUrl}
-          alt="MaidanLive Broadcast Logo"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
-          style={{ height: heightStyle, width: 'auto' }}
-          className="object-contain max-w-[320px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.75)]"
-        />
-      ) : (
-        <MaidanLiveFallbackLogoCrest height={heightStyle} />
-      )}
+      <img
+        src={logoUrl}
+        alt="Broadcast Logo"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        style={{ height: heightStyle, width: 'auto' }}
+        className="object-contain max-w-[320px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.75)]"
+      />
     </div>
+  );
+}
+
+export function EnvBrandLogoImg({
+  alt = 'Brand Logo',
+  className = 'h-6 w-auto object-contain shrink-0',
+}: {
+  alt?: string;
+  className?: string;
+}) {
+  const envLogo = useEnvBrandLogo();
+  const logoUrl = resolveBrandLogoUrl(null, envLogo);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [logoUrl]);
+
+  if (!logoUrl || failed) {
+    return null;
+  }
+
+  return (
+    <img
+      src={logoUrl}
+      alt={alt}
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={className}
+    />
   );
 }
 

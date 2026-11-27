@@ -332,7 +332,14 @@ export function FloatingScoreboardLogoPreview() {
               <HotstarBroadcastOverlay
                 stream={overlayPreview.stream}
                 score={overlayPreview.score}
-                config={overlayPreview.config}
+                config={{
+                  ...overlayPreview.config,
+                  visible: true,
+                  mode:
+                    overlayPreview.config.mode === 'hidden'
+                      ? 'full'
+                      : overlayPreview.config.mode || 'full',
+                }}
                 isPortrait={isPortrait}
                 serverClockOffsetMs={overlayPreview.serverClockOffsetMs}
               />

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Palette, RotateCcw, Sparkles, Type } from 'lucide-react';
 import type { BroadcastOverlayConfig } from '../../types/index.ts';
-import { MaidanLiveFallbackLogoCrest } from './ObsBrandMark.tsx';
+import { useEnvBrandLogo } from '../../hooks/useEnvBrandLogo.ts';
 import {
   BRAND_LOGO_BOUNDS,
   CUSTOM_DESIGN_BOUNDS,
@@ -171,7 +171,6 @@ export function CustomScoreboardDesigner({
   darkSurface = true,
   serverLogoUrl,
 }: CustomScoreboardDesignerProps) {
-  const [logoUrlInput, setLogoUrlInput] = useState(config.brandLogoUrl || '');
   const [logoThumbFailed, setLogoThumbFailed] = useState(false);
   const [localLogoDraft, setLocalLogoDraft] = useState<{
     brandLogoSize?: number;
@@ -183,10 +182,12 @@ export function CustomScoreboardDesigner({
   const debounceTimerRef = useRef<number | null>(null);
   const pendingPatchRef = useRef<Partial<BroadcastOverlayConfig>>({});
 
+  const envLogoUrl = useEnvBrandLogo(serverLogoUrl);
+  const effectiveLogoUrl = resolveBrandLogoUrl(config, envLogoUrl);
+
   useEffect(() => {
-    setLogoUrlInput(config.brandLogoUrl || '');
     setLogoThumbFailed(false);
-  }, [config.brandLogoUrl, serverLogoUrl]);
+  }, [effectiveLogoUrl]);
 
   useEffect(() => {
     return () => {
@@ -200,8 +201,6 @@ export function CustomScoreboardDesigner({
     ...config.customScoreboardDesign,
     ...(localDesignDraft || {}),
   });
-
-  const effectiveLogoUrl = resolveBrandLogoUrl(config, serverLogoUrl);
   const logoSize = localLogoDraft.brandLogoSize ?? config.brandLogoSize ?? BRAND_LOGO_BOUNDS.brandLogoSize.defaultVal;
   const logoOpacity =
     localLogoDraft.brandLogoOpacity ?? config.brandLogoOpacity ?? BRAND_LOGO_BOUNDS.brandLogoOpacity.defaultVal;
@@ -308,51 +307,34 @@ export function CustomScoreboardDesigner({
           </label>
         </div>
 
-        {/* Logo Preview + URL Override */}
+        {/* .env Logo Source Preview */}
         <div className={`rounded-lg border p-2.5 flex items-center gap-3 ${subCardBg}`}>
           <div className="w-20 h-12 rounded-md bg-slate-900/90 border border-slate-700/70 flex items-center justify-center p-1 shrink-0 overflow-hidden">
             {effectiveLogoUrl && !logoThumbFailed ? (
               <img
                 src={effectiveLogoUrl}
-                alt="Brand Logo Preview"
+                alt="Broadcast Logo Preview"
                 referrerPolicy="no-referrer"
                 onError={() => setLogoThumbFailed(true)}
                 className="max-h-full max-w-full object-contain"
               />
             ) : (
-              <MaidanLiveFallbackLogoCrest height={34} className="scale-[0.72] origin-center" />
+              <span className="text-[10px] font-medium text-slate-500 text-center leading-tight">
+                No logo
+              </span>
             )}
           </div>
-          <div className="flex-1 min-w-0 space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="url"
-                value={logoUrlInput}
-                disabled={disabled}
-                onChange={(e) => setLogoUrlInput(e.target.value)}
-                onBlur={() => {
-                  if (logoUrlInput.trim() !== (config.brandLogoUrl || '')) {
-                    onChange({ brandLogoUrl: logoUrlInput.trim() });
-                  }
-                }}
-                placeholder="Using .env BRAND_LOGO_URL (or paste custom URL)"
-                className={`flex-1 min-w-0 min-h-[32px] px-2.5 text-[11px] rounded-md border ${inputCls}`}
-              />
-              {logoUrlInput.trim() && (
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    setLogoUrlInput('');
-                    onChange({ brandLogoUrl: '' });
-                  }}
-                  title="Reset to .env logo"
-                  className="px-2 py-1.5 text-[10px] font-semibold rounded-md border border-slate-600 hover:bg-slate-700/40 shrink-0"
-                >
-                  .env Default
-                </button>
-              )}
-            </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-semibold">
+              {effectiveLogoUrl && !logoThumbFailed
+                ? 'Active .env Brand Logo'
+                : 'No .env Brand Logo Configured'}
+            </p>
+            <p className={`text-[10px] truncate ${labelMuted}`}>
+              {effectiveLogoUrl && !logoThumbFailed
+                ? effectiveLogoUrl
+                : 'Set VITE_BRAND_LOGO_URL or BRAND_LOGO_URL in .env to display a logo.'}
+            </p>
           </div>
         </div>
 

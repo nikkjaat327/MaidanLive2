@@ -881,6 +881,7 @@ router.get('/:id/detail', optionalAuthenticate, async (req: AuthenticatedRequest
         teamB: teamBUnique.map(mapPlayer),
       },
       upcomingFixtures,
+      brandLogoUrl: (process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL || '').trim(),
       serverNowIso: new Date().toISOString(),
     });
   } catch (err) {
@@ -927,6 +928,7 @@ router.get('/:id', optionalAuthenticate, async (req: AuthenticatedRequest, res: 
 
     res.json({
       stream: req.user ? formatted : redactPlaybackForUnauthenticated(formatted),
+      brandLogoUrl: (process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL || '').trim(),
     });
   } catch (err) {
     console.error('[LiveStream] Get error:', err);

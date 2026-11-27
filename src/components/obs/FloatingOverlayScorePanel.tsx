@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeftRight,
   Check,
   Clock,
-  CornerDownRight,
   ExternalLink,
+  GripHorizontal,
+  LocateFixed,
   Lock,
   Maximize2,
   Minus,
@@ -40,6 +42,21 @@ import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { resolveMatchTimeoutState } from '../../utils/matchTimeout.ts';
 
 export type FloatingDockCorner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+type ResizeDirection = 'e' | 's' | 'w' | 'se' | 'sw';
+
+interface PanelGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const GEOMETRY_STORAGE_KEY = 'maidanlive_quick_score_panel_geometry';
+const EDGE_MARGIN = 12;
+const MIN_PANEL_WIDTH = 290;
+const MIN_PANEL_HEIGHT = 250;
+const DEFAULT_PANEL_WIDTH = 392;
+const DEFAULT_PANEL_HEIGHT = 510;
 
 interface FloatingOverlayScorePanelProps {
   stream: LiveStreamData;
@@ -54,25 +71,79 @@ interface FloatingOverlayScorePanelProps {
   defaultTab?: 'manual' | 'events';
 }
 
-function resolveSmartDefaultCorner(overlayPosition?: OverlayPosition): FloatingDockCorner {
-  if (overlayPosition === 'bottom-right') return 'bottom-left';
-  if (overlayPosition === 'top-right') return 'bottom-right';
-  return 'bottom-right';
+function clampPanelGeometry(g: PanelGeometry): PanelGeometry {
+  if (typeof window === 'undefined') return g;
+  const maxW = Math.max(MIN_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+  const maxH = Math.max(MIN_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+  const width = Math.round(Math.min(maxW, Math.max(Math.min(MIN_PANEL_WIDTH, maxW), g.width)));
+  const height = Math.round(Math.min(maxH, Math.max(Math.min(MIN_PANEL_HEIGHT, maxH), g.height)));
+  const maxX = Math.max(EDGE_MARGIN, window.innerWidth - width - EDGE_MARGIN);
+  const maxY = Math.max(EDGE_MARGIN, window.innerHeight - height - EDGE_MARGIN);
+  return {
+    x: Math.round(Math.min(maxX, Math.max(EDGE_MARGIN, g.x))),
+    y: Math.round(Math.min(maxY, Math.max(EDGE_MARGIN, g.y))),
+    width,
+    height,
+  };
 }
 
-const CORNER_CLASSES: Record<FloatingDockCorner, string> = {
-  'bottom-right': 'bottom-3 right-3 sm:bottom-4 sm:right-4',
-  'bottom-left': 'bottom-3 left-3 sm:bottom-4 sm:left-4',
-  'top-right': 'top-3 right-3 sm:top-4 sm:right-4',
-  'top-left': 'top-3 left-3 sm:top-4 sm:left-4',
-};
+function getDefaultPanelGeometry(overlayPosition?: OverlayPosition): PanelGeometry {
+  if (typeof window === 'undefined') {
+    return { x: 24, y: 24, width: DEFAULT_PANEL_WIDTH, height: DEFAULT_PANEL_HEIGHT };
+  }
+  const width = Math.min(DEFAULT_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2));
+  const height = Math.min(DEFAULT_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2));
+  const dockLeft = overlayPosition === 'bottom-right';
+  const rawX = dockLeft ? EDGE_MARGIN : window.innerWidth - width - EDGE_MARGIN;
+  const rawY = window.innerHeight - height - EDGE_MARGIN;
+  return clampPanelGeometry({ x: rawX, y: rawY, width, height });
+}
 
-const NEXT_CORNER: Record<FloatingDockCorner, FloatingDockCorner> = {
-  'bottom-right': 'bottom-left',
-  'bottom-left': 'top-left',
-  'top-left': 'top-right',
-  'top-right': 'bottom-right',
-};
+function loadSavedPanelGeometry(overlayPosition?: OverlayPosition): {
+  geometry: PanelGeometry;
+  isCustom: boolean;
+} {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = window.localStorage.getItem(GEOMETRY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PanelGeometry>;
+        if (
+          typeof parsed.x === 'number' &&
+          typeof parsed.y === 'number' &&
+          typeof parsed.width === 'number' &&
+          typeof parsed.height === 'number'
+        ) {
+          return {
+            geometry: clampPanelGeometry(parsed as PanelGeometry),
+            isCustom: true,
+          };
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return { geometry: getDefaultPanelGeometry(overlayPosition), isCustom: false };
+}
+
+function savePanelGeometry(g: PanelGeometry) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(GEOMETRY_STORAGE_KEY, JSON.stringify(g));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function clearSavedPanelGeometry() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(GEOMETRY_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 function makeClientEventId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -91,9 +162,29 @@ export function FloatingOverlayScorePanel({
   defaultTab = 'manual',
 }: FloatingOverlayScorePanelProps) {
   const [activeTab, setActiveTab] = useState<'manual' | 'events'>(defaultTab);
-  const [dockCorner, setDockCorner] = useState<FloatingDockCorner>(() =>
-    resolveSmartDefaultCorner(overlayPosition)
-  );
+  const initialSaved = useMemo(() => loadSavedPanelGeometry(overlayPosition), [overlayPosition]);
+  const [geometry, setGeometry] = useState<PanelGeometry>(initialSaved.geometry);
+  const [hasCustomGeometry, setHasCustomGeometry] = useState<boolean>(initialSaved.isCustom);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
+
+  const interactionRef = useRef<{
+    mode: 'none' | 'drag' | 'resize';
+    dir: ResizeDirection;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    orig: PanelGeometry;
+  }>({
+    mode: 'none',
+    dir: 'se',
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    orig: initialSaved.geometry,
+  });
+
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
@@ -388,24 +479,162 @@ export function FloatingOverlayScorePanel({
     });
   }
 
-  const positionStyleClass =
-    positioning === 'fixed' ? `fixed z-50 ${CORNER_CLASSES[dockCorner]}` : `absolute z-30 ${CORNER_CLASSES[dockCorner]}`;
+  useEffect(() => {
+    const syncViewport = () => {
+      setGeometry((prev) =>
+        hasCustomGeometry ? clampPanelGeometry(prev) : getDefaultPanelGeometry(overlayPosition)
+      );
+    };
+    window.addEventListener('resize', syncViewport);
+    return () => window.removeEventListener('resize', syncViewport);
+  }, [hasCustomGeometry, overlayPosition]);
+
+  const handleHeaderPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if (e.target instanceof Element && e.target.closest('button, input, select, a, label')) {
+      return;
+    }
+    e.preventDefault();
+    interactionRef.current = {
+      mode: 'drag',
+      dir: 'se',
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: geometryRef.current,
+    };
+    setIsInteracting(true);
+  }, []);
+
+  const handleResizePointerDown = useCallback(
+    (dir: ResizeDirection) => (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      interactionRef.current = {
+        mode: 'resize',
+        dir,
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        orig: geometryRef.current,
+      };
+      setIsInteracting(true);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!isInteracting) return;
+
+    const onPointerMove = (e: PointerEvent) => {
+      const st = interactionRef.current;
+      if (st.mode === 'none' || e.pointerId !== st.pointerId) return;
+      const dx = e.clientX - st.startX;
+      const dy = e.clientY - st.startY;
+
+      if (st.mode === 'drag') {
+        const next = clampPanelGeometry({
+          ...st.orig,
+          x: st.orig.x + dx,
+          y: st.orig.y + dy,
+        });
+        geometryRef.current = next;
+        setGeometry(next);
+        setHasCustomGeometry(true);
+        return;
+      }
+
+      const maxW = Math.max(MIN_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+      const maxH = Math.max(MIN_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+      let nextX = st.orig.x;
+      let nextY = st.orig.y;
+      let nextW = st.orig.width;
+      let nextH = st.orig.height;
+
+      if (st.dir === 'e' || st.dir === 'se') {
+        nextW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, st.orig.width + dx));
+      }
+      if (st.dir === 'w' || st.dir === 'sw') {
+        const proposedW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, st.orig.width - dx));
+        const deltaW = st.orig.width - proposedW;
+        nextX = Math.max(EDGE_MARGIN, st.orig.x + deltaW);
+        nextW = st.orig.x + st.orig.width - nextX;
+      }
+      if (st.dir === 's' || st.dir === 'se' || st.dir === 'sw') {
+        nextH = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, st.orig.height + dy));
+      }
+
+      const clamped = clampPanelGeometry({ x: nextX, y: nextY, width: nextW, height: nextH });
+      geometryRef.current = clamped;
+      setGeometry(clamped);
+      setHasCustomGeometry(true);
+    };
+
+    const stopInteraction = (e: PointerEvent) => {
+      const st = interactionRef.current;
+      if (st.mode === 'none' || e.pointerId !== st.pointerId) return;
+      st.mode = 'none';
+      setIsInteracting(false);
+      savePanelGeometry(geometryRef.current);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', stopInteraction);
+    window.addEventListener('pointercancel', stopInteraction);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', stopInteraction);
+      window.removeEventListener('pointercancel', stopInteraction);
+    };
+  }, [isInteracting]);
+
+  function handleResetGeometry() {
+    clearSavedPanelGeometry();
+    setHasCustomGeometry(false);
+    setGeometry(getDefaultPanelGeometry(overlayPosition));
+  }
 
   return (
     <aside
-      aria-label="Floating Score Control Panel"
-      className={`${positionStyleClass} pointer-events-auto w-[min(92vw,400px)] max-h-[85vh] overflow-y-auto rounded-xl border border-slate-700/90 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur-md`}
+      aria-label="Quick Score Control Panel"
+      data-quick-score-panel="true"
+      style={{
+        transform: `translate3d(${geometry.x}px, ${geometry.y}px, 0)`,
+        width: geometry.width,
+        height: geometry.height,
+      }}
+      className={`${
+        positioning === 'absolute' ? 'absolute z-40' : 'fixed z-[80]'
+      } top-0 left-0 pointer-events-auto flex flex-col overflow-hidden rounded-xl border ${
+        isInteracting
+          ? 'border-[#EA580C] shadow-[0_24px_56px_rgba(0,0,0,0.8)]'
+          : 'border-slate-700/90 shadow-2xl'
+      } bg-slate-950/95 text-slate-100 backdrop-blur-md transition-[border-color] duration-150`}
     >
-      {/* Compact Broadcast Control Header */}
-      <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2">
+      {/* Draggable Broadcast Control Header */}
+      <div
+        onPointerDown={handleHeaderPointerDown}
+        onDoubleClick={(e) => {
+          if (e.target instanceof Element && e.target.closest('button, input, select, a, label')) {
+            return;
+          }
+          handleResetGeometry();
+        }}
+        title="Drag to move · Resize from edges/corners · Double-click to reset"
+        className={`shrink-0 px-3.5 py-2.5 border-b border-slate-800 bg-slate-900/85 flex items-center justify-between gap-2 select-none touch-none ${
+          isInteracting ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
-          <SlidersHorizontal className="w-4 h-4 text-[#EA580C] shrink-0" />
+          <GripHorizontal className="w-4 h-4 text-slate-400 shrink-0" />
+          <SlidersHorizontal className="w-3.5 h-3.5 text-[#EA580C] shrink-0" />
           <div className="min-w-0">
             <h3 className="font-display text-xs font-bold text-white truncate">
               Quick Score Controls
             </h3>
-            <p className="text-[11px] text-slate-400 truncate">
-              {shortA} vs {shortB} · {sport}
+            <p className="text-[10px] text-slate-400 truncate">
+              {shortA} vs {shortB} · {sport} · Drag &amp; resize
             </p>
           </div>
         </div>
@@ -416,21 +645,23 @@ export function FloatingOverlayScorePanel({
             disabled={busy}
             onClick={handleUndo}
             title="Undo last score action"
-            className="min-h-[32px] px-2 py-1 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap disabled:opacity-40"
+            className="min-h-[30px] px-2 py-1 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap disabled:opacity-40"
           >
             <Undo2 className="w-3 h-3" />
             <span>Undo</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setDockCorner((c) => NEXT_CORNER[c])}
-            title="Move panel corner"
-            aria-label="Move floating panel corner"
-            className="min-h-[32px] w-8 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 inline-flex items-center justify-center"
-          >
-            <CornerDownRight className="w-3.5 h-3.5" />
-          </button>
+          {hasCustomGeometry && (
+            <button
+              type="button"
+              onClick={handleResetGeometry}
+              title="Reset panel position and size"
+              aria-label="Reset floating panel position and size"
+              className="min-h-[30px] w-7 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 inline-flex items-center justify-center"
+            >
+              <LocateFixed className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {onClose && (
             <button
@@ -438,7 +669,7 @@ export function FloatingOverlayScorePanel({
               onClick={onClose}
               title="Minimize floating control panel"
               aria-label="Close floating control panel"
-              className="min-h-[32px] w-8 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 inline-flex items-center justify-center"
+              className="min-h-[30px] w-7 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 inline-flex items-center justify-center"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -446,7 +677,7 @@ export function FloatingOverlayScorePanel({
         </div>
       </div>
 
-      <div className="p-3.5 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3.5 space-y-3">
         {/* Segmented Mode Switcher + Status Dropdown */}
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800">
@@ -1201,7 +1432,7 @@ export function FloatingOverlayScorePanel({
 
         {/* Footer link to full Scorer Console */}
         <div className="pt-2 border-t border-slate-800/90 flex items-center justify-between gap-2 text-[11px] text-slate-400">
-          <span className="truncate">Live sync to overlay</span>
+          <span className="truncate">Live sync to overlay · {geometry.width}×{geometry.height}</span>
           <Link
             to={`/admin/scoreboard/${stream.id}`}
             className="inline-flex items-center gap-1 font-semibold text-orange-400 hover:text-orange-300 whitespace-nowrap"
@@ -1210,6 +1441,42 @@ export function FloatingOverlayScorePanel({
             <ExternalLink className="w-3 h-3" />
           </Link>
         </div>
+      </div>
+
+      {/* Edge & Corner Resize Handles */}
+      <div
+        onPointerDown={handleResizePointerDown('e')}
+        title="Resize width"
+        aria-hidden="true"
+        className="absolute top-3 bottom-4 right-0 w-2 cursor-ew-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('w')}
+        title="Resize width"
+        aria-hidden="true"
+        className="absolute top-3 bottom-4 left-0 w-2 cursor-ew-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('s')}
+        title="Resize height"
+        aria-hidden="true"
+        className="absolute left-3 right-3 bottom-0 h-2 cursor-ns-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('sw')}
+        title="Drag corner to resize"
+        aria-hidden="true"
+        className="absolute left-0 bottom-0 w-3.5 h-3.5 cursor-nesw-resize touch-none z-30"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('se')}
+        title="Drag corner to resize"
+        aria-label="Resize Quick Score Controls panel"
+        className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize touch-none z-30 flex items-end justify-end p-0.5 text-slate-400 hover:text-orange-400"
+      >
+        <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <path d="M11 5L5 11M11 9L9 11" strokeLinecap="round" />
+        </svg>
       </div>
     </aside>
   );

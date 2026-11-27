@@ -84,8 +84,10 @@ export function useObsOverlay(matchId?: string) {
           activeObsScene: res.obsLayout.activeObsScene || '',
         });
       }
-      if (typeof res.brandLogoUrl === 'string' && res.brandLogoUrl.trim()) {
+      if (typeof res.brandLogoUrl === 'string') {
         setBrandLogoUrl(res.brandLogoUrl.trim());
+      } else {
+        setBrandLogoUrl('');
       }
     } catch (err: any) {
       const status = typeof err?.response?.status === 'number' ? err.response.status : null;

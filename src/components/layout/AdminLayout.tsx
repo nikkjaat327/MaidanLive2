@@ -51,6 +51,7 @@ import {
   getStickyMatchId,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
+import { EnvBrandLogoImg } from '../obs/ObsBrandMark.tsx';
 
 const ADMIN_SIDEBAR_STORAGE_KEY = 'maidanlive_admin_sidebar_collapsed';
 
@@ -239,7 +240,7 @@ function AdminDesktopSidebar({
             to="/admin/dashboard"
             className="font-display text-lg font-extrabold tracking-tight text-white whitespace-nowrap flex items-center gap-2 min-w-0"
           >
-            <Activity className="w-5 h-5 text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.85)] shrink-0" />
+            <EnvBrandLogoImg alt="MaidanLive Admin" className="h-6 w-auto object-contain shrink-0" />
             <span className="truncate bg-gradient-to-r from-white via-cyan-100 to-orange-300 bg-clip-text text-transparent">
               MaidanLive Admin
             </span>
@@ -922,7 +923,7 @@ export function AdminLayout() {
             >
               <div className="h-14 px-4 flex items-center justify-between border-b border-cyan-500/20">
                 <div className="flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-cyan-400" />
+                  <EnvBrandLogoImg alt="MaidanLive Admin" className="h-6 w-auto object-contain shrink-0" />
                   <span className="font-display font-bold">MaidanLive Admin</span>
                 </div>
                 <button

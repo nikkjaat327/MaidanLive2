@@ -428,10 +428,13 @@ async function startServer() {
     value: null,
   };
   app.get('/api/health', async (req, res) => {
+    const brandLogoUrl =
+      (process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL || '').trim();
     if (req.query.lite === '1') {
       res.json({
         ok: true,
         dbMode: dbInfo.mode,
+        brandLogoUrl,
         timestamp: new Date().toISOString(),
       });
       return;
@@ -447,6 +450,7 @@ async function startServer() {
     res.json({
       ok: true,
       dbMode: cachedHealthDiag.value?.engine || dbInfo.mode,
+      brandLogoUrl,
       diagnostics: cachedHealthDiag.value,
       timestamp: new Date().toISOString(),
     });

@@ -72,18 +72,43 @@ interface Point {
   y: number;
 }
 
-const PANEL_WIDTH = 404;
-const DEFAULT_ESTIMATED_HEIGHT = 460;
+type ObsResizeDirection = 'e' | 's' | 'w' | 'se' | 'sw';
+
+interface ObsPanelSize {
+  width: number;
+  height: number;
+}
+
+const DEFAULT_PANEL_WIDTH = 404;
+const DEFAULT_PANEL_HEIGHT = 480;
+const MIN_PANEL_WIDTH = 300;
+const MIN_PANEL_HEIGHT = 260;
 const EDGE_MARGIN = 14;
 
 function makeClientEventId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function clampToViewport(pt: Point, panelEl: HTMLElement | null): Point {
+function clampSize(sz: ObsPanelSize): ObsPanelSize {
+  if (typeof window === 'undefined') return sz;
+  const maxW = Math.max(MIN_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+  const maxH = Math.max(MIN_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+  return {
+    width: Math.round(Math.min(maxW, Math.max(Math.min(MIN_PANEL_WIDTH, maxW), sz.width))),
+    height: Math.round(Math.min(maxH, Math.max(Math.min(MIN_PANEL_HEIGHT, maxH), sz.height))),
+  };
+}
+
+function getDefaultSize(): ObsPanelSize {
+  return clampSize({ width: DEFAULT_PANEL_WIDTH, height: DEFAULT_PANEL_HEIGHT });
+}
+
+function clampToViewport(pt: Point, panelEl: HTMLElement | null, sizeOverride?: ObsPanelSize): Point {
   if (typeof window === 'undefined') return pt;
-  const width = panelEl?.offsetWidth || Math.min(PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
-  const height = panelEl?.offsetHeight || Math.min(DEFAULT_ESTIMATED_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+  const width =
+    sizeOverride?.width || panelEl?.offsetWidth || Math.min(DEFAULT_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+  const height =
+    sizeOverride?.height || panelEl?.offsetHeight || Math.min(DEFAULT_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
   const maxX = Math.max(EDGE_MARGIN, window.innerWidth - width - EDGE_MARGIN);
   const maxY = Math.max(EDGE_MARGIN, window.innerHeight - height - EDGE_MARGIN);
   return {
@@ -94,11 +119,14 @@ function clampToViewport(pt: Point, panelEl: HTMLElement | null): Point {
 
 function computeDefaultPosition(
   overlayPosition: OverlayPosition | undefined,
-  panelEl: HTMLElement | null
+  panelEl: HTMLElement | null,
+  sizeOverride?: ObsPanelSize
 ): Point {
   if (typeof window === 'undefined') return { x: 24, y: 24 };
-  const width = panelEl?.offsetWidth || Math.min(PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
-  const height = panelEl?.offsetHeight || Math.min(DEFAULT_ESTIMATED_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+  const width =
+    sizeOverride?.width || panelEl?.offsetWidth || Math.min(DEFAULT_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+  const height =
+    sizeOverride?.height || panelEl?.offsetHeight || Math.min(DEFAULT_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
 
   // Place opposite the active overlay graphic corner to keep the scoreboard unobstructed
   const dockLeft = overlayPosition === 'bottom-right';
@@ -106,7 +134,7 @@ function computeDefaultPosition(
 
   const rawX = dockLeft ? EDGE_MARGIN : window.innerWidth - width - EDGE_MARGIN;
   const rawY = dockTop ? EDGE_MARGIN : window.innerHeight - height - EDGE_MARGIN;
-  return clampToViewport({ x: rawX, y: rawY }, panelEl);
+  return clampToViewport({ x: rawX, y: rawY }, panelEl, sizeOverride);
 }
 
 export function DraggableObsScorePanel({
@@ -120,25 +148,37 @@ export function DraggableObsScorePanel({
   onClose,
 }: DraggableObsScorePanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
+  const [size, setSize] = useState<ObsPanelSize>(() => getDefaultSize());
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+
   const dragStateRef = useRef<{
-    dragging: boolean;
+    mode: 'none' | 'drag' | 'resize';
+    dir: ObsResizeDirection;
     pointerId: number;
     startX: number;
     startY: number;
     originX: number;
     originY: number;
+    originW: number;
+    originH: number;
   }>({
-    dragging: false,
+    mode: 'none',
+    dir: 'se',
     pointerId: -1,
     startX: 0,
     startY: 0,
     originX: 0,
     originY: 0,
+    originW: DEFAULT_PANEL_WIDTH,
+    originH: DEFAULT_PANEL_HEIGHT,
   });
 
   const [isDragging, setIsDragging] = useState(false);
   const [hasCustomPos, setHasCustomPos] = useState(false);
-  const [pos, setPos] = useState<Point>(() => computeDefaultPosition(overlayPosition, null));
+  const [pos, setPos] = useState<Point>(() => computeDefaultPosition(overlayPosition, null, size));
+  const posRef = useRef(pos);
+  posRef.current = pos;
 
   const [activeTab, setActiveTabState] = useState<'manual' | 'events' | 'size'>('manual');
   const { triggerOverlayPreview } = useBroadcastPreview();
@@ -205,13 +245,15 @@ export function DraggableObsScorePanel({
     setManualTarget(cricketDetails.target || 0);
   }, [cricketDetails]);
 
-  // Measure panel after initial mount & keep clamped within viewport on resize or height change
+  // Measure panel after initial mount & keep clamped within viewport on resize
   useEffect(() => {
     const syncBounds = () => {
+      const nextSize = clampSize(sizeRef.current);
+      setSize(nextSize);
       setPos((prev) =>
         hasCustomPos
-          ? clampToViewport(prev, panelRef.current)
-          : computeDefaultPosition(overlayPosition, panelRef.current)
+          ? clampToViewport(prev, panelRef.current, nextSize)
+          : computeDefaultPosition(overlayPosition, panelRef.current, nextSize)
       );
     };
     syncBounds();
@@ -230,16 +272,40 @@ export function DraggableObsScorePanel({
       }
       e.preventDefault();
       dragStateRef.current = {
-        dragging: true,
+        mode: 'drag',
+        dir: 'se',
         pointerId: e.pointerId,
         startX: e.clientX,
         startY: e.clientY,
-        originX: pos.x,
-        originY: pos.y,
+        originX: posRef.current.x,
+        originY: posRef.current.y,
+        originW: sizeRef.current.width,
+        originH: sizeRef.current.height,
       };
       setIsDragging(true);
     },
-    [pos.x, pos.y]
+    []
+  );
+
+  const handleResizePointerDown = useCallback(
+    (dir: ObsResizeDirection) => (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragStateRef.current = {
+        mode: 'resize',
+        dir,
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        originX: posRef.current.x,
+        originY: posRef.current.y,
+        originW: sizeRef.current.width,
+        originH: sizeRef.current.height,
+      };
+      setIsDragging(true);
+    },
+    []
   );
 
   useEffect(() => {
@@ -247,22 +313,50 @@ export function DraggableObsScorePanel({
 
     const onPointerMove = (e: PointerEvent) => {
       const state = dragStateRef.current;
-      if (!state.dragging || e.pointerId !== state.pointerId) return;
+      if (state.mode === 'none' || e.pointerId !== state.pointerId) return;
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       setHasCustomPos(true);
-      setPos(
-        clampToViewport(
-          { x: state.originX + dx, y: state.originY + dy },
-          panelRef.current
-        )
-      );
+
+      if (state.mode === 'drag') {
+        setPos(
+          clampToViewport(
+            { x: state.originX + dx, y: state.originY + dy },
+            panelRef.current,
+            sizeRef.current
+          )
+        );
+        return;
+      }
+
+      const maxW = Math.max(MIN_PANEL_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+      const maxH = Math.max(MIN_PANEL_HEIGHT, window.innerHeight - EDGE_MARGIN * 2);
+      let nextX = state.originX;
+      let nextW = state.originW;
+      let nextH = state.originH;
+
+      if (state.dir === 'e' || state.dir === 'se') {
+        nextW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, state.originW + dx));
+      }
+      if (state.dir === 'w' || state.dir === 'sw') {
+        const proposedW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, state.originW - dx));
+        const deltaW = state.originW - proposedW;
+        nextX = Math.max(EDGE_MARGIN, state.originX + deltaW);
+        nextW = state.originX + state.originW - nextX;
+      }
+      if (state.dir === 's' || state.dir === 'se' || state.dir === 'sw') {
+        nextH = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, state.originH + dy));
+      }
+
+      const clampedSize = clampSize({ width: nextW, height: nextH });
+      setSize(clampedSize);
+      setPos(clampToViewport({ x: nextX, y: state.originY }, panelRef.current, clampedSize));
     };
 
     const stopDragging = (e: PointerEvent) => {
       const state = dragStateRef.current;
-      if (!state.dragging || e.pointerId !== state.pointerId) return;
-      state.dragging = false;
+      if (state.mode === 'none' || e.pointerId !== state.pointerId) return;
+      state.mode = 'none';
       setIsDragging(false);
     };
 
@@ -277,8 +371,10 @@ export function DraggableObsScorePanel({
   }, [isDragging]);
 
   function handleResetPosition() {
+    const defSize = getDefaultSize();
+    setSize(defSize);
     setHasCustomPos(false);
-    setPos(computeDefaultPosition(overlayPosition, panelRef.current));
+    setPos(computeDefaultPosition(overlayPosition, panelRef.current, defSize));
   }
 
   function handleSelectCricketSide(side: 'A' | 'B') {
@@ -560,8 +656,12 @@ export function DraggableObsScorePanel({
     <aside
       ref={panelRef}
       aria-label="Draggable OBS Score Control Panel"
-      style={{ transform: `translate3d(${pos.x}px, ${pos.y}px, 0)` }}
-      className={`fixed top-0 left-0 z-50 pointer-events-auto w-[min(94vw,404px)] max-h-[86vh] overflow-y-auto rounded-xl border ${
+      style={{
+        transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
+        width: size.width,
+        height: size.height,
+      }}
+      className={`fixed top-0 left-0 z-50 pointer-events-auto flex flex-col overflow-hidden rounded-xl border ${
         isDragging
           ? 'border-[#EA580C] shadow-[0_24px_48px_rgba(0,0,0,0.65)]'
           : 'border-slate-700/90 shadow-2xl'
@@ -570,8 +670,14 @@ export function DraggableObsScorePanel({
       {/* Draggable Broadcast Control Header */}
       <div
         onPointerDown={handleHeaderPointerDown}
-        title="Drag to move panel anywhere on screen"
-        className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing select-none touch-none bg-slate-900/75"
+        onDoubleClick={(e) => {
+          if (e.target instanceof Element && e.target.closest('button, input, select, a, label')) {
+            return;
+          }
+          handleResetPosition();
+        }}
+        title="Drag to move · Resize from edges/corners · Double-click to reset"
+        className="shrink-0 px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing select-none touch-none bg-slate-900/75"
       >
         <div className="flex items-center gap-2 min-w-0">
           <GripHorizontal className="w-4 h-4 text-slate-400 shrink-0" />
@@ -583,7 +689,7 @@ export function DraggableObsScorePanel({
               </h3>
             </div>
             <p className="text-[11px] text-slate-400 truncate">
-              {shortA} vs {shortB} · {sport} · Drag header
+              {shortA} vs {shortB} · {sport} · Drag &amp; resize
             </p>
           </div>
         </div>
@@ -604,7 +710,7 @@ export function DraggableObsScorePanel({
             <button
               type="button"
               onClick={handleResetPosition}
-              title="Snap panel back to default corner"
+              title="Reset panel position and size"
               aria-label="Reset floating panel position"
               className="min-h-[30px] w-7 rounded-md border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 inline-flex items-center justify-center"
             >
@@ -626,7 +732,7 @@ export function DraggableObsScorePanel({
         </div>
       </div>
 
-      <div className="p-3.5 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3.5 space-y-3">
         {/* Segmented Mode Switcher + Status Dropdown */}
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800">
@@ -1600,7 +1706,7 @@ export function DraggableObsScorePanel({
 
         {/* Footer link to full Scorer Console */}
         <div className="pt-2 border-t border-slate-800/90 flex items-center justify-between gap-2 text-[11px] text-slate-400">
-          <span className="truncate">Live sync to overlay</span>
+          <span className="truncate">Live sync to overlay · {size.width}×{size.height}</span>
           <Link
             to={`/admin/scoreboard/${stream.id}`}
             className="inline-flex items-center gap-1 font-semibold text-orange-400 hover:text-orange-300 whitespace-nowrap"
@@ -1609,6 +1715,42 @@ export function DraggableObsScorePanel({
             <ExternalLink className="w-3 h-3" />
           </Link>
         </div>
+      </div>
+
+      {/* Edge & Corner Resize Handles */}
+      <div
+        onPointerDown={handleResizePointerDown('e')}
+        title="Resize width"
+        aria-hidden="true"
+        className="absolute top-3 bottom-4 right-0 w-2 cursor-ew-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('w')}
+        title="Resize width"
+        aria-hidden="true"
+        className="absolute top-3 bottom-4 left-0 w-2 cursor-ew-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('s')}
+        title="Resize height"
+        aria-hidden="true"
+        className="absolute left-3 right-3 bottom-0 h-2 cursor-ns-resize touch-none z-20 hover:bg-[#EA580C]/25 transition-colors"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('sw')}
+        title="Drag corner to resize"
+        aria-hidden="true"
+        className="absolute left-0 bottom-0 w-3.5 h-3.5 cursor-nesw-resize touch-none z-30"
+      />
+      <div
+        onPointerDown={handleResizePointerDown('se')}
+        title="Drag corner to resize"
+        aria-label="Resize Admin Score Controls panel"
+        className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize touch-none z-30 flex items-end justify-end p-0.5 text-slate-400 hover:text-orange-400"
+      >
+        <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <path d="M11 5L5 11M11 9L9 11" strokeLinecap="round" />
+        </svg>
       </div>
     </aside>
   );

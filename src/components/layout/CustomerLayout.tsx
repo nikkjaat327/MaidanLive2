@@ -26,6 +26,7 @@ import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { OfflineIndicator } from '../common/OfflineIndicator.tsx';
 import { ServerWakeupBanner } from '../common/ServerWakeupBanner.tsx';
 import { GlobalSearchModal } from '../common/GlobalSearchModal.tsx';
+import { EnvBrandLogoImg } from '../obs/ObsBrandMark.tsx';
 
 export function CustomerLayout() {
   const { customerUser, adminUser, unreadNotifications } = useAuth();
@@ -196,7 +197,7 @@ export function CustomerLayout() {
               to="/"
               className="font-display text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap flex items-center gap-1.5 shrink-0"
             >
-              <span className="h-2.5 w-2.5 rounded-full bg-[#EA580C] shrink-0" aria-hidden="true" />
+              <EnvBrandLogoImg alt="MaidanLive" className="h-6 sm:h-7 w-auto object-contain shrink-0" />
               <span>MaidanLive</span>
             </Link>
           </div>
@@ -323,7 +324,7 @@ export function CustomerLayout() {
                   onClick={() => setMobileMenuOpen(false)}
                   className="font-display text-lg font-extrabold text-slate-900 flex items-center gap-2"
                 >
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#EA580C]" />
+                  <EnvBrandLogoImg alt="MaidanLive" className="h-6 w-auto object-contain shrink-0" />
                   <span>MaidanLive</span>
                 </Link>
                 <button

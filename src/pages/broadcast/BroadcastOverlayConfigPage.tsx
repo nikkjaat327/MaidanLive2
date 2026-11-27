@@ -177,7 +177,7 @@ export function BroadcastOverlayConfigPage() {
 
   // Responsive canvas scaling inside preview box (supports Landscape 16:9 & Portrait 9:16)
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
-  const [previewWidth, setPreviewWidth] = useState(960);
+  const [previewWidth, setPreviewWidth] = useState(580);
   const sliderDebounceRef = useRef<number | null>(null);
   const sliderClearDraftRef = useRef<number | null>(null);
   const lastSliderEditAtRef = useRef<number>(0);
@@ -227,17 +227,6 @@ export function BroadcastOverlayConfigPage() {
     else if (sport.includes('volley') || sport.includes('badminton')) setSelectedEventKey('SET_WIN');
     else if (sport.includes('kabaddi')) setSelectedEventKey('SUPER_RAID');
   }, [stream?.id, stream?.gameName, score?.sportType]);
-
-  useEffect(() => {
-    const section = new URLSearchParams(location.search).get('section');
-    if (section !== 'events' || loading || !stream) return;
-    const t = window.setTimeout(() => {
-      document
-        .getElementById('event-animations-studio')
-        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 180);
-    return () => window.clearTimeout(t);
-  }, [location.search, loading, stream]);
 
   useEffect(() => {
     closeOverlayPreview();
@@ -316,13 +305,24 @@ export function BroadcastOverlayConfigPage() {
   }, []);
 
   useEffect(() => {
+    if (loading || streamsLoading || !stream) return;
     const el = previewContainerRef.current;
     if (!el) return;
-    const initialW = el.getBoundingClientRect().width;
-    if (initialW > 0) {
-      setPreviewWidth(initialW);
+    const measure = () => {
+      const nextW = el.getBoundingClientRect().width;
+      if (nextW > 0) {
+        setPreviewWidth(nextW);
+      }
+    };
+    measure();
+    const rafId = window.requestAnimationFrame(measure);
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        window.removeEventListener('resize', measure);
+      };
     }
-    if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.contentRect.width > 0) {
@@ -331,8 +331,11 @@ export function BroadcastOverlayConfigPage() {
       }
     });
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [stream?.id, previewOrientation]);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
+  }, [loading, streamsLoading, stream?.id, previewOrientation]);
 
   useEffect(() => {
     return () => {
@@ -633,9 +636,20 @@ export function BroadcastOverlayConfigPage() {
   const stageCanvasW = isPreviewPortrait ? 1080 : 1920;
   const stageCanvasH = isPreviewPortrait ? 1920 : 1080;
   const previewScale = Math.max(0.15, previewWidth / stageCanvasW);
+  const previewOverlayConfig = useMemo<BroadcastOverlayConfig>(
+    () => ({
+      ...effectiveOverlayConfig,
+      visible: true,
+      mode:
+        effectiveOverlayConfig.mode === 'hidden'
+          ? 'full'
+          : effectiveOverlayConfig.mode || 'full',
+    }),
+    [effectiveOverlayConfig]
+  );
   const previewMetrics = useMemo(
-    () => computeOverlayMetrics(effectiveOverlayConfig, isPreviewPortrait),
-    [effectiveOverlayConfig, isPreviewPortrait]
+    () => computeOverlayMetrics(previewOverlayConfig, isPreviewPortrait),
+    [previewOverlayConfig, isPreviewPortrait]
   );
 
   // Match summary helpers
@@ -826,12 +840,12 @@ export function BroadcastOverlayConfigPage() {
                   {overlayConfig.visible && overlayConfig.mode !== 'hidden' ? (
                     <>
                       <Eye className="w-3.5 h-3.5" />
-                      <span>SCOREBOARD ON</span>
+                      <span>Scoreboard Show in OBS/YouTube</span>
                     </>
                   ) : (
                     <>
                       <EyeOff className="w-3.5 h-3.5" />
-                      <span>SCOREBOARD OFF</span>
+                      <span>Scoreboard Hidden in OBS/YouTube</span>
                     </>
                   )}
                 </button>
@@ -1055,6 +1069,11 @@ export function BroadcastOverlayConfigPage() {
                       <strong>Scoreboard on YouTube is UNCHECKED:</strong> Live OBS Browser Source stays blank so YouTube video stays clean; viewers see the scoreboard only inside MaidanLive&apos;s embedded video player.
                     </div>
                   )}
+                  {(!overlayConfig.visible || overlayConfig.mode === 'hidden') && (
+                    <div className="px-4 py-1.5 bg-slate-800/80 border-b border-slate-700/70 text-[11px] font-medium text-slate-300">
+                      OBS/YouTube output is currently hidden — live stage preview continues showing the scoreboard for styling.
+                    </div>
+                  )}
                   <div className={isPreviewPortrait ? 'py-4 bg-slate-950/90 flex justify-center' : ''}>
                     <div
                       ref={previewContainerRef}
@@ -1100,13 +1119,13 @@ export function BroadcastOverlayConfigPage() {
                         className="absolute top-0 left-0 pointer-events-none"
                       >
                         <BroadcastBrandLogoBug
-                          config={effectiveOverlayConfig}
+                          config={previewOverlayConfig}
                           serverLogoUrl={brandLogoUrl}
                           variant="canvas"
                           zIndex={24}
                         />
                         <BroadcastSponsorAdBanner
-                          config={effectiveOverlayConfig}
+                          config={previewOverlayConfig}
                           variant="canvas"
                           zIndex={26}
                           suppress={timeoutDecision.isAnyTakeoverActive}
@@ -1115,7 +1134,7 @@ export function BroadcastOverlayConfigPage() {
                           <HotstarBroadcastOverlay
                             stream={stream}
                             score={score}
-                            config={effectiveOverlayConfig}
+                            config={previewOverlayConfig}
                             isPortrait={isPreviewPortrait}
                             serverClockOffsetMs={serverClockOffsetMs}
                           />
@@ -1123,7 +1142,7 @@ export function BroadcastOverlayConfigPage() {
                         <JioHotstarFullScoreboard
                           stream={stream}
                           score={score}
-                          config={effectiveOverlayConfig}
+                          config={previewOverlayConfig}
                           timeoutInfo={timeoutInfo}
                           isPortrait={isPreviewPortrait}
                           variant="canvas"
@@ -1134,7 +1153,7 @@ export function BroadcastOverlayConfigPage() {
                         <TimeoutFullscreenSponsorAd
                           stream={stream}
                           score={score}
-                          config={effectiveOverlayConfig}
+                          config={previewOverlayConfig}
                           timeoutInfo={timeoutInfo}
                           variant="canvas"
                           isPortrait={isPreviewPortrait}
@@ -1144,14 +1163,14 @@ export function BroadcastOverlayConfigPage() {
                         <BroadcastEventAnimationLayer
                           activeItem={activeEventItem}
                           isExiting={isEventExiting}
-                          overlayConfig={effectiveOverlayConfig}
+                          overlayConfig={previewOverlayConfig}
                           variant="canvas"
                           isPortrait={isPreviewPortrait}
                           zIndex={42}
                           stagePositionGuide={{
                             eventKey: selectedEventKey,
                             rule: normalizeEventAnimationsConfig(
-                              effectiveOverlayConfig.eventAnimations
+                              previewOverlayConfig.eventAnimations
                             )[selectedEventKey],
                             active: stagePickActive,
                           }}
@@ -1171,7 +1190,7 @@ export function BroadcastOverlayConfigPage() {
                     onScoreChange={setScore}
                     onRefresh={refetch}
                     onClose={() => setFloatingControlsOpen(false)}
-                    positioning="absolute"
+                    positioning="fixed"
                   />
                 )}
                 </div>

@@ -4,6 +4,7 @@ import { BroadcastTeamWing } from './BroadcastTeamWing.tsx';
 import { BroadcastCenterShield } from './BroadcastCenterShield.tsx';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { normalizeOverlayConfig, resolveBrandLogoUrl } from '../../utils/overlayConfig.ts';
+import { useEnvBrandLogo } from '../../hooks/useEnvBrandLogo.ts';
 
 interface BroadcastScoreboardProps {
   broadcast: NormalizedBroadcast;
@@ -72,7 +73,14 @@ export function BroadcastScoreboard({
   className = '',
 }: BroadcastScoreboardProps) {
   const cfg = normalizeOverlayConfig(broadcast.raw?.overlayConfig);
-  const logoUrl = resolveBrandLogoUrl(cfg);
+  const envLogo = useEnvBrandLogo();
+  const logoUrl = resolveBrandLogoUrl(cfg, envLogo);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [logoUrl]);
+
   const isPortrait = useAutoPortraitDetect(layoutMode);
   const { pulseA, pulseB } = useScoreChangePulse(
     broadcast.teamA.primaryText,
@@ -89,11 +97,12 @@ export function BroadcastScoreboard({
         {/* Portrait Header: Brand / Sport Status + Clock / Period */}
         <div className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-950/95 border-b border-slate-800/90">
           <div className="flex items-center gap-2 min-w-0">
-            {cfg.showBrandLogo && logoUrl && (
+            {cfg.showBrandLogo && logoUrl && !logoFailed && (
               <img
                 src={logoUrl}
-                alt="MaidanLive"
+                alt="Broadcast Logo"
                 referrerPolicy="no-referrer"
+                onError={() => setLogoFailed(true)}
                 style={{
                   height: `${Math.max(18, Math.min(28, Math.round(cfg.brandLogoSize * 0.3)))}px`,
                   opacity: cfg.brandLogoOpacity,
@@ -244,12 +253,13 @@ export function BroadcastScoreboard({
       data-scoreboard-layout="landscape"
       className={`bg-[#0A1120] border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl ${className}`}
     >
-      {cfg.showBrandLogo && logoUrl && (
+      {cfg.showBrandLogo && logoUrl && !logoFailed && (
         <div className="flex items-center justify-between px-3 py-1 bg-slate-950/90 border-b border-slate-800/80">
           <img
             src={logoUrl}
-            alt="MaidanLive"
+            alt="Broadcast Logo"
             referrerPolicy="no-referrer"
+            onError={() => setLogoFailed(true)}
             style={{
               height: `${Math.max(18, Math.min(34, Math.round(cfg.brandLogoSize * 0.34)))}px`,
               opacity: cfg.brandLogoOpacity,

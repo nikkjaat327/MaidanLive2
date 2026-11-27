@@ -510,10 +510,9 @@ const PROC_BRAND_LOGO =
     ? String(process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL).trim()
     : '';
 
-export const DEFAULT_BRAND_LOGO_URL =
-  VITE_BRAND_LOGO ||
-  PROC_BRAND_LOGO ||
-  'https://res.cloudinary.com/dbexuvouv/image/upload/v1795534866/maidanlive/logo/Neon_Sports_Broadcast_Logo_with_Slogan_hhyz1d.png';
+export const ENV_BRAND_LOGO_URL = VITE_BRAND_LOGO || PROC_BRAND_LOGO || '';
+
+export const DEFAULT_BRAND_LOGO_URL = ENV_BRAND_LOGO_URL;
 
 export type CustomScoreboardLayoutVariant =
   | 'classic_bar'
@@ -808,14 +807,14 @@ export function sanitizeBrandLogoUrl(val: unknown): string {
 }
 
 export function resolveBrandLogoUrl(
-  config?: Partial<BroadcastOverlayConfig> | null,
+  _config?: Partial<BroadcastOverlayConfig> | null,
   serverLogoUrl?: string | null
 ): string {
-  const custom = sanitizeBrandLogoUrl(config?.brandLogoUrl);
-  if (custom) return custom;
+  const envConfigured = sanitizeBrandLogoUrl(ENV_BRAND_LOGO_URL);
+  if (envConfigured) return envConfigured;
   const server = sanitizeBrandLogoUrl(serverLogoUrl);
   if (server) return server;
-  return DEFAULT_BRAND_LOGO_URL;
+  return '';
 }
 
 /**
@@ -1077,7 +1076,7 @@ export function normalizeOverlayConfig(
       DEFAULT_OVERLAY_CONFIG.metaScale
     ),
     showBrandLogo: bool(src.showBrandLogo, DEFAULT_OVERLAY_CONFIG.showBrandLogo),
-    brandLogoUrl: sanitizeBrandLogoUrl(src.brandLogoUrl),
+    brandLogoUrl: '',
     brandLogoPosition,
     brandLogoSize: Math.round(
       clampScaleNumber(

@@ -28,6 +28,7 @@ import {
   getStickyMatchId,
   setStickyMatchId,
 } from '../../utils/activeMatchSelection.ts';
+import { EnvBrandLogoImg } from '../obs/ObsBrandMark.tsx';
 
 const BROADCASTER_SIDEBAR_STORAGE_KEY = 'maidanlive_broadcaster_sidebar_collapsed';
 export const ACTIVE_CONTROL_ROOM_MATCH_STORAGE_KEY = ACTIVE_MATCH_STORAGE_KEY;
@@ -136,9 +137,7 @@ function BroadcasterDesktopSidebar({
             to="/broadcaster/dashboard"
             className="font-display text-sm font-bold tracking-tight text-white flex items-center gap-2 min-w-0"
           >
-            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500 via-fuchsia-500 to-cyan-500 text-white flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(34,211,238,0.35)]">
-              <Radio className="w-4 h-4" />
-            </span>
+            <EnvBrandLogoImg alt="MaidanLive Studio" className="h-6 w-auto object-contain shrink-0" />
             <span className="truncate bg-gradient-to-r from-white via-cyan-100 to-orange-300 bg-clip-text text-transparent">
               MaidanLive Studio
             </span>
@@ -591,7 +590,7 @@ export function BroadcasterLayout() {
           <div className="w-72 max-w-[85vw] bg-[#060913] border-r border-cyan-500/30 h-full flex flex-col">
             <div className="h-14 px-4 flex items-center justify-between border-b border-cyan-500/20">
               <span className="font-display font-bold text-white flex items-center gap-2">
-                <Radio className="w-4 h-4 text-cyan-400" />
+                <EnvBrandLogoImg alt="MaidanLive Studio" className="h-6 w-auto object-contain shrink-0" />
                 <span>MaidanLive Studio</span>
               </span>
               <button

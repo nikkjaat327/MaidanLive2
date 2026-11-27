@@ -68,19 +68,26 @@ describe('Scoreboard Default Position, 25 Styles, Brand Logo & Custom Designer',
     assert.equal(parsed.position, 'bottom-center');
   });
 
-  it('resolves brand logo URL (.env fallback -> server -> config override) and clamps logo sizing', () => {
-    assert.ok(DEFAULT_BRAND_LOGO_URL.startsWith('https://'));
+  it('resolves brand logo URL strictly from .env (ignores non-.env overrides and returns empty if missing) and clamps logo sizing', () => {
+    assert.equal(typeof DEFAULT_BRAND_LOGO_URL, 'string');
     assert.equal(resolveBrandLogoUrl({ brandLogoUrl: '' }, ''), DEFAULT_BRAND_LOGO_URL);
     assert.equal(
       resolveBrandLogoUrl({ brandLogoUrl: '' }, 'https://cdn.example.com/server-logo.png'),
-      'https://cdn.example.com/server-logo.png'
+      DEFAULT_BRAND_LOGO_URL || 'https://cdn.example.com/server-logo.png'
+    );
+    assert.equal(
+      resolveBrandLogoUrl(
+        { brandLogoUrl: 'https://cdn.example.com/custom.png' },
+        ''
+      ),
+      DEFAULT_BRAND_LOGO_URL
     );
     assert.equal(
       resolveBrandLogoUrl(
         { brandLogoUrl: 'https://cdn.example.com/custom.png' },
         'https://cdn.example.com/server-logo.png'
       ),
-      'https://cdn.example.com/custom.png'
+      DEFAULT_BRAND_LOGO_URL || 'https://cdn.example.com/server-logo.png'
     );
 
     const clamped = normalizeOverlayConfig({
