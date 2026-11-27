@@ -53,6 +53,7 @@ import { BroadcastSportStrip } from './BroadcastSportStrip.tsx';
 import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
 import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
+import { ActivePlayersCard } from '../scoreboard/ActivePlayersCard.tsx';
 import { CricketScorecardPanel } from '../scoreboard/CricketScorecardPanel.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { StartingSoonGraphic } from '../streaming/StartingSoonGraphic.tsx';
@@ -66,6 +67,15 @@ import {
   KabaddiDetails,
   normalizeKabaddiDetails,
 } from '../../utils/kabaddiScoring.ts';
+import {
+  CricketDetails,
+  deriveCricketInningsScorecard,
+  normalizeCricketDetails,
+} from '../../utils/cricketScoring.ts';
+import {
+  mergeMatchRoster,
+  type UnifiedMatchPlayer,
+} from '../../utils/sportPositions.ts';
 import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
@@ -248,7 +258,19 @@ export function LiveBroadcastView({
   const [playerSignal, setPlayerSignal] = useState<PlayerPlaybackSignal>('ok');
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const wakeLockRef = useRef<any>(null);
-  const [activeTab, setActiveTab] = useState<DetailTab>('commentary');
+  const userPickedTabRef = useRef(false);
+  const [activeTab, setActiveTab] = useState<DetailTab>(() =>
+    broadcast.sport === 'Cricket' ? 'scorecard' : 'commentary'
+  );
+  useEffect(() => {
+    userPickedTabRef.current = false;
+    setActiveTab(broadcast.sport === 'Cricket' ? 'scorecard' : 'commentary');
+  }, [broadcast.id]);
+  useEffect(() => {
+    if (!userPickedTabRef.current && broadcast.sport === 'Cricket' && activeTab === 'commentary') {
+      setActiveTab('scorecard');
+    }
+  }, [broadcast.sport, activeTab]);
   const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>(
     () => initialPublicSponsors || []
   );
@@ -271,6 +293,15 @@ export function LiveBroadcastView({
     return () => window.clearTimeout(id);
   }, [recentImportantEvent]);
 
+  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>(
+    () => initialLineupPlayers || { teamA: [], teamB: [] }
+  );
+
+  const mergedRoster = useMemo(
+    () => mergeMatchRoster(stream, [...lineupPlayers.teamA, ...lineupPlayers.teamB]),
+    [stream, lineupPlayers]
+  );
+
   const kabaddiStatRows = useMemo(() => {
     if (!kabaddiDetails) return [];
     const byPlayerId = new Map<string, PlayerMatchStatRecord>();
@@ -283,7 +314,8 @@ export function LiveBroadcastView({
       id: string;
       playerId: string;
       name: string;
-      jersey?: number | string;
+      jersey?: number | string | null;
+      position?: string;
       teamName: string;
       isMvp: boolean;
       raidPoints: number;
@@ -294,58 +326,74 @@ export function LiveBroadcastView({
       outCount: number;
       revivals: number;
     }> = [];
-    const seenIds = new Set<string>();
-    const appendSide = (players: KabaddiDetails['courtPlayersA'], teamName: string) => {
-      for (const cp of players) {
+    const seenKeys = new Set<string>();
+    const appendSide = (
+      courtPlayers: KabaddiDetails['courtPlayersA'],
+      rosterPlayers: UnifiedMatchPlayer[],
+      teamName: string
+    ) => {
+      for (const cp of courtPlayers) {
         const db = byPlayerId.get(cp.playerId);
-        if (cp.playerId) seenIds.add(cp.playerId);
-        const raidPoints = Math.max(cp.stats.raidPoints || 0, db?.raidPoints || 0);
-        const tacklePoints = Math.max(cp.stats.tacklePoints || 0, db?.tacklePoints || 0);
-        const bonusPoints = Math.max(cp.stats.bonusPoints || 0, db?.bonusPoints || 0);
-        const superRaids = cp.stats.superRaids || 0;
-        const superTackles = cp.stats.superTackles || 0;
-        const outCount = cp.stats.outCount || 0;
-        const revivals = cp.stats.revivals || 0;
-        const hasActivity =
-          raidPoints > 0 ||
-          tacklePoints > 0 ||
-          bonusPoints > 0 ||
-          superRaids > 0 ||
-          superTackles > 0 ||
-          outCount > 0 ||
-          revivals > 0 ||
-          (cp.stats.raidsAttempted || 0) > 0 ||
-          Boolean(db);
-        if (!hasActivity) continue;
+        const nameKey = `${teamName}:${cp.name.trim().toLowerCase()}`;
+        seenKeys.add(nameKey);
+        if (cp.playerId) seenKeys.add(`id:${cp.playerId}`);
         rows.push({
           id: cp.playerId || `${teamName}-${cp.name}`,
           playerId: cp.playerId,
           name: cp.name,
           jersey: cp.jerseyNumber,
+          position: cp.role || '',
           teamName,
           isMvp: Boolean(db?.isMvp),
-          raidPoints,
-          tacklePoints,
-          bonusPoints,
-          superRaids,
-          superTackles,
-          outCount,
-          revivals,
+          raidPoints: Math.max(cp.stats.raidPoints || 0, db?.raidPoints || 0),
+          tacklePoints: Math.max(cp.stats.tacklePoints || 0, db?.tacklePoints || 0),
+          bonusPoints: Math.max(cp.stats.bonusPoints || 0, db?.bonusPoints || 0),
+          superRaids: cp.stats.superRaids || 0,
+          superTackles: cp.stats.superTackles || 0,
+          outCount: cp.stats.outCount || 0,
+          revivals: cp.stats.revivals || 0,
+        });
+      }
+      for (const rp of rosterPlayers) {
+        const nameKey = `${teamName}:${rp.name.trim().toLowerCase()}`;
+        if (seenKeys.has(nameKey) || (rp.dbPlayerId && seenKeys.has(`id:${rp.dbPlayerId}`))) {
+          continue;
+        }
+        seenKeys.add(nameKey);
+        const db = rp.dbPlayerId ? byPlayerId.get(rp.dbPlayerId) : undefined;
+        rows.push({
+          id: rp.id,
+          playerId: rp.dbPlayerId || '',
+          name: rp.name,
+          jersey: rp.jerseyNumber,
+          position: rp.position || '',
+          teamName,
+          isMvp: Boolean(db?.isMvp),
+          raidPoints: db?.raidPoints || 0,
+          tacklePoints: db?.tacklePoints || 0,
+          bonusPoints: db?.bonusPoints || 0,
+          superRaids: 0,
+          superTackles: 0,
+          outCount: 0,
+          revivals: 0,
         });
       }
     };
-    appendSide(kabaddiDetails.courtPlayersA, stream.teamAName || 'Team A');
-    appendSide(kabaddiDetails.courtPlayersB, stream.teamBName || 'Team B');
+    appendSide(kabaddiDetails.courtPlayersA, mergedRoster.teamA, stream.teamAName || 'Team A');
+    appendSide(kabaddiDetails.courtPlayersB, mergedRoster.teamB, stream.teamBName || 'Team B');
     for (const st of matchStats) {
       const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
       const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
       const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
-      if (pId && seenIds.has(pId)) continue;
+      if (pId && seenKeys.has(`id:${pId}`)) continue;
+      const tName = tObj?.shortName || tObj?.name || '—';
+      const pName = pObj?.name || 'Player';
+      if (seenKeys.has(`${tName}:${pName.toLowerCase()}`)) continue;
       rows.push({
         id: st.id || pId || `stat_${rows.length}`,
         playerId: pId,
-        name: pObj?.name || 'Player',
-        teamName: tObj?.shortName || tObj?.name || '—',
+        name: pName,
+        teamName: tName,
         isMvp: Boolean(st.isMvp),
         raidPoints: st.raidPoints || 0,
         tacklePoints: st.tacklePoints || 0,
@@ -360,11 +408,264 @@ export function LiveBroadcastView({
       (a, b) =>
         b.raidPoints + b.tacklePoints + b.bonusPoints - (a.raidPoints + a.tacklePoints + a.bonusPoints)
     );
-  }, [kabaddiDetails, matchStats, stream.teamAName, stream.teamBName]);
+  }, [kabaddiDetails, matchStats, mergedRoster, stream.teamAName, stream.teamBName]);
 
-  const [lineupPlayers, setLineupPlayers] = useState<{ teamA: PlayerData[]; teamB: PlayerData[] }>(
-    () => initialLineupPlayers || { teamA: [], teamB: [] }
-  );
+  const cricketPlayerStatRows = useMemo(() => {
+    if (broadcast.sport !== 'Cricket') return [];
+    const d = normalizeCricketDetails(
+      (score?.sportSpecificDetails || {}) as Partial<CricketDetails>
+    );
+    const teamAName = stream.teamAName || 'Team A';
+    const teamBName = stream.teamBName || 'Team B';
+    const card1 = deriveCricketInningsScorecard(d, 1, teamAName, teamBName);
+    const card2 = deriveCricketInningsScorecard(d, 2, teamAName, teamBName);
+
+    interface CricketStatRow {
+      key: string;
+      playerId: string;
+      name: string;
+      jersey?: number | null;
+      position?: string;
+      teamName: string;
+      runs: number;
+      balls: number;
+      fours: number;
+      sixes: number;
+      strikeRate: string;
+      onStrike: boolean;
+      overs: string;
+      wickets: number;
+      runsConceded: number;
+      economy: string;
+      isMvp: boolean;
+      statusNote: string;
+    }
+
+    const rowMap = new Map<string, CricketStatRow>();
+    const ensureRow = (
+      name: string,
+      teamName: string,
+      opts?: { playerId?: string; jersey?: number | null; position?: string }
+    ): CricketStatRow => {
+      const k = `${teamName.toLowerCase()}::${name.trim().toLowerCase()}`;
+      let row = rowMap.get(k);
+      if (!row) {
+        row = {
+          key: k,
+          playerId: opts?.playerId || '',
+          name: name.trim(),
+          jersey: opts?.jersey ?? null,
+          position: opts?.position || '',
+          teamName,
+          runs: 0,
+          balls: 0,
+          fours: 0,
+          sixes: 0,
+          strikeRate: '0.0',
+          onStrike: false,
+          overs: '—',
+          wickets: 0,
+          runsConceded: 0,
+          economy: '—',
+          isMvp: false,
+          statusNote: 'Squad',
+        };
+        rowMap.set(k, row);
+      } else {
+        if (!row.playerId && opts?.playerId) row.playerId = opts.playerId;
+        if (row.jersey == null && opts?.jersey != null) row.jersey = opts.jersey;
+        if (!row.position && opts?.position) row.position = opts.position;
+      }
+      return row;
+    };
+
+    // Seed with full drafted/DB rosters first so jersey numbers & positions populate
+    for (const p of mergedRoster.teamA) {
+      ensureRow(p.name, teamAName, {
+        playerId: p.dbPlayerId || '',
+        jersey: p.jerseyNumber ?? null,
+        position: p.position || '',
+      });
+    }
+    for (const p of mergedRoster.teamB) {
+      ensureRow(p.name, teamBName, {
+        playerId: p.dbPlayerId || '',
+        jersey: p.jerseyNumber ?? null,
+        position: p.position || '',
+      });
+    }
+
+    // Apply live batting & bowling stats from both innings
+    for (const card of [card1, card2]) {
+      for (const b of card.batting) {
+        const row = ensureRow(b.name, card.battingTeamName);
+        row.runs += b.runs;
+        row.balls += b.balls;
+        row.fours += b.fours;
+        row.sixes += b.sixes;
+        row.strikeRate = row.balls > 0 ? ((row.runs / row.balls) * 100).toFixed(1) : '0.0';
+        row.onStrike = row.onStrike || b.onStrike;
+        row.statusNote = b.isOut ? b.dismissalText : b.onStrike ? 'Batting *' : 'Not out';
+      }
+      for (const bw of card.bowling) {
+        const row = ensureRow(bw.name, card.bowlingTeamName);
+        row.overs = bw.overs;
+        row.wickets += bw.wickets;
+        row.runsConceded += bw.runsConceded;
+        row.economy = bw.economy;
+        if (row.statusNote === 'Squad') row.statusNote = 'Bowled';
+      }
+    }
+
+    // Merge verified PlayerMatchStat overrides (MVP, DB IDs, any manually saved rows)
+    for (const st of matchStats) {
+      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
+      const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
+      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
+      const tName = tObj?.name || tObj?.shortName || teamAName;
+      const pName = pObj?.name || '';
+      if (!pName) continue;
+      const row = ensureRow(pName, tName, { playerId: pId });
+      if (st.isMvp) row.isMvp = true;
+      if ((st.runs || 0) > row.runs) row.runs = st.runs;
+      if ((st.ballsFaced || 0) > row.balls) row.balls = st.ballsFaced;
+      if ((st.fours || 0) > row.fours) row.fours = st.fours;
+      if ((st.sixes || 0) > row.sixes) row.sixes = st.sixes;
+      if ((st.wickets || 0) > row.wickets) row.wickets = st.wickets;
+      if (row.balls > 0) row.strikeRate = ((row.runs / row.balls) * 100).toFixed(1);
+    }
+
+    return Array.from(rowMap.values()).sort((a, b) => {
+      const aAct = a.runs + a.balls + a.wickets * 20 + (a.overs !== '—' ? 5 : 0);
+      const bAct = b.runs + b.balls + b.wickets * 20 + (b.overs !== '—' ? 5 : 0);
+      return bAct - aAct;
+    });
+  }, [broadcast.sport, score?.sportSpecificDetails, mergedRoster, matchStats, stream.teamAName, stream.teamBName]);
+
+  const generalSportStatRows = useMemo(() => {
+    if (broadcast.sport === 'Cricket' || broadcast.sport === 'Kabaddi') return [];
+    const teamAName = stream.teamAName || 'Team A';
+    const teamBName = stream.teamBName || 'Team B';
+
+    interface GeneralStatRow {
+      id: string;
+      playerId: string;
+      name: string;
+      jersey?: number | null;
+      position?: string;
+      teamName: string;
+      goals: number;
+      assists: number;
+      yellowCards: number;
+      redCards: number;
+      attackPoints: number;
+      blockPoints: number;
+      serveAces: number;
+      pointsScored: number;
+      isMvp: boolean;
+    }
+
+    const rowMap = new Map<string, GeneralStatRow>();
+    const ensure = (
+      name: string,
+      teamName: string,
+      opts?: { playerId?: string; jersey?: number | null; position?: string }
+    ): GeneralStatRow => {
+      const key = `${teamName.toLowerCase()}::${name.trim().toLowerCase()}`;
+      let row = rowMap.get(key);
+      if (!row) {
+        row = {
+          id: opts?.playerId || key,
+          playerId: opts?.playerId || '',
+          name: name.trim(),
+          jersey: opts?.jersey ?? null,
+          position: opts?.position || '',
+          teamName,
+          goals: 0,
+          assists: 0,
+          yellowCards: 0,
+          redCards: 0,
+          attackPoints: 0,
+          blockPoints: 0,
+          serveAces: 0,
+          pointsScored: 0,
+          isMvp: false,
+        };
+        rowMap.set(key, row);
+      } else {
+        if (!row.playerId && opts?.playerId) row.playerId = opts.playerId;
+        if (row.jersey == null && opts?.jersey != null) row.jersey = opts.jersey;
+        if (!row.position && opts?.position) row.position = opts.position;
+      }
+      return row;
+    };
+
+    for (const p of mergedRoster.teamA) {
+      ensure(p.name, teamAName, {
+        playerId: p.dbPlayerId || '',
+        jersey: p.jerseyNumber ?? null,
+        position: p.position || '',
+      });
+    }
+    for (const p of mergedRoster.teamB) {
+      ensure(p.name, teamBName, {
+        playerId: p.dbPlayerId || '',
+        jersey: p.jerseyNumber ?? null,
+        position: p.position || '',
+      });
+    }
+
+    // Derive live events from ScoreHistory for active players
+    for (const h of history) {
+      if (h.reverted || h.entryType === 'UNDO') continue;
+      const tName = h.teamSide === 'B' ? teamBName : teamAName;
+      if (h.playerName) {
+        const r = ensure(h.playerName, tName);
+        const ev = String(h.eventType || '').toUpperCase();
+        if (ev === 'GOAL' || ev === 'PENALTY_GOAL') r.goals += 1;
+        if (ev === 'YELLOW_CARD') r.yellowCards += 1;
+        if (ev === 'RED_CARD') r.redCards += 1;
+        if (ev.includes('ATTACK') || ev.includes('SPIKE')) r.attackPoints += 1;
+        if (ev.includes('BLOCK')) r.blockPoints += 1;
+        if (ev.includes('ACE') || ev.includes('SERVE')) r.serveAces += 1;
+        r.pointsScored += Math.max(0, Number(h.pointsAwarded || 0));
+      }
+      if (h.assistPlayerName) {
+        const aRow = ensure(h.assistPlayerName, tName);
+        aRow.assists += 1;
+      }
+    }
+
+    for (const st of matchStats) {
+      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
+      const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
+      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
+      const pName = pObj?.name || '';
+      if (!pName) continue;
+      const tName = tObj?.name || tObj?.shortName || teamAName;
+      const r = ensure(pName, tName, { playerId: pId });
+      r.isMvp = Boolean(st.isMvp);
+      r.goals = Math.max(r.goals, st.goals || 0);
+      r.assists = Math.max(r.assists, st.assists || 0);
+      r.yellowCards = Math.max(r.yellowCards, st.yellowCards || 0);
+      r.redCards = Math.max(r.redCards, st.redCards || 0);
+      r.attackPoints = Math.max(r.attackPoints, st.attackPoints || 0);
+      r.blockPoints = Math.max(r.blockPoints, st.blockPoints || 0);
+      r.serveAces = Math.max(r.serveAces, st.serveAces || 0);
+    }
+
+    return Array.from(rowMap.values()).sort(
+      (a, b) =>
+        b.goals * 10 +
+        b.assists * 5 +
+        b.pointsScored +
+        b.attackPoints +
+        b.blockPoints +
+        b.serveAces -
+        (a.goals * 10 + a.assists * 5 + a.pointsScored + a.attackPoints + a.blockPoints + a.serveAces)
+    );
+  }, [broadcast.sport, history, matchStats, mergedRoster, stream.teamAName, stream.teamBName]);
+
   const [upcomingFixtures, setUpcomingFixtures] = useState<FixtureData[]>(
     () => initialUpcomingFixtures || []
   );
@@ -1100,6 +1401,7 @@ export function LiveBroadcastView({
           <BroadcastScoreboard
             broadcast={broadcast}
             layoutMode={layout.scoreboardMode}
+            hideSubStrip
           />
         )}
         <BroadcastSportStrip broadcast={broadcast} />
@@ -1263,13 +1565,18 @@ export function LiveBroadcastView({
           </div>
         </div>
 
+        {/* Active Players Overview Card (Cricket) */}
+        {broadcast.sport === 'Cricket' && (
+          <ActivePlayersCard matchId={broadcast.id} stream={stream} score={score} />
+        )}
+
         {/* 3. MATCH CENTER TABS */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {[
-            { id: 'commentary' as const, label: `Commentary (${history.length})` },
             ...(broadcast.sport === 'Cricket'
               ? [{ id: 'scorecard' as const, label: 'Scorecard' }]
               : []),
+            { id: 'commentary' as const, label: `Commentary (${history.length})` },
             ...(broadcast.sport === 'Kabaddi' &&
             kabaddiDetails?.viewerDisplaySettings.showRaidHistory !== false
               ? [{ id: 'raids' as const, label: `Raid History (${kabaddiActiveRaids.length})` }]
@@ -1277,12 +1584,16 @@ export function LiveBroadcastView({
             {
               id: 'stats' as const,
               label: `Player Stats (${
-                broadcast.sport === 'Kabaddi' ? kabaddiStatRows.length : matchStats.length
+                broadcast.sport === 'Kabaddi'
+                  ? kabaddiStatRows.length
+                  : broadcast.sport === 'Cricket'
+                    ? cricketPlayerStatRows.length
+                    : generalSportStatRows.length
               })`,
             },
             {
               id: 'lineups' as const,
-              label: `Lineups (${lineupPlayers.teamA.length + lineupPlayers.teamB.length})`,
+              label: `Lineups (${mergedRoster.teamA.length + mergedRoster.teamB.length})`,
             },
             { id: 'chat' as const, label: 'Live Chat & Polls' },
             ...(broadcast.highlightsEnabled && (!resolvedAuth || highlights.length > 0)
@@ -1301,7 +1612,10 @@ export function LiveBroadcastView({
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                userPickedTabRef.current = true;
+                setActiveTab(tab.id);
+              }}
               className={`min-h-[40px] px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors ${
                 activeTab === tab.id
                   ? 'bg-slate-900 text-white border-slate-900'
@@ -1316,7 +1630,11 @@ export function LiveBroadcastView({
         {activeTab === 'commentary' && <LiveCommentaryFeed history={history} />}
 
         {activeTab === 'scorecard' && broadcast.sport === 'Cricket' && (
-          <CricketScorecardPanel stream={stream} score={score} />
+          <CricketScorecardPanel
+            stream={stream}
+            score={score}
+            lineupPlayers={mergedRoster}
+          />
         )}
 
         {activeTab === 'raids' && broadcast.sport === 'Kabaddi' && kabaddiDetails && (
@@ -1430,15 +1748,20 @@ export function LiveBroadcastView({
                       {kabaddiStatRows.map((row) => (
                         <tr key={row.id} className="hover:bg-slate-50">
                           <td className="py-2.5 px-3 font-semibold text-slate-900">
-                            {row.playerId && !row.playerId.startsWith('kab_') ? (
+                            {row.playerId && /^[a-f\d]{24}$/i.test(row.playerId) ? (
                               <Link to={`/players/${row.playerId}`} className="hover:text-[#EA580C]">
-                                {row.jersey ? `#${row.jersey} ` : ''}
+                                {row.jersey != null ? `#${row.jersey} ` : ''}
                                 {row.name}
                               </Link>
                             ) : (
                               <span>
-                                {row.jersey ? `#${row.jersey} ` : ''}
+                                {row.jersey != null ? `#${row.jersey} ` : ''}
                                 {row.name}
+                              </span>
+                            )}
+                            {row.position && (
+                              <span className="ml-1.5 text-[11px] font-normal text-slate-500">
+                                ({row.position})
                               </span>
                             )}
                             {row.isMvp && (
@@ -1465,9 +1788,80 @@ export function LiveBroadcastView({
                   </table>
                 </div>
               )
-            ) : matchStats.length === 0 ? (
+            ) : broadcast.sport === 'Cricket' ? (
+              cricketPlayerStatRows.length === 0 ? (
+                <p className="text-sm text-slate-500 py-4 text-center">
+                  No player statistics recorded for this Cricket match yet.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                        <th className="py-2.5 px-3">Player</th>
+                        <th className="py-2.5 px-3">Team</th>
+                        <th className="py-2.5 px-3 font-mono text-right">R (B)</th>
+                        <th className="py-2.5 px-3 font-mono text-right">4s/6s</th>
+                        <th className="py-2.5 px-3 font-mono text-right">SR</th>
+                        <th className="py-2.5 px-3 font-mono text-right">Bowling (O-R-W)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {cricketPlayerStatRows.map((row) => (
+                        <tr key={row.key} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3">
+                            <div className="font-semibold text-slate-900">
+                              {row.playerId && /^[a-f\d]{24}$/i.test(row.playerId) ? (
+                                <Link to={`/players/${row.playerId}`} className="hover:text-[#EA580C]">
+                                  {row.jersey != null ? `#${row.jersey} ` : ''}
+                                  {row.name}
+                                </Link>
+                              ) : (
+                                <span>
+                                  {row.jersey != null ? `#${row.jersey} ` : ''}
+                                  {row.name}
+                                </span>
+                              )}
+                              {row.onStrike && (
+                                <span className="text-[#EA580C] font-bold ml-0.5">*</span>
+                              )}
+                              {row.isMvp && (
+                                <span className="ml-1.5 text-[10px] font-bold text-amber-700">
+                                  POTM
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              {[row.position, row.statusNote].filter(Boolean).join(' · ')}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">{row.teamName}</td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-right">
+                            <strong className="text-slate-900">{row.runs}</strong>{' '}
+                            <span className="text-slate-500">({row.balls})</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-right text-slate-700">
+                            {row.fours}/{row.sixes}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-right text-slate-700">
+                            {row.strikeRate}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-right text-slate-800">
+                            {row.overs !== '—'
+                              ? `${row.overs}-${row.runsConceded}-${row.wickets}`
+                              : row.wickets > 0
+                                ? `${row.wickets}w`
+                                : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : generalSportStatRows.length === 0 ? (
               <p className="text-sm text-slate-500 py-4 text-center">
-                No verified player statistics recorded for this match yet.
+                No player statistics recorded for this match yet.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -1476,97 +1870,81 @@ export function LiveBroadcastView({
                     <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
                       <th className="py-2.5 px-3">Player</th>
                       <th className="py-2.5 px-3">Team</th>
-                      {broadcast.sport === 'Cricket' && (
+                      {broadcast.sport === 'Football' ? (
                         <>
-                          <th className="py-2.5 px-3 font-mono">Runs</th>
-                          <th className="py-2.5 px-3 font-mono">Balls</th>
-                          <th className="py-2.5 px-3 font-mono">4s/6s</th>
-                          <th className="py-2.5 px-3 font-mono">Wkts</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Goals</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Assists</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Cards</th>
                         </>
-                      )}
-                      {broadcast.sport === 'Kabaddi' && (
+                      ) : broadcast.sport === 'Volleyball' ? (
                         <>
-                          <th className="py-2.5 px-3 font-mono">Raid</th>
-                          <th className="py-2.5 px-3 font-mono">Tackle</th>
-                          <th className="py-2.5 px-3 font-mono">Bonus</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Attack</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Block</th>
+                          <th className="py-2.5 px-3 font-mono text-right">Aces</th>
                         </>
-                      )}
-                      {broadcast.sport === 'Football' && (
-                        <>
-                          <th className="py-2.5 px-3 font-mono">Goals</th>
-                          <th className="py-2.5 px-3 font-mono">Assists</th>
-                          <th className="py-2.5 px-3 font-mono">Cards</th>
-                        </>
-                      )}
-                      {broadcast.sport === 'Volleyball' && (
-                        <>
-                          <th className="py-2.5 px-3 font-mono">Attack</th>
-                          <th className="py-2.5 px-3 font-mono">Block</th>
-                          <th className="py-2.5 px-3 font-mono">Aces</th>
-                        </>
+                      ) : (
+                        <th className="py-2.5 px-3 font-mono text-right">Points</th>
                       )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {matchStats.map((st) => {
-                      const pObj = typeof st.playerId === 'object' && st.playerId ? st.playerId : null;
-                      const tObj = typeof st.teamId === 'object' && st.teamId ? st.teamId : null;
-                      const pId = pObj?._id || (typeof st.playerId === 'string' ? st.playerId : '');
-                      return (
-                        <tr key={st.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-semibold text-slate-900">
-                            {pId ? (
-                              <Link to={`/players/${pId}`} className="hover:text-[#EA580C]">
-                                {pObj?.name || 'Player'}
-                              </Link>
-                            ) : (
-                              <span>{pObj?.name || 'Player'}</span>
-                            )}
-                            {st.isMvp && (
-                              <span className="ml-1.5 text-[10px] font-bold text-amber-700">
-                                POTM
-                              </span>
-                            )}
+                    {generalSportStatRows.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-3 font-semibold text-slate-900">
+                          {row.playerId && /^[a-f\d]{24}$/i.test(row.playerId) ? (
+                            <Link to={`/players/${row.playerId}`} className="hover:text-[#EA580C]">
+                              {row.jersey != null ? `#${row.jersey} ` : ''}
+                              {row.name}
+                            </Link>
+                          ) : (
+                            <span>
+                              {row.jersey != null ? `#${row.jersey} ` : ''}
+                              {row.name}
+                            </span>
+                          )}
+                          {row.position && (
+                            <span className="ml-1.5 text-[11px] font-normal text-slate-500">
+                              ({row.position})
+                            </span>
+                          )}
+                          {row.isMvp && (
+                            <span className="ml-1.5 text-[10px] font-bold text-amber-700">
+                              POTM
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600">{row.teamName}</td>
+                        {broadcast.sport === 'Football' ? (
+                          <>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right font-bold">
+                              {row.goals}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right">
+                              {row.assists}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right">
+                              Y:{row.yellowCards} R:{row.redCards}
+                            </td>
+                          </>
+                        ) : broadcast.sport === 'Volleyball' ? (
+                          <>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right font-bold">
+                              {row.attackPoints}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right">
+                              {row.blockPoints}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-right">
+                              {row.serveAces}
+                            </td>
+                          </>
+                        ) : (
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-right font-bold">
+                            {row.pointsScored}
                           </td>
-                          <td className="py-2.5 px-3 text-slate-600">
-                            {tObj?.shortName || tObj?.name || '—'}
-                          </td>
-                          {broadcast.sport === 'Cricket' && (
-                            <>
-                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.runs}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.ballsFaced}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">
-                                {st.fours}/{st.sixes}
-                              </td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.wickets}</td>
-                            </>
-                          )}
-                          {broadcast.sport === 'Kabaddi' && (
-                            <>
-                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.raidPoints}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.tacklePoints}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.bonusPoints}</td>
-                            </>
-                          )}
-                          {broadcast.sport === 'Football' && (
-                            <>
-                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.goals}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.assists}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">
-                                Y:{st.yellowCards} R:{st.redCards}
-                              </td>
-                            </>
-                          )}
-                          {broadcast.sport === 'Volleyball' && (
-                            <>
-                              <td className="py-2.5 px-3 font-mono tabular-nums font-bold">{st.attackPoints}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.blockPoints}</td>
-                              <td className="py-2.5 px-3 font-mono tabular-nums">{st.serveAces}</td>
-                            </>
-                          )}
-                        </tr>
-                      );
-                    })}
+                        )}
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -1577,8 +1955,8 @@ export function LiveBroadcastView({
         {activeTab === 'lineups' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {[
-              { team: broadcast.teamA, roster: lineupPlayers.teamA },
-              { team: broadcast.teamB, roster: lineupPlayers.teamB },
+              { team: broadcast.teamA, roster: mergedRoster.teamA },
+              { team: broadcast.teamB, roster: mergedRoster.teamB },
             ].map((side, idx) => (
               <div
                 key={side.team.id || idx}
@@ -1597,19 +1975,38 @@ export function LiveBroadcastView({
                   <p className="text-xs text-slate-500 py-3">Squad list not published yet.</p>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {side.roster.map((p) => (
-                      <Link
-                        key={p.id}
-                        to={`/players/${p.id}`}
-                        className="py-2 flex items-center justify-between gap-2 text-xs hover:bg-slate-50 px-1 rounded"
-                      >
-                        <span className="font-medium text-slate-900 truncate">
-                          {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}
-                          {p.name}
-                        </span>
-                        <span className="text-slate-500 shrink-0">{p.role || 'Player'}</span>
-                      </Link>
-                    ))}
+                    {side.roster.map((p) => {
+                      const hasDbProfile = Boolean(
+                        p.dbPlayerId && /^[a-f\d]{24}$/i.test(p.dbPlayerId)
+                      );
+                      const label = (
+                        <>
+                          <span className="font-medium text-slate-900 truncate">
+                            {p.jerseyNumber != null ? `#${p.jerseyNumber} ` : ''}
+                            {p.name}
+                          </span>
+                          <span className="text-slate-500 shrink-0">
+                            {p.position || 'Player'}
+                          </span>
+                        </>
+                      );
+                      return hasDbProfile ? (
+                        <Link
+                          key={p.id}
+                          to={`/players/${p.dbPlayerId}`}
+                          className="py-2 flex items-center justify-between gap-2 text-xs hover:bg-slate-50 px-1 rounded"
+                        >
+                          {label}
+                        </Link>
+                      ) : (
+                        <div
+                          key={p.id}
+                          className="py-2 flex items-center justify-between gap-2 text-xs px-1"
+                        >
+                          {label}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

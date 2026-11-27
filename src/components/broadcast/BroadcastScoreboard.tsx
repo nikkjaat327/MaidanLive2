@@ -10,6 +10,7 @@ interface BroadcastScoreboardProps {
   broadcast: NormalizedBroadcast;
   compact?: boolean;
   layoutMode?: 'auto' | 'portrait' | 'landscape';
+  hideSubStrip?: boolean;
   className?: string;
 }
 
@@ -70,6 +71,7 @@ export function BroadcastScoreboard({
   broadcast,
   compact = false,
   layoutMode = 'auto',
+  hideSubStrip = false,
   className = '',
 }: BroadcastScoreboardProps) {
   const cfg = normalizeOverlayConfig(broadcast.raw?.overlayConfig);
@@ -218,7 +220,7 @@ export function BroadcastScoreboard({
         </div>
 
         {/* Portrait Sub-Info Strip (Equation / CRR / Raid Clock / Set Scores) */}
-        {broadcast.subStripItems.length > 0 && !compact && (
+        {!hideSubStrip && broadcast.subStripItems.length > 0 && !compact && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/90 text-[11px]">
             {broadcast.subStripItems.slice(0, 4).map((item, idx) => (
               <span key={`${item.label}-${idx}`} className="inline-flex items-center gap-1">

@@ -1,21 +1,30 @@
-import { useEffect, useState } from 'react';
-import { LiveScoreData, LiveStreamData } from '../../types/index.ts';
+import { useEffect, useMemo, useState } from 'react';
+import { LiveScoreData, LiveStreamData, PlayerData } from '../../types/index.ts';
 import {
   CricketDetails,
   computeCricketChaseState,
   deriveCricketInningsScorecard,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
+import { mergeMatchRoster, type UnifiedMatchPlayer } from '../../utils/sportPositions.ts';
 
 interface CricketScorecardPanelProps {
-  stream: Pick<LiveStreamData, 'teamAName' | 'teamBName' | 'gameName'>;
+  stream: Pick<LiveStreamData, 'teamAName' | 'teamBName' | 'gameName'> &
+    Partial<Pick<LiveStreamData, 'teamAId' | 'teamBId' | 'teamAPlayers' | 'teamBPlayers'>>;
   score: LiveScoreData | null;
+  players?: PlayerData[];
+  lineupPlayers?: {
+    teamA: Array<PlayerData | UnifiedMatchPlayer>;
+    teamB: Array<PlayerData | UnifiedMatchPlayer>;
+  };
   compact?: boolean;
 }
 
 export function CricketScorecardPanel({
   stream,
   score,
+  players = [],
+  lineupPlayers,
   compact = false,
 }: CricketScorecardPanelProps) {
   const details = normalizeCricketDetails(
@@ -48,6 +57,55 @@ export function CricketScorecardPanel({
   }, [details.innings, hasSecondInningsData]);
 
   const activeCard = selectedInnings === 2 && hasSecondInningsData ? card2 : card1;
+
+  const roster = useMemo(() => {
+    const combinedDb: PlayerData[] = [...players];
+    const pushIfDb = (arr: Array<PlayerData | UnifiedMatchPlayer> | undefined, teamSide: 'A' | 'B') => {
+      if (!Array.isArray(arr)) return;
+      for (const item of arr) {
+        if ('teamSide' in item) {
+          combinedDb.push({
+            id: item.dbPlayerId || item.id,
+            name: item.name,
+            teamId: teamSide === 'A' ? stream.teamAId : stream.teamBId,
+            sportType: 'Cricket',
+            role: item.position || '',
+            position: item.position || '',
+            jerseyNumber: item.jerseyNumber ?? null,
+            avatarUrl: '',
+            createdAt: '',
+          });
+        } else {
+          combinedDb.push({
+            ...item,
+            teamId:
+              item.teamId || (teamSide === 'A' ? stream.teamAId : stream.teamBId) || null,
+          });
+        }
+      }
+    };
+    pushIfDb(lineupPlayers?.teamA, 'A');
+    pushIfDb(lineupPlayers?.teamB, 'B');
+    return mergeMatchRoster(stream, combinedDb);
+  }, [stream, players, lineupPlayers]);
+
+  const battingSideRoster = activeCard.battingTeam === 'A' ? roster.teamA : roster.teamB;
+  const bowlingSideRoster = activeCard.bowlingTeam === 'A' ? roster.teamA : roster.teamB;
+
+  const battedSet = new Set(activeCard.batting.map((b) => b.name.trim().toLowerCase()));
+  const yetToBat = battingSideRoster.filter(
+    (p) => !battedSet.has(p.name.trim().toLowerCase())
+  );
+
+  const bowledSet = new Set(activeCard.bowling.map((bw) => bw.name.trim().toLowerCase()));
+  const remainingBowlers = bowlingSideRoster.filter(
+    (p) => !bowledSet.has(p.name.trim().toLowerCase())
+  );
+  const currentBowlerLower = (details.bowler || '').trim().toLowerCase();
+  const isCurrentInningsActive =
+    details.innings === activeCard.innings &&
+    details.matchPhase !== 'COMPLETED' &&
+    !(activeCard.innings === 1 && details.innings1Completed);
 
   return (
     <div className="space-y-4">
@@ -180,6 +238,29 @@ export function CricketScorecardPanel({
           </div>
         )}
 
+        {/* Yet to Bat (Remaining Squad Players) */}
+        {yetToBat.length > 0 && (
+          <div className="px-3.5 py-2.5 bg-white border-t border-slate-100 text-xs">
+            <span className="font-semibold text-slate-700 mr-2">
+              {activeCard.batting.length === 0 ? 'Squad:' : 'Yet to bat:'}
+            </span>
+            <span className="text-slate-600 leading-relaxed">
+              {yetToBat.map((p, idx) => (
+                <span key={p.id || p.name}>
+                  {idx > 0 && <span className="text-slate-400 mx-1.5">·</span>}
+                  <span className="font-medium text-slate-800">
+                    {p.jerseyNumber != null ? `#${p.jerseyNumber} ` : ''}
+                    {p.name}
+                  </span>
+                  {p.position ? (
+                    <span className="text-[11px] text-slate-500"> ({p.position})</span>
+                  ) : null}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
+
         {/* Extras & Total */}
         <div className="px-3.5 py-2.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="text-slate-600">
@@ -245,43 +326,78 @@ export function CricketScorecardPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {activeCard.bowling.map((bw) => (
-                  <tr key={bw.name}>
-                    <td className="py-2 px-3 font-semibold text-slate-900">{bw.name}</td>
-                    <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700">
-                      {bw.overs}
-                    </td>
-                    <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-600">
-                      {bw.maidens}
-                    </td>
-                    <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700">
-                      {bw.runsConceded}
-                    </td>
-                    <td className="py-2 px-2 text-right font-mono font-bold tabular-nums text-slate-900">
-                      {bw.wickets}
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-700">
-                      {bw.economy}
-                    </td>
-                    {!compact && (
-                      <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-500">
-                        {bw.dotBalls}
+                {activeCard.bowling.map((bw) => {
+                  const isActiveBowler =
+                    isCurrentInningsActive &&
+                    currentBowlerLower &&
+                    bw.name.trim().toLowerCase() === currentBowlerLower;
+                  return (
+                    <tr key={bw.name} className={isActiveBowler ? 'bg-sky-50/60' : ''}>
+                      <td className="py-2 px-3 font-semibold text-slate-900">
+                        {bw.name}
+                        {isActiveBowler && (
+                          <span className="ml-1 text-[10px] font-bold uppercase text-sky-700">
+                            (Bowling)
+                          </span>
+                        )}
                       </td>
-                    )}
-                    {!compact && (
-                      <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-500">
-                        {bw.foursConceded}
+                      <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700">
+                        {bw.overs}
                       </td>
-                    )}
-                    {!compact && (
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-500">
-                        {bw.sixesConceded}
+                      <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-600">
+                        {bw.maidens}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-700">
+                        {bw.runsConceded}
+                      </td>
+                      <td className="py-2 px-2 text-right font-mono font-bold tabular-nums text-slate-900">
+                        {bw.wickets}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-700">
+                        {bw.economy}
+                      </td>
+                      {!compact && (
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-500">
+                          {bw.dotBalls}
+                        </td>
+                      )}
+                      {!compact && (
+                        <td className="py-2 px-2 text-right font-mono tabular-nums text-slate-500">
+                          {bw.foursConceded}
+                        </td>
+                      )}
+                      {!compact && (
+                        <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-500">
+                          {bw.sixesConceded}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {remainingBowlers.length > 0 && (
+          <div className="px-3.5 py-2.5 bg-slate-50/70 border-t border-slate-100 text-xs">
+            <span className="font-semibold text-slate-700 mr-2">
+              {activeCard.bowling.length === 0 ? 'Bowling squad:' : 'Did not bowl:'}
+            </span>
+            <span className="text-slate-600 leading-relaxed">
+              {remainingBowlers.map((p, idx) => (
+                <span key={p.id || p.name}>
+                  {idx > 0 && <span className="text-slate-400 mx-1.5">·</span>}
+                  <span className="font-medium text-slate-800">
+                    {p.jerseyNumber != null ? `#${p.jerseyNumber} ` : ''}
+                    {p.name}
+                  </span>
+                  {p.position ? (
+                    <span className="text-[11px] text-slate-500"> ({p.position})</span>
+                  ) : null}
+                </span>
+              ))}
+            </span>
           </div>
         )}
       </div>

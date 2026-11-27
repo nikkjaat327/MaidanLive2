@@ -384,9 +384,28 @@ export function HomePage() {
                     {m.matchTitle || `${m.teamAName || 'Team A'} vs ${m.teamBName || 'Team B'}`}
                   </p>
                   {m.score && (
-                    <p className="font-mono text-xs font-bold tabular-nums text-slate-700">
-                      {m.score.teamAScore} - {m.score.teamBScore}
-                    </p>
+                    <div className="space-y-0.5">
+                      <p className="font-mono text-xs font-bold tabular-nums text-slate-700">
+                        {m.score.teamAScore} - {m.score.teamBScore}
+                      </p>
+                      {m.score.sportType === 'Cricket' &&
+                        (m.score.sportSpecificDetails?.batsman1 ||
+                          m.score.sportSpecificDetails?.bowler) && (
+                          <p className="text-[11px] text-slate-500 truncate">
+                            {[
+                              m.score.sportSpecificDetails?.batsman1
+                                ? `${m.score.sportSpecificDetails.batsman1}*`
+                                : '',
+                              m.score.sportSpecificDetails?.batsman2 || '',
+                            ]
+                              .filter(Boolean)
+                              .join(' & ')}
+                            {m.score.sportSpecificDetails?.bowler
+                              ? ` · ${m.score.sportSpecificDetails.bowler}`
+                              : ''}
+                          </p>
+                        )}
+                    </div>
                   )}
                 </Link>
               ))}

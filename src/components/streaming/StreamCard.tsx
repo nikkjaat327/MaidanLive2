@@ -6,7 +6,7 @@ import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { ShareButton } from '../common/ShareButton.tsx';
 import { ShareCardPayload } from '../common/ShareCardModal.tsx';
-import { formatCricketOvers } from '../../utils/cricketScoring.ts';
+import { formatCricketOvers, getCricketCreaseSummary } from '../../utils/cricketScoring.ts';
 import { buildMatchUrl } from '../../utils/shareUrl.ts';
 
 interface StreamCardProps {
@@ -49,6 +49,18 @@ export const StreamCard = memo(function StreamCard({
   const score = stream.score;
   const isCricket = score?.sportType === 'Cricket';
   const cricketDetails = isCricket ? score?.sportSpecificDetails : null;
+  const cricketCrease =
+    isCricket && cricketDetails
+      ? getCricketCreaseSummary(
+          cricketDetails,
+          stream.teamAName || 'Team A',
+          stream.teamBName || 'Team B'
+        )
+      : null;
+  const hasCricketCrease = Boolean(
+    cricketCrease &&
+      (cricketCrease.batsman1 || cricketCrease.batsman2 || cricketCrease.bowler)
+  );
 
   const teamAScoreText =
     isCricket && cricketDetails
@@ -242,6 +254,50 @@ export const StreamCard = memo(function StreamCard({
               <span className="truncate">
                 {score.resultDescription || score.winnerTeamName}
               </span>
+            </div>
+          )}
+
+          {hasCricketCrease && cricketCrease && (
+            <div className="mt-2.5 rounded-lg bg-slate-50 border border-slate-200/80 px-2.5 py-1.5 text-[11px] space-y-1">
+              {(cricketCrease.batsman1 || cricketCrease.batsman2) && (
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Bat
+                  </span>
+                  {cricketCrease.batsman1 && (
+                    <span className="font-mono tabular-nums font-semibold text-slate-900">
+                      <span className="font-sans text-[#EA580C]">
+                        {cricketCrease.batsman1.name}*
+                      </span>{' '}
+                      {cricketCrease.batsman1.runs} ({cricketCrease.batsman1.balls})
+                    </span>
+                  )}
+                  {cricketCrease.batsman2 && (
+                    <span className="font-mono tabular-nums text-slate-700">
+                      <span className="font-sans font-medium">
+                        {cricketCrease.batsman2.name}
+                      </span>{' '}
+                      {cricketCrease.batsman2.runs} ({cricketCrease.batsman2.balls})
+                    </span>
+                  )}
+                </div>
+              )}
+              {cricketCrease.bowler && (
+                <div className="flex items-center justify-between gap-2 text-slate-700">
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 shrink-0">
+                      Bowl
+                    </span>
+                    <span className="font-medium text-slate-800 truncate">
+                      {cricketCrease.bowler.name}
+                    </span>
+                  </span>
+                  <span className="font-mono tabular-nums text-slate-700 shrink-0">
+                    {cricketCrease.bowler.overs}-{cricketCrease.bowler.maidens}-
+                    {cricketCrease.bowler.runsConceded}-{cricketCrease.bowler.wickets}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

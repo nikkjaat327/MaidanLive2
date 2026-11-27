@@ -264,4 +264,68 @@ describe('Draft Roster Positions, Live Lineup Merging & Zero-Required Match Star
     assert.equal(vbInit.status, 201);
     assert.equal(vbInit.json.stream.teamAPlayers[0].position, 'Middle Blocker');
   });
+
+  it('exposes current Cricket batters, bowler, deliveryHistory, and full drafted players to public normal-user endpoints', async () => {
+    const createRes = await apiJson('POST', '/api/live', adminToken, {
+      gameName: 'Cricket',
+      teamAName: 'Chandena',
+      teamBName: 'Talheri',
+      streamingProvider: 'mediamtx',
+      status: 'LIVE',
+      broadcastPublished: true,
+      teamAPlayers: [
+        { name: 'Ankit', position: 'Opening Batsman', jerseyNumber: 18 },
+        { name: 'Hunny', position: 'Opening Batsman', jerseyNumber: 45 },
+        { name: 'Vikas', position: 'All-Rounder', jerseyNumber: 7 },
+      ],
+      teamBPlayers: [
+        { name: 'Mohan', position: 'Bowler', jerseyNumber: 99 },
+        { name: 'Sandeep', position: 'All-Rounder', jerseyNumber: 12 },
+      ],
+    });
+    assert.equal(createRes.status, 201, JSON.stringify(createRes.json));
+    const matchId = createRes.json.stream.id;
+
+    // Score 4 balls for Hunny while Ankit is non-striker and Mohan bowls
+    const ballRes = await apiJson('POST', `/api/live/${matchId}/score/event`, adminToken, {
+      clientEventId: `pub_crk_${Date.now()}`,
+      sportType: 'Cricket',
+      action: {
+        type: 'RUNS',
+        runs: 4,
+        striker: 'Hunny',
+        nonStriker: 'Ankit',
+        bowler: 'Mohan',
+      },
+      playerName: 'Hunny',
+    });
+    assert.equal(ballRes.status, 201, JSON.stringify(ballRes.json));
+
+    // Normal unauthenticated user calls public /api/live/:id/detail
+    const pubDetail = await apiJson('GET', `/api/live/${matchId}/detail`);
+    assert.equal(pubDetail.status, 200, JSON.stringify(pubDetail.json));
+    assert.equal(pubDetail.json.score.sportSpecificDetails.batsman1, 'Hunny');
+    assert.equal(pubDetail.json.score.sportSpecificDetails.batsman2, 'Ankit');
+    assert.equal(pubDetail.json.score.sportSpecificDetails.bowler, 'Mohan');
+    assert.ok(
+      Array.isArray(pubDetail.json.score.sportSpecificDetails.deliveryHistory) &&
+        pubDetail.json.score.sportSpecificDetails.deliveryHistory.length === 1,
+      'Public detail should include deliveryHistory so normal user scorecard matches admin panel'
+    );
+    assert.equal(pubDetail.json.lineupPlayers.teamA.length, 3);
+    assert.equal(pubDetail.json.lineupPlayers.teamB.length, 2);
+    assert.equal(pubDetail.json.lineupPlayers.teamA[2].name, 'Vikas');
+
+    // Normal unauthenticated user calls public /api/live feed for match cards
+    const pubFeed = await apiJson('GET', '/api/live');
+    assert.equal(pubFeed.status, 200);
+    const matchCard = (pubFeed.json.streams || []).find((s: any) => s.id === matchId);
+    assert.ok(matchCard, 'Public /api/live feed should include published live match');
+    assert.equal(matchCard.score.sportSpecificDetails.batsman1, 'Hunny');
+    assert.equal(matchCard.score.sportSpecificDetails.batsman2, 'Ankit');
+    assert.equal(matchCard.score.sportSpecificDetails.bowler, 'Mohan');
+    assert.equal(matchCard.teamAPlayers.length, 3);
+    assert.equal(matchCard.teamBPlayers.length, 2);
+  });
 });
+

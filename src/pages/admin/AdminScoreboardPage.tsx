@@ -390,7 +390,7 @@ export function AdminScoreboardPage() {
           <ScoreboardSummary stream={stream} score={score} variant="compact" />
 
           {score?.sportType === 'Cricket' && (
-            <CricketScorecardPanel stream={stream} score={score} />
+            <CricketScorecardPanel stream={stream} score={score} players={players} />
           )}
 
           {showMomentumCharts && (

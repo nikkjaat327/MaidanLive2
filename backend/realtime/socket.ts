@@ -9,6 +9,7 @@ import { LiveStream } from '../../server/models/LiveStream.ts';
 import { BroadcastCamera } from '../../server/models/BroadcastCamera.ts';
 import { verifyScopedToken } from '../../server/utils/obsCrypto.ts';
 import { corsOriginDelegate } from '../../server/config/cors.ts';
+import { getCricketCreaseSummary } from '../../src/utils/cricketScoring.ts';
 
 let io: SocketIOServer | null = null;
 const SERVER_BOOT_ID = crypto.randomUUID();
@@ -90,6 +91,7 @@ function trimScoreForFeed(score: any): any {
   if (details && typeof details === 'object' && !Array.isArray(details)) {
     const sport = plain.sportType || '';
     if (sport === 'Cricket') {
+      const creaseSummary = getCricketCreaseSummary(details);
       slimDetails = {
         battingTeam: details.battingTeam,
         innings: details.innings,
@@ -102,6 +104,12 @@ function trimScoreForFeed(score: any): any {
         oversLimit: details.oversLimit,
         target: details.target,
         matchPhase: details.matchPhase,
+        batsman1: details.batsman1 || '',
+        batsman2: details.batsman2 || '',
+        bowler: details.bowler || '',
+        ...(creaseSummary.batsman1 || creaseSummary.batsman2 || creaseSummary.bowler
+          ? { creaseSummary }
+          : {}),
       };
     } else if (sport === 'Kabaddi') {
       slimDetails = {

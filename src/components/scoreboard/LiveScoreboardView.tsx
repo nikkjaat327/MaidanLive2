@@ -6,6 +6,7 @@ import {
   CricketDetails,
   computeCricketChaseState,
   formatCricketOvers,
+  getCricketCreaseSummary,
   getTotalExtras,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -18,6 +19,7 @@ import { KabaddiCourtDots } from './kabaddi/KabaddiCourtDots.tsx';
 import { KabaddiAnimations } from './kabaddi/KabaddiAnimations.tsx';
 import { FootballDetails, createInitialFootballDetails } from '../../utils/footballScoring.ts';
 import { VolleyballDetails, normalizeVolleyballDetails } from '../../utils/volleyballScoring.ts';
+import { usePlayerChangeFlash } from '../../hooks/usePlayerChangeFlash.ts';
 
 interface LiveScoreboardViewProps {
   stream: LiveStreamData;
@@ -171,6 +173,12 @@ function CricketBoard({
   details: CricketDetails;
 }) {
   const chase = computeCricketChaseState(details, teamA, teamB);
+  const crease = getCricketCreaseSummary(details, teamA, teamB);
+  const flash = usePlayerChangeFlash(
+    crease.batsman1?.name,
+    crease.batsman2?.name,
+    crease.bowler?.name
+  );
   const isBattingA = details.battingTeam === 'A';
   const activeExtras = isBattingA ? details.extrasA : details.extrasB;
   const activePlay = !chase.isInningsBreak && !chase.isMatchCompleted;
@@ -278,21 +286,55 @@ function CricketBoard({
         </span>
       </div>
 
-      {(details.batsman1 || details.batsman2 || details.bowler) && (
+      {(crease.batsman1 || crease.batsman2 || crease.bowler) && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
-          {(details.batsman1 || details.batsman2) && (
-            <span>
-              Batters:{' '}
-              <strong className="text-white">
-                {[details.batsman1 ? `${details.batsman1}*` : '', details.batsman2]
-                  .filter(Boolean)
-                  .join(' & ')}
-              </strong>
+          {(crease.batsman1 || crease.batsman2) && (
+            <span className="inline-flex flex-wrap items-center gap-x-2">
+              <span>Batters:</span>
+              {crease.batsman1 && (
+                <strong className="text-white font-mono tabular-nums">
+                  <span
+                    key={`s-${flash.strikerAnimKey}`}
+                    className={`font-sans text-orange-300 inline-block ${
+                      flash.strikerFlash ? 'ml-player-change' : ''
+                    }`}
+                  >
+                    {crease.batsman1.name}*
+                  </span>{' '}
+                  {crease.batsman1.runs} ({crease.batsman1.balls})
+                </strong>
+              )}
+              {crease.batsman1 && crease.batsman2 && <span className="text-slate-500">&amp;</span>}
+              {crease.batsman2 && (
+                <strong className="text-white font-mono tabular-nums">
+                  <span
+                    key={`ns-${flash.nonStrikerAnimKey}`}
+                    className={`font-sans inline-block ${
+                      flash.nonStrikerFlash ? 'ml-player-change' : ''
+                    }`}
+                  >
+                    {crease.batsman2.name}
+                  </span>{' '}
+                  {crease.batsman2.runs} ({crease.batsman2.balls})
+                </strong>
+              )}
             </span>
           )}
-          {details.bowler && (
+          {crease.bowler && (
             <span>
-              Bowler: <strong className="text-white">{details.bowler}</strong>
+              Bowler:{' '}
+              <strong className="text-white font-mono tabular-nums">
+                <span
+                  key={`bw-${flash.bowlerAnimKey}`}
+                  className={`font-sans text-sky-300 inline-block ${
+                    flash.bowlerFlash ? 'ml-player-change' : ''
+                  }`}
+                >
+                  {crease.bowler.name}
+                </span>{' '}
+                {crease.bowler.overs}-{crease.bowler.maidens}-{crease.bowler.runsConceded}-
+                {crease.bowler.wickets}
+              </strong>
             </span>
           )}
         </div>

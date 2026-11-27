@@ -1602,3 +1602,146 @@ export function applyCricketAction(
     autoCompletedMatch,
   };
 }
+
+export interface CricketCreaseBatterStat {
+  name: string;
+  runs: number;
+  balls: number;
+  fours: number;
+  sixes: number;
+  strikeRate: string;
+  onStrike: boolean;
+}
+
+export interface CricketCreaseBowlerStat {
+  name: string;
+  overs: string;
+  maidens: number;
+  runsConceded: number;
+  wickets: number;
+  economy: string;
+}
+
+export interface CricketCreaseSummary {
+  innings: 1 | 2;
+  batsman1: CricketCreaseBatterStat | null;
+  batsman2: CricketCreaseBatterStat | null;
+  bowler: CricketCreaseBowlerStat | null;
+}
+
+export function getCricketCreaseSummary(
+  raw?: (Partial<CricketDetails> & { creaseSummary?: Partial<CricketCreaseSummary> }) | null,
+  teamAName = 'Team A',
+  teamBName = 'Team B'
+): CricketCreaseSummary {
+  const d = normalizeCricketDetails(raw);
+  const inningsNum: 1 | 2 = d.innings === 2 ? 2 : 1;
+  const fallback = raw?.creaseSummary;
+
+  if (d.deliveryHistory.length === 0 && fallback) {
+    return {
+      innings: inningsNum,
+      batsman1:
+        fallback.batsman1 ||
+        (d.batsman1
+          ? {
+              name: d.batsman1,
+              runs: 0,
+              balls: 0,
+              fours: 0,
+              sixes: 0,
+              strikeRate: '0.0',
+              onStrike: true,
+            }
+          : null),
+      batsman2:
+        fallback.batsman2 ||
+        (d.batsman2
+          ? {
+              name: d.batsman2,
+              runs: 0,
+              balls: 0,
+              fours: 0,
+              sixes: 0,
+              strikeRate: '0.0',
+              onStrike: false,
+            }
+          : null),
+      bowler:
+        fallback.bowler ||
+        (d.bowler
+          ? {
+              name: d.bowler,
+              overs: '0.0',
+              maidens: 0,
+              runsConceded: 0,
+              wickets: 0,
+              economy: '0.00',
+            }
+          : null),
+    };
+  }
+
+  const card = deriveCricketInningsScorecard(d, inningsNum, teamAName, teamBName);
+  const findBatter = (name: string): CricketBatterRow | undefined => {
+    const clean = name.trim().toLowerCase();
+    if (!clean) return undefined;
+    return card.batting.find((b) => b.name.trim().toLowerCase() === clean);
+  };
+  const findBowler = (name: string): CricketBowlerRow | undefined => {
+    const clean = name.trim().toLowerCase();
+    if (!clean) return undefined;
+    return card.bowling.find((bw) => bw.name.trim().toLowerCase() === clean);
+  };
+
+  const b1Name = (d.batsman1 || '').trim();
+  const b2Name = (d.batsman2 || '').trim();
+  const bwName = (d.bowler || '').trim();
+
+  const b1Row = b1Name ? findBatter(b1Name) : undefined;
+  const b2Row = b2Name ? findBatter(b2Name) : undefined;
+  const bwRow = bwName ? findBowler(bwName) : undefined;
+
+  const batsman1: CricketCreaseBatterStat | null = b1Name
+    ? {
+        name: b1Row?.name || b1Name,
+        runs: b1Row?.runs ?? 0,
+        balls: b1Row?.balls ?? 0,
+        fours: b1Row?.fours ?? 0,
+        sixes: b1Row?.sixes ?? 0,
+        strikeRate: b1Row?.strikeRate ?? '0.0',
+        onStrike: true,
+      }
+    : null;
+
+  const batsman2: CricketCreaseBatterStat | null = b2Name
+    ? {
+        name: b2Row?.name || b2Name,
+        runs: b2Row?.runs ?? 0,
+        balls: b2Row?.balls ?? 0,
+        fours: b2Row?.fours ?? 0,
+        sixes: b2Row?.sixes ?? 0,
+        strikeRate: b2Row?.strikeRate ?? '0.0',
+        onStrike: false,
+      }
+    : null;
+
+  const bowler: CricketCreaseBowlerStat | null = bwName
+    ? {
+        name: bwRow?.name || bwName,
+        overs: bwRow?.overs ?? '0.0',
+        maidens: bwRow?.maidens ?? 0,
+        runsConceded: bwRow?.runsConceded ?? 0,
+        wickets: bwRow?.wickets ?? 0,
+        economy: bwRow?.economy ?? '0.00',
+      }
+    : null;
+
+  return {
+    innings: inningsNum,
+    batsman1,
+    batsman2,
+    bowler,
+  };
+}
+

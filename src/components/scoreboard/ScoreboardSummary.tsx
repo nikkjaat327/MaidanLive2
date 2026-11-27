@@ -4,6 +4,7 @@ import {
   CricketDetails,
   computeCricketChaseState,
   formatCricketOvers,
+  getCricketCreaseSummary,
   getTotalExtras,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -22,6 +23,7 @@ import {
 } from '../../utils/volleyballScoring.ts';
 import { SportOption } from '../../constants/sports.ts';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
+import { usePlayerChangeFlash } from '../../hooks/usePlayerChangeFlash.ts';
 
 export interface ScoreboardSummaryProps {
   stream: Pick<
@@ -54,6 +56,16 @@ export function ScoreboardSummary({
   const rawDetails = (score?.sportSpecificDetails || {}) as Record<string, unknown>;
   const isCompact = variant === 'compact';
 
+  const cricketCreaseForFlash =
+    sportType === 'Cricket'
+      ? getCricketCreaseSummary(rawDetails as Partial<CricketDetails>, teamA, teamB)
+      : null;
+  const playerFlash = usePlayerChangeFlash(
+    cricketCreaseForFlash?.batsman1?.name,
+    cricketCreaseForFlash?.batsman2?.name,
+    cricketCreaseForFlash?.bowler?.name
+  );
+
   const resultBanner =
     score?.resultStatus && score.resultStatus !== 'NOT_DECLARED' ? (
       <div className="mt-2.5 flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-900">
@@ -68,6 +80,11 @@ export function ScoreboardSummary({
   const renderCricketSummary = () => {
     const details: CricketDetails = normalizeCricketDetails(rawDetails as Partial<CricketDetails>);
     const chase = computeCricketChaseState(details, teamA, teamB);
+    const crease = getCricketCreaseSummary(
+      rawDetails as Partial<CricketDetails>,
+      teamA,
+      teamB
+    );
     const isBattingA = details.battingTeam !== 'B';
     const runsA = details.teamARuns ?? scoreA;
     const runsB = details.teamBRuns ?? scoreB;
@@ -185,27 +202,86 @@ export function ScoreboardSummary({
         {/* Batters, Bowler & Recent Balls (Detail Mode) */}
         {!isCompact && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-            {(details.batsman1 || details.batsman2 || details.bowler) && (
-              <div className="rounded-lg border border-slate-200 p-3 bg-white space-y-1.5 text-xs">
-                <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
-                  <span>On Crease</span>
-                  <span>Bowling</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 font-medium text-slate-900">
-                    {details.batsman1 ? <span>{details.batsman1}*</span> : null}
-                    {details.batsman1 && details.batsman2 ? (
-                      <span className="text-slate-400 mx-1.5">·</span>
-                    ) : null}
-                    {details.batsman2 ? (
-                      <span className="text-slate-700">{details.batsman2}</span>
-                    ) : null}
-                    {!details.batsman1 && !details.batsman2 && (
+            {(crease.batsman1 || crease.batsman2 || crease.bowler) && (
+              <div className="rounded-lg border border-slate-200 p-3 bg-white space-y-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <span>On Crease</span>
+                      <span className="font-mono">R (B) · SR</span>
+                    </div>
+                    {crease.batsman1 || crease.batsman2 ? (
+                      <div className="space-y-1">
+                        {crease.batsman1 && (
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              key={`s-${playerFlash.strikerAnimKey}`}
+                              className={`truncate font-semibold text-[#EA580C] ${
+                                playerFlash.strikerFlash ? 'ml-player-change' : ''
+                              }`}
+                            >
+                              {crease.batsman1.name}
+                              {crease.batsman1.onStrike ? '*' : ''}
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-900 shrink-0">
+                              <strong>{crease.batsman1.runs}</strong>{' '}
+                              <span className="text-slate-500">
+                                ({crease.batsman1.balls}) · {crease.batsman1.strikeRate}
+                              </span>
+                            </span>
+                          </div>
+                        )}
+                        {crease.batsman2 && (
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              key={`ns-${playerFlash.nonStrikerAnimKey}`}
+                              className={`truncate font-semibold text-slate-800 ${
+                                playerFlash.nonStrikerFlash ? 'ml-player-change' : ''
+                              }`}
+                            >
+                              {crease.batsman2.name}
+                              {crease.batsman2.onStrike ? '*' : ''}
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-900 shrink-0">
+                              <strong>{crease.batsman2.runs}</strong>{' '}
+                              <span className="text-slate-500">
+                                ({crease.batsman2.balls}) · {crease.batsman2.strikeRate}
+                              </span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
                       <span className="text-slate-400">Batters not updated</span>
                     )}
                   </div>
-                  <div className="font-medium text-slate-800 truncate shrink-0">
-                    {details.bowler || '—'}
+
+                  <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-3">
+                    <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <span>Bowling</span>
+                      <span className="font-mono">O-M-R-W · Econ</span>
+                    </div>
+                    {crease.bowler ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          key={`bw-${playerFlash.bowlerAnimKey}`}
+                          className={`truncate font-semibold text-slate-900 ${
+                            playerFlash.bowlerFlash ? 'ml-player-change' : ''
+                          }`}
+                        >
+                          {crease.bowler.name}
+                        </span>
+                        <span className="font-mono tabular-nums text-slate-800 shrink-0">
+                          <strong>
+                            {crease.bowler.overs}-{crease.bowler.maidens}-
+                            {crease.bowler.runsConceded}-{crease.bowler.wickets}
+                          </strong>{' '}
+                          <span className="text-slate-500">· {crease.bowler.economy}</span>
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">Bowler not updated</span>
+                    )}
                   </div>
                 </div>
               </div>
