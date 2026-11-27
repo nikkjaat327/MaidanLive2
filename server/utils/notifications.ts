@@ -183,37 +183,46 @@ export async function dispatchMatchNotifications(params: {
     if (recipients.length === 0) return 0;
 
     let createdCount = 0;
-    for (const r of recipients) {
-      const uid = r._id.toString();
-      try {
-        const doc = await Notification.findOneAndUpdate(
-          { userId: r._id, dedupeKey: params.dedupeKey },
-          {
-            $setOnInsert: {
-              userId: r._id,
-              type: params.type,
-              title: params.title.slice(0, 160),
-              message: params.message.slice(0, 400),
-              entityType: params.entityType,
-              entityId: params.entityId,
-              link: params.link,
-              metadata: params.metadata || {},
-              dedupeKey: params.dedupeKey,
-              isRead: false,
-            },
-          },
-          { upsert: true, new: true }
-        ).lean();
-        if (doc) {
-          createdCount += 1;
-          emitUserNotification(uid, {
-            ...doc,
-            id: doc._id.toString(),
-          });
-        }
-      } catch {
-        // Ignore duplicate dedupeKey race
-      }
+    const CHUNK_SIZE = 25;
+    const safeTitle = params.title.slice(0, 160);
+    const safeMessage = params.message.slice(0, 400);
+
+    for (let i = 0; i < recipients.length; i += CHUNK_SIZE) {
+      const chunk = recipients.slice(i, i + CHUNK_SIZE);
+      await Promise.all(
+        chunk.map(async (r) => {
+          const uid = r._id.toString();
+          try {
+            const doc = await Notification.findOneAndUpdate(
+              { userId: r._id, dedupeKey: params.dedupeKey },
+              {
+                $setOnInsert: {
+                  userId: r._id,
+                  type: params.type,
+                  title: safeTitle,
+                  message: safeMessage,
+                  entityType: params.entityType,
+                  entityId: params.entityId,
+                  link: params.link,
+                  metadata: params.metadata || {},
+                  dedupeKey: params.dedupeKey,
+                  isRead: false,
+                },
+              },
+              { upsert: true, new: true }
+            ).lean();
+            if (doc) {
+              createdCount += 1;
+              emitUserNotification(uid, {
+                ...doc,
+                id: doc._id.toString(),
+              });
+            }
+          } catch {
+            // Ignore duplicate dedupeKey race
+          }
+        })
+      );
     }
     return createdCount;
   } catch (err) {

@@ -132,6 +132,7 @@ import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { Modal } from '../../components/common/Modal.tsx';
+import { RealtimeDiagnosticsDrawer } from '../../components/admin/RealtimeDiagnosticsDrawer.tsx';
 
 const LazyGraphicsStudioEditor = React.lazy(
   () => import('../../components/obsGraphics/GraphicsStudioEditor.tsx')
@@ -243,6 +244,7 @@ export function AdminObsBroadcastStudioPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   const {
     studio,
@@ -2685,16 +2687,19 @@ export function AdminObsBroadcastStudioPage() {
             <span className={`w-2 h-2 rounded-full ${liveReadyStatus.dot}`} />
             <span>{liveReadyStatus.label}</span>
           </span>
-          <span
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono ${
+          <button
+            type="button"
+            onClick={() => setDiagOpen(true)}
+            title="Inspect real-time WebSocket & scoring latency diagnostics"
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono transition-colors cursor-pointer ${
               socketConnected
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                ? 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
             }`}
           >
             {socketConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             <span>{socketConnected ? 'Sync' : 'Reconnecting'}</span>
-          </span>
+          </button>
         </div>
 
         {/* Right Match Selector + 1-Click Switch OBS + Go Live + Settings */}
@@ -6146,9 +6151,9 @@ export function AdminObsBroadcastStudioPage() {
             </div>
           )}
 
-          <div className="space-y-3 p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900">
-              OBS Scoreboard & Scene Sync
+          <div className="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              OBS Scoreboard &amp; Scene Sync
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -6237,19 +6242,19 @@ export function AdminObsBroadcastStudioPage() {
                 </label>
               )}
 
-              <label className="inline-flex items-center gap-2 text-xs font-semibold text-indigo-900 cursor-pointer">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={autoSwitchObsOnSelect}
                   onChange={(e) => updateAutoSwitchPreference(e.target.checked)}
-                  className="w-4 h-4 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 <span>Auto-switch OBS automatically whenever the match dropdown changes</span>
               </label>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-3 mt-1">
             <button
               type="button"
               onClick={() => setQuickSwitchModalOpen(false)}
@@ -6274,6 +6279,8 @@ export function AdminObsBroadcastStudioPage() {
           </div>
         </form>
       </Modal>
+
+      <RealtimeDiagnosticsDrawer open={diagOpen} onClose={() => setDiagOpen(false)} />
     </div>
   );
 }

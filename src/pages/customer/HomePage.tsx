@@ -61,27 +61,90 @@ export function HomePage() {
     loadData();
     const socket = getSocketClient();
 
-    const refresh = () => loadData();
-    const updateScore = (payload: { streamId: string; score: any }) => {
+    const joinFeed = () => {
+      socket.emit('feed:join');
+    };
+    if (socket.connected) {
+      joinFeed();
+    }
+
+    const matchStreamId = (s: LiveStreamData, targetId?: string) =>
+      Boolean(targetId && (s.id === targetId || s._id === targetId));
+
+    const handleStreamStarted = (started: LiveStreamData) => {
+      const targetId = started?.id || started?._id;
+      if (!targetId) {
+        void loadData();
+        return;
+      }
+      setStreams((prev) => {
+        const exists = prev.some((s) => matchStreamId(s, targetId));
+        if (!exists) {
+          void loadData();
+          return prev;
+        }
+        return prev.map((s) =>
+          matchStreamId(s, targetId)
+            ? { ...s, ...started, score: started.score ?? s.score }
+            : s
+        );
+      });
+    };
+
+    const handleStreamUpdated = (updated: LiveStreamData) => {
+      const targetId = updated?.id || updated?._id;
+      if (!targetId) return;
       setStreams((prev) =>
-        prev.map((s) => (s.id === payload.streamId ? { ...s, score: payload.score } : s))
+        prev.map((s) =>
+          matchStreamId(s, targetId)
+            ? { ...s, ...updated, score: updated.score ?? s.score }
+            : s
+        )
       );
     };
 
-    socket.on('live:started', refresh);
-    socket.on('live:updated', refresh);
-    socket.on('live:ended', refresh);
+    const handleStreamEnded = (ended: LiveStreamData) => {
+      const targetId = ended?.id || ended?._id;
+      if (!targetId) return;
+      setStreams((prev) =>
+        prev.map((s) =>
+          matchStreamId(s, targetId)
+            ? { ...s, ...ended, status: 'ENDED', score: ended.score ?? s.score }
+            : s
+        )
+      );
+    };
+
+    const updateScore = (payload: { streamId: string; score: any }) => {
+      if (!payload?.streamId || !payload?.score) return;
+      setStreams((prev) =>
+        prev.map((s) =>
+          matchStreamId(s, payload.streamId) ? { ...s, score: payload.score } : s
+        )
+      );
+    };
+
+    socket.on('connect', joinFeed);
+    socket.on('live:started', handleStreamStarted);
+    socket.on('live:updated', handleStreamUpdated);
+    socket.on('live:ended', handleStreamEnded);
     socket.on('score:updated', updateScore);
+    socket.on('score:event:created', updateScore);
+    socket.on('kabaddi:state', updateScore);
     socket.on('score:undo', updateScore);
     socket.on('score:reset', updateScore);
     socket.on('match:result:declared', updateScore);
     socket.on('match:result:updated', updateScore);
 
     return () => {
-      socket.off('live:started', refresh);
-      socket.off('live:updated', refresh);
-      socket.off('live:ended', refresh);
+      socket.emit('feed:leave');
+      socket.off('connect', joinFeed);
+      socket.off('live:started', handleStreamStarted);
+      socket.off('live:updated', handleStreamUpdated);
+      socket.off('live:ended', handleStreamEnded);
       socket.off('score:updated', updateScore);
+      socket.off('score:event:created', updateScore);
+      socket.off('kabaddi:state', updateScore);
       socket.off('score:undo', updateScore);
       socket.off('score:reset', updateScore);
       socket.off('match:result:declared', updateScore);

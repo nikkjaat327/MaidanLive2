@@ -60,8 +60,14 @@ import {
   handleVolleyballRulesRoute,
   revertVolleyballFixtureOnReopenOrUndo,
 } from '../utils/volleyballServerEngine.ts';
+import {
+  buildDiagPayload,
+  buildInMemoryPopulatedHistory,
+  runBackgroundTask,
+} from '../utils/scoreHotPath.ts';
 
 const router = Router();
+const recentUndoByClientEventId = new Map<string, { at: number; payload: any }>();
 
 async function ensureLiveScore(streamId: string, session: any = null) {
   let score = await LiveScore.findOne({ liveStreamId: streamId }).session(session);
@@ -136,6 +142,8 @@ async function applyStatUpdateForStructuredEvent(params: {
     );
   };
 
+  const statTasks: Promise<void>[] = [];
+
   if (sportType === 'Kabaddi' && action?.type === 'STRUCTURED_EVENT' && playerId) {
     const pts = Math.max(0, Math.trunc(action.points || 0));
     const bonusPart = Math.max(0, Math.min(pts, Math.trunc(action.bonusIncluded || 0)));
@@ -166,7 +174,7 @@ async function applyStatUpdateForStructuredEvent(params: {
       if (bonusPart > 0) inc.bonusPoints = bonusPart;
     }
     if (Object.keys(inc).length > 0) {
-      await incStat(playerId, action.team || '', inc);
+      statTasks.push(incStat(playerId, action.team || '', inc));
     }
   } else if (
     sportType === 'Cricket' &&
@@ -219,7 +227,7 @@ async function applyStatUpdateForStructuredEvent(params: {
       if (batRuns === 4) inc.fours = 1;
       if (batRuns === 6) inc.sixes = 1;
       if (Object.keys(inc).length > 0) {
-        await incStat(playerId, '', inc);
+        statTasks.push(incStat(playerId, '', inc));
       }
     }
     if (assistPlayerId) {
@@ -232,7 +240,7 @@ async function applyStatUpdateForStructuredEvent(params: {
         bowlerInc.wickets = 1;
       }
       if (Object.keys(bowlerInc).length > 0) {
-        await incStat(assistPlayerId, '', bowlerInc);
+        statTasks.push(incStat(assistPlayerId, '', bowlerInc));
       }
     }
   } else if (sportType === 'Volleyball' && action?.type === 'STRUCTURED_POINT' && playerId) {
@@ -241,7 +249,7 @@ async function applyStatUpdateForStructuredEvent(params: {
     else if (action.eventType === 'BLOCK_POINT') inc.blockPoints = 1;
     else if (action.eventType === 'SERVICE_ACE') inc.serveAces = 1;
     if (Object.keys(inc).length > 0) {
-      await incStat(playerId, action.team || '', inc);
+      statTasks.push(incStat(playerId, action.team || '', inc));
     }
   } else if (sportType === 'Football' && action?.type === 'STRUCTURED_EVENT') {
     if (playerId) {
@@ -254,15 +262,19 @@ async function applyStatUpdateForStructuredEvent(params: {
         inc.redCards = 1;
       }
       if (Object.keys(inc).length > 0) {
-        await incStat(playerId, action.team || '', inc);
+        statTasks.push(incStat(playerId, action.team || '', inc));
       }
     }
     if (
       assistPlayerId &&
       (action.eventType === 'GOAL' || action.eventType === 'PENALTY_GOAL')
     ) {
-      await incStat(assistPlayerId, action.team || '', { assists: 1 });
+      statTasks.push(incStat(assistPlayerId, action.team || '', { assists: 1 }));
     }
+  }
+
+  if (statTasks.length > 0) {
+    await Promise.all(statTasks);
   }
 }
 
@@ -294,6 +306,7 @@ router.patch(
   authenticate,
   requireAdminPortal,
   async (req: AuthenticatedRequest, res: Response) => {
+    const serverReceivedAtMs = Date.now();
     try {
       const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -301,7 +314,17 @@ router.patch(
         return;
       }
 
-      const allowed = await canManageStream(req.user!, id, 'score');
+      const clientEventId = sanitizeText(req.body.clientEventId, 100);
+      const [allowed, existingEvent, score] = await Promise.all([
+        canManageStream(req.user!, id, 'score'),
+        clientEventId
+          ? ScoreHistory.findOne({ liveStreamId: id, clientEventId })
+              .populate('updatedBy', 'name role')
+              .lean()
+          : Promise.resolve(null),
+        ensureLiveScore(id),
+      ]);
+
       if (!allowed) {
         res.status(403).json({
           message: 'Forbidden: You are not authorized to update scores for this stream.',
@@ -309,7 +332,16 @@ router.patch(
         return;
       }
 
-      const score = await ensureLiveScore(id);
+      if (existingEvent) {
+        res.json({
+          streamId: id,
+          score: score ? score.toObject() : null,
+          historyItem: existingEvent,
+          duplicatePrevented: true,
+        });
+        return;
+      }
+
       if (!score) {
         res.status(404).json({ message: 'Live stream not found.' });
         return;
@@ -444,6 +476,7 @@ router.patch(
         liveStreamId: score.liveStreamId,
         entryType: 'SCORE_UPDATE',
         sportType: score.sportType,
+        clientEventId,
         previousScore: previousSnapshot,
         updatedScore: updatedSnapshot,
         action: actionLabel,
@@ -470,14 +503,15 @@ router.patch(
         }
       }
 
-      const populatedHistory = await ScoreHistory.findById(historyItem._id)
-        .populate('updatedBy', 'name role')
-        .lean();
+      const dbDoneAtMs = Date.now();
+      const diag = buildDiagPayload(req, serverReceivedAtMs, dbDoneAtMs);
+      const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
       const payload = {
         streamId: id,
         score: score.toObject(),
         historyItem: populatedHistory,
+        ...(diag ? { diag } : {}),
       };
 
       emitStreamEvent(id, 'score:updated', payload);
@@ -547,6 +581,7 @@ router.patch(
 
 // POST /api/live/:id/score/event - Structured multi-point & delivery scoring with duplicate guard
 async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const serverReceivedAtMs = Date.now();
   try {
     const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -554,7 +589,17 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         return;
       }
 
-      const allowed = await canManageStream(req.user!, id, 'score');
+      const clientEventId = sanitizeText(req.body.clientEventId, 100);
+      const [allowed, existingEvent, stream] = await Promise.all([
+        canManageStream(req.user!, id, 'score'),
+        clientEventId
+          ? ScoreHistory.findOne({ liveStreamId: id, clientEventId })
+              .populate('updatedBy', 'name role')
+              .lean()
+          : Promise.resolve(null),
+        LiveStream.findById(id),
+      ]);
+
       if (!allowed) {
         res.status(403).json({
           message: 'Forbidden: You are not authorized to record score events for this stream.',
@@ -562,27 +607,17 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         return;
       }
 
-      const clientEventId = sanitizeText(req.body.clientEventId, 100);
-      if (clientEventId) {
-        const existingEvent = await ScoreHistory.findOne({
-          liveStreamId: id,
-          clientEventId,
-        })
-          .populate('updatedBy', 'name role')
-          .lean();
-        if (existingEvent) {
-          const existingScore = await LiveScore.findOne({ liveStreamId: id }).lean();
-          res.json({
-            streamId: id,
-            score: existingScore,
-            historyItem: existingEvent,
-            duplicatePrevented: true,
-          });
-          return;
-        }
+      if (existingEvent) {
+        const existingScore = await LiveScore.findOne({ liveStreamId: id }).lean();
+        res.json({
+          streamId: id,
+          score: existingScore,
+          historyItem: existingEvent,
+          duplicatePrevented: true,
+        });
+        return;
       }
 
-      const stream = await LiveStream.findById(id);
       if (!stream) {
         res.status(404).json({ message: 'Live stream not found.' });
         return;
@@ -828,6 +863,7 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         return {
           locked: false as const,
           score,
+          historyDoc: createdHistory[0],
           historyId: createdHistory[0]._id,
           previousSnapshot,
           autoCompletedInnings1,
@@ -962,9 +998,7 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           action: `Official Result: ${resScore.resultDescription}`,
           updatedBy: req.user!._id,
         });
-        resultHistoryItem = await ScoreHistory.findById(rHist._id)
-          .populate('updatedBy', 'name role')
-          .lean();
+        resultHistoryItem = buildInMemoryPopulatedHistory(rHist, req.user);
 
         emitStreamEvent(id, 'match:result:declared', {
           streamId: id,
@@ -985,29 +1019,33 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
             winnerTeamId: resScore.winnerTeamId ? resScore.winnerTeamId.toString() : null,
           });
         }
-        await dispatchMatchNotifications({
-          type: 'MATCH_COMPLETED',
-          title: 'Match Completed',
-          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${resScore.resultDescription}`,
-          entityType: 'LiveStream',
-          entityId: stream._id.toString(),
-          link: `/live/${stream._id.toString()}`,
-          dedupeKey: `cricket-complete-${stream._id.toString()}`,
-          teamIds: [stream.teamAId, stream.teamBId],
-          tournamentId: stream.tournamentId,
-          includeAllSpectatorsIfNoFollowers: true,
-        });
+        runBackgroundTask(
+          'cricketCompleteNotify',
+          dispatchMatchNotifications({
+            type: 'MATCH_COMPLETED',
+            title: 'Match Completed',
+            message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${resScore.resultDescription}`,
+            entityType: 'LiveStream',
+            entityId: stream._id.toString(),
+            link: `/live/${stream._id.toString()}`,
+            dedupeKey: `cricket-complete-${stream._id.toString()}`,
+            teamIds: [stream.teamAId, stream.teamBId],
+            tournamentId: stream.tournamentId,
+            includeAllSpectatorsIfNoFollowers: true,
+          })
+        );
       }
 
-      const populatedHistory = await ScoreHistory.findById(txResult.historyId)
-        .populate('updatedBy', 'name role')
-        .lean();
+      const dbDoneAtMs = Date.now();
+      const diag = buildDiagPayload(req, serverReceivedAtMs, dbDoneAtMs);
+      const populatedHistory = buildInMemoryPopulatedHistory(txResult.historyDoc, req.user);
 
       const payload = {
         streamId: id,
         score: finalScoreObj,
         historyItem: populatedHistory,
         duplicatePrevented: false,
+        ...(diag ? { diag } : {}),
       };
 
       emitStreamEvent(id, 'score:event:created', payload);
@@ -1022,31 +1060,37 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           (finalScoreObj.sportSpecificDetails || {}) as Partial<CricketDetails>
         );
         emitStreamEvent(id, 'cricket:innings_completed', payload);
-        await dispatchMatchNotifications({
-          type: 'INNINGS_BREAK',
-          title: 'Innings Break',
-          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${d.target}`,
-          entityType: 'LiveStream',
-          entityId: stream._id.toString(),
-          link: `/live/${stream._id.toString()}`,
-          dedupeKey: `innings-break-${stream._id.toString()}`,
-          teamIds: [stream.teamAId, stream.teamBId],
-          tournamentId: stream.tournamentId,
-          includeAllSpectatorsIfNoFollowers: true,
-        });
+        runBackgroundTask(
+          'inningsBreakNotify',
+          dispatchMatchNotifications({
+            type: 'INNINGS_BREAK',
+            title: 'Innings Break',
+            message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${d.target}`,
+            entityType: 'LiveStream',
+            entityId: stream._id.toString(),
+            link: `/live/${stream._id.toString()}`,
+            dedupeKey: `innings-break-${stream._id.toString()}`,
+            teamIds: [stream.teamAId, stream.teamBId],
+            tournamentId: stream.tournamentId,
+            includeAllSpectatorsIfNoFollowers: true,
+          })
+        );
       } else if (txResult.cricketWicketEvent && !txResult.autoCompletedMatch) {
-        await dispatchMatchNotifications({
-          type: 'WICKET',
-          title: 'Wicket Alert!',
-          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${txResult.actionLabel}`,
-          entityType: 'LiveStream',
-          entityId: stream._id.toString(),
-          link: `/live/${stream._id.toString()}`,
-          dedupeKey: `wicket-${stream._id.toString()}-${txResult.historyId.toString()}`,
-          teamIds: [stream.teamAId, stream.teamBId],
-          tournamentId: stream.tournamentId,
-          includeAllSpectatorsIfNoFollowers: false,
-        });
+        runBackgroundTask(
+          'wicketNotify',
+          dispatchMatchNotifications({
+            type: 'WICKET',
+            title: 'Wicket Alert!',
+            message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${txResult.actionLabel}`,
+            entityType: 'LiveStream',
+            entityId: stream._id.toString(),
+            link: `/live/${stream._id.toString()}`,
+            dedupeKey: `wicket-${stream._id.toString()}-${txResult.historyId.toString()}`,
+            teamIds: [stream.teamAId, stream.teamBId],
+            tournamentId: stream.tournamentId,
+            includeAllSpectatorsIfNoFollowers: false,
+          })
+        );
       }
 
       // Optional Event-Based Sponsor Graphics (with server-side cooldowns & dedupe)
@@ -1348,18 +1392,7 @@ router.post(
         updatedBy: req.user!._id,
       });
 
-      const populatedHistory = await ScoreHistory.findById(historyItem._id)
-        .populate('updatedBy', 'name role')
-        .lean();
-
-      await recordActivity(
-        req.user!,
-        'COMPLETE_FIRST_INNINGS',
-        'LiveScore',
-        score._id.toString(),
-        applied.label,
-        { previousValue: { innings1Completed: false }, newValue: { target: applied.details.target } }
-      );
+      const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
       const payload = {
         streamId: id,
@@ -1371,18 +1404,33 @@ router.post(
       emitStreamEvent(id, 'score:updated', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
 
-      await dispatchMatchNotifications({
-        type: 'INNINGS_BREAK',
-        title: 'Innings Break',
-        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${applied.details.target}`,
-        entityType: 'LiveStream',
-        entityId: stream._id.toString(),
-        link: `/live/${stream._id.toString()}`,
-        dedupeKey: `innings-break-${stream._id.toString()}`,
-        teamIds: [stream.teamAId, stream.teamBId],
-        tournamentId: stream.tournamentId,
-        includeAllSpectatorsIfNoFollowers: true,
-      });
+      runBackgroundTask(
+        'completeInningsAudit',
+        recordActivity(
+          req.user!,
+          'COMPLETE_FIRST_INNINGS',
+          'LiveScore',
+          score._id.toString(),
+          applied.label,
+          { previousValue: { innings1Completed: false }, newValue: { target: applied.details.target } }
+        )
+      );
+
+      runBackgroundTask(
+        'completeInningsNotify',
+        dispatchMatchNotifications({
+          type: 'INNINGS_BREAK',
+          title: 'Innings Break',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: 1st Innings completed · Target ${applied.details.target}`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `innings-break-${stream._id.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          tournamentId: stream.tournamentId,
+          includeAllSpectatorsIfNoFollowers: true,
+        })
+      );
 
       res.json(payload);
     } catch (err) {
@@ -1520,21 +1568,7 @@ router.post(
         updatedBy: req.user!._id,
       });
 
-      const populatedHistory = await ScoreHistory.findById(historyItem._id)
-        .populate('updatedBy', 'name role')
-        .lean();
-
-      await recordActivity(
-        req.user!,
-        'START_SECOND_INNINGS',
-        'LiveScore',
-        score._id.toString(),
-        applied.label,
-        {
-          previousValue: { innings: 1, matchPhase: previousSnapshot.matchStatus },
-          newValue: { innings: 2, battingTeam, target, oversLimit },
-        }
-      );
+      const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
       const payload = {
         streamId: id,
@@ -1546,20 +1580,38 @@ router.post(
       emitStreamEvent(id, 'score:updated', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
 
+      runBackgroundTask(
+        'startSecondInningsAudit',
+        recordActivity(
+          req.user!,
+          'START_SECOND_INNINGS',
+          'LiveScore',
+          score._id.toString(),
+          applied.label,
+          {
+            previousValue: { innings: 1, matchPhase: previousSnapshot.matchStatus },
+            newValue: { innings: 2, battingTeam, target, oversLimit },
+          }
+        )
+      );
+
       const chasingTeamName =
         battingTeam === 'A' ? stream.teamAName || 'Team A' : stream.teamBName || 'Team B';
-      await dispatchMatchNotifications({
-        type: 'SECOND_INNINGS_STARTED',
-        title: '2nd Innings Started',
-        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${chasingTeamName} need ${target} runs in ${oversLimit} overs`,
-        entityType: 'LiveStream',
-        entityId: stream._id.toString(),
-        link: `/live/${stream._id.toString()}`,
-        dedupeKey: `second-innings-${stream._id.toString()}`,
-        teamIds: [stream.teamAId, stream.teamBId],
-        tournamentId: stream.tournamentId,
-        includeAllSpectatorsIfNoFollowers: true,
-      });
+      runBackgroundTask(
+        'startSecondInningsNotify',
+        dispatchMatchNotifications({
+          type: 'SECOND_INNINGS_STARTED',
+          title: '2nd Innings Started',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${chasingTeamName} need ${target} runs in ${oversLimit} overs`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `second-innings-${stream._id.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          tournamentId: stream.tournamentId,
+          includeAllSpectatorsIfNoFollowers: true,
+        })
+      );
 
       res.json(payload);
     } catch (err) {
@@ -1679,29 +1731,7 @@ router.patch(
         updatedBy: req.user!._id,
       });
 
-      const populated = await ScoreHistory.findById(correctionDoc._id)
-        .populate('updatedBy', 'name role')
-        .lean();
-
-      await recordActivity(
-        req.user!,
-        'CORRECT_SCORE_EVENT',
-        'ScoreHistory',
-        eventId,
-        correctionLabel,
-        {
-          previousValue: {
-            teamAScore: previousSnapshot.teamAScore,
-            teamBScore: previousSnapshot.teamBScore,
-            originalAction: original.action,
-          },
-          newValue: {
-            teamAScore: updatedSnapshot.teamAScore,
-            teamBScore: updatedSnapshot.teamBScore,
-            reason: correctionReason,
-          },
-        }
-      );
+      const populated = buildInMemoryPopulatedHistory(correctionDoc, req.user);
 
       const payload = {
         streamId: id,
@@ -1714,6 +1744,29 @@ router.patch(
       emitStreamEvent(id, 'score:updated', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populated });
 
+      runBackgroundTask(
+        'correctEventAudit',
+        recordActivity(
+          req.user!,
+          'CORRECT_SCORE_EVENT',
+          'ScoreHistory',
+          eventId,
+          correctionLabel,
+          {
+            previousValue: {
+              teamAScore: previousSnapshot.teamAScore,
+              teamBScore: previousSnapshot.teamBScore,
+              originalAction: original.action,
+            },
+            newValue: {
+              teamAScore: updatedSnapshot.teamAScore,
+              teamBScore: updatedSnapshot.teamBScore,
+              reason: correctionReason,
+            },
+          }
+        )
+      );
+
       res.json(payload);
     } catch (err) {
       console.error('[Score] Correction error:', err);
@@ -1724,6 +1777,7 @@ router.patch(
 
 // POST /api/live/:id/score/undo & /cricket/undo
 async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const serverReceivedAtMs = Date.now();
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -1731,7 +1785,20 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const allowed = await canManageStream(req.user!, id, 'score');
+    const clientEventId = sanitizeText(req.body?.clientEventId, 100);
+    if (clientEventId) {
+      const undoKey = `${id}:${clientEventId}`;
+      const cached = recentUndoByClientEventId.get(undoKey);
+      if (cached && Date.now() - cached.at < 60_000) {
+        res.json({ ...cached.payload, duplicatePrevented: true });
+        return;
+      }
+    }
+
+    const [allowed, score] = await Promise.all([
+      canManageStream(req.user!, id, 'score'),
+      ensureLiveScore(id),
+    ]);
     if (!allowed) {
       res.status(403).json({
         message: 'Forbidden: You are not authorized to undo scores for this stream.',
@@ -1739,7 +1806,6 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const score = await ensureLiveScore(id);
     if (!score) {
       res.status(404).json({ message: 'Stream not found.' });
       return;
@@ -1944,23 +2010,23 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
       }
     }
 
-    await recordActivity(
-      req.user!,
-      'UNDO_SCORE',
-      'LiveScore',
-      score._id.toString(),
-      `Undid: ${latestHistory.action}`,
-      {
-        previousValue: previousSnapshot,
-        newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
-      }
-    );
-
+    const dbDoneAtMs = Date.now();
+    const diag = buildDiagPayload(req, serverReceivedAtMs, dbDoneAtMs);
     const payload = {
       streamId: id,
       score: score.toObject(),
       undoneAction: latestHistory.action,
+      ...(diag ? { diag } : {}),
     };
+
+    if (clientEventId) {
+      const undoKey = `${id}:${clientEventId}`;
+      recentUndoByClientEventId.set(undoKey, { at: Date.now(), payload });
+      if (recentUndoByClientEventId.size > 300) {
+        const firstKey = recentUndoByClientEventId.keys().next().value;
+        if (firstKey) recentUndoByClientEventId.delete(firstKey);
+      }
+    }
 
     emitStreamEvent(id, 'score:undo', payload);
     emitStreamEvent(id, 'score:updated', payload);
@@ -1973,17 +2039,36 @@ async function handleUndoScore(req: AuthenticatedRequest, res: Response): Promis
     }
     if (revertedAutoResult || revertedVolleyballResult) {
       emitStreamEvent(id, 'match:result:updated', { streamId: id, score: score.toObject(), isCorrection: true });
-      const streamForTourn = await LiveStream.findById(id).lean();
-      if (streamForTourn?.tournamentId) {
-        emitTournamentEvent(streamForTourn.tournamentId.toString(), 'tournament:points_updated', {
-          tournamentId: streamForTourn.tournamentId.toString(),
-          streamId: id,
-          resultStatus: score.resultStatus,
-          winnerTeamId: null,
-        });
-      }
+      LiveStream.findById(id)
+        .select('tournamentId')
+        .lean()
+        .then((streamForTourn) => {
+          if (streamForTourn?.tournamentId) {
+            emitTournamentEvent(streamForTourn.tournamentId.toString(), 'tournament:points_updated', {
+              tournamentId: streamForTourn.tournamentId.toString(),
+              streamId: id,
+              resultStatus: score.resultStatus,
+              winnerTeamId: null,
+            });
+          }
+        })
+        .catch(() => {});
     }
     emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+    runBackgroundTask(
+      'undoScoreAudit',
+      recordActivity(
+        req.user!,
+        'UNDO_SCORE',
+        'LiveScore',
+        score._id.toString(),
+        `Undid: ${latestHistory.action}`,
+        {
+          previousValue: previousSnapshot,
+          newValue: { teamAScore: score.teamAScore, teamBScore: score.teamBScore },
+        }
+      )
+    );
     res.json(payload);
   } catch (err) {
     console.error('[Score] Undo error:', err);
@@ -2068,21 +2153,6 @@ router.post(
         updatedBy: req.user!._id,
       });
 
-      await recordActivity(
-        req.user!,
-        'RESET_SCOREBOARD',
-        'LiveScore',
-        score._id.toString(),
-        'Reset scoreboard to zero',
-        {
-          previousValue: {
-            teamAScore: previousSnapshot.teamAScore,
-            teamBScore: previousSnapshot.teamBScore,
-          },
-          newValue: { teamAScore: 0, teamBScore: 0 },
-        }
-      );
-
       const payload = {
         streamId: id,
         score: score.toObject(),
@@ -2090,6 +2160,23 @@ router.post(
 
       emitStreamEvent(id, 'score:reset', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id });
+      runBackgroundTask(
+        'resetScoreAudit',
+        recordActivity(
+          req.user!,
+          'RESET_SCOREBOARD',
+          'LiveScore',
+          score._id.toString(),
+          'Reset scoreboard to zero',
+          {
+            previousValue: {
+              teamAScore: previousSnapshot.teamAScore,
+              teamBScore: previousSnapshot.teamBScore,
+            },
+            newValue: { teamAScore: 0, teamBScore: 0 },
+          }
+        )
+      );
       res.json(payload);
     } catch (err) {
       console.error('[Score] Reset error:', err);
@@ -2172,17 +2259,7 @@ router.post(
         updatedBy: req.user!._id,
       });
 
-      const populated = await ScoreHistory.findById(historyItem._id)
-        .populate('updatedBy', 'name role')
-        .lean();
-
-      await recordActivity(
-        req.user!,
-        'POST_COMMENTARY',
-        'LiveScore',
-        score._id.toString(),
-        snippet
-      );
+      const populated = buildInMemoryPopulatedHistory(historyItem, req.user);
 
       const payload = {
         streamId: id,
@@ -2191,6 +2268,16 @@ router.post(
 
       emitStreamEvent(id, 'commentary:added', payload);
       emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populated });
+      runBackgroundTask(
+        'commentaryAudit',
+        recordActivity(
+          req.user!,
+          'POST_COMMENTARY',
+          'LiveScore',
+          score._id.toString(),
+          snippet
+        )
+      );
       res.status(201).json(payload);
     } catch (err) {
       console.error('[Score] Commentary error:', err);
@@ -2486,40 +2573,7 @@ router.post(
         updatedBy: req.user!._id,
       });
 
-      const populatedHistory = await ScoreHistory.findById(historyItem._id)
-        .populate('updatedBy', 'name role')
-        .lean();
-
-      await recordActivity(
-        req.user!,
-        isCorrection ? 'UPDATE_MATCH_RESULT' : 'DECLARE_MATCH_RESULT',
-        'LiveScore',
-        score._id.toString(),
-        `${stream.matchTitle || stream.youtubeVideoId}: ${score.resultDescription}`,
-        {
-          previousValue: {
-            resultStatus: previousSnapshot.resultStatus,
-            winnerTeamName: previousSnapshot.winnerTeamName,
-          },
-          newValue: {
-            resultStatus: score.resultStatus,
-            winnerTeamName: score.winnerTeamName,
-            mvpPlayerName: score.mvpPlayerName,
-          },
-        }
-      );
-
-      await dispatchMatchNotifications({
-        type: 'MATCH_RESULT',
-        title: 'Official Match Result Declared',
-        message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${score.resultDescription}`,
-        entityType: 'LiveStream',
-        entityId: stream._id.toString(),
-        link: `/live/${stream._id.toString()}`,
-        dedupeKey: `match-result-${stream._id.toString()}-${isCorrection ? Date.now() : 'v1'}`,
-        teamIds: [stream.teamAId, stream.teamBId],
-        includeAllSpectatorsIfNoFollowers: true,
-      });
+      const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
       const payload = {
         streamId: id,
@@ -2542,6 +2596,44 @@ router.post(
           winnerTeamId: score.winnerTeamId ? score.winnerTeamId.toString() : null,
         });
       }
+
+      runBackgroundTask(
+        'resultAudit',
+        recordActivity(
+          req.user!,
+          isCorrection ? 'UPDATE_MATCH_RESULT' : 'DECLARE_MATCH_RESULT',
+          'LiveScore',
+          score._id.toString(),
+          `${stream.matchTitle || stream.youtubeVideoId}: ${score.resultDescription}`,
+          {
+            previousValue: {
+              resultStatus: previousSnapshot.resultStatus,
+              winnerTeamName: previousSnapshot.winnerTeamName,
+            },
+            newValue: {
+              resultStatus: score.resultStatus,
+              winnerTeamName: score.winnerTeamName,
+              mvpPlayerName: score.mvpPlayerName,
+            },
+          }
+        )
+      );
+
+      runBackgroundTask(
+        'resultNotify',
+        dispatchMatchNotifications({
+          type: 'MATCH_RESULT',
+          title: 'Official Match Result Declared',
+          message: `${stream.matchTitle || `${stream.teamAName} vs ${stream.teamBName}`}: ${score.resultDescription}`,
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `match-result-${stream._id.toString()}-${isCorrection ? Date.now() : 'v1'}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          includeAllSpectatorsIfNoFollowers: true,
+        })
+      );
+
       res.json(payload);
     } catch (err) {
       console.error('[Score] Declare result error:', err);

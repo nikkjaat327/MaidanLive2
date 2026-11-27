@@ -35,6 +35,13 @@ export async function connectDatabase(): Promise<{
     try {
       await mongoose.connect(externalUri, {
         serverSelectionTimeoutMS: 6000,
+        connectTimeoutMS: 8000,
+        socketTimeoutMS: 20000,
+        maxPoolSize: 20,
+        minPoolSize: 4,
+        maxIdleTimeMS: 60000,
+        retryWrites: true,
+        w: 'majority',
       });
       setActiveDbEngine('mongodb');
       updateEngineDiagnostics({
@@ -104,6 +111,13 @@ export async function retryMongoConnection(): Promise<{
     if (mongoose.connection.readyState !== 1) {
       await mongoose.connect(externalUri, {
         serverSelectionTimeoutMS: 6000,
+        connectTimeoutMS: 8000,
+        socketTimeoutMS: 20000,
+        maxPoolSize: 20,
+        minPoolSize: 4,
+        maxIdleTimeMS: 60000,
+        retryWrites: true,
+        w: 'majority',
       });
     }
     const syncResult = await syncSqliteToMongo();

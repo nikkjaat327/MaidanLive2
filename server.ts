@@ -392,17 +392,31 @@ async function startServer() {
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api', apiLimiter);
 
-  app.get('/api/health', async (_req, res) => {
-    let diag: ReturnType<typeof getDatabaseDiagnostics> | null = null;
-    try {
-      diag = getDatabaseDiagnostics();
-    } catch {
-      diag = null;
+  let cachedHealthDiag: { at: number; value: ReturnType<typeof getDatabaseDiagnostics> | null } = {
+    at: 0,
+    value: null,
+  };
+  app.get('/api/health', async (req, res) => {
+    if (req.query.lite === '1') {
+      res.json({
+        ok: true,
+        dbMode: dbInfo.mode,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    const now = Date.now();
+    if (!cachedHealthDiag.value || now - cachedHealthDiag.at > 5000) {
+      try {
+        cachedHealthDiag = { at: now, value: getDatabaseDiagnostics() };
+      } catch {
+        cachedHealthDiag = { at: now, value: null };
+      }
     }
     res.json({
       ok: true,
-      dbMode: diag?.engine || dbInfo.mode,
-      diagnostics: diag,
+      dbMode: cachedHealthDiag.value?.engine || dbInfo.mode,
+      diagnostics: cachedHealthDiag.value,
       timestamp: new Date().toISOString(),
     });
   });

@@ -72,7 +72,6 @@ export function LiveMatchDetailPage() {
   useEffect(() => {
     if (!id) return;
     const socket = getSocketClient();
-    socket.emit('stream:join', id);
 
     const refreshHighlights = (payload: { streamId?: string }) => {
       if (payload?.streamId === id && isAuthenticated) {

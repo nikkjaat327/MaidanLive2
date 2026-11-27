@@ -210,6 +210,17 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       socket.leave('feed');
     });
 
+    socket.on('diag:ping', (payload: { clientSentAtMs?: number } | undefined, ack?: (res: any) => void) => {
+      if (typeof ack === 'function') {
+        ack({
+          ok: true,
+          clientSentAtMs: typeof payload?.clientSentAtMs === 'number' ? payload.clientSentAtMs : null,
+          serverNowMs: Date.now(),
+          transport: (socket as any).conn?.transport?.name || 'unknown',
+        });
+      }
+    });
+
     socket.on('tournament:join', (tournamentId: string) => {
       if (typeof tournamentId !== 'string' || !tournamentId.trim()) return;
       socket.join(`tournament:${tournamentId.trim()}`);
@@ -599,18 +610,13 @@ export function getSocketIO(): SocketIOServer | null {
 export function emitStreamEvent(streamId: string, event: string, payload: unknown): void {
   if (!io) return;
   const enriched = attachMeta(payload);
-  io.to(`stream:${streamId}`).emit(event, enriched);
-  io.to(`match:${streamId}`).emit(event, enriched);
-  io.to('feed').emit(event, enriched);
-  // Keep root broadcast for existing listeners not yet joined to feed room
-  io.emit(event, enriched);
+  io.to([`stream:${streamId}`, `match:${streamId}`, 'feed']).emit(event, enriched);
 }
 
 export function emitRoomOnlyEvent(streamId: string, event: string, payload: unknown): void {
   if (!io) return;
   const enriched = attachMeta(payload);
-  io.to(`stream:${streamId}`).emit(event, enriched);
-  io.to(`match:${streamId}`).emit(event, enriched);
+  io.to([`stream:${streamId}`, `match:${streamId}`]).emit(event, enriched);
 }
 
 export function emitBroadcastStudioEvent(matchId: string, event: string, payload: unknown): void {
@@ -628,9 +634,7 @@ export function emitCameraCompanionEvent(cameraDocId: string, event: string, pay
 export function emitTournamentEvent(tournamentId: string, event: string, payload: unknown): void {
   if (!io) return;
   const enriched = attachMeta(payload);
-  io.to(`tournament:${tournamentId}`).emit(event, enriched);
-  io.to('feed').emit(event, enriched);
-  io.emit(event, enriched);
+  io.to([`tournament:${tournamentId}`, 'feed']).emit(event, enriched);
 }
 
 export function emitUserNotification(userId: string, payload: unknown): void {

@@ -4,6 +4,10 @@ import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 import { DEFAULT_OVERLAY_CONFIG, normalizeOverlayConfig } from '../utils/overlayConfig.ts';
+import {
+  recordSocketDiagEvent,
+  type ScoreDiagTraceServer,
+} from '../utils/realtimeDiagnostics.ts';
 import type { BroadcastGraphicsStateData } from '../types/broadcastGraphics.ts';
 import type { ObsLayoutType, PipPosition, PipSize } from '../utils/obsLayoutGeometry.ts';
 
@@ -159,9 +163,11 @@ export function useObsOverlay(matchId?: string) {
       sequence?: number;
       serverNowIso?: string;
       emittedAt?: string;
+      diag?: ScoreDiagTraceServer;
     }) => {
       if (payload?.streamId !== matchId) return;
       if (!shouldAcceptEvent(payload, true)) return;
+      recordSocketDiagEvent(payload, 'obs');
       syncServerClock(payload.serverNowIso || payload.emittedAt);
       if (payload.score) {
         setScore(payload.score);
@@ -175,7 +181,9 @@ export function useObsOverlay(matchId?: string) {
       if (id !== matchId) return;
       if (!shouldAcceptEvent(updated, false)) return;
       syncServerClock(updated.serverNowIso || updated.emittedAt);
-      setStream((prev) => (prev ? { ...prev, ...updated } : updated));
+      setStream((prev) =>
+        prev ? { ...prev, ...updated, score: updated.score ?? prev.score } : updated
+      );
       if (updated.score) {
         setScore(updated.score);
       }
@@ -328,11 +336,24 @@ export function useObsOverlay(matchId?: string) {
   // Reliable background reconciliation polling so OBS Browser Sources never drift even if WebSocket is blocked
   useEffect(() => {
     if (!matchId) return;
-    const intervalMs = connected ? 4000 : 2500;
+    const intervalMs = connected ? 25000 : 2500;
     const timer = window.setInterval(() => {
       fetchOverlay();
     }, intervalMs);
-    return () => window.clearInterval(timer);
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void fetchOverlay();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility);
+    }
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility);
+      }
+    };
   }, [matchId, connected, fetchOverlay]);
 
   return {

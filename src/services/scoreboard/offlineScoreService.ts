@@ -7,6 +7,7 @@ import {
   OfflineScoreQueueItem,
   offlineScoreQueue,
 } from '../../utils/offlineScoreQueue.ts';
+import type { ScoreDiagTraceServer } from '../../utils/realtimeDiagnostics.ts';
 
 export interface OfflineScoreSnapshot {
   streamId: string;
@@ -25,9 +26,12 @@ export interface ScoreSubmitResult {
   score: LiveScoreData | null;
   historyItem?: ScoreHistoryItem;
   queueItem?: OfflineScoreQueueItem;
+  diag?: ScoreDiagTraceServer;
 }
 
 export interface ScorePatchInput {
+  clientEventId?: string;
+  traceId?: string;
   teamAScore?: number;
   teamBScore?: number;
   sportSpecificDetails?: Record<string, unknown>;
@@ -41,6 +45,7 @@ export interface ScorePatchInput {
 
 export interface StructuredScoreEventInput {
   clientEventId: string;
+  traceId?: string;
   sportType: string;
   action: Record<string, unknown>;
   playerId?: string;
@@ -269,8 +274,10 @@ export class OfflineScoreService {
       return {
         synced: true,
         queued: false,
+        duplicatePrevented: res.duplicatePrevented,
         score: res.score,
         historyItem: res.historyItem,
+        diag: res.diag,
       };
     } catch (err) {
       if (!isUnstableNetworkError(err)) {
@@ -326,6 +333,7 @@ export class OfflineScoreService {
         duplicatePrevented: res.duplicatePrevented,
         score: res.score,
         historyItem: res.historyItem,
+        diag: res.diag,
       };
     } catch (err) {
       if (!isUnstableNetworkError(err)) {

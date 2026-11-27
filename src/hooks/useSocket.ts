@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getSocketClient } from '../services/socket/socketClient.ts';
 
 export function useSocket(streamId?: string, onReconnect?: () => void) {
   const [connected, setConnected] = useState<boolean>(() => getSocketClient().connected);
+  const onReconnectRef = useRef(onReconnect);
+
+  useEffect(() => {
+    onReconnectRef.current = onReconnect;
+  }, [onReconnect]);
 
   useEffect(() => {
     const socket = getSocketClient();
@@ -12,9 +17,7 @@ export function useSocket(streamId?: string, onReconnect?: () => void) {
       if (streamId) {
         socket.emit('stream:join', streamId);
       }
-      if (onReconnect) {
-        onReconnect();
-      }
+      onReconnectRef.current?.();
     };
 
     const handleDisconnect = () => {
@@ -38,7 +41,8 @@ export function useSocket(streamId?: string, onReconnect?: () => void) {
         socket.emit('stream:leave', streamId);
       }
     };
-  }, [streamId, onReconnect]);
+  }, [streamId]);
 
   return { connected, socket: getSocketClient() };
 }
+

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  Activity,
   Eye,
   EyeOff,
   Radio,
@@ -47,6 +48,7 @@ import { ScoreControlPanel } from '../../components/scoreboard/ScoreControlPanel
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { QuickLiveScoreControls } from '../../components/obs/QuickLiveScoreControls.tsx';
+import { RealtimeDiagnosticsDrawer } from '../../components/admin/RealtimeDiagnosticsDrawer.tsx';
 
 export function AdminScoreboardPage() {
   const { id } = useParams<{ id: string }>();
@@ -57,6 +59,7 @@ export function AdminScoreboardPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [showVideoMonitor, setShowVideoMonitor] = useState(false);
   const [showMomentumCharts, setShowMomentumCharts] = useState(true);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   const [players, setPlayers] = useState<PlayerData[]>([]);
   const [highlights, setHighlights] = useState<MatchHighlightData[]>([]);
@@ -73,7 +76,8 @@ export function AdminScoreboardPage() {
     notFound: streamNotFound,
     clearError: clearStreamError,
   } = useLiveStream(selectedId || undefined);
-  const { score, setScore, history, connected, refetch } = useScoreboard(selectedId || undefined);
+  const { score, setScore, history, connected, refreshHistoryOnly, addHistoryItem } =
+    useScoreboard(selectedId || undefined);
 
   useEffect(() => {
     if (id && streams.some((s) => s.id === id)) {
@@ -231,6 +235,14 @@ export function AdminScoreboardPage() {
               <StreamStatusIndicator stream={stream} socketConnected={connected} />
               <button
                 type="button"
+                onClick={() => setDiagOpen(true)}
+                className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Activity className="w-4 h-4 text-indigo-600" />
+                <span>Latency</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowMomentumCharts((v) => !v)}
                 className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 whitespace-nowrap"
               >
@@ -314,7 +326,7 @@ export function AdminScoreboardPage() {
                   stream={stream}
                   score={score}
                   onScoreChange={setScore}
-                  onRefresh={refetch}
+                  onRefresh={refreshHistoryOnly}
                   themeVariant="light"
                 />
               )}
@@ -386,13 +398,15 @@ export function AdminScoreboardPage() {
             highlights={highlights}
             playerStats={playerStats}
             onScoreChange={setScore}
-            onRefreshHistory={refetch}
+            onRefreshHistory={refreshHistoryOnly}
+            onAddHistoryItem={addHistoryItem}
             onRefreshHighlights={loadHighlights}
             onRefreshStats={loadPlayerStats}
           />
         </div>
       )}
 
+      <RealtimeDiagnosticsDrawer open={diagOpen} onClose={() => setDiagOpen(false)} />
     </div>
   );
 }

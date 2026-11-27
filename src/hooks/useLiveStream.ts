@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LiveStreamData } from '../types/index.ts';
 import { liveStreamService } from '../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
@@ -52,19 +52,28 @@ export function useLiveStream(streamId?: string, authKey = '') {
     fetchStream();
   }, [streamId, fetchStream]);
 
+  const fetchStreamRef = useRef(fetchStream);
+  useEffect(() => {
+    fetchStreamRef.current = fetchStream;
+  }, [fetchStream]);
+
   useEffect(() => {
     if (!streamId) return;
     const socket = getSocketClient();
 
     const handleUpdated = (updated: LiveStreamData) => {
       if (updated.id === streamId || updated._id === streamId) {
-        setStream((prev) => (prev ? { ...prev, ...updated } : updated));
+        setStream((prev) =>
+          prev ? { ...prev, ...updated, score: updated.score ?? prev.score } : updated
+        );
       }
     };
 
     const handleEnded = (ended: LiveStreamData) => {
       if (ended.id === streamId || ended._id === streamId) {
-        setStream((prev) => (prev ? { ...prev, ...ended, status: 'ENDED' } : ended));
+        setStream((prev) =>
+          prev ? { ...prev, ...ended, status: 'ENDED', score: ended.score ?? prev.score } : ended
+        );
       }
     };
 
@@ -147,9 +156,15 @@ export function useLiveStream(streamId?: string, authKey = '') {
     let hasConnectedOnce = socket.connected;
     const handleConnect = () => {
       if (hasConnectedOnce) {
-        fetchStream();
+        void fetchStreamRef.current();
       }
       hasConnectedOnce = true;
+    };
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && !socket.connected) {
+        void fetchStreamRef.current();
+      }
     };
 
     socket.on('live:updated', handleUpdated);
@@ -162,6 +177,9 @@ export function useLiveStream(streamId?: string, authKey = '') {
     socket.on('stream:viewers', handleViewerUpdate);
     socket.on('viewer:count_updated', handleViewerUpdate);
     socket.on('connect', handleConnect);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility);
+    }
 
     return () => {
       socket.off('live:updated', handleUpdated);
@@ -174,8 +192,11 @@ export function useLiveStream(streamId?: string, authKey = '') {
       socket.off('stream:viewers', handleViewerUpdate);
       socket.off('viewer:count_updated', handleViewerUpdate);
       socket.off('connect', handleConnect);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility);
+      }
     };
-  }, [streamId, fetchStream]);
+  }, [streamId]);
 
   return {
     stream,

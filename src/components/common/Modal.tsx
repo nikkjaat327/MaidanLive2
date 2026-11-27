@@ -83,9 +83,9 @@ export function Modal({
       }}
     >
       <div
-        className={`w-full ${maxWidthClass} max-h-[92vh] overflow-y-auto bg-white border border-slate-200 rounded-t-2xl sm:rounded-xl shadow-2xl`}
+        className={`w-full ${maxWidthClass} max-h-[92vh] flex flex-col overflow-hidden bg-white border border-slate-200 rounded-t-2xl sm:rounded-xl shadow-2xl`}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 px-5 py-4 bg-white border-b border-slate-200">
+        <div className="shrink-0 z-10 flex items-start justify-between gap-4 px-5 py-4 bg-white border-b border-slate-200">
           <div className="min-w-0">
             <h2 id={titleId} className="text-lg font-semibold text-slate-900 truncate">
               {title}
@@ -101,7 +101,7 @@ export function Modal({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-5">{children}</div>
       </div>
     </div>,
     document.body

@@ -51,6 +51,11 @@ import {
 } from './KabaddiModals.tsx';
 import { KabaddiSidebarPanels, type KabaddiSidebarTab } from './KabaddiSidebarPanels.tsx';
 import { KabaddiWinnerScreen } from './KabaddiWinnerScreen.tsx';
+import {
+  applyOptimisticKabaddiEngineEvent,
+  makeClientEventId,
+} from '../../../utils/optimisticScore.ts';
+import { completeScoreTraceApi, startScoreTrace } from '../../../utils/realtimeDiagnostics.ts';
 
 interface KabaddiScorerConsoleProps {
   stream: LiveStreamData;
@@ -60,13 +65,10 @@ interface KabaddiScorerConsoleProps {
   playerStats: PlayerMatchStatRecord[];
   onScoreChange: (score: LiveScoreData) => void;
   onRefreshHistory: () => void;
+  onAddHistoryItem?: (item?: ScoreHistoryItem) => void;
   onRefreshStats?: () => void;
   onError: (msg: string | null) => void;
   onSuccess: (msg: string | null) => void;
-}
-
-function makeUuid(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function KabaddiScorerConsole({
@@ -77,6 +79,7 @@ export function KabaddiScorerConsole({
   playerStats,
   onScoreChange,
   onRefreshHistory,
+  onAddHistoryItem,
   onRefreshStats,
   onError,
   onSuccess,
@@ -148,22 +151,45 @@ export function KabaddiScorerConsole({
   ).length;
 
   async function dispatchEvent(action: Record<string, unknown>, successFallback?: string) {
+    const prevScore = score;
+    const traceId = makeClientEventId('kbd');
+    const apiStartAtMs = Date.now();
+    const actionType = String(action?.type || 'Kabaddi Event');
+    startScoreTrace(traceId, `Kabaddi: ${actionType}`, apiStartAtMs);
+    if (score && actionType !== 'SYNC_ROSTER') {
+      const optimistic = applyOptimisticKabaddiEngineEvent(score, action as any);
+      if (optimistic) {
+        onScoreChange(optimistic);
+      }
+    }
+
     try {
       setSaving(true);
       onError(null);
       const res = await scoreboardService.recordKabaddiEvent(stream.id, {
-        clientEventId: makeUuid('kbd'),
+        clientEventId: traceId,
+        traceId,
         action,
       });
+      completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
       onScoreChange(res.score);
-      onRefreshHistory();
+      if (res.historyItem && onAddHistoryItem) {
+        onAddHistoryItem(res.historyItem);
+      } else {
+        onRefreshHistory();
+      }
       onRefreshStats?.();
       if (!res.duplicatePrevented) {
         onSuccess(res.historyItem?.action || successFallback || 'Kabaddi score updated.');
       }
       return res;
     } catch (err) {
-      onError(extractApiError(err, 'Unable to apply Kabaddi scoring event.'));
+      if (prevScore) {
+        onScoreChange(prevScore);
+      }
+      const msg = extractApiError(err, 'Unable to apply Kabaddi scoring event.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      onError(msg);
       return null;
     } finally {
       setSaving(false);
@@ -186,16 +212,25 @@ export function KabaddiScorerConsole({
   }
 
   async function handleUndoLast() {
+    const traceId = makeClientEventId('undo');
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, 'Kabaddi: Undo', apiStartAtMs);
     try {
       setSaving(true);
       onError(null);
-      const res = await scoreboardService.undoScore(stream.id);
+      const res = await scoreboardService.undoScore(stream.id, {
+        clientEventId: traceId,
+        traceId,
+      });
+      completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
       onScoreChange(res.score);
       onRefreshHistory();
       onRefreshStats?.();
       onSuccess(`Undid: ${res.undoneAction}`);
     } catch (err) {
-      onError(extractApiError(err, 'Unable to undo last update.'));
+      const msg = extractApiError(err, 'Unable to undo last update.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      onError(msg);
     } finally {
       setSaving(false);
     }

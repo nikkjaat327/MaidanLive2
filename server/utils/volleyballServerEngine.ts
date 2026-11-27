@@ -23,6 +23,7 @@ import { recordActivity } from './audit.ts';
 import { dispatchMatchNotifications } from './notifications.ts';
 import { findDocByAnyId } from './mongoNormalize.ts';
 import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
+import { buildInMemoryPopulatedHistory, runBackgroundTask } from './scoreHotPath.ts';
 
 export async function resolveVolleyballStream(idOrFixtureId: string, session: any = null) {
   let stream = await LiveStream.findById(idOrFixtureId).session(session);
@@ -321,44 +322,7 @@ export async function finalizeVolleyballMatchCompletion(params: {
     updatedBy: actor._id,
   });
 
-  const populatedHistory = await ScoreHistory.findById(historyItem._id)
-    .populate('updatedBy', 'name role')
-    .lean();
-
-  await recordActivity(
-    actor as any,
-    norm.completedReason === 'THRESHOLD_REACHED'
-      ? 'COMPLETE_VOLLEYBALL_MATCH'
-      : 'DECLARE_VOLLEYBALL_WINNER_MANUAL',
-    'LiveScore',
-    score._id.toString(),
-    resultDescription,
-    {
-      previousValue: {
-        resultStatus: (preCompletionSnapshot as any).resultStatus || 'NOT_DECLARED',
-        sets: `${(preCompletionSnapshot as any).sportSpecificDetails?.teamASetsWon ?? 0}-${(preCompletionSnapshot as any).sportSpecificDetails?.teamBSetsWon ?? 0}`,
-      },
-      newValue: {
-        winnerTeamName: winnerName,
-        sets: setsSummary,
-        completedReason: norm.completedReason,
-        reason,
-      },
-    }
-  );
-
-  await dispatchMatchNotifications({
-    type: 'MATCH_COMPLETED',
-    title: 'Volleyball Match Completed',
-    message: `${stream.matchTitle || `${labelA} vs ${labelB}`}: ${resultDescription}`,
-    entityType: 'LiveStream',
-    entityId: id,
-    link: `/live/${id}`,
-    dedupeKey: `volleyball-complete-${id}-${Date.now()}`,
-    teamIds: [stream.teamAId, stream.teamBId],
-    tournamentId: stream.tournamentId,
-    includeAllSpectatorsIfNoFollowers: true,
-  });
+  const populatedHistory = buildInMemoryPopulatedHistory(historyItem, actor);
 
   const payload = {
     streamId: id,
@@ -379,6 +343,45 @@ export async function finalizeVolleyballMatchCompletion(params: {
     });
   }
 
+  runBackgroundTask(
+    'volleyballCompleteAudit',
+    recordActivity(
+      actor as any,
+      norm.completedReason === 'THRESHOLD_REACHED'
+        ? 'COMPLETE_VOLLEYBALL_MATCH'
+        : 'DECLARE_VOLLEYBALL_WINNER_MANUAL',
+      'LiveScore',
+      score._id.toString(),
+      resultDescription,
+      {
+        previousValue: {
+          resultStatus: (preCompletionSnapshot as any).resultStatus || 'NOT_DECLARED',
+          sets: `${(preCompletionSnapshot as any).sportSpecificDetails?.teamASetsWon ?? 0}-${(preCompletionSnapshot as any).sportSpecificDetails?.teamBSetsWon ?? 0}`,
+        },
+        newValue: {
+          winnerTeamName: winnerName,
+          sets: setsSummary,
+          completedReason: norm.completedReason,
+          reason,
+        },
+      }
+    )
+  );
+  runBackgroundTask(
+    'volleyballCompleteNotify',
+    dispatchMatchNotifications({
+      type: 'MATCH_COMPLETED',
+      title: 'Volleyball Match Completed',
+      message: `${stream.matchTitle || `${labelA} vs ${labelB}`}: ${resultDescription}`,
+      entityType: 'LiveStream',
+      entityId: id,
+      link: `/live/${id}`,
+      dedupeKey: `volleyball-complete-${id}-${Date.now()}`,
+      teamIds: [stream.teamAId, stream.teamBId],
+      tournamentId: stream.tournamentId,
+      includeAllSpectatorsIfNoFollowers: true,
+    })
+  );
   triggerBroadcastGraphicEvent(id, 'MATCH_COMPLETED', `vb_complete_${id}_${Date.now()}`).catch(
     () => {}
   );
@@ -503,21 +506,7 @@ export async function handleVolleyballRulesRoute(
       updatedBy: req.user!._id,
     });
 
-    const populatedHistory = await ScoreHistory.findById(historyItem._id)
-      .populate('updatedBy', 'name role')
-      .lean();
-
-    await recordActivity(
-      req.user!,
-      'UPDATE_VOLLEYBALL_RULES',
-      'LiveScore',
-      score._id.toString(),
-      applied.label,
-      {
-        previousValue: { ...currentDetails.rules } as Record<string, unknown>,
-        newValue: { ...applied.details.rules } as Record<string, unknown>,
-      }
-    );
+    const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
     const payload = {
       streamId: id,
@@ -528,6 +517,20 @@ export async function handleVolleyballRulesRoute(
     emitStreamEvent(id, 'volleyball:rules_updated', payload);
     emitStreamEvent(id, 'score:updated', payload);
     emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+    runBackgroundTask(
+      'volleyballRulesAudit',
+      recordActivity(
+        req.user!,
+        'UPDATE_VOLLEYBALL_RULES',
+        'LiveScore',
+        score._id.toString(),
+        applied.label,
+        {
+          previousValue: { ...currentDetails.rules } as Record<string, unknown>,
+          newValue: { ...applied.details.rules } as Record<string, unknown>,
+        }
+      )
+    );
     res.json(payload);
   } catch (err: any) {
     console.error('[Volleyball] Rules update error:', err);
@@ -738,25 +741,7 @@ export async function handleVolleyballReopenRoute(
       updatedBy: req.user!._id,
     });
 
-    const populatedHistory = await ScoreHistory.findById(hist._id)
-      .populate('updatedBy', 'name role')
-      .lean();
-
-    await recordActivity(
-      req.user!,
-      'REOPEN_VOLLEYBALL_MATCH',
-      'LiveScore',
-      score._id.toString(),
-      `Reopened Volleyball match: ${reason}`,
-      {
-        previousValue: { resultStatus: prevSnapshot.resultStatus, winnerTeamName: prevWinnerName },
-        newValue: {
-          resultStatus: 'NOT_DECLARED',
-          sets: `${nextDetails.teamASetsWon}-${nextDetails.teamBSetsWon}`,
-          reopenedCount: nextDetails.reopenedCount,
-        },
-      }
-    );
+    const populatedHistory = buildInMemoryPopulatedHistory(hist, req.user);
 
     const payload = {
       streamId: id,
@@ -776,6 +761,25 @@ export async function handleVolleyballReopenRoute(
         winnerTeamId: null,
       });
     }
+
+    runBackgroundTask(
+      'volleyballReopenAudit',
+      recordActivity(
+        req.user!,
+        'REOPEN_VOLLEYBALL_MATCH',
+        'LiveScore',
+        score._id.toString(),
+        `Reopened Volleyball match: ${reason}`,
+        {
+          previousValue: { resultStatus: prevSnapshot.resultStatus, winnerTeamName: prevWinnerName },
+          newValue: {
+            resultStatus: 'NOT_DECLARED',
+            sets: `${nextDetails.teamASetsWon}-${nextDetails.teamBSetsWon}`,
+            reopenedCount: nextDetails.reopenedCount,
+          },
+        }
+      )
+    );
 
     res.json(payload);
   } catch (err: any) {

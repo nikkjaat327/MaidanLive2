@@ -69,8 +69,9 @@ const scoreHistorySchema = new Schema<IScoreHistory>(
   { timestamps: { createdAt: true, updatedAt: false } }
 );
 
-scoreHistorySchema.index({ liveStreamId: 1, createdAt: -1 });
+scoreHistorySchema.index({ liveStreamId: 1, createdAt: -1, _id: -1 });
 scoreHistorySchema.index({ liveStreamId: 1, clientEventId: 1 });
+scoreHistorySchema.index({ liveStreamId: 1, entryType: 1, reverted: 1, createdAt: -1 });
 
 const MongooseScoreHistory = mongoose.model<IScoreHistory>('ScoreHistory', scoreHistorySchema);
 export const ScoreHistory = createDualModel<IScoreHistory>('scorehistories', MongooseScoreHistory);

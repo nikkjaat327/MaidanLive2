@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LiveScoreData, ScoreHistoryItem, StreamingProvider } from '../types/index.ts';
 import { scoreboardService } from '../services/scoreboard/scoreboardService.ts';
 import { extractApiError } from '../services/api/httpClient.ts';
+import {
+  recordSocketDiagEvent,
+  type ScoreDiagTraceServer,
+} from '../utils/realtimeDiagnostics.ts';
 import { useSocket } from './useSocket.ts';
 
 export interface ProviderSwitchEventPayload {
@@ -57,7 +61,44 @@ export function useScoreboard(
     }
   }, [streamId]);
 
+  const refreshHistoryOnly = useCallback(async () => {
+    if (!streamId) return;
+    try {
+      const historyData = await scoreboardService.getScoreHistory(streamId);
+      setHistory(historyData);
+    } catch {
+      // Non-blocking fallback
+    }
+  }, [streamId]);
+
+  const addHistoryItem = useCallback((item?: ScoreHistoryItem) => {
+    if (!item || !item._id) return;
+    setHistory((prev) => {
+      if (prev.some((h) => h._id === item._id)) return prev;
+      return [item, ...prev].slice(0, 100);
+    });
+  }, []);
+
   const { connected, socket } = useSocket(streamId, fetchScoreAndHistory);
+  const wasDisconnectedRef = useRef(false);
+
+  useEffect(() => {
+    if (!connected) {
+      wasDisconnectedRef.current = true;
+    }
+  }, [connected]);
+
+  useEffect(() => {
+    if (!streamId || typeof document === 'undefined') return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && (!socket.connected || wasDisconnectedRef.current)) {
+        wasDisconnectedRef.current = false;
+        void fetchScoreAndHistory();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [streamId, socket, fetchScoreAndHistory]);
 
   useEffect(() => {
     seenEventIdsRef.current.clear();
@@ -141,9 +182,12 @@ export function useScoreboard(
       correctedEventId?: string;
       eventId?: string;
       sequence?: number;
+      emittedAt?: string;
+      diag?: ScoreDiagTraceServer;
     }) => {
       if (payload.streamId !== streamId) return;
       if (!shouldAcceptEvent(payload, true)) return;
+      recordSocketDiagEvent(payload, 'client');
       setScore(payload.score);
       if (payload.historyItem) {
         setHistory((prev) => {
@@ -163,9 +207,12 @@ export function useScoreboard(
       score: LiveScoreData;
       eventId?: string;
       sequence?: number;
+      emittedAt?: string;
+      diag?: ScoreDiagTraceServer;
     }) => {
       if (payload.streamId !== streamId) return;
       if (!shouldAcceptEvent(payload, true)) return;
+      recordSocketDiagEvent(payload, 'client');
       setScore(payload.score);
       scoreboardService.getScoreHistory(streamId).then(setHistory).catch(() => {});
     };
@@ -201,9 +248,12 @@ export function useScoreboard(
       historyItem?: ScoreHistoryItem;
       eventId?: string;
       sequence?: number;
+      emittedAt?: string;
+      diag?: ScoreDiagTraceServer;
     }) => {
       if (payload.streamId !== streamId) return;
       if (!shouldAcceptEvent(payload, true)) return;
+      recordSocketDiagEvent(payload, 'client');
       setScore(payload.score);
       if (payload.historyItem) {
         setHistory((prev) => {
@@ -285,5 +335,7 @@ export function useScoreboard(
     error,
     connected,
     refetch: fetchScoreAndHistory,
+    refreshHistoryOnly,
+    addHistoryItem,
   };
 }

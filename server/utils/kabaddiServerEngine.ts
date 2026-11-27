@@ -30,6 +30,11 @@ import { dispatchMatchNotifications } from './notifications.ts';
 import { buildIdMatchFilter, findDocByAnyId } from './mongoNormalize.ts';
 import { triggerBroadcastGraphicEvent } from '../services/broadcastGraphicsService.ts';
 import { emitBroadcastEventAnimation } from './eventAnimationDispatcher.ts';
+import {
+  buildDiagPayload,
+  buildInMemoryPopulatedHistory,
+  runBackgroundTask,
+} from './scoreHotPath.ts';
 
 const PLAYER_STAT_FIELDS = [
   'raidPoints',
@@ -151,16 +156,11 @@ export async function handleKabaddiEventRoute(
   req: AuthenticatedRequest,
   res: Response
 ): Promise<void> {
+  const serverReceivedAtMs = Date.now();
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       res.status(400).json({ message: 'Invalid stream ID.' });
-      return;
-    }
-
-    const allowed = await canManageStream(req.user!, id, 'score');
-    if (!allowed) {
-      res.status(403).json({ message: 'Forbidden: Not authorized to score this Kabaddi match.' });
       return;
     }
 
@@ -171,23 +171,29 @@ export async function handleKabaddiEventRoute(
     }
 
     const clientEventId = sanitizeText(req.body?.clientEventId, 100);
-    if (clientEventId) {
-      const existing = await ScoreHistory.findOne({
-        liveStreamId: id,
-        clientEventId,
-      })
-        .populate('updatedBy', 'name role')
-        .lean();
-      if (existing) {
-        const currentScore = await ensureKabaddiScore(id);
-        res.json({
-          streamId: id,
-          score: currentScore ? currentScore.toObject() : null,
-          historyItem: existing,
-          duplicatePrevented: true,
-        });
-        return;
-      }
+    const [allowed, existing] = await Promise.all([
+      canManageStream(req.user!, id, 'score'),
+      clientEventId
+        ? ScoreHistory.findOne({ liveStreamId: id, clientEventId })
+            .populate('updatedBy', 'name role')
+            .lean()
+        : Promise.resolve(null),
+    ]);
+
+    if (!allowed) {
+      res.status(403).json({ message: 'Forbidden: Not authorized to score this Kabaddi match.' });
+      return;
+    }
+
+    if (existing) {
+      const currentScore = await ensureKabaddiScore(id);
+      res.json({
+        streamId: id,
+        score: currentScore ? currentScore.toObject() : null,
+        historyItem: existing,
+        duplicatePrevented: true,
+      });
+      return;
     }
 
     const txResult = await runWithOptionalTransaction(async (session) => {
@@ -341,6 +347,7 @@ export async function handleKabaddiEventRoute(
       return {
         locked: false as const,
         score,
+        historyDoc: createdHistory[0],
         historyId: createdHistory[0]._id,
         applied,
       };
@@ -355,24 +362,9 @@ export async function handleKabaddiEventRoute(
       return;
     }
 
-    const populatedHistory = await ScoreHistory.findById(txResult.historyId)
-      .populate('updatedBy', 'name role')
-      .lean();
-
-    await recordActivity(
-      req.user!,
-      'KABADDI_SCORE_EVENT',
-      'LiveScore',
-      txResult.score._id.toString(),
-      txResult.applied.label,
-      {
-        newValue: {
-          teamAScore: txResult.score.teamAScore,
-          teamBScore: txResult.score.teamBScore,
-          eventType: txResult.applied.eventType,
-        },
-      }
-    );
+    const dbDoneAtMs = Date.now();
+    const diag = buildDiagPayload(req, serverReceivedAtMs, dbDoneAtMs);
+    const populatedHistory = buildInMemoryPopulatedHistory(txResult.historyDoc, req.user);
 
     const serverNowIso = new Date().toISOString();
     const payload = {
@@ -382,9 +374,27 @@ export async function handleKabaddiEventRoute(
       triggeredDoOrDie: txResult.applied.triggeredDoOrDie || null,
       triggeredAllOut: txResult.applied.triggeredAllOut || null,
       serverNowIso,
+      ...(diag ? { diag } : {}),
     };
 
     emitStreamEvent(id, 'score:updated', payload);
+    runBackgroundTask(
+      'kabaddiEventAudit',
+      recordActivity(
+        req.user!,
+        'KABADDI_SCORE_EVENT',
+        'LiveScore',
+        txResult.score._id.toString(),
+        txResult.applied.label,
+        {
+          newValue: {
+            teamAScore: txResult.score.teamAScore,
+            teamBScore: txResult.score.teamBScore,
+            eventType: txResult.applied.eventType,
+          },
+        }
+      )
+    );
     emitStreamEvent(id, 'kabaddi:state', {
       streamId: id,
       score: payload.score,
@@ -570,9 +580,7 @@ export async function handleKabaddiClockRoute(
       action: label.slice(0, 280),
       updatedBy: req.user!._id,
     });
-    const populatedHistory = await ScoreHistory.findById(historyDoc._id)
-      .populate('updatedBy', 'name role')
-      .lean();
+    const populatedHistory = buildInMemoryPopulatedHistory(historyDoc, req.user);
 
     const payload = {
       streamId: id,
@@ -689,14 +697,6 @@ export async function handleKabaddiSettingsRoute(
     score.lastUpdatedAt = new Date();
     await score.save();
 
-    await recordActivity(
-      req.user!,
-      'UPDATE_KABADDI_SETTINGS',
-      'LiveScore',
-      score._id.toString(),
-      'Updated Kabaddi rules / console / viewer display settings'
-    );
-
     const payload = {
       streamId: id,
       score: score.toObject(),
@@ -705,6 +705,16 @@ export async function handleKabaddiSettingsRoute(
 
     emitStreamEvent(id, 'kabaddi:settings_updated', payload);
     emitStreamEvent(id, 'score:updated', payload);
+    runBackgroundTask(
+      'kabaddiSettingsAudit',
+      recordActivity(
+        req.user!,
+        'UPDATE_KABADDI_SETTINGS',
+        'LiveScore',
+        score._id.toString(),
+        'Updated Kabaddi rules / console / viewer display settings'
+      )
+    );
     res.json(payload);
   } catch (err: any) {
     console.error('[Kabaddi] Settings route error:', err);
@@ -928,31 +938,7 @@ export async function handleKabaddiCompleteRoute(
       action: `Match Completed: ${resultDescription}`,
       updatedBy: req.user!._id,
     });
-    const populatedHistory = await ScoreHistory.findById(historyItem._id)
-      .populate('updatedBy', 'name role')
-      .lean();
-
-    await recordActivity(
-      req.user!,
-      'COMPLETE_KABADDI_MATCH',
-      'LiveScore',
-      score._id.toString(),
-      resultDescription,
-      { newValue: { winnerTeamName, teamAScore: score.teamAScore, teamBScore: score.teamBScore } }
-    );
-
-    await dispatchMatchNotifications({
-      type: 'MATCH_COMPLETED',
-      title: 'Kabaddi Match Completed',
-      message: `${stream.matchTitle || `${labelA} vs ${labelB}`}: ${resultDescription}`,
-      entityType: 'LiveStream',
-      entityId: stream._id.toString(),
-      link: `/live/${stream._id.toString()}`,
-      dedupeKey: `kabaddi-complete-${stream._id.toString()}`,
-      teamIds: [stream.teamAId, stream.teamBId],
-      tournamentId: stream.tournamentId,
-      includeAllSpectatorsIfNoFollowers: true,
-    });
+    const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
 
     const payload = {
       streamId: id,
@@ -973,6 +959,32 @@ export async function handleKabaddiCompleteRoute(
       });
     }
 
+    runBackgroundTask(
+      'kabaddiCompleteAudit',
+      recordActivity(
+        req.user!,
+        'COMPLETE_KABADDI_MATCH',
+        'LiveScore',
+        score._id.toString(),
+        resultDescription,
+        { newValue: { winnerTeamName, teamAScore: score.teamAScore, teamBScore: score.teamBScore } }
+      )
+    );
+    runBackgroundTask(
+      'kabaddiCompleteNotify',
+      dispatchMatchNotifications({
+        type: 'MATCH_COMPLETED',
+        title: 'Kabaddi Match Completed',
+        message: `${stream.matchTitle || `${labelA} vs ${labelB}`}: ${resultDescription}`,
+        entityType: 'LiveStream',
+        entityId: stream._id.toString(),
+        link: `/live/${stream._id.toString()}`,
+        dedupeKey: `kabaddi-complete-${stream._id.toString()}`,
+        teamIds: [stream.teamAId, stream.teamBId],
+        tournamentId: stream.tournamentId,
+        includeAllSpectatorsIfNoFollowers: true,
+      })
+    );
     triggerBroadcastGraphicEvent(id, 'MATCH_COMPLETED', `k_complete_${id}`).catch(() => {});
 
     res.json(payload);
@@ -1069,9 +1081,7 @@ export async function handleKabaddiReopenRoute(
       action: `Match reopened for correction: ${reason}`,
       updatedBy: req.user!._id,
     });
-    const populatedHistory = await ScoreHistory.findById(hist._id)
-      .populate('updatedBy', 'name role')
-      .lean();
+    const populatedHistory = buildInMemoryPopulatedHistory(hist, req.user);
 
     const payload = { streamId: id, score: score.toObject(), historyItem: populatedHistory };
     emitStreamEvent(id, 'score:updated', payload);

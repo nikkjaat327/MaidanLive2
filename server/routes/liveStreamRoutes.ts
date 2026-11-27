@@ -41,6 +41,7 @@ import {
   emitFullStudioState,
   ensureObsProfileForMatch,
 } from '../services/obsControllerService.ts';
+import { runBackgroundTask } from '../utils/scoreHotPath.ts';
 import {
   clearLiveGraphics,
   getGraphicsStateForMatch,
@@ -450,31 +451,6 @@ async function createMatchOrStreamSession(
       }).catch(() => {});
     }
 
-    await recordActivity(
-      req.user!,
-      initializeOnly
-        ? 'INITIALIZE_MATCH'
-        : requestedStatus === 'LIVE'
-          ? 'START_STREAM'
-          : 'SCHEDULE_STREAM',
-      'LiveStream',
-      stream._id.toString(),
-      `${stream.matchTitle || [teamAName, teamBName].filter(Boolean).join(' vs ') || parsedYtId || mtxCfg.streamPath} (${scoreSport} · ${initializeOnly ? 'Prepared/Unpublished' : streamingProvider})`,
-      {
-        newValue: {
-          status: requestedStatus,
-          broadcastPublished: isPublished,
-          broadcastPhase,
-          streamingProvider,
-          youtubeVideoId: parsedYtId,
-          mediamtxStreamPath: mtxCfg.streamPath,
-          gameName: scoreSport,
-          scoreboardPosition: stream.scoreboardPosition,
-          showScoreboardOnYoutube: stream.showScoreboardOnYoutube,
-        },
-      }
-    );
-
     const publicPayload = formatPublicStream(
       stream.toObject(),
       { score: initialScore.toObject() },
@@ -484,39 +460,73 @@ async function createMatchOrStreamSession(
     if (!initializeOnly && isPublished) {
       if (requestedStatus === 'LIVE') {
         emitStreamEvent(stream._id.toString(), 'live:started', publicPayload);
-        await dispatchMatchNotifications({
-          type: 'MATCH_LIVE',
-          title: 'Match is Live Now',
-          message:
-            stream.matchTitle ||
-            [teamAName, teamBName].filter(Boolean).join(' vs ') ||
-            'A scheduled match is now live!',
-          entityType: 'LiveStream',
-          entityId: stream._id.toString(),
-          link: `/live/${stream._id.toString()}`,
-          dedupeKey: `stream-live-${stream._id.toString()}`,
-          teamIds: [teamAId, teamBId],
-          includeAllSpectatorsIfNoFollowers: true,
-        });
-      } else {
-        emitStreamEvent(stream._id.toString(), 'live:updated', publicPayload);
-        if (teamAId || teamBId) {
-          await dispatchMatchNotifications({
-            type: 'MATCH_STARTING',
-            title: 'Upcoming Match Scheduled',
+        runBackgroundTask(
+          'streamCreateLiveNotify',
+          dispatchMatchNotifications({
+            type: 'MATCH_LIVE',
+            title: 'Match is Live Now',
             message:
               stream.matchTitle ||
               [teamAName, teamBName].filter(Boolean).join(' vs ') ||
-              'An upcoming match has been scheduled.',
+              'A scheduled match is now live!',
             entityType: 'LiveStream',
             entityId: stream._id.toString(),
             link: `/live/${stream._id.toString()}`,
-            dedupeKey: `stream-upcoming-${stream._id.toString()}`,
+            dedupeKey: `stream-live-${stream._id.toString()}`,
             teamIds: [teamAId, teamBId],
-          });
+            includeAllSpectatorsIfNoFollowers: true,
+          })
+        );
+      } else {
+        emitStreamEvent(stream._id.toString(), 'live:updated', publicPayload);
+        if (teamAId || teamBId) {
+          runBackgroundTask(
+            'streamCreateUpcomingNotify',
+            dispatchMatchNotifications({
+              type: 'MATCH_STARTING',
+              title: 'Upcoming Match Scheduled',
+              message:
+                stream.matchTitle ||
+                [teamAName, teamBName].filter(Boolean).join(' vs ') ||
+                'An upcoming match has been scheduled.',
+              entityType: 'LiveStream',
+              entityId: stream._id.toString(),
+              link: `/live/${stream._id.toString()}`,
+              dedupeKey: `stream-upcoming-${stream._id.toString()}`,
+              teamIds: [teamAId, teamBId],
+            })
+          );
         }
       }
     }
+
+    runBackgroundTask(
+      'streamCreateAudit',
+      recordActivity(
+        req.user!,
+        initializeOnly
+          ? 'INITIALIZE_MATCH'
+          : requestedStatus === 'LIVE'
+            ? 'START_STREAM'
+            : 'SCHEDULE_STREAM',
+        'LiveStream',
+        stream._id.toString(),
+        `${stream.matchTitle || [teamAName, teamBName].filter(Boolean).join(' vs ') || parsedYtId || mtxCfg.streamPath} (${scoreSport} · ${initializeOnly ? 'Prepared/Unpublished' : streamingProvider})`,
+        {
+          newValue: {
+            status: requestedStatus,
+            broadcastPublished: isPublished,
+            broadcastPhase,
+            streamingProvider,
+            youtubeVideoId: parsedYtId,
+            mediamtxStreamPath: mtxCfg.streamPath,
+            gameName: scoreSport,
+            scoreboardPosition: stream.scoreboardPosition,
+            showScoreboardOnYoutube: stream.showScoreboardOnYoutube,
+          },
+        }
+      )
+    );
 
     // Include RTMP publish credentials in creation response ONLY for admin creator
     const { rtmpBase } = getMediaMTXEnvConfig();
@@ -1392,18 +1402,6 @@ router.post(
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
 
-      await recordActivity(
-        req.user!,
-        'SWITCH_STREAM_PROVIDER',
-        'LiveStream',
-        stream._id.toString(),
-        `Switched broadcast provider ${fromProvider} -> ${toProvider} (${reason})`,
-        {
-          previousValue: { activeStreamingProvider: fromProvider },
-          newValue: { activeStreamingProvider: toProvider, reason },
-        }
-      );
-
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
       const publicPayload = formatPublicStream(stream.toObject(), { score }, true);
 
@@ -1434,6 +1432,21 @@ router.post(
       if (toProvider === 'mediamtx') {
         emitStreamEvent(stream._id.toString(), 'mediamtx:status_changed', switchHealthPayload);
       }
+
+      runBackgroundTask(
+        'switchProviderAudit',
+        recordActivity(
+          req.user!,
+          'SWITCH_STREAM_PROVIDER',
+          'LiveStream',
+          stream._id.toString(),
+          `Switched broadcast provider ${fromProvider} -> ${toProvider} (${reason})`,
+          {
+            previousValue: { activeStreamingProvider: fromProvider },
+            newValue: { activeStreamingProvider: toProvider, reason },
+          }
+        )
+      );
 
       res.json({
         message: `Broadcast switched from ${fromProvider} to ${toProvider}.`,
@@ -1755,28 +1768,6 @@ router.patch(
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
       const payload = formatPublicStream(stream.toObject(), { score }, true);
 
-      await recordActivity(
-        req.user!,
-        becameLive ? 'START_STREAM' : 'UPDATE_STREAM',
-        'LiveStream',
-        stream._id.toString(),
-        stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath,
-        {
-          previousValue,
-          newValue: {
-            status: stream.status,
-            youtubeVideoId: stream.youtubeVideoId,
-            activeStreamingProvider: stream.activeStreamingProvider,
-            viewerCountVisibility: stream.viewerCountVisibility,
-            matchTitle: stream.matchTitle,
-            scoreboardPosition: stream.scoreboardPosition,
-            scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
-            showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
-            chatEnabled: stream.chatEnabled,
-          },
-        }
-      );
-
       emitStreamEvent(stream._id.toString(), becameLive ? 'live:started' : 'live:updated', payload);
       if (showOnYoutubeUpdated) {
         emitRoomOnlyEvent(id, 'overlay:config_updated', {
@@ -1789,24 +1780,52 @@ router.patch(
           overlayConfig: payload.overlayConfig,
           showScoreboardOnYoutube: payload.showScoreboardOnYoutube,
         });
-        await emitFullStudioState(id);
+        runBackgroundTask('updateStreamStudioState', emitFullStudioState(id));
       }
 
+      runBackgroundTask(
+        'updateStreamAudit',
+        recordActivity(
+          req.user!,
+          becameLive ? 'START_STREAM' : 'UPDATE_STREAM',
+          'LiveStream',
+          stream._id.toString(),
+          stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath,
+          {
+            previousValue,
+            newValue: {
+              status: stream.status,
+              youtubeVideoId: stream.youtubeVideoId,
+              activeStreamingProvider: stream.activeStreamingProvider,
+              viewerCountVisibility: stream.viewerCountVisibility,
+              matchTitle: stream.matchTitle,
+              scoreboardPosition: stream.scoreboardPosition,
+              scoreboardVisibleByDefault: stream.scoreboardVisibleByDefault,
+              showScoreboardOnYoutube: stream.showScoreboardOnYoutube !== false,
+              chatEnabled: stream.chatEnabled,
+            },
+          }
+        )
+      );
+
       if (becameLive) {
-        await dispatchMatchNotifications({
-          type: 'MATCH_LIVE',
-          title: 'Match is Live Now',
-          message:
-            stream.matchTitle ||
-            [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
-            'Scheduled match has started!',
-          entityType: 'LiveStream',
-          entityId: stream._id.toString(),
-          link: `/live/${stream._id.toString()}`,
-          dedupeKey: `stream-live-${stream._id.toString()}`,
-          teamIds: [stream.teamAId, stream.teamBId],
-          includeAllSpectatorsIfNoFollowers: true,
-        });
+        runBackgroundTask(
+          'updateStreamLiveNotify',
+          dispatchMatchNotifications({
+            type: 'MATCH_LIVE',
+            title: 'Match is Live Now',
+            message:
+              stream.matchTitle ||
+              [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
+              'Scheduled match has started!',
+            entityType: 'LiveStream',
+            entityId: stream._id.toString(),
+            link: `/live/${stream._id.toString()}`,
+            dedupeKey: `stream-live-${stream._id.toString()}`,
+            teamIds: [stream.teamAId, stream.teamBId],
+            includeAllSpectatorsIfNoFollowers: true,
+          })
+        );
       }
 
       res.json({ stream: payload });
@@ -1927,14 +1946,6 @@ router.patch(
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
       const payload = formatPublicStream(stream.toObject(), { score }, true);
 
-      await recordActivity(
-        req.user!,
-        'CONNECT_YOUTUBE_OUTPUT',
-        'LiveStream',
-        stream._id.toString(),
-        `Updated broadcast output (${requestedProvider}${stream.youtubeVideoId ? ` · ${stream.youtubeVideoId}` : ''})`
-      );
-
       if (stream.broadcastPublished !== false) {
         emitStreamEvent(stream._id.toString(), 'streaming_provider_changed', {
           streamId: stream._id.toString(),
@@ -1947,7 +1958,17 @@ router.patch(
         });
         emitStreamEvent(stream._id.toString(), 'live:updated', payload);
       }
-      await emitFullStudioState(stream._id.toString());
+      runBackgroundTask(
+        'youtubeConnectAudit',
+        recordActivity(
+          req.user!,
+          'CONNECT_YOUTUBE_OUTPUT',
+          'LiveStream',
+          stream._id.toString(),
+          `Updated broadcast output (${requestedProvider}${stream.youtubeVideoId ? ` · ${stream.youtubeVideoId}` : ''})`
+        )
+      );
+      runBackgroundTask('youtubeConnectStudioState', emitFullStudioState(stream._id.toString()));
 
       res.json({ stream: payload, verification: verificationResult });
     } catch (err) {
@@ -2079,30 +2100,35 @@ router.post(
         true
       );
 
-      await recordActivity(
-        req.user!,
-        'ACTIVATE_BROADCAST',
-        'LiveStream',
-        stream._id.toString(),
-        `Activated public broadcast (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`
-      );
-
       emitStreamEvent(stream._id.toString(), 'live:started', payload);
-      await dispatchMatchNotifications({
-        type: 'MATCH_LIVE',
-        title: 'Match is Live Now',
-        message:
-          stream.matchTitle ||
-          [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
-          'Match broadcast is now live on MaidanLive!',
-        entityType: 'LiveStream',
-        entityId: stream._id.toString(),
-        link: `/live/${stream._id.toString()}`,
-        dedupeKey: `stream-live-${stream._id.toString()}`,
-        teamIds: [stream.teamAId, stream.teamBId],
-        includeAllSpectatorsIfNoFollowers: true,
-      });
-      await emitFullStudioState(stream._id.toString());
+      runBackgroundTask(
+        'activateAudit',
+        recordActivity(
+          req.user!,
+          'ACTIVATE_BROADCAST',
+          'LiveStream',
+          stream._id.toString(),
+          `Activated public broadcast (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`
+        )
+      );
+      runBackgroundTask(
+        'activateNotify',
+        dispatchMatchNotifications({
+          type: 'MATCH_LIVE',
+          title: 'Match is Live Now',
+          message:
+            stream.matchTitle ||
+            [stream.teamAName, stream.teamBName].filter(Boolean).join(' vs ') ||
+            'Match broadcast is now live on MaidanLive!',
+          entityType: 'LiveStream',
+          entityId: stream._id.toString(),
+          link: `/live/${stream._id.toString()}`,
+          dedupeKey: `stream-live-${stream._id.toString()}`,
+          teamIds: [stream.teamAId, stream.teamBId],
+          includeAllSpectatorsIfNoFollowers: true,
+        })
+      );
+      runBackgroundTask('activateStudioState', emitFullStudioState(stream._id.toString()));
       triggerBroadcastGraphicEvent(
         stream._id.toString(),
         'MATCH_STARTING',
@@ -2168,27 +2194,29 @@ router.patch(
         { returnDocument: 'after' }
       ).lean();
 
-      await recordActivity(
-        req.user!,
-        'END_STREAM',
-        'LiveStream',
-        stream._id.toString(),
-        `Ended MaidanLive stream (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`,
-        {
-          previousValue: { status: previousStatus },
-          newValue: {
-            status: 'ENDED',
-            broadcastPhase: 'BROADCAST_ENDED',
-            endedAt: stream.endedAt,
-          },
-        }
-      );
-
       const payload = formatPublicStream(stream.toObject(), { score }, true);
-      await clearLiveGraphics(stream._id.toString(), req.user!).catch(() => {});
-      await handleMatchSessionEndedForSchedules(stream._id.toString()).catch(() => {});
       emitStreamEvent(stream._id.toString(), 'live:ended', payload);
-      await emitFullStudioState(stream._id.toString());
+      runBackgroundTask(
+        'endStreamAudit',
+        recordActivity(
+          req.user!,
+          'END_STREAM',
+          'LiveStream',
+          stream._id.toString(),
+          `Ended MaidanLive stream (${stream.matchTitle || stream.youtubeVideoId || stream.mediamtxStreamPath})`,
+          {
+            previousValue: { status: previousStatus },
+            newValue: {
+              status: 'ENDED',
+              broadcastPhase: 'BROADCAST_ENDED',
+              endedAt: stream.endedAt,
+            },
+          }
+        )
+      );
+      runBackgroundTask('endClearGraphics', clearLiveGraphics(stream._id.toString(), req.user!));
+      runBackgroundTask('endMatchSchedules', handleMatchSessionEndedForSchedules(stream._id.toString()));
+      runBackgroundTask('endStudioState', emitFullStudioState(stream._id.toString()));
 
       res.json({
         stream: payload,
@@ -2272,17 +2300,19 @@ router.patch(
       stream.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await stream.save();
 
-      await recordActivity(
-        req.user!,
-        stream.replayPublished ? 'PUBLISH_REPLAY' : 'UPDATE_REPLAY',
-        'LiveStream',
-        stream._id.toString(),
-        `Replay ${stream.replayVideoId} (${stream.replayPublished ? 'Published' : 'Hidden'})`
-      );
-
       const score = await LiveScore.findOne({ liveStreamId: stream._id }).lean();
       const payload = formatPublicStream(stream.toObject(), { score }, true);
       emitStreamEvent(stream._id.toString(), 'live:updated', payload);
+      runBackgroundTask(
+        'replayAudit',
+        recordActivity(
+          req.user!,
+          stream.replayPublished ? 'PUBLISH_REPLAY' : 'UPDATE_REPLAY',
+          'LiveStream',
+          stream._id.toString(),
+          `Replay ${stream.replayVideoId} (${stream.replayPublished ? 'Published' : 'Hidden'})`
+        )
+      );
 
       res.json({ stream: payload });
     } catch (err) {

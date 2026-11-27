@@ -6062,9 +6062,15 @@ export async function switchMatchBroadcastInObs(
     }
 
     const updatedObj = stream.toObject ? stream.toObject() : (stream as any);
+    const liveScoreObj = liveScore
+      ? liveScore.toObject
+        ? liveScore.toObject()
+        : liveScore
+      : undefined;
     emitStreamEvent(targetMatchId, 'live:updated', {
       ...updatedObj,
       id: String(stream._id),
+      ...(liveScoreObj ? { score: liveScoreObj } : {}),
     });
     if (overlayUpdated) {
       const normalized = normalizeOverlayConfig((stream as any).overlayConfig);

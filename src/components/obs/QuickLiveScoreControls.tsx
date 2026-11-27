@@ -35,6 +35,13 @@ import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { resolveMatchTimeoutState } from '../../utils/matchTimeout.ts';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 import { Modal } from '../common/Modal.tsx';
+import {
+  applyOptimisticKabaddiEngineEvent,
+  applyOptimisticPatch,
+  applyOptimisticStructuredEvent,
+  makeClientEventId,
+} from '../../utils/optimisticScore.ts';
+import { completeScoreTraceApi, startScoreTrace } from '../../utils/realtimeDiagnostics.ts';
 
 interface QuickLiveScoreControlsProps {
   stream: LiveStreamData;
@@ -53,10 +60,6 @@ const WICKET_TYPES = [
   'HIT_WICKET',
   'RETIRED_OUT',
 ] as const;
-
-function makeClientEventId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
 
 export function QuickLiveScoreControls({
   stream,
@@ -132,20 +135,39 @@ export function QuickLiveScoreControls({
     successFallback: string,
     sportTypeOverride?: string
   ) {
+    const prevScore = score;
+    const effectiveSport = sportTypeOverride || sport;
+    const traceId = makeClientEventId('quick');
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, successFallback, apiStartAtMs);
+    const optimistic = applyOptimisticStructuredEvent(score, effectiveSport, action);
+    if (optimistic && optimistic !== score) {
+      onScoreChange(optimistic);
+    }
+
     try {
       setBusy(true);
       setFeedback(null);
       const res = await offlineScoreService.submitScoreEvent(
         stream.id,
         {
-          clientEventId: makeClientEventId('quick'),
-          sportType: sportTypeOverride || sport,
+          clientEventId: traceId,
+          traceId,
+          sportType: effectiveSport,
           action,
         },
         score
       );
-      if (res.score) onScoreChange(res.score);
-      onRefresh?.();
+      completeScoreTraceApi(traceId, {
+        status: res.queued ? 'queued' : 'synced',
+        apiStartAtMs,
+        diag: res.diag,
+      });
+      if (res.score) {
+        onScoreChange(res.score);
+      } else if (!res.queued) {
+        onRefresh?.();
+      }
       setFeedback({
         type: 'success',
         text: res.queued
@@ -153,9 +175,12 @@ export function QuickLiveScoreControls({
           : res.historyItem?.action || successFallback,
       });
     } catch (err) {
+      if (prevScore) onScoreChange(prevScore);
+      const msg = extractApiError(err, 'Failed to update live score.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
       setFeedback({
         type: 'error',
-        text: extractApiError(err, 'Failed to update live score.'),
+        text: msg,
       });
     } finally {
       setBusy(false);
@@ -169,20 +194,44 @@ export function QuickLiveScoreControls({
     sportSpecificDetails?: Record<string, unknown>;
     action: string;
   }) {
+    const prevScore = score;
+    const traceId = makeClientEventId('quick_patch');
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, payload.action, apiStartAtMs);
+    const optimistic = applyOptimisticPatch(score, payload);
+    if (optimistic) {
+      onScoreChange(optimistic);
+    }
+
     try {
       setBusy(true);
       setFeedback(null);
-      const res = await offlineScoreService.submitScorePatch(stream.id, payload, score);
-      if (res.score) onScoreChange(res.score);
-      onRefresh?.();
+      const res = await offlineScoreService.submitScorePatch(
+        stream.id,
+        { ...payload, clientEventId: traceId, traceId },
+        score
+      );
+      completeScoreTraceApi(traceId, {
+        status: res.queued ? 'queued' : 'synced',
+        apiStartAtMs,
+        diag: res.diag,
+      });
+      if (res.score) {
+        onScoreChange(res.score);
+      } else if (!res.queued) {
+        onRefresh?.();
+      }
       setFeedback({
         type: 'success',
         text: res.queued ? `Cached offline (${payload.action})` : payload.action,
       });
     } catch (err) {
+      if (prevScore) onScoreChange(prevScore);
+      const msg = extractApiError(err, 'Failed to update match score.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
       setFeedback({
         type: 'error',
-        text: extractApiError(err, 'Failed to update match score.'),
+        text: msg,
       });
     } finally {
       setBusy(false);
@@ -190,15 +239,27 @@ export function QuickLiveScoreControls({
   }
 
   async function handleUndo() {
+    const traceId = makeClientEventId('quick_undo');
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, 'Quick Undo', apiStartAtMs);
     try {
       setBusy(true);
       setFeedback(null);
-      const res = await scoreboardService.undoScore(stream.id);
-      onScoreChange(res.score);
-      onRefresh?.();
+      const res = await scoreboardService.undoScore(stream.id, {
+        clientEventId: traceId,
+        traceId,
+      });
+      completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+      if (res.score) {
+        onScoreChange(res.score);
+      } else {
+        onRefresh?.();
+      }
       setFeedback({ type: 'success', text: `Undid: ${res.undoneAction}` });
     } catch (err) {
-      setFeedback({ type: 'error', text: extractApiError(err, 'Nothing to undo.') });
+      const msg = extractApiError(err, 'Nothing to undo.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      setFeedback({ type: 'error', text: msg });
     } finally {
       setBusy(false);
     }
@@ -714,23 +775,39 @@ export function QuickLiveScoreControls({
               action: Record<string, unknown>,
               fallbackText: string
             ) => {
+              const prevScore = score;
+              const traceId = makeClientEventId('quick_kbd');
+              const apiStartAtMs = Date.now();
+              startScoreTrace(traceId, fallbackText, apiStartAtMs);
+              const optimistic = applyOptimisticKabaddiEngineEvent(score, action as any);
+              if (optimistic) {
+                onScoreChange(optimistic);
+              }
               try {
                 setBusy(true);
                 setFeedback(null);
                 const res = await scoreboardService.recordKabaddiEvent(stream.id, {
-                  clientEventId: makeClientEventId('quick_kbd'),
+                  clientEventId: traceId,
+                  traceId,
                   action,
                 });
-                onScoreChange(res.score);
-                onRefresh?.();
+                completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
+                if (res.score) {
+                  onScoreChange(res.score);
+                } else {
+                  onRefresh?.();
+                }
                 setFeedback({
                   type: 'success',
                   text: res.historyItem?.action || fallbackText,
                 });
               } catch (err) {
+                if (prevScore) onScoreChange(prevScore);
+                const msg = extractApiError(err, 'Failed to update Kabaddi score.');
+                completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
                 setFeedback({
                   type: 'error',
-                  text: extractApiError(err, 'Failed to update Kabaddi score.'),
+                  text: msg,
                 });
               } finally {
                 setBusy(false);

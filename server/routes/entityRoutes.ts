@@ -36,6 +36,8 @@ import {
   findDocByAnyId,
 } from '../utils/mongoNormalize.ts';
 import { isStreamVisibleToPublic } from '../utils/streamVisibility.ts';
+import { emitStreamEvent } from '../socket/index.ts';
+import { runBackgroundTask } from '../utils/scoreHotPath.ts';
 
 function dedupeDocsById<T extends { _id?: any; id?: string }>(docs: T[]): T[] {
   const seen = new Set<string>();
@@ -1207,7 +1209,54 @@ router.patch(
       team.updatedBy = req.user!._id as mongoose.Types.ObjectId;
       await team.save();
 
-      await recordActivity(req.user!, 'UPDATE_TEAM', 'Team', id, team.name);
+      if (req.body.name !== undefined || req.body.logoUrl !== undefined) {
+        const teamIdMatch = buildIdMatchFilter(id);
+        runBackgroundTask(
+          'syncTeamToLiveStreams',
+          (async () => {
+            const streams = await LiveStream.find({
+              status: { $ne: 'ENDED' },
+              $or: [{ teamAId: teamIdMatch }, { teamBId: teamIdMatch }],
+            });
+            for (const s of streams) {
+              let changed = false;
+              if (s.teamAId && String(s.teamAId) === String(team._id)) {
+                if (s.teamAName !== team.name) {
+                  s.teamAName = team.name;
+                  changed = true;
+                }
+                if (s.teamALogo !== (team.logoUrl || '')) {
+                  s.teamALogo = team.logoUrl || '';
+                  changed = true;
+                }
+              }
+              if (s.teamBId && String(s.teamBId) === String(team._id)) {
+                if (s.teamBName !== team.name) {
+                  s.teamBName = team.name;
+                  changed = true;
+                }
+                if (s.teamBLogo !== (team.logoUrl || '')) {
+                  s.teamBLogo = team.logoUrl || '';
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await s.save();
+                const plain = s.toObject ? s.toObject() : (s as any);
+                emitStreamEvent(String(s._id), 'live:updated', {
+                  ...plain,
+                  id: String(s._id),
+                });
+              }
+            }
+          })()
+        );
+      }
+
+      runBackgroundTask(
+        'updateTeamAudit',
+        recordActivity(req.user!, 'UPDATE_TEAM', 'Team', id, team.name)
+      );
       res.json({ team: { ...team.toObject(), id: team._id.toString() } });
     } catch (err) {
       console.error('[Teams] Update error:', err);

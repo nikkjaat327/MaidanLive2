@@ -64,6 +64,12 @@ import {
   validateVolleyballRules,
 } from '../../utils/volleyballScoring.ts';
 import { getInitialSportDetails } from '../../utils/scoringEngine.ts';
+import {
+  applyOptimisticPatch,
+  applyOptimisticStructuredEvent,
+  makeClientEventId,
+} from '../../utils/optimisticScore.ts';
+import { completeScoreTraceApi, startScoreTrace } from '../../utils/realtimeDiagnostics.ts';
 
 interface ScoreControlPanelProps {
   stream: LiveStreamData;
@@ -74,6 +80,7 @@ interface ScoreControlPanelProps {
   playerStats?: PlayerMatchStatRecord[];
   onScoreChange: (score: LiveScoreData) => void;
   onRefreshHistory: () => void;
+  onAddHistoryItem?: (item?: ScoreHistoryItem) => void;
   onRefreshHighlights?: () => void;
   onRefreshStats?: () => void;
 }
@@ -87,6 +94,7 @@ export function ScoreControlPanel({
   playerStats = [],
   onScoreChange,
   onRefreshHistory,
+  onAddHistoryItem,
   onRefreshHighlights,
   onRefreshStats,
 }: ScoreControlPanelProps) {
@@ -214,10 +222,29 @@ export function ScoreControlPanel({
     tossDecision?: string;
     action: string;
   }) {
+    const prevScore = score;
+    const clientEventId = makeClientEventId('patch');
+    const traceId = clientEventId;
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, payload.action, apiStartAtMs);
+    const optimistic = applyOptimisticPatch(score, payload);
+    if (optimistic) {
+      onScoreChange(optimistic);
+    }
+
     try {
       setSaving(true);
       setError(null);
-      const result = await offlineScoreService.submitScorePatch(stream.id, payload, score);
+      const result = await offlineScoreService.submitScorePatch(
+        stream.id,
+        { ...payload, clientEventId, traceId },
+        score
+      );
+      completeScoreTraceApi(traceId, {
+        status: result.queued ? 'queued' : 'synced',
+        apiStartAtMs,
+        diag: result.diag,
+      });
       if (result.score) {
         onScoreChange(result.score);
       }
@@ -231,7 +258,11 @@ export function ScoreControlPanel({
           payload.sportSpecificDetails
         );
       } else {
-        onRefreshHistory();
+        if (result.historyItem && onAddHistoryItem) {
+          onAddHistoryItem(result.historyItem);
+        } else {
+          onRefreshHistory();
+        }
         setSuccessMsg(payload.action);
         if (result.score) {
           handleAutoCommentaryAfterEvent(
@@ -243,7 +274,12 @@ export function ScoreControlPanel({
         }
       }
     } catch (err) {
-      setError(extractApiError(err, 'Failed to update score.'));
+      if (prevScore) {
+        onScoreChange(prevScore);
+      }
+      const msg = extractApiError(err, 'Failed to update score.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      setError(msg);
     } finally {
       setSaving(false);
     }
@@ -259,28 +295,49 @@ export function ScoreControlPanel({
     assistPlayerName?: string;
     eventPhase?: string;
   }) {
+    const prevScore = score;
+    const traceId = payload.clientEventId || makeClientEventId('evt');
+    const apiStartAtMs = Date.now();
+    const actionName = String(payload.action?.type || 'Structured Event');
+    startScoreTrace(traceId, `${payload.sportType}: ${actionName}`, apiStartAtMs);
+    const optimistic = applyOptimisticStructuredEvent(score, payload.sportType, payload.action);
+    if (optimistic && optimistic !== score) {
+      onScoreChange(optimistic);
+    }
+
     try {
       setSaving(true);
       setError(null);
-      const result = await offlineScoreService.submitScoreEvent(stream.id, payload, score);
+      const result = await offlineScoreService.submitScoreEvent(
+        stream.id,
+        { ...payload, clientEventId: traceId, traceId },
+        score
+      );
+      completeScoreTraceApi(traceId, {
+        status: result.queued ? 'queued' : 'synced',
+        apiStartAtMs,
+        diag: result.diag,
+      });
       if (result.queued) {
-        if (payload.sportType === 'Cricket' && score) {
-          const applied = applyCricketAction(
-            (score.sportSpecificDetails || {}) as Partial<CricketDetails>,
-            payload.action as any
-          );
-          const nextStatus = applied.autoCompletedMatch
-            ? 'COMPLETED'
-            : applied.autoCompletedInnings1
-              ? 'INNINGS BREAK'
-              : score.matchStatus;
-          onScoreChange({
-            ...score,
-            teamAScore: applied.teamAScore,
-            teamBScore: applied.teamBScore,
-            matchStatus: nextStatus,
-            sportSpecificDetails: applied.details as unknown as Record<string, unknown>,
-          });
+        if (!optimistic || optimistic === score) {
+          if (payload.sportType === 'Cricket' && score) {
+            const applied = applyCricketAction(
+              (score.sportSpecificDetails || {}) as Partial<CricketDetails>,
+              payload.action as any
+            );
+            const nextStatus = applied.autoCompletedMatch
+              ? 'COMPLETED'
+              : applied.autoCompletedInnings1
+                ? 'INNINGS BREAK'
+                : score.matchStatus;
+            onScoreChange({
+              ...score,
+              teamAScore: applied.teamAScore,
+              teamBScore: applied.teamBScore,
+              matchStatus: nextStatus,
+              sportSpecificDetails: applied.details as unknown as Record<string, unknown>,
+            });
+          }
         }
         setSuccessMsg(
           'Scoring event cached in IndexedDB — will sync automatically upon reconnection.'
@@ -291,7 +348,11 @@ export function ScoreControlPanel({
       if (result.score) {
         onScoreChange(result.score);
       }
-      onRefreshHistory();
+      if (result.historyItem && onAddHistoryItem) {
+        onAddHistoryItem(result.historyItem);
+      } else {
+        onRefreshHistory();
+      }
       onRefreshStats?.();
       const actionLabel = result.historyItem?.action || 'Structured scoring event recorded.';
       setSuccessMsg(
@@ -306,7 +367,12 @@ export function ScoreControlPanel({
         );
       }
     } catch (err) {
-      setError(extractApiError(err, 'Failed to record scoring event.'));
+      if (prevScore) {
+        onScoreChange(prevScore);
+      }
+      const msg = extractApiError(err, 'Failed to record scoring event.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      setError(msg);
     } finally {
       setSaving(false);
     }
@@ -340,16 +406,25 @@ export function ScoreControlPanel({
   }
 
   async function handleUndo() {
+    const traceId = makeClientEventId('undo');
+    const apiStartAtMs = Date.now();
+    startScoreTrace(traceId, 'Undo Last Action', apiStartAtMs);
     try {
       setSaving(true);
       setError(null);
-      const res = await scoreboardService.undoScore(stream.id);
+      const res = await scoreboardService.undoScore(stream.id, {
+        clientEventId: traceId,
+        traceId,
+      });
+      completeScoreTraceApi(traceId, { status: 'synced', apiStartAtMs, diag: res.diag });
       onScoreChange(res.score);
       onRefreshHistory();
       setUndoOpen(false);
       setSuccessMsg(`Undid: ${res.undoneAction}`);
     } catch (err) {
-      setError(extractApiError(err, 'Unable to undo score update.'));
+      const msg = extractApiError(err, 'Unable to undo score update.');
+      completeScoreTraceApi(traceId, { status: 'error', apiStartAtMs, errorText: msg });
+      setError(msg);
     } finally {
       setSaving(false);
     }
@@ -834,6 +909,7 @@ export function ScoreControlPanel({
           playerStats={playerStats}
           onScoreChange={onScoreChange}
           onRefreshHistory={onRefreshHistory}
+          onAddHistoryItem={onAddHistoryItem}
           onRefreshStats={onRefreshStats}
           onError={setError}
           onSuccess={setSuccessMsg}

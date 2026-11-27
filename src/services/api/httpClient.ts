@@ -23,19 +23,19 @@ export const API_ORIGIN = CONFIGURED_API_BASE
 
 export const publicApi = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: 35000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 export const customerApi = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: 35000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 export const adminApi = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: 35000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -220,6 +220,32 @@ function attachAuthInterceptors(
   );
 }
 
+function attachColdStartGetRetry(instance: typeof publicApi) {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const cfg = error?.config as (Record<string, any> & { method?: string }) | undefined;
+      const isGet = typeof cfg?.method === 'string' && cfg.method.toLowerCase() === 'get';
+      const status = error?.response?.status as number | undefined;
+      const isColdStartTransient =
+        error?.code === 'ECONNABORTED' ||
+        error?.code === 'ETIMEDOUT' ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+
+      if (isGet && isColdStartTransient && cfg && !cfg._coldStartRetried) {
+        cfg._coldStartRetried = true;
+        await new Promise((r) => setTimeout(r, 800));
+        return instance(cfg);
+      }
+      return Promise.reject(error);
+    }
+  );
+}
+
+attachColdStartGetRetry(publicApi);
+attachColdStartGetRetry(customerApi);
 attachAuthInterceptors(customerApi, CUSTOMER_TOKEN_KEY, CUSTOMER_REFRESH_KEY, 'customer');
 attachAuthInterceptors(adminApi, ADMIN_TOKEN_KEY, ADMIN_REFRESH_KEY, 'admin');
 
@@ -245,6 +271,9 @@ export function extractApiError(err: unknown, fallback = 'Something went wrong.'
   if (axios.isAxiosError(err)) {
     const msg = err.response?.data?.message;
     if (typeof msg === 'string' && msg.trim()) return msg;
+    if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+      return 'Server is waking up or taking longer than expected — please wait a moment and try again.';
+    }
     if (err.message) return err.message;
   }
   if (err instanceof Error && err.message) return err.message;

@@ -1,4 +1,8 @@
 import { LiveScoreData, ScoreHistoryItem } from '../../types/index.ts';
+import {
+  getDiagRequestHeaders,
+  type ScoreDiagTraceServer,
+} from '../../utils/realtimeDiagnostics.ts';
 import { adminApi, publicApi } from '../api/httpClient.ts';
 
 export const scoreboardService = {
@@ -10,6 +14,8 @@ export const scoreboardService = {
   async updateScore(
     streamId: string,
     payload: {
+      clientEventId?: string;
+      traceId?: string;
       teamAScore?: number;
       teamBScore?: number;
       sportSpecificDetails?: Record<string, unknown>;
@@ -20,12 +26,22 @@ export const scoreboardService = {
       action?: string;
       allowLockedOverride?: boolean;
     }
-  ): Promise<{ streamId: string; score: LiveScoreData; historyItem?: ScoreHistoryItem }> {
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+    duplicatePrevented?: boolean;
+    diag?: ScoreDiagTraceServer;
+  }> {
+    const { traceId, ...body } = payload;
+    const headers = getDiagRequestHeaders(traceId);
     const { data } = await adminApi.patch<{
       streamId: string;
       score: LiveScoreData;
       historyItem?: ScoreHistoryItem;
-    }>(`/live/${streamId}/score`, payload);
+      duplicatePrevented?: boolean;
+      diag?: ScoreDiagTraceServer;
+    }>(`/live/${streamId}/score`, body, Object.keys(headers).length ? { headers } : undefined);
     return data;
   },
 
@@ -33,6 +49,7 @@ export const scoreboardService = {
     streamId: string,
     payload: {
       clientEventId?: string;
+      traceId?: string;
       sportType?: string;
       action: Record<string, unknown>;
       playerId?: string;
@@ -47,13 +64,17 @@ export const scoreboardService = {
     score: LiveScoreData;
     historyItem?: ScoreHistoryItem;
     duplicatePrevented?: boolean;
+    diag?: ScoreDiagTraceServer;
   }> {
+    const { traceId, ...body } = payload;
+    const headers = getDiagRequestHeaders(traceId);
     const { data } = await adminApi.post<{
       streamId: string;
       score: LiveScoreData;
       historyItem?: ScoreHistoryItem;
       duplicatePrevented?: boolean;
-    }>(`/live/${streamId}/score/event`, payload);
+      diag?: ScoreDiagTraceServer;
+    }>(`/live/${streamId}/score/event`, body, Object.keys(headers).length ? { headers } : undefined);
     return data;
   },
 
@@ -80,16 +101,28 @@ export const scoreboardService = {
     return data;
   },
 
-  async undoScore(streamId: string): Promise<{
+  async undoScore(
+    streamId: string,
+    options?: { clientEventId?: string; traceId?: string }
+  ): Promise<{
     streamId: string;
     score: LiveScoreData;
     undoneAction: string;
+    duplicatePrevented?: boolean;
+    diag?: ScoreDiagTraceServer;
   }> {
+    const headers = getDiagRequestHeaders(options?.traceId);
     const { data } = await adminApi.post<{
       streamId: string;
       score: LiveScoreData;
       undoneAction: string;
-    }>(`/live/${streamId}/score/undo`);
+      duplicatePrevented?: boolean;
+      diag?: ScoreDiagTraceServer;
+    }>(
+      `/live/${streamId}/score/undo`,
+      options?.clientEventId ? { clientEventId: options.clientEventId } : undefined,
+      Object.keys(headers).length ? { headers } : undefined
+    );
     return data;
   },
 
@@ -206,6 +239,7 @@ export const scoreboardService = {
     streamId: string,
     payload: {
       clientEventId?: string;
+      traceId?: string;
       action: Record<string, unknown>;
       allowPostCompletionOverride?: boolean;
     }
@@ -216,8 +250,15 @@ export const scoreboardService = {
     duplicatePrevented?: boolean;
     triggeredDoOrDie?: Record<string, unknown> | null;
     triggeredAllOut?: Record<string, unknown> | null;
+    diag?: ScoreDiagTraceServer;
   }> {
-    const { data } = await adminApi.post(`/live/${streamId}/kabaddi/event`, payload);
+    const { traceId, ...body } = payload;
+    const headers = getDiagRequestHeaders(traceId);
+    const { data } = await adminApi.post(
+      `/live/${streamId}/kabaddi/event`,
+      body,
+      Object.keys(headers).length ? { headers } : undefined
+    );
     return data;
   },
 
