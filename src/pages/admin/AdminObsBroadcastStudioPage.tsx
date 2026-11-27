@@ -49,6 +49,7 @@ import {
   Video,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import {
@@ -125,7 +126,9 @@ import { ControlRoomMonitors } from '../../components/obsStudio/ControlRoomMonit
 import { ControlRoomCameraGrid } from '../../components/obsStudio/ControlRoomCameraGrid.tsx';
 import { ControlRoomRightPanel } from '../../components/obsStudio/ControlRoomRightPanel.tsx';
 import { ControlRoomSceneBar } from '../../components/obsStudio/ControlRoomSceneBar.tsx';
+import { ControlRoomReadinessStrip } from '../../components/obsStudio/ControlRoomReadinessStrip.tsx';
 import { ObsAudioPeakMeter } from '../../components/obsStudio/ObsAudioPeakMeter.tsx';
+import { QuickLiveScoreControls } from '../../components/obs/QuickLiveScoreControls.tsx';
 import { SavedAdsLibraryPanel } from '../../components/obsGraphics/SavedAdsLibraryPanel.tsx';
 import { MatchSetupFormModal } from '../../components/broadcast/MatchSetupFormModal.tsx';
 import { LiveStreamPlayer } from '../../components/broadcast/LiveStreamPlayer.tsx';
@@ -207,7 +210,11 @@ export function AdminObsBroadcastStudioPage() {
   const studioBaseRoute = isBroadcasterPortal ? '/broadcaster/control-room' : '/admin/broadcast-studio';
 
   const { refreshStreams } = useLiveMonitor();
-  const { score: liveMatchScore } = useScoreboard(matchId);
+  const {
+    score: liveMatchScore,
+    setScore: setLiveMatchScore,
+    refetch: refetchLiveMatchScore,
+  } = useScoreboard(matchId);
   const { triggerOverlayPreview } = useBroadcastPreview();
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -247,6 +254,15 @@ export function AdminObsBroadcastStudioPage() {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
+  const [quickScorerOpen, setQuickScorerOpen] = useState(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [hotkeysEnabled, setHotkeysEnabled] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('maidanlive_studio_hotkeys') !== 'false';
+    } catch {
+      return true;
+    }
+  });
 
   const {
     studio,
@@ -2748,6 +2764,123 @@ export function AdminObsBroadcastStudioPage() {
   ]);
 
   const currentOverlay = normalizeOverlayConfig(studio?.match?.overlayConfig);
+  const canQuickScore = Boolean(
+    adminUser &&
+      (adminUser.role === 'SUPER_ADMIN' ||
+        adminUser.role === 'ADMIN' ||
+        adminUser.role === 'TOURNAMENT_ORGANIZER' ||
+        adminUser.role === 'SCORER' ||
+        adminUser.permissions?.manageScores)
+  );
+  const streamTargetReady = Boolean(
+    studio?.match &&
+      (studio.match.activeStreamingProvider === 'mediamtx'
+        ? Boolean(studio.match.mediamtxStreamPath)
+        : Boolean(studio.match.youtubeVideoId))
+  );
+  const streamTargetLabel = !studio?.match
+    ? 'Unconfigured'
+    : studio.match.activeStreamingProvider === 'mediamtx'
+      ? studio.match.mediamtxStreamPath
+        ? 'MediaMTX Direct'
+        : 'MediaMTX (Pending)'
+      : studio.match.youtubeVideoId
+        ? `YouTube (${studio.match.youtubeVideoId})`
+        : 'YouTube (Missing ID)';
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('maidanlive_studio_hotkeys', hotkeysEnabled ? 'true' : 'false');
+    } catch {
+      // Ignore storage error
+    }
+  }, [hotkeysEnabled]);
+
+  useEffect(() => {
+    if (activeTab !== 'control_room' || !hotkeysEnabled) return;
+    const anyBlockingModalOpen =
+      quickSwitchModalOpen ||
+      addSceneModalOpen ||
+      cameraModalOpen ||
+      larixModalOpen ||
+      mapSourcesModalOpen ||
+      overrideModalOpen ||
+      endConfirmOpen ||
+      guideOpen ||
+      diagOpen ||
+      Boolean(setupModalMode) ||
+      Boolean(wizardCamera);
+    if (anyBlockingModalOpen) return;
+
+    const handleStudioKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const key = e.key;
+      if (key >= '1' && key <= '6') {
+        const idx = Number(key) - 1;
+        const obsScenesList = profile?.obsScenes || [];
+        if (obsConnected && obsScenesList[idx]) {
+          e.preventDefault();
+          void handleSwitchSceneName(obsScenesList[idx]);
+        } else if (scenes[idx]) {
+          const sc = scenes[idx];
+          e.preventDefault();
+          void handleApplyLayout({
+            layoutType: sc.layoutType,
+            cameraIds: sc.cameraIds,
+            mainCameraId: sc.mainCameraId || undefined,
+            pipPosition: sc.pipPosition || undefined,
+            pipSize: sc.pipSize || undefined,
+            sceneName: sc.obsSceneName,
+            includeScoreboardOverlay: sc.includeScoreboardOverlay,
+          });
+        }
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        void handleTriggerObsSceneTransition();
+        return;
+      }
+
+      if (key.toLowerCase() === 'm' && audioMeter?.primaryInputName) {
+        e.preventDefault();
+        void handleTogglePrimaryAudioMute(audioMeter.primaryInputName, !audioMeter.muted);
+        return;
+      }
+
+      if (key.toLowerCase() === 's' && studio?.match) {
+        e.preventDefault();
+        void handleUpdateOverlay({ visible: !currentOverlay.visible });
+        return;
+      }
+
+      if (key.toLowerCase() === 'l' && canQuickScore) {
+        e.preventDefault();
+        setQuickScorerOpen((prev) => !prev);
+        return;
+      }
+
+      if (key === '?') {
+        e.preventDefault();
+        setShortcutsHelpOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleStudioKeyDown);
+    return () => window.removeEventListener('keydown', handleStudioKeyDown);
+  });
 
   const liveReadyStatus = obsConnected
     ? profile?.obsStreamActive
@@ -3246,6 +3379,25 @@ export function AdminObsBroadcastStudioPage() {
               {/* ============================================================== */}
               {activeTab === 'control_room' && (
                 <div className="space-y-3">
+                  <ControlRoomReadinessStrip
+                    obsConnected={obsConnected}
+                    bridgeOnline={Boolean(profile?.agentOnline)}
+                    onlineCameraCount={onlineCameraCount}
+                    totalCameraCount={enabledCameras.length}
+                    audioMeter={audioMeter}
+                    streamTargetReady={streamTargetReady}
+                    streamTargetLabel={streamTargetLabel}
+                    hotkeysEnabled={hotkeysEnabled}
+                    onToggleHotkeys={() => setHotkeysEnabled((prev) => !prev)}
+                    shortcutsHelpOpen={shortcutsHelpOpen}
+                    onToggleShortcutsHelp={() => setShortcutsHelpOpen((prev) => !prev)}
+                    quickScorerOpen={quickScorerOpen}
+                    onToggleQuickScorer={() => setQuickScorerOpen((prev) => !prev)}
+                    canQuickScore={canQuickScore && Boolean(studio?.match)}
+                    onJumpToSettings={() => setActiveTab('settings')}
+                    onJumpToCameras={() => setActiveTab('cameras')}
+                    onJumpToWorkflow={() => setActiveTab('scoreboard')}
+                  />
                   <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
                     <div className="xl:col-span-9 space-y-3 min-w-0">
                       <ControlRoomMonitors
@@ -6684,6 +6836,59 @@ export function AdminObsBroadcastStudioPage() {
       </Modal>
 
       <RealtimeDiagnosticsDrawer open={diagOpen} onClose={() => setDiagOpen(false)} />
+
+      {/* Dockable Slide-Over Quick Live Scorer Drawer (stays inside dark Control Room) */}
+      {quickScorerOpen && studio?.match && canQuickScore && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Quick Live Scorer"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setQuickScorerOpen(false);
+          }}
+          className="fixed inset-0 z-[95] bg-slate-950/60 backdrop-blur-xs flex justify-end"
+        >
+          <div className="w-full max-w-md bg-[#0B101B] border-l border-slate-800 text-slate-100 h-full flex flex-col shadow-2xl">
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <div className="min-w-0">
+                <p className="font-display text-sm font-bold text-white truncate">
+                  Quick Live Scorer
+                </p>
+                <p className="text-[11px] text-slate-400 truncate">
+                  {currentMatchLabel}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {!isBroadcasterRole && (
+                  <Link
+                    to={`/admin/scoreboard/${studio.match.id}`}
+                    className="px-2.5 py-1 rounded-lg bg-[#121826] border border-slate-700 text-[11px] font-semibold text-orange-300 hover:text-white"
+                  >
+                    Full Console
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setQuickScorerOpen(false)}
+                  aria-label="Close quick scorer drawer"
+                  className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3.5">
+              <QuickLiveScoreControls
+                stream={buildPreviewStreamFromStudioMatch(studio.match, currentOverlay)}
+                score={liveMatchScore}
+                onScoreChange={(next) => setLiveMatchScore(next)}
+                onRefresh={() => void refetchLiveMatchScore()}
+                themeVariant="dark"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

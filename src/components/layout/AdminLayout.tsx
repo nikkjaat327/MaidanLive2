@@ -30,6 +30,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
+  Search,
   Settings,
   Shield,
   SlidersHorizontal,
@@ -46,6 +47,7 @@ import { useAuth } from '../../hooks/useAuth.ts';
 import { useAdminTheme } from '../../context/AdminThemeContext.tsx';
 import { ROLE_LABELS } from '../../constants/roles.ts';
 import { HeaderYouTubePreviewControl } from '../streaming/HeaderYouTubePreviewControl.tsx';
+import { AdminCommandPalette } from '../admin/AdminCommandPalette.tsx';
 import {
   ACTIVE_MATCH_CHANGED_EVENT,
   getStickyMatchId,
@@ -499,6 +501,7 @@ export function AdminLayout() {
   const { theme, toggleTheme } = useAdminTheme();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [mobileOpenGroups, setMobileOpenGroups] = useState<Record<string, boolean>>({});
   const [stickyMatchId, setStickyMatchState] = useState<string>(() => getStickyMatchId());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -508,6 +511,17 @@ export function AdminLayout() {
       return false;
     }
   });
+
+  useEffect(() => {
+    const handleGlobalKey = (ev: KeyboardEvent) => {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, []);
 
   useEffect(() => {
     const matchRoute = location.pathname.match(
@@ -844,6 +858,23 @@ export function AdminLayout() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open admin command palette"
+              title="Quick Jump (Cmd/Ctrl + K)"
+              className={`min-h-[34px] inline-flex items-center gap-2 px-2.5 rounded-lg border text-xs font-semibold transition-colors ${
+                theme === 'dark'
+                  ? 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white hover:border-cyan-400/50'
+                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span className="hidden sm:inline">Jump</span>
+              <kbd className="hidden md:inline px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono text-[10px]">
+                ⌘K
+              </kbd>
+            </button>
             <HeaderYouTubePreviewControl
               tone={theme === 'dark' ? 'dark' : 'light'}
               compact
@@ -1085,6 +1116,13 @@ export function AdminLayout() {
           <span className="mt-0.5">Menu</span>
         </button>
       </nav>
+      <AdminCommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        stickyMatchId={stickyMatchId}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
     </div>
   );
 }

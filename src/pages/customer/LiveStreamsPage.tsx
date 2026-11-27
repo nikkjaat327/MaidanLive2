@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Lock, Radio, Search } from 'lucide-react';
+import { Heart, Lock, Radio, Search } from 'lucide-react';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
 import { LiveStreamData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
+import { engagementService } from '../../services/engagement/engagementService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
@@ -11,6 +12,7 @@ import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
+import { MatchStatusBadge } from '../../components/common/MatchStatusBadge.tsx';
 import {
   getCachedViewerData,
   pickFresherScore,
@@ -21,6 +23,7 @@ export function LiveStreamsPage() {
   const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
   const isAuthenticated = Boolean(customerUser || adminUser);
   const authLoading = customerLoading || adminLoading;
+  const [followedMatches, setFollowedMatches] = useState<LiveStreamData[]>([]);
 
   const cachedStreams = getCachedViewerData<LiveStreamData[]>('live_streams_list_v1');
   const [streams, setStreams] = useState<LiveStreamData[]>(() => cachedStreams || []);
@@ -32,8 +35,10 @@ export function LiveStreamsPage() {
 
   const fetchStreams = useCallback(async () => {
     try {
-      setError(null);
-      const data = await liveStreamService.listStreams();
+      const [data, followingFeed] = await Promise.all([
+        liveStreamService.listStreams(),
+        customerUser ? engagementService.getFollowingFeed().catch(() => null) : Promise.resolve(null),
+      ]);
       setStreams((prev) => {
         if (prev.length === 0) return data;
         const prevMap = new Map(prev.map((s) => [s.id || s._id, s]));
@@ -46,13 +51,21 @@ export function LiveStreamsPage() {
           };
         });
       });
+      if (followingFeed) {
+        setFollowedMatches([
+          ...(followingFeed.liveMatches || []),
+          ...(followingFeed.upcomingMatches || []).slice(0, 4),
+        ]);
+      } else {
+        setFollowedMatches([]);
+      }
       setCachedViewerData('live_streams_list_v1', data);
     } catch (err) {
       setError(extractApiError(err, 'Failed to load live streams.'));
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, customerUser]);
 
   useEffect(() => {
     fetchStreams();
@@ -184,6 +197,39 @@ export function LiveStreamsPage() {
           />
         </div>
       </div>
+
+      {/* Followed Teams Quick Ticker */}
+      {followedMatches.length > 0 && (
+        <div className="flex items-stretch gap-2.5 overflow-x-auto pb-1">
+          {followedMatches.map((fm) => {
+            const liveObj = streams.find((s) => s.id === fm.id);
+            const activeScore = liveObj?.score || fm.score;
+            return (
+              <Link
+                key={`live-fol-${fm.id}`}
+                to={`/live/${fm.id}`}
+                className="min-w-[220px] shrink-0 bg-white border border-slate-200 hover:border-orange-300 rounded-xl px-3 py-2 flex flex-col gap-1 transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="inline-flex items-center gap-1 font-bold text-[#EA580C]">
+                    <Heart className="w-3 h-3" />
+                    <span>{fm.gameName || 'Followed'}</span>
+                  </span>
+                  <MatchStatusBadge stream={liveObj || fm} score={activeScore} compact />
+                </div>
+                <p className="text-xs font-bold text-slate-900 truncate">
+                  {fm.matchTitle || `${fm.teamAName || 'Team A'} vs ${fm.teamBName || 'Team B'}`}
+                </p>
+                {activeScore && (
+                  <p className="font-mono tabular-nums text-[11px] text-slate-600">
+                    {activeScore.teamAScore} - {activeScore.teamBScore}
+                  </p>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center justify-between gap-3">

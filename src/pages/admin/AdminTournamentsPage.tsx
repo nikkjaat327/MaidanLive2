@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   Award,
-  BookmarkPlus,
   Edit3,
-  ExternalLink,
   GitBranch,
   MapPin,
   Medal,
@@ -19,14 +17,12 @@ import {
   TournamentBestPlayerEntry,
   TournamentCustomAwardField,
   TournamentData,
-  TournamentFormat,
   TournamentPaymentMode,
   TournamentPositionEntry,
   TournamentPrizesConfig,
   TournamentTemplateData,
   VenueData,
 } from '../../types/index.ts';
-import { SPORT_OPTIONS, SportOption } from '../../constants/sports.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
@@ -35,8 +31,49 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
 import { FeedbackBanner } from '../../components/common/FeedbackBanner.tsx';
 import { TableSkeleton } from '../../components/common/LoadingSkeleton.tsx';
+import {
+  TournamentSetupWizardModal,
+  type TournamentWizardFormState,
+} from '../../components/admin/TournamentSetupWizardModal.tsx';
+
+function createInitialWizardForm(): TournamentWizardFormState {
+  return {
+    name: '',
+    sportType: 'Cricket',
+    format: 'KNOCKOUT',
+    season: '',
+    prizeMoney: '',
+    firstPrizeAmount: '',
+    firstPrizeLabel: '',
+    secondPrizeAmount: '',
+    secondPrizeLabel: '',
+    thirdPrizeAmount: '',
+    thirdPrizeLabel: '',
+    registrationOpen: false,
+    paymentMode: 'NONE',
+    registrationFee: '0',
+    securityDepositAmount: '0',
+    refundPolicy: '',
+    paymentInstructions: '',
+    logoUrl: '',
+    venueId: '',
+    location: '',
+    googleMapsUrl: '',
+    organizerName: '',
+    status: 'UPCOMING',
+    startDate: '',
+    endDate: '',
+    groupCount: '2',
+    rules: '',
+    qualificationRules: '',
+    description: '',
+    isPublished: true,
+    teamIds: [],
+  };
+}
 
 export function AdminTournamentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tournaments, setTournaments] = useState<TournamentData[]>([]);
   const [venues, setVenues] = useState<VenueData[]>([]);
   const [teams, setTeams] = useState<TeamData[]>([]);
@@ -50,37 +87,9 @@ export function AdminTournamentsPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<TournamentData | null>(null);
-  const [name, setName] = useState('');
-  const [sportType, setSportType] = useState<SportOption>('Cricket');
-  const [format, setFormat] = useState<TournamentFormat>('KNOCKOUT');
-  const [season, setSeason] = useState('');
-  const [prizeMoney, setPrizeMoney] = useState('');
-  const [firstPrizeAmount, setFirstPrizeAmount] = useState('');
-  const [firstPrizeLabel, setFirstPrizeLabel] = useState('');
-  const [secondPrizeAmount, setSecondPrizeAmount] = useState('');
-  const [secondPrizeLabel, setSecondPrizeLabel] = useState('');
-  const [thirdPrizeAmount, setThirdPrizeAmount] = useState('');
-  const [thirdPrizeLabel, setThirdPrizeLabel] = useState('');
-  const [registrationOpen, setRegistrationOpen] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<TournamentPaymentMode>('NONE');
-  const [registrationFee, setRegistrationFee] = useState('0');
-  const [securityDepositAmount, setSecurityDepositAmount] = useState('0');
-  const [refundPolicy, setRefundPolicy] = useState('');
-  const [paymentInstructions, setPaymentInstructions] = useState('');
-  const [logoUrl, setLogoUrl] = useState('');
-  const [venueId, setVenueId] = useState('');
-  const [location, setLocation] = useState('');
-  const [googleMapsUrl, setGoogleMapsUrl] = useState('');
-  const [organizerName, setOrganizerName] = useState('');
-  const [status, setStatus] = useState<'UPCOMING' | 'ONGOING' | 'COMPLETED'>('UPCOMING');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [groupCount, setGroupCount] = useState('2');
-  const [rules, setRules] = useState('');
-  const [qualificationRules, setQualificationRules] = useState('');
-  const [description, setDescription] = useState('');
-  const [isPublished, setIsPublished] = useState(true);
-  const [teamIds, setTeamIds] = useState<string[]>([]);
+  const [wizardForm, setWizardForm] = useState<TournamentWizardFormState>(() =>
+    createInitialWizardForm()
+  );
   const [saving, setSaving] = useState(false);
 
   // Results, Positions & Custom Awards modal state
@@ -128,83 +137,65 @@ export function AdminTournamentsPage() {
     loadTournaments();
   }, [loadTournaments]);
 
-  function openCreate() {
+  const openCreate = useCallback(() => {
     setEditing(null);
     setSelectedTemplateId('');
     setTemplateName('');
-    setName('');
-    setSportType('Cricket');
-    setFormat('KNOCKOUT');
-    setSeason('');
-    setPrizeMoney('');
-    setFirstPrizeAmount('');
-    setFirstPrizeLabel('');
-    setSecondPrizeAmount('');
-    setSecondPrizeLabel('');
-    setThirdPrizeAmount('');
-    setThirdPrizeLabel('');
-    setRegistrationOpen(false);
-    setPaymentMode('NONE');
-    setRegistrationFee('0');
-    setSecurityDepositAmount('0');
-    setRefundPolicy('');
-    setPaymentInstructions('');
-    setLogoUrl('');
-    setVenueId('');
-    setLocation('');
-    setGoogleMapsUrl('');
-    setOrganizerName('');
-    setStatus('UPCOMING');
-    setStartDate('');
-    setEndDate('');
-    setGroupCount('2');
-    setRules('');
-    setQualificationRules('');
-    setDescription('');
-    setIsPublished(true);
-    setTeamIds([]);
+    setWizardForm(createInitialWizardForm());
     setModalOpen(true);
-  }
+  }, []);
+
+  useEffect(() => {
+    if (searchParams.get('create') === '1') {
+      openCreate();
+      const next = new URLSearchParams(searchParams);
+      next.delete('create');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams, openCreate]);
 
   function openEdit(t: TournamentData) {
     setEditing(t);
-    setName(t.name);
-    setSportType(t.sportType);
-    setFormat(t.format || 'KNOCKOUT');
-    setSeason(t.season || '');
-    setPrizeMoney(t.prizeMoney || '');
-    setFirstPrizeAmount(t.prizes?.first?.amount || '');
-    setFirstPrizeLabel(t.prizes?.first?.label || '');
-    setSecondPrizeAmount(t.prizes?.second?.amount || '');
-    setSecondPrizeLabel(t.prizes?.second?.label || '');
-    setThirdPrizeAmount(t.prizes?.third?.amount || '');
-    setThirdPrizeLabel(t.prizes?.third?.label || '');
-    setRegistrationOpen(Boolean(t.registrationOpen));
+    setSelectedTemplateId('');
+    setTemplateName('');
     const derivedMode: TournamentPaymentMode =
       t.paymentMode || ((t.registrationFee || 0) > 0 ? 'ENTRY_FEE' : 'NONE');
-    setPaymentMode(derivedMode);
-    setRegistrationFee(String(t.registrationFee ?? 0));
-    setSecurityDepositAmount(String(t.securityDepositAmount ?? 0));
-    setRefundPolicy(t.refundPolicy || '');
-    setPaymentInstructions(t.paymentInstructions || '');
-    setLogoUrl(t.logoUrl || '');
-    setVenueId(
-      typeof t.venueId === 'object' && t.venueId
-        ? t.venueId.id || t.venueId._id || ''
-        : t.venueId || ''
-    );
-    setLocation(t.location || '');
-    setGoogleMapsUrl(t.googleMapsUrl || '');
-    setOrganizerName(t.organizerName || '');
-    setStatus(t.status);
-    setStartDate(t.startDate ? t.startDate.slice(0, 10) : '');
-    setEndDate(t.endDate ? t.endDate.slice(0, 10) : '');
-    setGroupCount(String(t.groupCount || 2));
-    setRules(t.rules || '');
-    setQualificationRules(t.qualificationRules || '');
-    setDescription(t.description || '');
-    setIsPublished(t.isPublished ?? true);
-    setTeamIds((t.teamIds || []).map((id) => String(id)));
+    setWizardForm({
+      name: t.name,
+      sportType: t.sportType,
+      format: t.format || 'KNOCKOUT',
+      season: t.season || '',
+      prizeMoney: t.prizeMoney || '',
+      firstPrizeAmount: t.prizes?.first?.amount || '',
+      firstPrizeLabel: t.prizes?.first?.label || '',
+      secondPrizeAmount: t.prizes?.second?.amount || '',
+      secondPrizeLabel: t.prizes?.second?.label || '',
+      thirdPrizeAmount: t.prizes?.third?.amount || '',
+      thirdPrizeLabel: t.prizes?.third?.label || '',
+      registrationOpen: Boolean(t.registrationOpen),
+      paymentMode: derivedMode,
+      registrationFee: String(t.registrationFee ?? 0),
+      securityDepositAmount: String(t.securityDepositAmount ?? 0),
+      refundPolicy: t.refundPolicy || '',
+      paymentInstructions: t.paymentInstructions || '',
+      logoUrl: t.logoUrl || '',
+      venueId:
+        typeof t.venueId === 'object' && t.venueId
+          ? t.venueId.id || t.venueId._id || ''
+          : t.venueId || '',
+      location: t.location || '',
+      googleMapsUrl: t.googleMapsUrl || '',
+      organizerName: t.organizerName || '',
+      status: t.status,
+      startDate: t.startDate ? t.startDate.slice(0, 10) : '',
+      endDate: t.endDate ? t.endDate.slice(0, 10) : '',
+      groupCount: String(t.groupCount || 2),
+      rules: t.rules || '',
+      qualificationRules: t.qualificationRules || '',
+      description: t.description || '',
+      isPublished: t.isPublished ?? true,
+      teamIds: (t.teamIds || []).map((id) => String(id)),
+    });
     setModalOpen(true);
   }
 
@@ -298,20 +289,16 @@ export function AdminTournamentsPage() {
     }
   }
 
-  function toggleTeamId(id: string) {
-    setTeamIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
-  }
-
-  function buildPrizesPayload(): TournamentPrizesConfig {
+  function buildPrizesPayload(form: TournamentWizardFormState = wizardForm): TournamentPrizesConfig {
     const out: TournamentPrizesConfig = {};
-    if (firstPrizeAmount.trim() || firstPrizeLabel.trim()) {
-      out.first = { amount: firstPrizeAmount.trim(), label: firstPrizeLabel.trim() };
+    if (form.firstPrizeAmount.trim() || form.firstPrizeLabel.trim()) {
+      out.first = { amount: form.firstPrizeAmount.trim(), label: form.firstPrizeLabel.trim() };
     }
-    if (secondPrizeAmount.trim() || secondPrizeLabel.trim()) {
-      out.second = { amount: secondPrizeAmount.trim(), label: secondPrizeLabel.trim() };
+    if (form.secondPrizeAmount.trim() || form.secondPrizeLabel.trim()) {
+      out.second = { amount: form.secondPrizeAmount.trim(), label: form.secondPrizeLabel.trim() };
     }
-    if (thirdPrizeAmount.trim() || thirdPrizeLabel.trim()) {
-      out.third = { amount: thirdPrizeAmount.trim(), label: thirdPrizeLabel.trim() };
+    if (form.thirdPrizeAmount.trim() || form.thirdPrizeLabel.trim()) {
+      out.third = { amount: form.thirdPrizeAmount.trim(), label: form.thirdPrizeLabel.trim() };
     }
     return out;
   }
@@ -320,40 +307,45 @@ export function AdminTournamentsPage() {
     setSelectedTemplateId(tplId);
     const tpl = templates.find((item) => item.id === tplId);
     if (!tpl) return;
-    setSportType(tpl.sportType);
-    setFormat(tpl.format);
-    setGroupCount(String(tpl.groupCount || 2));
-    if (tpl.location) setLocation(tpl.location);
-    if (tpl.prizeMoney) setPrizeMoney(tpl.prizeMoney);
-    setFirstPrizeAmount(tpl.prizes?.first?.amount || '');
-    setFirstPrizeLabel(tpl.prizes?.first?.label || '');
-    setSecondPrizeAmount(tpl.prizes?.second?.amount || '');
-    setSecondPrizeLabel(tpl.prizes?.second?.label || '');
-    setThirdPrizeAmount(tpl.prizes?.third?.amount || '');
-    setThirdPrizeLabel(tpl.prizes?.third?.label || '');
-    setRegistrationFee(String(tpl.registrationFee ?? 0));
-    setRules(tpl.rules || '');
-    setQualificationRules(tpl.qualificationRules || '');
-    setDescription(tpl.description || '');
+    setWizardForm((prev) => ({
+      ...prev,
+      sportType: tpl.sportType,
+      format: tpl.format,
+      groupCount: String(tpl.groupCount || 2),
+      location: tpl.location || prev.location,
+      prizeMoney: tpl.prizeMoney || prev.prizeMoney,
+      firstPrizeAmount: tpl.prizes?.first?.amount || '',
+      firstPrizeLabel: tpl.prizes?.first?.label || '',
+      secondPrizeAmount: tpl.prizes?.second?.amount || '',
+      secondPrizeLabel: tpl.prizes?.second?.label || '',
+      thirdPrizeAmount: tpl.prizes?.third?.amount || '',
+      thirdPrizeLabel: tpl.prizes?.third?.label || '',
+      registrationFee: String(tpl.registrationFee ?? 0),
+      paymentMode: (tpl.registrationFee ?? 0) > 0 ? 'ENTRY_FEE' : prev.paymentMode,
+      rules: tpl.rules || '',
+      qualificationRules: tpl.qualificationRules || '',
+      description: tpl.description || '',
+    }));
   }
 
   async function handleSaveAsTemplate() {
-    const label = templateName.trim() || `${sportType} ${format.replace('_', ' ')} Preset`;
+    const label =
+      templateName.trim() || `${wizardForm.sportType} ${wizardForm.format.replace('_', ' ')} Preset`;
     try {
       setSavingTemplate(true);
       setError(null);
       const created = await entityService.createTournamentTemplate({
         name: label,
-        sportType,
-        format,
-        groupCount: Math.max(1, Number(groupCount) || 2),
-        location: location.trim(),
-        prizeMoney: prizeMoney.trim(),
-        prizes: buildPrizesPayload(),
-        registrationFee: Math.max(0, Number(registrationFee) || 0),
-        rules: rules.trim(),
-        qualificationRules: qualificationRules.trim(),
-        description: description.trim(),
+        sportType: wizardForm.sportType,
+        format: wizardForm.format,
+        groupCount: Math.max(1, Number(wizardForm.groupCount) || 2),
+        location: wizardForm.location.trim(),
+        prizeMoney: wizardForm.prizeMoney.trim(),
+        prizes: buildPrizesPayload(wizardForm),
+        registrationFee: Math.max(0, Number(wizardForm.registrationFee) || 0),
+        rules: wizardForm.rules.trim(),
+        qualificationRules: wizardForm.qualificationRules.trim(),
+        description: wizardForm.description.trim(),
       });
       setTemplates((prev) => [created, ...prev]);
       setSelectedTemplateId(created.id);
@@ -376,9 +368,9 @@ export function AdminTournamentsPage() {
     }
   }
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    const cleanMaps = googleMapsUrl.trim();
+  async function handleSave(e?: React.FormEvent) {
+    e?.preventDefault();
+    const cleanMaps = wizardForm.googleMapsUrl.trim();
     if (cleanMaps) {
       try {
         const u = new URL(cleanMaps);
@@ -392,13 +384,13 @@ export function AdminTournamentsPage() {
       }
     }
 
-    const entryAmt = Math.max(0, Number(registrationFee) || 0);
-    const depositAmt = Math.max(0, Number(securityDepositAmount) || 0);
-    if (paymentMode === 'ENTRY_FEE' && entryAmt <= 0) {
+    const entryAmt = Math.max(0, Number(wizardForm.registrationFee) || 0);
+    const depositAmt = Math.max(0, Number(wizardForm.securityDepositAmount) || 0);
+    if (wizardForm.paymentMode === 'ENTRY_FEE' && entryAmt <= 0) {
       setError('Enter an Entry Fee amount greater than 0, or choose No Payment Required.');
       return;
     }
-    if (paymentMode === 'SECURITY_DEPOSIT' && depositAmt <= 0) {
+    if (wizardForm.paymentMode === 'SECURITY_DEPOSIT' && depositAmt <= 0) {
       setError('Enter a Refundable Security Deposit amount greater than 0, or choose No Payment Required.');
       return;
     }
@@ -407,32 +399,34 @@ export function AdminTournamentsPage() {
       setSaving(true);
       setError(null);
       const payload: Partial<TournamentData> = {
-        name: name.trim(),
-        sportType,
-        format,
-        season: season.trim(),
-        prizeMoney: prizeMoney.trim(),
-        prizes: buildPrizesPayload(),
-        registrationOpen,
-        paymentMode,
-        registrationFee: paymentMode === 'ENTRY_FEE' ? entryAmt : 0,
-        securityDepositAmount: paymentMode === 'SECURITY_DEPOSIT' ? depositAmt : 0,
-        refundPolicy: paymentMode === 'SECURITY_DEPOSIT' ? refundPolicy.trim() : '',
-        paymentInstructions: paymentMode !== 'NONE' ? paymentInstructions.trim() : '',
-        logoUrl: logoUrl.trim(),
-        venueId: venueId || null,
-        location: location.trim(),
+        name: wizardForm.name.trim(),
+        sportType: wizardForm.sportType,
+        format: wizardForm.format,
+        season: wizardForm.season.trim(),
+        prizeMoney: wizardForm.prizeMoney.trim(),
+        prizes: buildPrizesPayload(wizardForm),
+        registrationOpen: wizardForm.registrationOpen,
+        paymentMode: wizardForm.paymentMode,
+        registrationFee: wizardForm.paymentMode === 'ENTRY_FEE' ? entryAmt : 0,
+        securityDepositAmount: wizardForm.paymentMode === 'SECURITY_DEPOSIT' ? depositAmt : 0,
+        refundPolicy:
+          wizardForm.paymentMode === 'SECURITY_DEPOSIT' ? wizardForm.refundPolicy.trim() : '',
+        paymentInstructions:
+          wizardForm.paymentMode !== 'NONE' ? wizardForm.paymentInstructions.trim() : '',
+        logoUrl: wizardForm.logoUrl.trim(),
+        venueId: wizardForm.venueId || null,
+        location: wizardForm.location.trim(),
         googleMapsUrl: cleanMaps,
-        organizerName: organizerName.trim(),
-        status,
-        startDate: startDate || null,
-        endDate: endDate || null,
-        groupCount: Math.max(1, Number(groupCount) || 2),
-        rules: rules.trim(),
-        qualificationRules: qualificationRules.trim(),
-        description: description.trim(),
-        isPublished,
-        teamIds,
+        organizerName: wizardForm.organizerName.trim(),
+        status: wizardForm.status,
+        startDate: wizardForm.startDate || null,
+        endDate: wizardForm.endDate || null,
+        groupCount: Math.max(1, Number(wizardForm.groupCount) || 2),
+        rules: wizardForm.rules.trim(),
+        qualificationRules: wizardForm.qualificationRules.trim(),
+        description: wizardForm.description.trim(),
+        isPublished: wizardForm.isPublished,
+        teamIds: wizardForm.teamIds,
       };
       if (editing) {
         await entityService.updateTournament(editing.id, payload);
@@ -620,544 +614,26 @@ export function AdminTournamentsPage() {
         </div>
       )}
 
-      <Modal
+      <TournamentSetupWizardModal
         open={modalOpen}
+        editing={editing}
+        form={wizardForm}
+        setForm={setWizardForm}
+        venues={venues}
+        teams={teams}
+        templates={templates}
+        selectedTemplateId={selectedTemplateId}
+        templateName={templateName}
+        setTemplateName={setTemplateName}
+        savingTemplate={savingTemplate}
+        saving={saving}
+        onApplyTemplate={handleApplyTemplate}
+        onSaveAsTemplate={handleSaveAsTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
         onClose={() => setModalOpen(false)}
-        title={editing ? 'Edit Tournament' : 'Create Tournament'}
-        maxWidthClass="max-w-2xl"
-      >
-        <form onSubmit={handleSave} className="space-y-4">
-          {/* Saved Templates Bar */}
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
-                <BookmarkPlus className="w-3.5 h-3.5 text-[#EA580C]" />
-                <span>Tournament Templates</span>
-              </span>
-              {templates.length > 0 && (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    value={selectedTemplateId}
-                    onChange={(e) => handleApplyTemplate(e.target.value)}
-                    className="min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">Apply saved template...</option>
-                    {templates.map((tpl) => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name} ({tpl.sportType})
-                      </option>
-                    ))}
-                  </select>
-                  {selectedTemplateId && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTemplate(selectedTemplateId)}
-                      title="Delete selected template"
-                      className="min-h-[34px] px-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                placeholder="Template name (e.g. Weekend Turf Knockout)"
-                className="flex-1 min-w-[180px] min-h-[36px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
-              />
-              <button
-                type="button"
-                disabled={savingTemplate}
-                onClick={handleSaveAsTemplate}
-                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
-              >
-                {savingTemplate ? 'Saving...' : 'Save as Template'}
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Tournament Name *
-              </label>
-              <input
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Sport</label>
-              <select
-                value={sportType}
-                onChange={(e) => setSportType(e.target.value as SportOption)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                {SPORT_OPTIONS.map((sp) => (
-                  <option key={sp} value={sp}>
-                    {sp}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Format</label>
-              <select
-                value={format}
-                onChange={(e) => setFormat(e.target.value as TournamentFormat)}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="KNOCKOUT">Knockout Bracket</option>
-                <option value="LEAGUE">League / Round-Robin</option>
-                <option value="GROUP_STAGE">Group Stage</option>
-                <option value="GROUP_KNOCKOUT">Group Stage + Knockout</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
-              <select
-                value={status}
-                onChange={(e) =>
-                  setStatus(e.target.value as 'UPCOMING' | 'ONGOING' | 'COMPLETED')
-                }
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="UPCOMING">UPCOMING</option>
-                <option value="ONGOING">ONGOING</option>
-                <option value="COMPLETED">COMPLETED</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Season / Edition
-              </label>
-              <input
-                type="text"
-                value={season}
-                onChange={(e) => setSeason(e.target.value)}
-                placeholder="e.g. Season 2026"
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            {(format === 'GROUP_STAGE' || format === 'GROUP_KNOCKOUT') && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Group Count
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={groupCount}
-                  onChange={(e) => setGroupCount(e.target.value)}
-                  className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Saved Venue (Optional)
-              </label>
-              <select
-                value={venueId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setVenueId(id);
-                  const found = venues.find((v) => v.id === id);
-                  if (found && !location.trim()) {
-                    setLocation([found.name, found.city].filter(Boolean).join(', '));
-                  }
-                }}
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                <option value="">Manual location / None</option>
-                {venues.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name} {v.city ? `(${v.city})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Location Name</label>
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g. Azad Maidan Ground, Delhi"
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <label className="block text-sm font-medium text-slate-700">
-                  Google Maps Location Link (Optional)
-                </label>
-                {googleMapsUrl.trim() && (
-                  <a
-                    href={googleMapsUrl.trim()}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:underline"
-                  >
-                    <span>Test Map Link</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
-              </div>
-              <input
-                type="url"
-                value={googleMapsUrl}
-                onChange={(e) => setGoogleMapsUrl(e.target.value)}
-                placeholder="https://maps.google.com/?q=..."
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Organizer Name
-              </label>
-              <input
-                type="text"
-                value={organizerName}
-                onChange={(e) => setOrganizerName(e.target.value)}
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Prize Pool Summary (Optional)
-              </label>
-              <input
-                type="text"
-                value={prizeMoney}
-                onChange={(e) => setPrizeMoney(e.target.value)}
-                placeholder="e.g. ₹50,000 + Trophy"
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            {/* Optional 1st / 2nd / 3rd Prize Tiers */}
-            <div className="sm:col-span-2 p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="text-xs font-bold text-slate-800 inline-flex items-center gap-1.5">
-                  <Trophy className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Podium Prize Breakdown (Optional)</span>
-                </label>
-                <span className="text-[11px] text-slate-500">
-                  Leave any tier blank if not awarded
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <div className="p-2.5 rounded-lg bg-white border border-amber-200 space-y-1.5">
-                  <p className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
-                    1st Prize
-                  </p>
-                  <input
-                    type="text"
-                    value={firstPrizeAmount}
-                    onChange={(e) => setFirstPrizeAmount(e.target.value)}
-                    placeholder="Amount (e.g. ₹25,000)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                  <input
-                    type="text"
-                    value={firstPrizeLabel}
-                    onChange={(e) => setFirstPrizeLabel(e.target.value)}
-                    placeholder="Label (e.g. Champion Trophy)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                </div>
-                <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1.5">
-                  <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                    2nd Prize
-                  </p>
-                  <input
-                    type="text"
-                    value={secondPrizeAmount}
-                    onChange={(e) => setSecondPrizeAmount(e.target.value)}
-                    placeholder="Amount (e.g. ₹15,000)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                  <input
-                    type="text"
-                    value={secondPrizeLabel}
-                    onChange={(e) => setSecondPrizeLabel(e.target.value)}
-                    placeholder="Label (e.g. Runner-Up)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                </div>
-                <div className="p-2.5 rounded-lg bg-white border border-orange-200/80 space-y-1.5">
-                  <p className="text-[11px] font-bold text-orange-800 uppercase tracking-wider">
-                    3rd Prize
-                  </p>
-                  <input
-                    type="text"
-                    value={thirdPrizeAmount}
-                    onChange={(e) => setThirdPrizeAmount(e.target.value)}
-                    placeholder="Amount (e.g. ₹5,000)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                  <input
-                    type="text"
-                    value={thirdPrizeLabel}
-                    onChange={(e) => setThirdPrizeLabel(e.target.value)}
-                    placeholder="Label (e.g. Third Place)"
-                    className="w-full min-h-[34px] px-2.5 text-xs border border-slate-300 rounded-md"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Mutually Exclusive Payment Mode Configuration */}
-            <div className="sm:col-span-2 p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="text-xs font-bold text-slate-800">
-                  Team Payment Requirement (Mutually Exclusive)
-                </label>
-                <span className="text-[11px] text-slate-500">
-                  Choose Free, Entry Fee, OR Refundable Security Deposit
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {(
-                  [
-                    { id: 'NONE', label: 'No Payment (Free)' },
-                    { id: 'ENTRY_FEE', label: 'Entry Fee' },
-                    { id: 'SECURITY_DEPOSIT', label: 'Refundable Deposit' },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setPaymentMode(opt.id)}
-                    className={`min-h-[34px] px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                      paymentMode === opt.id
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              {paymentMode === 'ENTRY_FEE' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Entry Registration Fee (₹) *
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={registrationFee}
-                      onChange={(e) => setRegistrationFee(e.target.value)}
-                      className="w-full min-h-[38px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Payment / UPI / Bank Instructions
-                    </label>
-                    <input
-                      type="text"
-                      value={paymentInstructions}
-                      onChange={(e) => setPaymentInstructions(e.target.value)}
-                      placeholder="e.g. UPI ID: club@upi — upload screenshot"
-                      className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {paymentMode === 'SECURITY_DEPOSIT' && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Refundable Security Deposit Amount (₹) *
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={securityDepositAmount}
-                        onChange={(e) => setSecurityDepositAmount(e.target.value)}
-                        className="w-full min-h-[38px] px-3 py-1.5 text-sm font-mono border border-slate-300 rounded-lg bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Payment / UPI / Bank Instructions
-                      </label>
-                      <input
-                        type="text"
-                        value={paymentInstructions}
-                        onChange={(e) => setPaymentInstructions(e.target.value)}
-                        placeholder="e.g. UPI ID: club@upi — upload receipt"
-                        className="w-full min-h-[38px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Refundable Deposit Policy Explanation
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={refundPolicy}
-                      onChange={(e) => setRefundPolicy(e.target.value)}
-                      placeholder="e.g. 100% refundable after completion of group matches unless forfeited for walkover."
-                      className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Tournament Logo URL (Optional)
-              </label>
-              <input
-                type="url"
-                value={logoUrl}
-                onChange={(e) => setLogoUrl(e.target.value)}
-                placeholder="https://..."
-                className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
-            <textarea
-              rows={2}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Tournament Rules
-              </label>
-              <textarea
-                rows={2}
-                value={rules}
-                onChange={(e) => setRules(e.target.value)}
-                placeholder="Match overs, half durations, tie-breakers..."
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Qualification Criteria
-              </label>
-              <textarea
-                rows={2}
-                value={qualificationRules}
-                onChange={(e) => setQualificationRules(e.target.value)}
-                placeholder="Top 2 per group advance to Semi-Finals..."
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
-          </div>
-
-          {teams.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Participating Teams ({teamIds.length} selected)
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-36 overflow-y-auto p-2.5 border border-slate-200 rounded-lg bg-slate-50">
-                {teams.map((tm) => (
-                  <label key={tm.id} className="inline-flex items-center gap-2 text-xs text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={teamIds.includes(tm.id)}
-                      onChange={() => toggleTeamId(tm.id)}
-                      className="w-3.5 h-3.5 rounded border-slate-300"
-                    />
-                    <span className="truncate">{tm.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-6">
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isPublished}
-                onChange={(e) => setIsPublished(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-emerald-600"
-              />
-              <span>Publish tournament publicly on Player Portal</span>
-            </label>
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={registrationOpen}
-                onChange={(e) => setRegistrationOpen(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-[#EA580C]"
-              />
-              <span>Open Captain Team Registration</span>
-            </label>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setModalOpen(false)}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Tournament'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+        onSubmit={handleSave}
+        onValidationError={(msg) => setError(msg)}
+      />
 
       {/* Dynamic Positions, Best Player & Custom Awards Modal */}
       <Modal

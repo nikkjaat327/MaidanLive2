@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
+  ArrowRightLeft,
   Award,
+  Bell,
   BellPlus,
+  BellRing,
   Calendar,
   Check,
   Clock,
@@ -25,6 +28,7 @@ import {
   Video,
   VideoOff,
   Wifi,
+  X,
 } from 'lucide-react';
 import {
   FixtureData,
@@ -94,6 +98,8 @@ import { useBroadcastEventQueue } from '../../hooks/useBroadcastEventQueue.ts';
 import { BroadcastEventAnimationLayer } from '../obs/BroadcastEventAnimationLayer.tsx';
 import { useImmersivePlayer } from '../../hooks/useImmersivePlayer.ts';
 import { extractRecentImportantEvent } from '../../utils/mediaPlayerUtils.ts';
+import { QuickMatchSwitcherModal } from './QuickMatchSwitcherModal.tsx';
+import { useMatchReminders, useSpoilerFreeMode } from '../../utils/viewerPreferences.ts';
 
 interface LiveBroadcastViewProps {
   stream: LiveStreamData;
@@ -263,11 +269,20 @@ export function LiveBroadcastView({
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const wakeLockRef = useRef<any>(null);
   const userPickedTabRef = useRef(false);
+  const stageSentinelRef = useRef<HTMLDivElement | null>(null);
+  const [isScrolledPastStage, setIsScrolledPastStage] = useState(false);
+  const [miniDismissed, setMiniDismissed] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [revealedSpoiler, setRevealedSpoiler] = useState(false);
+  const { spoilerFree } = useSpoilerFreeMode();
+  const { isReminded, toggleReminder } = useMatchReminders();
   const [activeTab, setActiveTab] = useState<DetailTab>(() =>
     broadcast.sport === 'Cricket' ? 'scorecard' : 'commentary'
   );
   useEffect(() => {
     userPickedTabRef.current = false;
+    setRevealedSpoiler(false);
+    setMiniDismissed(false);
     setActiveTab(broadcast.sport === 'Cricket' ? 'scorecard' : 'commentary');
   }, [broadcast.id]);
   useEffect(() => {
@@ -275,6 +290,23 @@ export function LiveBroadcastView({
       setActiveTab('scorecard');
     }
   }, [broadcast.sport, activeTab]);
+
+  useEffect(() => {
+    const el = stageSentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        const scrolledPast = !entry.isIntersecting;
+        setIsScrolledPastStage(scrolledPast);
+        if (!scrolledPast) {
+          setMiniDismissed(false);
+        }
+      },
+      { threshold: 0.15 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [broadcast.id]);
   const [publicSponsors, setPublicSponsors] = useState<SponsorData[]>(
     () => initialPublicSponsors || []
   );
@@ -865,35 +897,78 @@ export function LiveBroadcastView({
     wantsReplay && broadcast.replayPublished ? 'youtube' : broadcast.activeProvider;
   const hasReconnectingAlert =
     !connected || playerSignal === 'error' || playerSignal === 'reconnecting';
-  const showHud = controlsVisible && !touchLocked;
+  const showMobileMiniPlayer =
+    isScrolledPastStage && !miniDismissed && !isFullscreenActive && canPlayVideo && !videoDisabled;
+  const showHud = controlsVisible && !touchLocked && !showMobileMiniPlayer;
+  const isReplaySpoilerHidden = Boolean(
+    (wantsReplay || broadcast.status === 'ENDED') && spoilerFree && !revealedSpoiler
+  );
+  const matchReminded = isReminded(broadcast.id);
 
   return (
     <div className="space-y-4">
-      {/* 1. PERSISTENT VIDEO STAGE (NEVER REMOUNTS ON ORIENTATION / FULLSCREEN / SCORE TOGGLE) */}
+      {/* 1. PERSISTENT VIDEO STAGE (NEVER REMOUNTS ON ORIENTATION / FULLSCREEN / MINI-PLAYER / SCORE TOGGLE) */}
       <div className="bg-slate-950 sm:rounded-xl overflow-hidden border border-slate-800 shadow-lg">
-        <div
-          ref={stageRef}
-          onMouseMove={() => {
-            if (!touchLocked) showControlsTemporarily();
-          }}
-          onClick={() => {
-            if (touchLocked) {
-              showLockedHintBriefly();
-              return;
+        <div ref={stageSentinelRef} className="relative w-full aspect-video bg-slate-950">
+          {showMobileMiniPlayer && (
+            <div className="lg:hidden absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-400 text-xs px-4 text-center">
+              <Radio className="w-5 h-5 text-[#EA580C]" />
+              <span>Playing in compact mini-player</span>
+            </div>
+          )}
+          <div
+            ref={stageRef}
+            onMouseMove={() => {
+              if (!touchLocked) showControlsTemporarily();
+            }}
+            onClick={() => {
+              if (touchLocked) {
+                showLockedHintBriefly();
+                return;
+              }
+              if (activePlayerProvider === 'mediamtx' || videoDisabled || broadcast.status === 'UPCOMING') {
+                toggleControls();
+              }
+            }}
+            className={
+              isExpandedFallback
+                ? 'fixed inset-0 z-50 bg-black flex items-center justify-center'
+                : isNativeFullscreen
+                  ? 'relative w-full h-full bg-black flex items-center justify-center'
+                  : showMobileMiniPlayer
+                    ? 'fixed bottom-[4.75rem] right-3 z-40 w-44 sm:w-56 aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-700 lg:relative lg:bottom-auto lg:right-auto lg:z-auto lg:w-full lg:h-full lg:rounded-none lg:border-0 lg:shadow-none'
+                    : 'relative w-full h-full bg-black'
             }
-            if (activePlayerProvider === 'mediamtx' || videoDisabled || broadcast.status === 'UPCOMING') {
-              toggleControls();
-            }
-          }}
-          className={
-            isExpandedFallback
-              ? 'fixed inset-0 z-50 bg-black flex items-center justify-center'
-              : isNativeFullscreen
-                ? 'relative w-full h-full bg-black flex items-center justify-center'
-                : 'relative w-full aspect-video bg-black'
-          }
-        >
-          <div className="relative w-full h-full">
+          >
+            {showMobileMiniPlayer && (
+              <div className="lg:hidden absolute top-1.5 right-1.5 z-45 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    stageSentinelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  aria-label="Return to full video player"
+                  title="Return to player"
+                  className="h-7 w-7 rounded-md bg-slate-950/85 text-white border border-white/20 inline-flex items-center justify-center"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMiniDismissed(true);
+                  }}
+                  aria-label="Minimize video dock"
+                  title="Hide mini-player"
+                  className="h-7 w-7 rounded-md bg-slate-950/85 text-white border border-white/20 inline-flex items-center justify-center"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <div className="relative w-full h-full">
             {canPlayVideo ? (
               <>
                 <LiveStreamPlayer
@@ -1370,6 +1445,7 @@ export function LiveBroadcastView({
                 />
               </>
             )}
+            </div>
           </div>
         </div>
 
@@ -1411,20 +1487,46 @@ export function LiveBroadcastView({
 
       {/* 2. CONTAINER/ORIENTATION-AWARE SCOREBOARD -> SPORT STRIP -> SUMMARY -> RESULT BAR */}
       <div className="px-3 sm:px-0 space-y-3">
-        {scoreboardVisible && (broadcast.showScoreboardOnYoutube || videoDisabled) && (
-          <BroadcastScoreboard
-            broadcast={broadcast}
-            layoutMode={layout.scoreboardMode}
-            hideSubStrip
-          />
-        )}
-        <BroadcastSportStrip broadcast={broadcast} />
-        <ScoreboardSummary stream={stream} score={score} variant="detail" />
-        <BroadcastResultBar broadcast={broadcast} />
-        {broadcast.sport === 'Kabaddi' && kabaddiDetails?.matchCompleted && (
-          <div className="flex justify-center">
-            <KabaddiWinnerScreen inline stream={stream} score={score} details={kabaddiDetails} />
+        {isReplaySpoilerHidden ? (
+          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <EyeOff className="w-4 h-4 text-[#EA580C] shrink-0" />
+              <div>
+                <p className="text-xs sm:text-sm font-bold text-slate-900">
+                  Spoiler-Free Mode Active
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Final score and match result are hidden while you watch the replay.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRevealedSpoiler(true)}
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Reveal Score</span>
+            </button>
           </div>
+        ) : (
+          <>
+            {scoreboardVisible && (broadcast.showScoreboardOnYoutube || videoDisabled) && (
+              <BroadcastScoreboard
+                broadcast={broadcast}
+                layoutMode={layout.scoreboardMode}
+                hideSubStrip
+              />
+            )}
+            <BroadcastSportStrip broadcast={broadcast} />
+            <ScoreboardSummary stream={stream} score={score} variant="detail" />
+            <BroadcastResultBar broadcast={broadcast} />
+            {broadcast.sport === 'Kabaddi' && kabaddiDetails?.matchCompleted && (
+              <div className="flex justify-center">
+                <KabaddiWinnerScreen inline stream={stream} score={score} details={kabaddiDetails} />
+              </div>
+            )}
+          </>
         )}
 
         {/* Match Header & Quick Actions */}
@@ -1461,6 +1563,33 @@ export function LiveBroadcastView({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {broadcast.status === 'UPCOMING' && (
+                <button
+                  type="button"
+                  onClick={() => void toggleReminder(stream)}
+                  aria-pressed={matchReminded}
+                  className={`min-h-[44px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                    matchReminded
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {matchReminded ? (
+                    <BellRing className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : (
+                    <Bell className="w-3.5 h-3.5 text-[#EA580C]" />
+                  )}
+                  <span>{matchReminded ? 'Alert On' : 'Remind Me'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSwitcherOpen(true)}
+                className="min-h-[44px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5 text-[#EA580C]" />
+                <span>Switch Live</span>
+              </button>
               <ShareButton
                 title={broadcast.title}
                 text={`Watch ${broadcast.sport} ${wantsReplay && broadcast.replayPublished ? 'replay' : 'live'} on MaidanLive`}
@@ -1545,7 +1674,7 @@ export function LiveBroadcastView({
               <button
                 type="button"
                 onClick={onOpenReport}
-                className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                className="min-h-[44px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 hover:bg-slate-100"
               >
                 <Flag className="w-3.5 h-3.5 text-red-600" />
                 <span>Report</span>
@@ -1607,8 +1736,8 @@ export function LiveBroadcastView({
           />
         </div>
 
-        {/* 3. MATCH CENTER TABS */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {/* 3. MATCH CENTER TABS (Compact sticky thumb bar on mobile, regular inline strip on desktop) */}
+        <div className="sticky top-14 lg:static z-20 -mx-3 px-3 py-1.5 bg-slate-50/95 lg:bg-transparent backdrop-blur-sm lg:backdrop-blur-none sm:mx-0 sm:px-0 lg:py-0 flex items-center gap-2 overflow-x-auto border-b border-slate-200/70 lg:border-b-0">
           {[
             ...(broadcast.sport === 'Cricket'
               ? [{ id: 'scorecard' as const, label: 'Scorecard' }]
@@ -1653,7 +1782,7 @@ export function LiveBroadcastView({
                 userPickedTabRef.current = true;
                 setActiveTab(tab.id);
               }}
-              className={`min-h-[40px] px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors ${
+              className={`min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors ${
                 activeTab === tab.id
                   ? 'bg-slate-900 text-white border-slate-900'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
@@ -2243,6 +2372,12 @@ export function LiveBroadcastView({
           </div>
         )}
       </div>
+
+      <QuickMatchSwitcherModal
+        open={switcherOpen}
+        currentMatchId={broadcast.id}
+        onClose={() => setSwitcherOpen(false)}
+      />
     </div>
   );
 }

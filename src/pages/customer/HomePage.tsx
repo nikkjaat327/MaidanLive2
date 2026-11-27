@@ -1,15 +1,30 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Award, Calendar, History, Lock, MapPin, PlaySquare, Radio, Trophy } from 'lucide-react';
+import {
+  ArrowRight,
+  Award,
+  Calendar,
+  Eye,
+  EyeOff,
+  Heart,
+  History,
+  Lock,
+  MapPin,
+  PlaySquare,
+  Radio,
+  Trophy,
+} from 'lucide-react';
 import { HERO_BANNER_IMAGE, SPORT_OPTIONS } from '../../constants/sports.ts';
 import { LiveStreamData, SponsorData, TournamentData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { entityService } from '../../services/entities/entityService.ts';
+import { engagementService } from '../../services/engagement/engagementService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
+import { useSpoilerFreeMode } from '../../utils/viewerPreferences.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
@@ -43,18 +58,24 @@ export function HomePage() {
   const [recentMatches, setRecentMatches] = useState<RecentMatchEntry[]>(() =>
     recentlyWatchedStore.getMatches()
   );
+  const { spoilerFree, toggleSpoilerFree } = useSpoilerFreeMode();
+  const [followedMatches, setFollowedMatches] = useState<LiveStreamData[]>([]);
   const [loading, setLoading] = useState(() => !initialStreams);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const [allStreams, publishedReplays, allTournaments, sponsors] = await Promise.all([
-        liveStreamService.listStreams(),
-        isAuthenticated ? liveStreamService.listReplays(false).catch(() => []) : Promise.resolve([]),
-        entityService.listTournaments().catch(() => []),
-        platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
-      ]);
+      const [allStreams, publishedReplays, allTournaments, sponsors, followingFeed] =
+        await Promise.all([
+          liveStreamService.listStreams(),
+          isAuthenticated
+            ? liveStreamService.listReplays(false).catch(() => [])
+            : Promise.resolve([]),
+          entityService.listTournaments().catch(() => []),
+          platformOpsService.listPublicSponsors({ placement: 'home_feed' }).catch(() => []),
+          customerUser ? engagementService.getFollowingFeed().catch(() => null) : Promise.resolve(null),
+        ]);
       setStreams((prev) => {
         if (prev.length === 0) return allStreams;
         const prevMap = new Map(prev.map((s) => [s.id || s._id, s]));
@@ -67,6 +88,14 @@ export function HomePage() {
           };
         });
       });
+      if (followingFeed) {
+        setFollowedMatches([
+          ...(followingFeed.liveMatches || []),
+          ...(followingFeed.upcomingMatches || []).slice(0, 6),
+        ]);
+      } else {
+        setFollowedMatches([]);
+      }
       setReplays(publishedReplays);
       setTournaments(allTournaments);
       setHomeSponsors(sponsors);
@@ -79,7 +108,7 @@ export function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, customerUser]);
 
   useEffect(() => {
     loadData();
@@ -209,6 +238,12 @@ export function HomePage() {
     })
     .slice(0, 4);
 
+  const streamScoreMap = new Map(streams.map((s) => [s.id || s._id, s.score]));
+  const visibleFollowedTicker = followedMatches
+    .map((m) => ({ ...m, score: streamScoreMap.get(m.id || m._id) || m.score }))
+    .filter(filterItem)
+    .slice(0, 8);
+
   const featuredTournaments = tournaments
     .filter(
       (tour) =>
@@ -313,6 +348,72 @@ export function HomePage() {
             </div>
           )}
         </div>
+
+        {/* Followed Teams Live & Next Up Ticker */}
+        {visibleFollowedTicker.length > 0 ? (
+          <section aria-label="Followed Teams Ticker" className="space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 inline-flex items-center gap-2">
+                <Heart className="w-4 h-4 text-[#EA580C]" />
+                <span>Your Followed Teams</span>
+              </h2>
+              <Link
+                to="/following"
+                className="text-xs font-semibold text-[#EA580C] hover:underline whitespace-nowrap"
+              >
+                Manage Following
+              </Link>
+            </div>
+            <div className="flex items-stretch gap-3 overflow-x-auto pb-1">
+              {visibleFollowedTicker.map((fm) => (
+                <Link
+                  key={`fol-${fm.id}`}
+                  to={`/live/${fm.id}`}
+                  className="min-w-[240px] max-w-[280px] shrink-0 bg-white border border-slate-200 hover:border-orange-300 rounded-xl p-3 flex flex-col justify-between gap-1.5 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold uppercase text-[#EA580C]">
+                      {fm.gameName || 'Match'}
+                    </span>
+                    <MatchStatusBadge stream={fm} score={fm.score} compact />
+                  </div>
+                  <p className="text-xs font-bold text-slate-900 truncate">
+                    {fm.matchTitle || `${fm.teamAName || 'Team A'} vs ${fm.teamBName || 'Team B'}`}
+                  </p>
+                  {fm.score ? (
+                    <p className="font-mono tabular-nums text-xs font-semibold text-slate-700">
+                      {fm.teamAName || 'A'} {fm.score.teamAScore} - {fm.score.teamBScore}{' '}
+                      {fm.teamBName || 'B'}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 truncate">
+                      {fm.matchDate ? new Date(fm.matchDate).toLocaleString() : 'Scheduled'}
+                    </p>
+                  )}
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : (
+          !loading &&
+          !customerUser && (
+            <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Heart className="w-4 h-4 text-[#EA580C] shrink-0" />
+                <p className="text-xs sm:text-sm text-slate-600">
+                  Follow your favorite local teams to pin their live scores &amp; get match-start alerts.
+                </p>
+              </div>
+              <Link
+                to="/teams"
+                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 shrink-0"
+              >
+                <span>Browse Teams</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+          )
+        )}
 
         {/* Continue Watching / Recently Watched */}
         {recentMatches.length > 0 && (
@@ -591,17 +692,36 @@ export function HomePage() {
 
         {/* Available Replays */}
         <section aria-labelledby="replays-heading" className="space-y-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 id="replays-heading" className="font-display text-2xl font-bold text-slate-900">
               Available Replays
             </h2>
-            <Link
-              to="/replays"
-              className="inline-flex items-center gap-1 text-sm font-medium text-[#EA580C] hover:underline whitespace-nowrap"
-            >
-              <span>All replays</span>
-              <ArrowRight className="w-4 h-4" />
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={toggleSpoilerFree}
+                aria-pressed={spoilerFree}
+                className={`min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                  spoilerFree
+                    ? 'bg-slate-900 border-slate-900 text-white'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {spoilerFree ? (
+                  <EyeOff className="w-3.5 h-3.5 text-orange-400" />
+                ) : (
+                  <Eye className="w-3.5 h-3.5 text-slate-500" />
+                )}
+                <span>Spoiler-Free: {spoilerFree ? 'ON' : 'OFF'}</span>
+              </button>
+              <Link
+                to="/replays"
+                className="inline-flex items-center gap-1 text-sm font-medium text-[#EA580C] hover:underline whitespace-nowrap"
+              >
+                <span>All replays</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            </div>
           </div>
 
           {loading || authLoading ? (

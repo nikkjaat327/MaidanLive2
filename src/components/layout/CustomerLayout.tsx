@@ -26,6 +26,7 @@ import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { OfflineIndicator } from '../common/OfflineIndicator.tsx';
 import { ServerWakeupBanner } from '../common/ServerWakeupBanner.tsx';
 import { GlobalSearchModal } from '../common/GlobalSearchModal.tsx';
+import { MatchStartAlertManager } from '../common/MatchStartAlertManager.tsx';
 import { EnvBrandLogoImg } from '../obs/ObsBrandMark.tsx';
 
 export function CustomerLayout() {
@@ -550,6 +551,7 @@ export function CustomerLayout() {
         </NavLink>
       </nav>
 
+      <MatchStartAlertManager />
       <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   );

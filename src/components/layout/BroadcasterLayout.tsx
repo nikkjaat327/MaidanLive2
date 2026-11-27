@@ -14,6 +14,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
+  Search,
   Settings,
   Shield,
   Sparkles,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { ROLE_LABELS } from '../../constants/roles.ts';
+import { AdminCommandPalette } from '../admin/AdminCommandPalette.tsx';
 import {
   ACTIVE_MATCH_CHANGED_EVENT,
   ACTIVE_MATCH_STORAGE_KEY,
@@ -345,6 +347,7 @@ export function BroadcasterLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<ControlRoomSidebarTelemetry | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -355,6 +358,17 @@ export function BroadcasterLayout() {
   });
 
   const [stickyMatchId, setStickyMatchState] = useState<string>(() => getStickyMatchId());
+
+  useEffect(() => {
+    const handleGlobalKey = (ev: KeyboardEvent) => {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, []);
 
   useEffect(() => {
     const onTelemetry = (ev: Event) => {
@@ -552,6 +566,19 @@ export function BroadcasterLayout() {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open broadcaster quick jump"
+              title="Quick Jump (Cmd/Ctrl + K)"
+              className="min-h-[34px] inline-flex items-center gap-2 px-2.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:border-cyan-400/50 text-xs font-semibold transition-colors"
+            >
+              <Search className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span className="hidden sm:inline">Jump</span>
+              <kbd className="hidden md:inline px-1.5 py-0.5 rounded bg-white/10 font-mono text-[10px]">
+                ⌘K
+              </kbd>
+            </button>
             {adminUser && (
               <span className="hidden md:inline text-xs text-slate-400 font-mono">
                 {adminUser.name} · {ROLE_LABELS[adminUser.role] || adminUser.role}
@@ -669,6 +696,13 @@ export function BroadcasterLayout() {
           </div>
         </div>
       )}
+      <AdminCommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        stickyMatchId={rememberedMatchId}
+        theme="dark"
+        isBroadcasterPortal
+      />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Lock, Play, Trophy } from 'lucide-react';
+import { Bell, BellRing, Eye, Lock, Play, ShieldAlert, Trophy } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { TeamAvatar } from '../common/TeamAvatar.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
@@ -8,6 +8,7 @@ import { ShareButton } from '../common/ShareButton.tsx';
 import { ShareCardPayload } from '../common/ShareCardModal.tsx';
 import { formatCricketOvers, getCricketCreaseSummary } from '../../utils/cricketScoring.ts';
 import { buildMatchUrl } from '../../utils/shareUrl.ts';
+import { useMatchReminders, useSpoilerFreeMode } from '../../utils/viewerPreferences.ts';
 
 interface StreamCardProps {
   stream: LiveStreamData;
@@ -26,7 +27,16 @@ export const StreamCard = memo(function StreamCard({
 }: StreamCardProps) {
   const [thumbErr, setThumbErr] = useState(false);
   const [scorePulseKey, setScorePulseKey] = useState(0);
+  const [revealedSpoiler, setRevealedSpoiler] = useState(false);
   const prevScoreSigRef = useRef<string>('');
+  const { spoilerFree } = useSpoilerFreeMode();
+  const { isReminded, toggleReminder } = useMatchReminders();
+
+  const isReplay = useReplayThumbnail || Boolean(stream.replayPublished && stream.status === 'ENDED');
+  const spoilerProtected =
+    spoilerFree && !revealedSpoiler && (isReplay || stream.status === 'ENDED');
+  const isUpcoming = stream.status === 'UPCOMING';
+  const reminded = isReminded(stream.id);
 
   const activeVideoId =
     useReplayThumbnail && stream.replayVideoId ? stream.replayVideoId : stream.youtubeVideoId;
@@ -84,7 +94,6 @@ export const StreamCard = memo(function StreamCard({
     prevScoreSigRef.current = scoreSig;
   }, [scoreSig]);
 
-  const isReplay = useReplayThumbnail || Boolean(stream.replayPublished && stream.status === 'ENDED');
   const canonicalUrl = buildMatchUrl(stream.id, useReplayThumbnail);
   const hasResult = Boolean(score?.resultStatus && score.resultStatus !== 'NOT_DECLARED');
 
@@ -208,7 +217,7 @@ export const StreamCard = memo(function StreamCard({
             {stream.activeViewers} watching
           </div>
         )}
-        {score && (
+        {score && !spoilerProtected && (
           <div
             key={scorePulseKey}
             className={`absolute bottom-3 left-3 right-3 flex items-center justify-between text-white text-xs font-mono tabular-nums ${
@@ -226,6 +235,14 @@ export const StreamCard = memo(function StreamCard({
               {isCricket && cricketDetails
                 ? `${cricketDetails.teamBRuns ?? score.teamBScore}/${cricketDetails.teamBWickets ?? 0} (${formatCricketOvers(cricketDetails.teamBBalls ?? 0)})`
                 : score.teamBScore}
+            </span>
+          </div>
+        )}
+        {spoilerProtected && (
+          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white/90 text-[11px] font-semibold">
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 text-orange-400" />
+              <span>Spoiler-Free · Score hidden</span>
             </span>
           </div>
         )}
@@ -248,16 +265,24 @@ export const StreamCard = memo(function StreamCard({
             {displayTitle}
           </h3>
 
-          {score?.resultStatus && score.resultStatus !== 'NOT_DECLARED' && (
-            <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800">
-              <Trophy className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              <span className="truncate">
-                {score.resultDescription || score.winnerTeamName}
-              </span>
+          {spoilerProtected ? (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 text-[11px] text-slate-600">
+              <span>Result &amp; final score masked</span>
+              <span className="font-semibold text-[#EA580C]">Tap Reveal</span>
             </div>
+          ) : (
+            score?.resultStatus &&
+            score.resultStatus !== 'NOT_DECLARED' && (
+              <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+                <Trophy className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="truncate">
+                  {score.resultDescription || score.winnerTeamName}
+                </span>
+              </div>
+            )
           )}
 
-          {hasCricketCrease && cricketCrease && (
+          {!spoilerProtected && hasCricketCrease && cricketCrease && (
             <div className="mt-2.5 rounded-lg bg-slate-50 border border-slate-200/80 px-2.5 py-1.5 text-[11px] space-y-1">
               {(cricketCrease.batsman1 || cricketCrease.batsman2) && (
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-slate-800">
@@ -333,22 +358,62 @@ export const StreamCard = memo(function StreamCard({
     </article>
   );
 
-  const shareOverlay = showShare ? (
-    <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
-      {showWatchingPill && (
-        <span className="pointer-events-none px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
-          {stream.activeViewers} watching
-        </span>
-      )}
-      <ShareButton
-        variant="card-icon"
-        title={displayTitle}
-        text={`${stream.gameName || 'Sports'} on MaidanLive`}
-        url={canonicalUrl}
-        shareCard={shareCardPayload}
-      />
-    </div>
-  ) : null;
+  const shareOverlay =
+    showShare || isUpcoming || spoilerProtected ? (
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+        {showWatchingPill && (
+          <span className="pointer-events-none px-2 py-0.5 rounded-md bg-slate-950/85 text-white font-mono text-[11px] font-semibold tabular-nums">
+            {stream.activeViewers} watching
+          </span>
+        )}
+        {spoilerProtected && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setRevealedSpoiler(true);
+            }}
+            aria-label="Reveal hidden score"
+            title="Reveal final score for this match"
+            className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/90 hover:bg-slate-900 border border-white/20 text-white text-[11px] font-semibold backdrop-blur-sm"
+          >
+            <Eye className="w-3.5 h-3.5 text-orange-400" />
+            <span>Reveal</span>
+          </button>
+        )}
+        {isUpcoming && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void toggleReminder(stream);
+            }}
+            aria-pressed={reminded}
+            aria-label={reminded ? 'Remove match start reminder' : 'Set match start reminder'}
+            title={reminded ? 'Match alert active' : 'Notify me when match starts'}
+            className={`min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold backdrop-blur-sm transition-colors ${
+              reminded
+                ? 'bg-[#EA580C] border-orange-400 text-white'
+                : 'bg-slate-950/85 hover:bg-slate-900 border-white/20 text-white'
+            }`}
+          >
+            {reminded ? <BellRing className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{reminded ? 'Alert On' : 'Remind'}</span>
+          </button>
+        )}
+        {showShare && !spoilerProtected && (
+          <ShareButton
+            variant="card-icon"
+            title={displayTitle}
+            text={`${stream.gameName || 'Sports'} on MaidanLive`}
+            url={canonicalUrl}
+            shareCard={shareCardPayload}
+          />
+        )}
+      </div>
+    ) : null;
 
   if (to) {
     return (

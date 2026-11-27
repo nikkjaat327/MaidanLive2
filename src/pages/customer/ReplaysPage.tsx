@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Lock, PlaySquare, Search } from 'lucide-react';
+import { Eye, EyeOff, Lock, PlaySquare, Search } from 'lucide-react';
 import { LiveStreamData } from '../../types/index.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { extractApiError } from '../../services/api/httpClient.ts';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { SPORT_OPTIONS } from '../../constants/sports.ts';
+import { useSpoilerFreeMode } from '../../utils/viewerPreferences.ts';
 import { StreamCard } from '../../components/streaming/StreamCard.tsx';
 import { CardGridSkeleton } from '../../components/common/LoadingSkeleton.tsx';
 import { EmptyState } from '../../components/common/EmptyState.tsx';
@@ -15,6 +16,7 @@ export function ReplaysPage() {
   const { customerUser, adminUser, customerLoading, adminLoading } = useAuth();
   const isAuthenticated = Boolean(customerUser || adminUser);
   const authLoading = customerLoading || adminLoading;
+  const { spoilerFree, toggleSpoilerFree } = useSpoilerFreeMode();
 
   const [replays, setReplays] = useState<LiveStreamData[]>([]);
   const [sportFilter, setSportFilter] = useState('');
@@ -62,33 +64,69 @@ export function ReplaysPage() {
           </p>
         </div>
 
-        {isAuthenticated && (
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="relative">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={toggleSpoilerFree}
+            aria-pressed={spoilerFree}
+            className={`min-h-[44px] inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border text-xs font-semibold transition-colors ${
+              spoilerFree
+                ? 'bg-slate-900 border-slate-900 text-white'
+                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            {spoilerFree ? (
+              <EyeOff className="w-4 h-4 text-orange-400" />
+            ) : (
+              <Eye className="w-4 h-4 text-slate-500" />
+            )}
+            <span>Spoiler-Free: {spoilerFree ? 'ON' : 'OFF'}</span>
+          </button>
+
+          {isAuthenticated && (
+            <div className="relative flex-1 sm:flex-initial">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search replays..."
-                className="min-h-[40px] pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg w-48 sm:w-56"
+                className="min-h-[44px] pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg w-full sm:w-56"
               />
             </div>
-            <select
-              value={sportFilter}
-              onChange={(e) => setSportFilter(e.target.value)}
-              className="min-h-[40px] px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg"
-            >
-              <option value="">All Sports</option>
-              {SPORT_OPTIONS.map((sp) => (
-                <option key={sp} value={sp}>
-                  {sp}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {isAuthenticated && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setSportFilter('')}
+            className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
+              sportFilter === ''
+                ? 'bg-[#EA580C] text-white border-[#EA580C]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            All Sports
+          </button>
+          {SPORT_OPTIONS.map((sp) => (
+            <button
+              key={sp}
+              type="button"
+              onClick={() => setSportFilter(sp)}
+              className={`min-h-[40px] px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${
+                sportFilter === sp
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {sp}
+            </button>
+          ))}
+        </div>
+      )}
 
       <FeedbackBanner type="error" message={error} onDismiss={() => setError(null)} />
 
