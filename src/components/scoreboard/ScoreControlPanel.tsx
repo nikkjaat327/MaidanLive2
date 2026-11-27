@@ -40,6 +40,10 @@ import { LiveMvpTrackerPanel } from './LiveMvpTrackerPanel.tsx';
 import type { MatchResultType } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { generateAutoCommentary } from '../../utils/autoCommentary.ts';
+import {
+  extractCommentaryFeedEntries,
+  type CommentaryCategory,
+} from '../../utils/commentaryFeed.ts';
 import { OfflineScoreQueueItem } from '../../utils/offlineScoreQueue.ts';
 import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus.ts';
@@ -132,6 +136,7 @@ export function ScoreControlPanel({
   const [panelSubReason, setPanelSubReason] = useState('');
 
   const [commentaryText, setCommentaryText] = useState('');
+  const [commentaryCategory, setCommentaryCategory] = useState<CommentaryCategory>('COMMENTARY');
   const [postingCommentary, setPostingCommentary] = useState(false);
   const [autoCommentaryEnabled, setAutoCommentaryEnabled] = useState<boolean>(() => {
     try {
@@ -532,7 +537,7 @@ export function ScoreControlPanel({
     try {
       setPostingCommentary(true);
       setError(null);
-      await scoreboardService.submitCommentary(stream.id, snippet);
+      await scoreboardService.submitCommentary(stream.id, snippet, commentaryCategory);
       setCommentaryText('');
       onRefreshHistory();
       setSuccessMsg('Live commentary posted to viewers.');
@@ -1042,9 +1047,31 @@ export function ScoreControlPanel({
             className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800"
           >
             <MessageSquarePlus className="w-4 h-4 text-emerald-600" />
-            <span>Live Commentary Snippet</span>
+            <span>Commentary Feed Broadcaster</span>
           </label>
           <div className="flex flex-wrap items-center gap-3 text-xs">
+            <div className="inline-flex items-center gap-1 p-0.5 bg-slate-100 rounded-md border border-slate-200">
+              {(
+                [
+                  { id: 'COMMENTARY', label: 'Commentary' },
+                  { id: 'HIGHLIGHT', label: 'Highlight' },
+                  { id: 'UPDATE', label: 'Match Update' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setCommentaryCategory(opt.id)}
+                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap ${
+                    commentaryCategory === opt.id
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer font-medium">
               <input
                 type="checkbox"
@@ -1086,7 +1113,7 @@ export function ScoreControlPanel({
             maxLength={280}
             value={commentaryText}
             onChange={(e) => setCommentaryText(e.target.value)}
-            placeholder="Type live commentary update or let Auto-Commentary pre-fill from score updates"
+            placeholder="Broadcast a match update, highlight, or live commentary"
             className="flex-1 min-h-[42px] px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
           <button
@@ -1095,9 +1122,41 @@ export function ScoreControlPanel({
             className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap shrink-0"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>{postingCommentary ? 'Sending...' : 'Post Commentary'}</span>
+            <span>{postingCommentary ? 'Sending...' : 'Broadcast'}</span>
           </button>
         </div>
+        {(() => {
+          const recentCommentary = extractCommentaryFeedEntries(history, 'ALL').slice(0, 8);
+          if (recentCommentary.length === 0) return null;
+          return (
+            <div className="pt-1 border-t border-slate-100 max-h-36 overflow-y-auto divide-y divide-slate-100">
+              {recentCommentary.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="py-1.5 flex items-start justify-between gap-3 text-xs"
+                >
+                  <div className="min-w-0">
+                    <span
+                      className={`font-semibold mr-1.5 ${
+                        entry.category === 'HIGHLIGHT'
+                          ? 'text-amber-700'
+                          : entry.category === 'UPDATE'
+                            ? 'text-sky-700'
+                            : 'text-emerald-700'
+                      }`}
+                    >
+                      {entry.categoryLabel}
+                    </span>
+                    <span className="text-slate-800 break-words">{entry.text}</span>
+                  </div>
+                  <span className="font-mono tabular-nums text-[11px] text-slate-400 shrink-0">
+                    {entry.formattedTime}
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </form>
 
       {/* Advanced Multi-Point & Structured Scorer (Football / Volleyball / Other; Cricket & Kabaddi have dedicated Consoles) */}

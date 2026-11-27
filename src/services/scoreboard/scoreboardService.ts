@@ -1,4 +1,5 @@
 import { LiveScoreData, ScoreHistoryItem } from '../../types/index.ts';
+import type { CommentaryCategory } from '../../utils/commentaryFeed.ts';
 import {
   getDiagRequestHeaders,
   type ScoreDiagTraceServer,
@@ -200,12 +201,25 @@ export const scoreboardService = {
 
   async submitCommentary(
     streamId: string,
-    snippet: string
+    snippet: string,
+    category: CommentaryCategory = 'COMMENTARY'
   ): Promise<{ streamId: string; commentary: ScoreHistoryItem }> {
     const { data } = await adminApi.post<{ streamId: string; commentary: ScoreHistoryItem }>(
       `/live/${streamId}/commentary`,
-      { snippet }
+      { snippet, category }
     );
+    return data;
+  },
+
+  async deleteCommentary(
+    streamId: string,
+    commentaryId: string
+  ): Promise<{ streamId: string; deleted: boolean; commentaryId: string }> {
+    const { data } = await adminApi.delete<{
+      streamId: string;
+      deleted: boolean;
+      commentaryId: string;
+    }>(`/live/${streamId}/commentary/${commentaryId}`);
     return data;
   },
 

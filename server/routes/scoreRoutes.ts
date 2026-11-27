@@ -38,6 +38,10 @@ import { applyFootballAction } from '../../src/utils/footballScoring.ts';
 import type { FootballDetails } from '../../src/utils/footballScoring.ts';
 import { validateMatchResult } from '../../src/utils/matchResultValidation.ts';
 import type { MatchResultType } from '../../src/utils/matchResultValidation.ts';
+import {
+  formatCommentaryScoreSnapshot,
+  normalizeCommentaryCategory,
+} from '../../src/utils/commentaryFeed.ts';
 import { sanitizeText } from '../utils/sanitize.ts';
 import { emitStreamEvent, emitTournamentEvent } from '../socket/index.ts';
 import { recordActivity } from '../utils/audit.ts';
@@ -2295,11 +2299,13 @@ router.post(
         return;
       }
 
-      const snippet = sanitizeText(req.body.snippet ?? req.body.action, 280);
+      const snippet = sanitizeText(req.body.snippet ?? req.body.action ?? req.body.text, 280);
       if (!snippet) {
         res.status(400).json({ message: 'Commentary snippet cannot be empty.' });
         return;
       }
+
+      const category = normalizeCommentaryCategory(req.body.category);
 
       const score = await ensureLiveScore(id);
       if (!score) {
@@ -2314,11 +2320,19 @@ router.post(
         sportSpecificDetails: score.sportSpecificDetails,
         matchStatus: score.matchStatus,
       };
+      const scoreSnapshotText = formatCommentaryScoreSnapshot(snapshot);
 
       const historyItem = await ScoreHistory.create({
         liveStreamId: score.liveStreamId,
         entryType: 'COMMENTARY',
         sportType: score.sportType,
+        eventCategory: 'COMMENTARY_FEED',
+        eventType: category,
+        details: {
+          commentaryCategory: category,
+          scoreSnapshotText,
+          authorName: req.user?.name || 'Admin',
+        },
         previousScore: snapshot,
         updatedScore: snapshot,
         action: snippet,
@@ -2341,13 +2355,78 @@ router.post(
           'POST_COMMENTARY',
           'LiveScore',
           score._id.toString(),
-          snippet
+          `[${category}] ${snippet}`
         )
       );
       res.status(201).json(payload);
     } catch (err) {
       console.error('[Score] Commentary error:', err);
       res.status(500).json({ message: 'Failed to submit commentary snippet.' });
+    }
+  }
+);
+
+// DELETE /api/live/:id/commentary/:commentaryId - Remove a commentary feed entry
+router.delete(
+  '/:id/commentary/:commentaryId',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id, commentaryId } = req.params;
+      if (
+        !mongoose.Types.ObjectId.isValid(id) ||
+        !mongoose.Types.ObjectId.isValid(commentaryId)
+      ) {
+        res.status(400).json({ message: 'Invalid stream or commentary ID.' });
+        return;
+      }
+
+      const allowed = await canManageStream(req.user!, id, 'score');
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to manage commentary for this stream.',
+        });
+        return;
+      }
+
+      const existing = await ScoreHistory.findOne({
+        _id: commentaryId,
+        liveStreamId: id,
+        entryType: 'COMMENTARY',
+      });
+      if (!existing) {
+        res.status(404).json({ message: 'Commentary update not found.' });
+        return;
+      }
+
+      await ScoreHistory.deleteOne({ _id: commentaryId, liveStreamId: id });
+
+      const payload = {
+        streamId: id,
+        commentaryId,
+      };
+      emitStreamEvent(id, 'commentary:deleted', payload);
+      emitStreamEvent(id, 'match:timeline:updated', {
+        streamId: id,
+        deletedCommentaryId: commentaryId,
+      });
+
+      runBackgroundTask(
+        'commentaryDeleteAudit',
+        recordActivity(
+          req.user!,
+          'DELETE_COMMENTARY',
+          'LiveScore',
+          id,
+          `Removed commentary ${commentaryId}`
+        )
+      );
+
+      res.json({ streamId: id, deleted: true, commentaryId });
+    } catch (err) {
+      console.error('[Score] Delete commentary error:', err);
+      res.status(500).json({ message: 'Failed to delete commentary update.' });
     }
   }
 );

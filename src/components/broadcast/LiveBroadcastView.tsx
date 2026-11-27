@@ -52,6 +52,7 @@ import { BroadcastScoreboardOverlay } from '../scoreboard/broadcast/BroadcastSco
 import { BroadcastSportStrip } from './BroadcastSportStrip.tsx';
 import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
+import { CommentaryFeedWidget } from './CommentaryFeedWidget.tsx';
 import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
 import { ActivePlayersCard } from '../scoreboard/ActivePlayersCard.tsx';
 import { MatchStatisticsWidget } from '../scoreboard/MatchStatisticsWidget.tsx';
@@ -1591,13 +1592,20 @@ export function LiveBroadcastView({
           history={history}
         />
 
-        {/* Match Timeline (Last 5 Major Events) */}
-        <MatchTimelineWidget
-          matchId={broadcast.id}
-          history={history}
-          teamAName={broadcast.teamA.name}
-          teamBName={broadcast.teamB.name}
-        />
+        {/* Match Timeline (Last 5 Major Events) & Live Commentary Feed */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+          <MatchTimelineWidget
+            matchId={broadcast.id}
+            history={history}
+            teamAName={broadcast.teamA.name}
+            teamBName={broadcast.teamB.name}
+          />
+          <CommentaryFeedWidget
+            matchId={broadcast.id}
+            history={history}
+            canBroadcast={Boolean(adminUser)}
+          />
+        </div>
 
         {/* 3. MATCH CENTER TABS */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">

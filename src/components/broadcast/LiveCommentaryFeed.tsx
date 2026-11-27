@@ -1,6 +1,10 @@
 import React from 'react';
 import { MessageSquare } from 'lucide-react';
 import { ScoreHistoryItem } from '../../types/index.ts';
+import {
+  formatCommentaryCategoryLabel,
+  normalizeCommentaryCategory,
+} from '../../utils/commentaryFeed.ts';
 
 interface LiveCommentaryFeedProps {
   history: ScoreHistoryItem[];
@@ -31,12 +35,23 @@ export function LiveCommentaryFeed({ history }: LiveCommentaryFeedProps) {
             const isCommentary = item.entryType === 'COMMENTARY';
             const isResult = item.entryType === 'RESULT';
             const isCorrection = item.entryType === 'CORRECTION';
+            const commentaryCategory = isCommentary
+              ? normalizeCommentaryCategory(
+                  (typeof item.details?.commentaryCategory === 'string' &&
+                    item.details.commentaryCategory) ||
+                    item.eventType
+                )
+              : null;
             return (
               <div
                 key={item._id}
                 className={`px-4 py-3 flex items-start justify-between gap-3 text-xs ${
                   isCommentary
-                    ? 'bg-emerald-50/50'
+                    ? commentaryCategory === 'HIGHLIGHT'
+                      ? 'bg-amber-50/50'
+                      : commentaryCategory === 'UPDATE'
+                        ? 'bg-sky-50/50'
+                        : 'bg-emerald-50/50'
                     : isResult
                       ? 'bg-amber-50/80'
                       : isCorrection
@@ -48,8 +63,18 @@ export function LiveCommentaryFeed({ history }: LiveCommentaryFeedProps) {
               >
                 <div className="min-w-0">
                   <p className="font-medium text-slate-900 break-words leading-relaxed">
-                    {isCommentary && (
-                      <span className="font-bold text-emerald-700 mr-1.5">COMMENTARY</span>
+                    {isCommentary && commentaryCategory && (
+                      <span
+                        className={`font-bold mr-1.5 uppercase ${
+                          commentaryCategory === 'HIGHLIGHT'
+                            ? 'text-amber-700'
+                            : commentaryCategory === 'UPDATE'
+                              ? 'text-sky-700'
+                              : 'text-emerald-700'
+                        }`}
+                      >
+                        {formatCommentaryCategoryLabel(commentaryCategory)}
+                      </span>
                     )}
                     {isResult && (
                       <span className="font-bold text-amber-800 mr-1.5">OFFICIAL RESULT</span>
