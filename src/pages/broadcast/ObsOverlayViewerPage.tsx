@@ -13,6 +13,7 @@ import {
 import { HotstarBroadcastOverlay } from '../../components/obs/HotstarBroadcastOverlay.tsx';
 import { BroadcastBrandLogoBug } from '../../components/obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../../components/obs/BroadcastSponsorAdBanner.tsx';
+import { LiveMvpBroadcastOverlay } from '../../components/obs/LiveMvpBroadcastOverlay.tsx';
 import { TimeoutFullscreenSponsorAd } from '../../components/obs/TimeoutFullscreenSponsorAd.tsx';
 import { JioHotstarFullScoreboard } from '../../components/obs/JioHotstarFullScoreboard.tsx';
 import { DraggableObsScorePanel } from '../../components/obs/DraggableObsScorePanel.tsx';
@@ -275,6 +276,16 @@ export function ObsOverlayViewerPage() {
           config={effectiveConfig}
           variant="canvas"
           zIndex={26}
+          suppress={timeoutDecision.isAnyTakeoverActive}
+        />
+
+        {/* Featured Live MVP Broadcast Overlay */}
+        <LiveMvpBroadcastOverlay
+          stream={stream}
+          score={score}
+          config={effectiveConfig}
+          variant="canvas"
+          zIndex={27}
           suppress={timeoutDecision.isAnyTakeoverActive}
         />
 

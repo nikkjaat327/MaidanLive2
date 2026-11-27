@@ -4,6 +4,7 @@ import { LiveScoreData, LiveStreamData, ScoreHistoryItem } from '../../types/ind
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
 import { getSocketClient } from '../../services/socket/socketClient.ts';
 import { deriveMatchStatisticsSummary } from '../../utils/matchStatistics.ts';
+import { WinProbabilityWidget } from './WinProbabilityWidget.tsx';
 
 export interface MatchStatisticsWidgetProps {
   matchId: string;
@@ -198,6 +199,14 @@ export function MatchStatisticsWidget({
           ))}
         </div>
       )}
+
+      {/* Live Win Probability Indicator */}
+      <WinProbabilityWidget
+        sportType={activeScore?.sportType || stream?.gameName}
+        teamAName={stream?.teamAName}
+        teamBName={stream?.teamBName}
+        score={activeScore}
+      />
     </section>
   );
 }

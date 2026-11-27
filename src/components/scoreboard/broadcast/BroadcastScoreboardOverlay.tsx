@@ -8,6 +8,7 @@ import { FootballBroadcastBar } from './FootballBroadcastBar.tsx';
 import { GenericBroadcastBar } from './GenericBroadcastBar.tsx';
 import { BroadcastScoreboard } from '../../broadcast/BroadcastScoreboard.tsx';
 import { normalizeBroadcast } from '../../../utils/normalizeBroadcast.ts';
+import { normalizeOverlayConfig } from '../../../utils/overlayConfig.ts';
 
 interface BroadcastScoreboardOverlayProps {
   stream: LiveStreamData;
@@ -23,6 +24,10 @@ export function BroadcastScoreboardOverlay({
   layoutMode = 'landscape',
 }: BroadcastScoreboardOverlayProps) {
   const resultDeclared = Boolean(score.resultStatus && score.resultStatus !== 'NOT_DECLARED');
+  const overlayCfg = useMemo(
+    () => normalizeOverlayConfig(stream.overlayConfig),
+    [stream.overlayConfig]
+  );
   const portraitNormalized = useMemo(
     () => (layoutMode === 'portrait' ? normalizeBroadcast(stream, score) : null),
     [layoutMode, stream, score]
@@ -84,6 +89,24 @@ export function BroadcastScoreboardOverlay({
           </span>
         </div>
       )}
+      {overlayCfg.liveMvpVisible && overlayCfg.liveMvpPlayerName && (
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-slate-950/90 border border-amber-400/50 text-white text-[10px] sm:text-[11px] font-semibold shadow-md max-w-full">
+          <AwardIcon />
+          <span className="uppercase text-amber-300 font-bold shrink-0">
+            {overlayCfg.liveMvpLabel || 'LIVE MVP'}
+          </span>
+          <span className="truncate font-bold">{overlayCfg.liveMvpPlayerName}</span>
+          {overlayCfg.liveMvpStatsLine && (
+            <span className="truncate font-mono text-slate-300">
+              · {overlayCfg.liveMvpStatsLine}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function AwardIcon() {
+  return <Trophy className="w-3 h-3 text-amber-400 shrink-0" />;
 }

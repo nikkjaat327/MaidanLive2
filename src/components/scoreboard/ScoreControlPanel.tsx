@@ -36,6 +36,7 @@ import { AdvancedEventComposer } from './AdvancedEventComposer.tsx';
 import { EventCorrectionModal } from './EventCorrectionModal.tsx';
 import { MatchHighlightsManager } from './MatchHighlightsManager.tsx';
 import { PlayerMatchStatsRecorder } from './PlayerMatchStatsRecorder.tsx';
+import { LiveMvpTrackerPanel } from './LiveMvpTrackerPanel.tsx';
 import type { MatchResultType } from '../../utils/matchResultValidation.ts';
 import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { generateAutoCommentary } from '../../utils/autoCommentary.ts';
@@ -1021,6 +1022,14 @@ export function ScoreControlPanel({
           </div>
         )}
       </div>
+
+      {/* Live MVP Tracker & Overlay Feature Control */}
+      <LiveMvpTrackerPanel
+        stream={stream}
+        score={score}
+        history={history}
+        playerStats={playerStats}
+      />
 
       {/* Live Commentary Snippet Input + Rule-Based Auto Commentary Controls */}
       <form

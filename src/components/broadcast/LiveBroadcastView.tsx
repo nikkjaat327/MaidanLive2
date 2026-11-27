@@ -81,6 +81,7 @@ import {
 import { KabaddiWinnerScreen } from '../scoreboard/kabaddi/KabaddiWinnerScreen.tsx';
 import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
+import { LiveMvpBroadcastOverlay } from '../obs/LiveMvpBroadcastOverlay.tsx';
 import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
 import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
@@ -1314,6 +1315,16 @@ export function LiveBroadcastView({
               config={normalizedOverlayConfig}
               variant="responsive"
               zIndex={23}
+              suppress={timeoutDecision.isAnyTakeoverActive}
+            />
+
+            {/* Featured Live MVP Broadcast Overlay */}
+            <LiveMvpBroadcastOverlay
+              stream={stream}
+              score={score}
+              config={normalizedOverlayConfig}
+              variant="responsive"
+              zIndex={24}
               suppress={timeoutDecision.isAnyTakeoverActive}
             />
 

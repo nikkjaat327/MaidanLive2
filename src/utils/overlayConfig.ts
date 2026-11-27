@@ -666,6 +666,12 @@ export interface BroadcastOverlayConfig {
   fullScoreboardStyle: FullScoreboardStyleId;
   customScoreboardDesign: CustomScoreboardDesign;
   eventAnimations: EventAnimationConfigMap;
+  liveMvpVisible: boolean;
+  liveMvpPlayerName: string;
+  liveMvpTeamName: string;
+  liveMvpStatsLine: string;
+  liveMvpLabel: string;
+  liveMvpPosition: OverlayPosition;
 }
 
 export const OVERLAY_MODES: readonly OverlayMode[] = ['full', 'compact', 'score_only', 'hidden'];
@@ -785,6 +791,12 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   fullScoreboardStyle: 'multisport_jiohotstar_prime',
   customScoreboardDesign: { ...DEFAULT_CUSTOM_SCOREBOARD_DESIGN },
   eventAnimations: normalizeEventAnimationsConfig(DEFAULT_EVENT_ANIMATIONS),
+  liveMvpVisible: false,
+  liveMvpPlayerName: '',
+  liveMvpTeamName: '',
+  liveMvpStatsLine: '',
+  liveMvpLabel: 'LIVE MVP',
+  liveMvpPosition: 'top-right',
 };
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -1015,6 +1027,12 @@ export function normalizeOverlayConfig(
     ? (src.fullScoreboardStyle as FullScoreboardStyleId)
     : DEFAULT_OVERLAY_CONFIG.fullScoreboardStyle;
 
+  const liveMvpPosition: OverlayPosition = OVERLAY_POSITIONS.includes(
+    src.liveMvpPosition as OverlayPosition
+  )
+    ? (src.liveMvpPosition as OverlayPosition)
+    : DEFAULT_OVERLAY_CONFIG.liveMvpPosition;
+
   const bool = (val: unknown, def: boolean): boolean =>
     typeof val === 'boolean' ? val : def;
 
@@ -1219,6 +1237,18 @@ export function normalizeOverlayConfig(
     fullScoreboardStyle,
     customScoreboardDesign: normalizeCustomScoreboardDesign(src.customScoreboardDesign),
     eventAnimations: normalizeEventAnimationsConfig(src.eventAnimations),
+    liveMvpVisible: bool(src.liveMvpVisible, DEFAULT_OVERLAY_CONFIG.liveMvpVisible),
+    liveMvpPlayerName:
+      typeof src.liveMvpPlayerName === 'string' ? src.liveMvpPlayerName.trim().slice(0, 120) : '',
+    liveMvpTeamName:
+      typeof src.liveMvpTeamName === 'string' ? src.liveMvpTeamName.trim().slice(0, 80) : '',
+    liveMvpStatsLine:
+      typeof src.liveMvpStatsLine === 'string' ? src.liveMvpStatsLine.trim().slice(0, 140) : '',
+    liveMvpLabel:
+      typeof src.liveMvpLabel === 'string' && src.liveMvpLabel.trim()
+        ? src.liveMvpLabel.trim().slice(0, 40)
+        : DEFAULT_OVERLAY_CONFIG.liveMvpLabel,
+    liveMvpPosition,
   };
 }
 
