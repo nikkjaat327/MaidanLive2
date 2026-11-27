@@ -34,6 +34,13 @@ export interface IStreamHealth {
   detail?: string;
 }
 
+export interface IMatchDraftPlayer {
+  id?: string;
+  name: string;
+  position?: string;
+  jerseyNumber?: number | null;
+}
+
 export interface ILiveStream extends Document {
   streamingProvider: StreamingProvider;
   activeStreamingProvider: StreamingProvider;
@@ -57,6 +64,8 @@ export interface ILiveStream extends Document {
   teamBId?: mongoose.Types.ObjectId | null;
   teamALogo: string;
   teamBLogo: string;
+  teamAPlayers?: IMatchDraftPlayer[];
+  teamBPlayers?: IMatchDraftPlayer[];
   location: string;
   venueId?: mongoose.Types.ObjectId | null;
   gameName: SportType | '';
@@ -160,6 +169,30 @@ const liveStreamSchema = new Schema<ILiveStream>(
     teamBId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
     teamALogo: { type: String, trim: true, default: '' },
     teamBLogo: { type: String, trim: true, default: '' },
+    teamAPlayers: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, trim: true, default: '', maxlength: 64 },
+          name: { type: String, trim: true, default: '', maxlength: 80 },
+          position: { type: String, trim: true, default: '', maxlength: 60 },
+          jerseyNumber: { type: Number, default: null },
+        },
+      ],
+      default: [],
+    },
+    teamBPlayers: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, trim: true, default: '', maxlength: 64 },
+          name: { type: String, trim: true, default: '', maxlength: 80 },
+          position: { type: String, trim: true, default: '', maxlength: 60 },
+          jerseyNumber: { type: Number, default: null },
+        },
+      ],
+      default: [],
+    },
     location: { type: String, trim: true, default: '', maxlength: 160 },
     venueId: { type: Schema.Types.ObjectId, ref: 'Venue', default: null },
     gameName: {

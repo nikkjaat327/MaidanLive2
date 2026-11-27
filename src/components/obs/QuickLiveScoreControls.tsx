@@ -11,8 +11,14 @@ import {
   Undo2,
   Zap,
 } from 'lucide-react';
-import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../../types/index.ts';
+import type {
+  BroadcastOverlayConfig,
+  LiveScoreData,
+  LiveStreamData,
+  PlayerData,
+} from '../../types/index.ts';
 import type { SportOption } from '../../constants/sports.ts';
+import { entityService } from '../../services/entities/entityService.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { offlineScoreService } from '../../services/scoreboard/offlineScoreService.ts';
 import { scoreboardService } from '../../services/scoreboard/scoreboardService.ts';
@@ -35,6 +41,8 @@ import { STANDARD_MATCH_STATUSES } from '../../utils/matchStatus.ts';
 import { resolveMatchTimeoutState } from '../../utils/matchTimeout.ts';
 import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
 import { Modal } from '../common/Modal.tsx';
+import { PlayerPickerField } from '../scoreboard/PlayerPickerField.tsx';
+import { mergeMatchRoster, UnifiedMatchPlayer } from '../../utils/sportPositions.ts';
 import {
   applyOptimisticKabaddiEngineEvent,
   applyOptimisticPatch,
@@ -51,6 +59,7 @@ import {
 interface QuickLiveScoreControlsProps {
   stream: LiveStreamData;
   score: LiveScoreData | null;
+  players?: PlayerData[];
   onScoreChange: (score: LiveScoreData) => void;
   onRefresh?: () => void;
   themeVariant?: 'dark' | 'light';
@@ -69,6 +78,7 @@ const WICKET_TYPES = [
 export function QuickLiveScoreControls({
   stream,
   score,
+  players: propPlayers,
   onScoreChange,
   onRefresh,
   themeVariant = 'dark',
@@ -78,6 +88,7 @@ export function QuickLiveScoreControls({
   const scoreRef = useRef<LiveScoreData | null>(score);
   const confirmedScoreRef = useRef<LiveScoreData | null>(score);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [fetchedPlayers, setFetchedPlayers] = useState<PlayerData[]>([]);
 
   useEffect(() => {
     return subscribePendingScoreCount(stream.id, setPendingOps);
@@ -89,6 +100,22 @@ export function QuickLiveScoreControls({
       confirmedScoreRef.current = score;
     }
   }, [score, stream.id]);
+
+  useEffect(() => {
+    if (propPlayers || (!stream.teamAId && !stream.teamBId)) return;
+    let cancelled = false;
+    Promise.all([
+      stream.teamAId ? entityService.listPlayers({ teamId: stream.teamAId }) : Promise.resolve([]),
+      stream.teamBId ? entityService.listPlayers({ teamId: stream.teamBId }) : Promise.resolve([]),
+    ])
+      .then(([a, b]) => {
+        if (!cancelled) setFetchedPlayers([...a, ...b]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [propPlayers, stream.teamAId, stream.teamBId]);
 
   const terminalBusy = busy || pendingOps > 0;
 
@@ -103,6 +130,13 @@ export function QuickLiveScoreControls({
   const [secondBatter2, setSecondBatter2] = useState('');
   const [secondBowler, setSecondBowler] = useState('');
 
+  // Quick per-team / crease player selection state
+  const [quickStriker, setQuickStriker] = useState('');
+  const [quickNonStriker, setQuickNonStriker] = useState('');
+  const [quickBowler, setQuickBowler] = useState('');
+  const [quickPlayerA, setQuickPlayerA] = useState('');
+  const [quickPlayerB, setQuickPlayerB] = useState('');
+
   const sport: SportOption = score?.sportType || (stream.gameName as SportOption) || 'Other';
   const nameA = stream.teamAName || 'Team A';
   const nameB = stream.teamBName || 'Team B';
@@ -116,6 +150,44 @@ export function QuickLiveScoreControls({
       ),
     [score?.sportSpecificDetails]
   );
+
+  useEffect(() => {
+    setQuickStriker(cricketDetails.batsman1 || '');
+    setQuickNonStriker(cricketDetails.batsman2 || '');
+    setQuickBowler(cricketDetails.bowler || '');
+  }, [cricketDetails.batsman1, cricketDetails.batsman2, cricketDetails.bowler]);
+
+  const roster = useMemo(
+    () => mergeMatchRoster(stream, propPlayers ?? fetchedPlayers),
+    [stream, propPlayers, fetchedPlayers]
+  );
+
+  const battingRoster = useMemo(() => {
+    const side = cricketDetails.battingTeam === 'A' ? roster.teamA : roster.teamB;
+    return side.length > 0 ? side : roster.all;
+  }, [roster, cricketDetails.battingTeam]);
+
+  const bowlingRoster = useMemo(() => {
+    const side = cricketDetails.battingTeam === 'A' ? roster.teamB : roster.teamA;
+    return side.length > 0 ? side : roster.all;
+  }, [roster, cricketDetails.battingTeam]);
+
+  const secondBattingTeam: 'A' | 'B' =
+    (cricketDetails.firstInningsBattingTeam || cricketDetails.battingTeam || 'A') === 'A' ? 'B' : 'A';
+  const secondBattingRoster = useMemo(() => {
+    const side = secondBattingTeam === 'A' ? roster.teamA : roster.teamB;
+    return side.length > 0 ? side : roster.all;
+  }, [roster, secondBattingTeam]);
+  const secondBowlingRoster = useMemo(() => {
+    const side = secondBattingTeam === 'A' ? roster.teamB : roster.teamA;
+    return side.length > 0 ? side : roster.all;
+  }, [roster, secondBattingTeam]);
+
+  const findDbPlayerId = (name: string, pool: UnifiedMatchPlayer[]): string | undefined => {
+    const norm = name.trim().toLowerCase();
+    if (!norm) return undefined;
+    return pool.find((p) => p.name.trim().toLowerCase() === norm)?.dbPlayerId;
+  };
 
   const cricketLock = useMemo(() => isCricketScoringLocked(cricketDetails), [cricketDetails]);
   const volleyballLock = useMemo(
@@ -154,7 +226,13 @@ export function QuickLiveScoreControls({
   async function submitEvent(
     action: Record<string, unknown>,
     successFallback: string,
-    sportTypeOverride?: string
+    sportTypeOverride?: string,
+    playerMeta?: {
+      playerId?: string;
+      playerName?: string;
+      assistPlayerId?: string;
+      assistPlayerName?: string;
+    }
   ) {
     const baseScore = scoreRef.current || score;
     const effectiveSport = sportTypeOverride || sport;
@@ -177,6 +255,10 @@ export function QuickLiveScoreControls({
             traceId,
             sportType: effectiveSport,
             action,
+            ...(playerMeta?.playerId ? { playerId: playerMeta.playerId } : {}),
+            ...(playerMeta?.playerName ? { playerName: playerMeta.playerName } : {}),
+            ...(playerMeta?.assistPlayerId ? { assistPlayerId: playerMeta.assistPlayerId } : {}),
+            ...(playerMeta?.assistPlayerName ? { assistPlayerName: playerMeta.assistPlayerName } : {}),
           },
           baseScore
         );
@@ -407,9 +489,9 @@ export function QuickLiveScoreControls({
       const firstRuns = firstSide === 'A' ? cricketDetails.teamARuns : cricketDetails.teamBRuns;
       const res = await scoreboardService.startSecondCricketInnings(stream.id, {
         battingTeam: nextBatting,
-        batsman1: secondBatter1.trim() || 'Opener 1',
-        batsman2: secondBatter2.trim() || 'Opener 2',
-        bowler: secondBowler.trim() || 'Opening Bowler',
+        batsman1: secondBatter1.trim(),
+        batsman2: secondBatter2.trim(),
+        bowler: secondBowler.trim(),
         oversLimit: cricketDetails.oversLimit,
         target: firstRuns + 1,
       });
@@ -621,18 +703,28 @@ export function QuickLiveScoreControls({
                 key={b.runs}
                 type="button"
                 disabled={cricketLock.locked}
-                onClick={() =>
-                  submitEvent(
+                onClick={() => {
+                  const s = quickStriker.trim() || cricketDetails.batsman1 || '';
+                  const ns = quickNonStriker.trim() || cricketDetails.batsman2 || '';
+                  const bw = quickBowler.trim() || cricketDetails.bowler || '';
+                  void submitEvent(
                     {
                       type: 'RUNS',
                       runs: b.runs,
-                      striker: cricketDetails.batsman1 || undefined,
-                      nonStriker: cricketDetails.batsman2 || undefined,
-                      bowler: cricketDetails.bowler || undefined,
+                      striker: s || undefined,
+                      nonStriker: ns || undefined,
+                      bowler: bw || undefined,
                     },
-                    `+${b.runs} run${b.runs === 1 ? '' : 's'}`
-                  )
-                }
+                    `+${b.runs} run${b.runs === 1 ? '' : 's'}`,
+                    'Cricket',
+                    {
+                      playerId: findDbPlayerId(s, battingRoster),
+                      playerName: s || undefined,
+                      assistPlayerId: findDbPlayerId(bw, bowlingRoster),
+                      assistPlayerName: bw || undefined,
+                    }
+                  );
+                }}
                 className={`min-h-[42px] px-3.5 py-2 rounded-lg border font-mono tabular-nums text-xs font-extrabold transition-colors disabled:opacity-40 whitespace-nowrap ${b.cls}`}
               >
                 {b.label}
@@ -642,18 +734,28 @@ export function QuickLiveScoreControls({
             <button
               type="button"
               disabled={cricketLock.locked}
-              onClick={() =>
-                submitEvent(
+              onClick={() => {
+                const s = quickStriker.trim() || cricketDetails.batsman1 || '';
+                const ns = quickNonStriker.trim() || cricketDetails.batsman2 || '';
+                const bw = quickBowler.trim() || cricketDetails.bowler || '';
+                void submitEvent(
                   {
                     type: 'WIDE',
                     extraRuns: 0,
-                    striker: cricketDetails.batsman1 || undefined,
-                    nonStriker: cricketDetails.batsman2 || undefined,
-                    bowler: cricketDetails.bowler || undefined,
+                    striker: s || undefined,
+                    nonStriker: ns || undefined,
+                    bowler: bw || undefined,
                   },
-                  'Wide +1'
-                )
-              }
+                  'Wide +1',
+                  'Cricket',
+                  {
+                    playerId: findDbPlayerId(s, battingRoster),
+                    playerName: s || undefined,
+                    assistPlayerId: findDbPlayerId(bw, bowlingRoster),
+                    assistPlayerName: bw || undefined,
+                  }
+                );
+              }}
               className="min-h-[42px] px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-mono text-xs font-bold disabled:opacity-40 whitespace-nowrap"
             >
               Wd +1
@@ -662,19 +764,29 @@ export function QuickLiveScoreControls({
             <button
               type="button"
               disabled={cricketLock.locked}
-              onClick={() =>
-                submitEvent(
+              onClick={() => {
+                const s = quickStriker.trim() || cricketDetails.batsman1 || '';
+                const ns = quickNonStriker.trim() || cricketDetails.batsman2 || '';
+                const bw = quickBowler.trim() || cricketDetails.bowler || '';
+                void submitEvent(
                   {
                     type: 'NO_BALL',
                     extraRuns: 0,
                     batRuns: 0,
-                    striker: cricketDetails.batsman1 || undefined,
-                    nonStriker: cricketDetails.batsman2 || undefined,
-                    bowler: cricketDetails.bowler || undefined,
+                    striker: s || undefined,
+                    nonStriker: ns || undefined,
+                    bowler: bw || undefined,
                   },
-                  'No Ball +1'
-                )
-              }
+                  'No Ball +1',
+                  'Cricket',
+                  {
+                    playerId: findDbPlayerId(s, battingRoster),
+                    playerName: s || undefined,
+                    assistPlayerId: findDbPlayerId(bw, bowlingRoster),
+                    assistPlayerName: bw || undefined,
+                  }
+                );
+              }}
               className="min-h-[42px] px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-mono text-xs font-bold disabled:opacity-40 whitespace-nowrap"
             >
               NB +1
@@ -716,6 +828,75 @@ export function QuickLiveScoreControls({
             )}
           </div>
 
+          {/* Quick Striker / Non-Striker / Bowler Dropdown Strip (Optional) */}
+          {!cricketLock.locked && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end">
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider opacity-75 mb-1">
+                  Striker (Optional)
+                </label>
+                <PlayerPickerField
+                  compact
+                  themeVariant={themeVariant}
+                  value={quickStriker}
+                  onChange={(name) => setQuickStriker(name)}
+                  players={battingRoster}
+                  placeholder="Striker name"
+                  emptyOptionLabel="-- Select striker --"
+                  ariaLabel="Quick Striker"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider opacity-75 mb-1">
+                  Non-Striker (Optional)
+                </label>
+                <PlayerPickerField
+                  compact
+                  themeVariant={themeVariant}
+                  value={quickNonStriker}
+                  onChange={(name) => setQuickNonStriker(name)}
+                  players={battingRoster}
+                  placeholder="Non-striker"
+                  emptyOptionLabel="-- Select non-striker --"
+                  ariaLabel="Quick Non-Striker"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider opacity-75 mb-1">
+                  Bowler (Optional)
+                </label>
+                <PlayerPickerField
+                  compact
+                  themeVariant={themeVariant}
+                  value={quickBowler}
+                  onChange={(name) => setQuickBowler(name)}
+                  players={bowlingRoster}
+                  placeholder="Current bowler"
+                  emptyOptionLabel="-- Select bowler --"
+                  ariaLabel="Quick Bowler"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={terminalBusy}
+                onClick={() =>
+                  submitEvent(
+                    {
+                      type: 'UPDATE_META',
+                      batsman1: quickStriker.trim(),
+                      batsman2: quickNonStriker.trim(),
+                      bowler: quickBowler.trim(),
+                    },
+                    'Updated crease batters & bowler'
+                  )
+                }
+                className={`min-h-[36px] px-3 py-1.5 rounded-lg border text-xs font-semibold whitespace-nowrap ${btnNeutral}`}
+              >
+                Apply Crease
+              </button>
+            </div>
+          )}
+
           <div
             className={`px-3 py-2 rounded-lg border flex flex-wrap items-center justify-between gap-2 text-xs ${subBarClass}`}
           >
@@ -727,14 +908,14 @@ export function QuickLiveScoreControls({
                   : `${cricketDetails.teamBRuns}/${cricketDetails.teamBWickets}`}
                 )
               </span>
-              {cricketDetails.batsman1 && (
+              {(quickStriker || cricketDetails.batsman1) && (
                 <span>
-                  Striker: <strong>*{cricketDetails.batsman1}</strong>
+                  Striker: <strong>*{quickStriker || cricketDetails.batsman1}</strong>
                 </span>
               )}
-              {cricketDetails.bowler && (
+              {(quickBowler || cricketDetails.bowler) && (
                 <span>
-                  Bowler: <strong>{cricketDetails.bowler}</strong>
+                  Bowler: <strong>{quickBowler || cricketDetails.bowler}</strong>
                 </span>
               )}
             </div>
@@ -749,56 +930,128 @@ export function QuickLiveScoreControls({
 
       {/* FOOTBALL QUICK CONTROLS */}
       {sport === 'Football' && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              submitEvent({ type: 'GOAL', team: 'A', delta: 1 }, `${shortA} Goal (+1)`, 'Football')
-            }
-            className="min-h-[42px] px-3 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold whitespace-nowrap"
-          >
-            +1 Goal ({shortA})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitEvent({ type: 'GOAL', team: 'A', delta: -1 }, `${shortA} -1`, 'Football')
-            }
-            className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap ${btnNeutral}`}
-          >
-            -1 ({shortA})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitEvent({ type: 'GOAL', team: 'B', delta: 1 }, `${shortB} Goal (+1)`, 'Football')
-            }
-            className="min-h-[42px] px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold whitespace-nowrap"
-          >
-            +1 Goal ({shortB})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitEvent({ type: 'GOAL', team: 'B', delta: -1 }, `${shortB} -1`, 'Football')
-            }
-            className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap ${btnNeutral}`}
-          >
-            -1 ({shortB})
-          </button>
-          {(() => {
-            const fd = {
-              ...createInitialFootballDetails(),
-              ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
-            };
-            return (
-              <div className={`col-span-full px-3 py-1.5 rounded-lg border text-xs font-mono ${subBarClass}`}>
-                {fd.half} · {String(fd.timerMinutes).padStart(2, '0')}:
-                {String(fd.timerSeconds).padStart(2, '0')} · {shortA} {score?.teamAScore ?? 0} -{' '}
-                {score?.teamBScore ?? 0} {shortB}
-              </div>
-            );
-          })()}
+        <div className="space-y-2.5">
+          {(roster.teamA.length > 0 || roster.teamB.length > 0) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerA}
+                onChange={(name) => setQuickPlayerA(name)}
+                players={roster.teamA}
+                placeholder={`${shortA} player (optional)`}
+                emptyOptionLabel={`-- ${shortA} Player (Optional) --`}
+                ariaLabel={`${shortA} player`}
+              />
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerB}
+                onChange={(name) => setQuickPlayerB(name)}
+                players={roster.teamB}
+                placeholder={`${shortB} player (optional)`}
+                emptyOptionLabel={`-- ${shortB} Player (Optional) --`}
+                ariaLabel={`${shortB} player`}
+              />
+            </div>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const pName = quickPlayerA.trim();
+                const fdCur = {
+                  ...createInitialFootballDetails(),
+                  ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
+                };
+                void submitEvent(
+                  pName
+                    ? {
+                        type: 'STRUCTURED_EVENT',
+                        team: 'A',
+                        eventType: 'GOAL',
+                        minute: fdCur.timerMinutes,
+                        playerName: pName,
+                      }
+                    : { type: 'GOAL', team: 'A', delta: 1 },
+                  `${shortA} Goal (+1)${pName ? ` · ${pName}` : ''}`,
+                  'Football',
+                  pName
+                    ? {
+                        playerId: findDbPlayerId(pName, roster.teamA),
+                        playerName: pName,
+                      }
+                    : undefined
+                );
+              }}
+              className="min-h-[42px] px-3 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold whitespace-nowrap"
+            >
+              +1 Goal ({shortA})
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                submitEvent({ type: 'GOAL', team: 'A', delta: -1 }, `${shortA} -1`, 'Football')
+              }
+              className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap ${btnNeutral}`}
+            >
+              -1 ({shortA})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const pName = quickPlayerB.trim();
+                const fdCur = {
+                  ...createInitialFootballDetails(),
+                  ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
+                };
+                void submitEvent(
+                  pName
+                    ? {
+                        type: 'STRUCTURED_EVENT',
+                        team: 'B',
+                        eventType: 'GOAL',
+                        minute: fdCur.timerMinutes,
+                        playerName: pName,
+                      }
+                    : { type: 'GOAL', team: 'B', delta: 1 },
+                  `${shortB} Goal (+1)${pName ? ` · ${pName}` : ''}`,
+                  'Football',
+                  pName
+                    ? {
+                        playerId: findDbPlayerId(pName, roster.teamB),
+                        playerName: pName,
+                      }
+                    : undefined
+                );
+              }}
+              className="min-h-[42px] px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold whitespace-nowrap"
+            >
+              +1 Goal ({shortB})
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                submitEvent({ type: 'GOAL', team: 'B', delta: -1 }, `${shortB} -1`, 'Football')
+              }
+              className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap ${btnNeutral}`}
+            >
+              -1 ({shortB})
+            </button>
+            {(() => {
+              const fd = {
+                ...createInitialFootballDetails(),
+                ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
+              };
+              return (
+                <div className={`col-span-full px-3 py-1.5 rounded-lg border text-xs font-mono ${subBarClass}`}>
+                  {fd.half} · {String(fd.timerMinutes).padStart(2, '0')}:
+                  {String(fd.timerSeconds).padStart(2, '0')} · {shortA} {score?.teamAScore ?? 0} -{' '}
+                  {score?.teamBScore ?? 0} {shortB}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -863,6 +1116,12 @@ export function QuickLiveScoreControls({
                 }
               });
             };
+            const sideRoster = side === 'A' ? roster.teamA : roster.teamB;
+            const sidePlayerName = side === 'A' ? quickPlayerA : quickPlayerB;
+            const setSidePlayerName = side === 'A' ? setQuickPlayerA : setQuickPlayerB;
+            const pickedPlayer = sideRoster.find(
+              (p) => p.name.trim().toLowerCase() === sidePlayerName.trim().toLowerCase()
+            );
             return (
               <div key={side} className={`p-2.5 rounded-lg border space-y-2 ${subBarClass}`}>
                 <div className="flex items-center justify-between text-xs font-bold">
@@ -871,12 +1130,32 @@ export function QuickLiveScoreControls({
                   </span>
                   <span className="font-mono text-sm">{curScore}</span>
                 </div>
+                {sideRoster.length > 0 && (
+                  <PlayerPickerField
+                    compact
+                    themeVariant={themeVariant}
+                    value={sidePlayerName}
+                    onChange={(name) => setSidePlayerName(name)}
+                    players={sideRoster}
+                    placeholder={`${label} player (optional)`}
+                    emptyOptionLabel={`-- ${label} Player (Optional) --`}
+                    ariaLabel={`${label} active player`}
+                  />
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     disabled={kd.matchCompleted}
                     onClick={() =>
-                      triggerKabaddi({ type: 'TOUCH_POINT', team: side }, `${label} Touch Point`)
+                      triggerKabaddi(
+                        {
+                          type: 'TOUCH_POINT',
+                          team: side,
+                          ...(pickedPlayer?.dbPlayerId ? { raiderId: pickedPlayer.dbPlayerId } : {}),
+                          ...(sidePlayerName.trim() ? { raiderName: sidePlayerName.trim() } : {}),
+                        },
+                        `${label} Touch Point`
+                      )
                     }
                     className="min-h-[36px] px-2.5 py-1 rounded bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold disabled:opacity-40"
                   >
@@ -887,7 +1166,12 @@ export function QuickLiveScoreControls({
                     disabled={kd.matchCompleted}
                     onClick={() =>
                       triggerKabaddi(
-                        { type: 'TACKLE_POINT', team: side },
+                        {
+                          type: 'TACKLE_POINT',
+                          team: side,
+                          ...(pickedPlayer?.dbPlayerId ? { defenderId: pickedPlayer.dbPlayerId } : {}),
+                          ...(sidePlayerName.trim() ? { defenderName: sidePlayerName.trim() } : {}),
+                        },
                         `${label} Tackle Point (+${kd.rules.unsuccessfulRaidDefenderPoints})`
                       )
                     }
@@ -899,7 +1183,15 @@ export function QuickLiveScoreControls({
                     type="button"
                     disabled={kd.matchCompleted}
                     onClick={() =>
-                      triggerKabaddi({ type: 'EMPTY_RAID', team: side }, `${label} Empty Raid`)
+                      triggerKabaddi(
+                        {
+                          type: 'EMPTY_RAID',
+                          team: side,
+                          ...(pickedPlayer?.dbPlayerId ? { raiderId: pickedPlayer.dbPlayerId } : {}),
+                          ...(sidePlayerName.trim() ? { raiderName: sidePlayerName.trim() } : {}),
+                        },
+                        `${label} Empty Raid`
+                      )
                     }
                     className={`min-h-[36px] px-2.5 py-1 rounded border text-xs font-bold disabled:opacity-40 ${btnNeutral}`}
                   >
@@ -909,7 +1201,15 @@ export function QuickLiveScoreControls({
                     type="button"
                     disabled={kd.matchCompleted}
                     onClick={() =>
-                      triggerKabaddi({ type: 'BONUS_POINT', team: side }, `${label} Bonus Point`)
+                      triggerKabaddi(
+                        {
+                          type: 'BONUS_POINT',
+                          team: side,
+                          ...(pickedPlayer?.dbPlayerId ? { raiderId: pickedPlayer.dbPlayerId } : {}),
+                          ...(sidePlayerName.trim() ? { raiderName: sidePlayerName.trim() } : {}),
+                        },
+                        `${label} Bonus Point`
+                      )
                     }
                     className="min-h-[36px] px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40"
                   >
@@ -922,7 +1222,15 @@ export function QuickLiveScoreControls({
                       courtCount > kd.rules.superTackleMaxDefenders
                     }
                     onClick={() =>
-                      triggerKabaddi({ type: 'SUPER_TACKLE', team: side }, `${label} Super Tackle`)
+                      triggerKabaddi(
+                        {
+                          type: 'SUPER_TACKLE',
+                          team: side,
+                          ...(pickedPlayer?.dbPlayerId ? { defenderId: pickedPlayer.dbPlayerId } : {}),
+                          ...(sidePlayerName.trim() ? { defenderName: sidePlayerName.trim() } : {}),
+                        },
+                        `${label} Super Tackle`
+                      )
                     }
                     className="min-h-[36px] px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-35"
                   >
@@ -944,6 +1252,30 @@ export function QuickLiveScoreControls({
               <span>{volleyballLock.reason}</span>
             </div>
           )}
+          {(roster.teamA.length > 0 || roster.teamB.length > 0) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerA}
+                onChange={(name) => setQuickPlayerA(name)}
+                players={roster.teamA}
+                placeholder={`${shortA} scorer (optional)`}
+                emptyOptionLabel={`-- ${shortA} Player (Optional) --`}
+                ariaLabel={`${shortA} Volleyball player`}
+              />
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerB}
+                onChange={(name) => setQuickPlayerB(name)}
+                players={roster.teamB}
+                placeholder={`${shortB} scorer (optional)`}
+                emptyOptionLabel={`-- ${shortB} Player (Optional) --`}
+                ariaLabel={`${shortB} Volleyball player`}
+              />
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             {(() => {
               const vd = normalizeVolleyballDetails(
@@ -955,13 +1287,28 @@ export function QuickLiveScoreControls({
                   <button
                     type="button"
                     disabled={disabled}
-                    onClick={() =>
-                      submitEvent(
-                        { type: 'POINT', team: 'A', delta: 1 },
-                        `${shortA} +1 Point`,
-                        'Volleyball'
-                      )
-                    }
+                    onClick={() => {
+                      const pName = quickPlayerA.trim();
+                      void submitEvent(
+                        pName
+                          ? {
+                              type: 'STRUCTURED_POINT',
+                              team: 'A',
+                              eventType: 'ATTACK_POINT',
+                              points: 1,
+                              playerName: pName,
+                            }
+                          : { type: 'POINT', team: 'A', delta: 1 },
+                        `${shortA} +1 Point${pName ? ` (${pName})` : ''}`,
+                        'Volleyball',
+                        pName
+                          ? {
+                              playerId: findDbPlayerId(pName, roster.teamA),
+                              playerName: pName,
+                            }
+                          : undefined
+                      );
+                    }}
                     className="min-h-[42px] px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold disabled:opacity-40 whitespace-nowrap"
                   >
                     +1 {shortA} ({score?.teamAScore ?? 0})
@@ -983,13 +1330,28 @@ export function QuickLiveScoreControls({
                   <button
                     type="button"
                     disabled={disabled}
-                    onClick={() =>
-                      submitEvent(
-                        { type: 'POINT', team: 'B', delta: 1 },
-                        `${shortB} +1 Point`,
-                        'Volleyball'
-                      )
-                    }
+                    onClick={() => {
+                      const pName = quickPlayerB.trim();
+                      void submitEvent(
+                        pName
+                          ? {
+                              type: 'STRUCTURED_POINT',
+                              team: 'B',
+                              eventType: 'ATTACK_POINT',
+                              points: 1,
+                              playerName: pName,
+                            }
+                          : { type: 'POINT', team: 'B', delta: 1 },
+                        `${shortB} +1 Point${pName ? ` (${pName})` : ''}`,
+                        'Volleyball',
+                        pName
+                          ? {
+                              playerId: findDbPlayerId(pName, roster.teamB),
+                              playerName: pName,
+                            }
+                          : undefined
+                      );
+                    }}
                     className="min-h-[42px] px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold disabled:opacity-40 whitespace-nowrap"
                   >
                     +1 {shortB} ({score?.teamBScore ?? 0})
@@ -1081,55 +1443,83 @@ export function QuickLiveScoreControls({
 
       {/* OTHER / GENERIC SPORT QUICK CONTROLS */}
       {sport === 'Other' && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              submitPatch({
-                teamAScore: (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) + 1,
-                action: `${shortA} +1`,
-              })
-            }
-            className="min-h-[42px] px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
-          >
-            +1 {shortA} ({score?.teamAScore ?? 0})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitPatch({
-                teamAScore: Math.max(0, (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) - 1),
-                action: `${shortA} -1`,
-              })
-            }
-            className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
-          >
-            -1
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitPatch({
-                teamBScore: (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) + 1,
-                action: `${shortB} +1`,
-              })
-            }
-            className="min-h-[42px] px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold"
-          >
-            +1 {shortB} ({score?.teamBScore ?? 0})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              submitPatch({
-                teamBScore: Math.max(0, (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) - 1),
-                action: `${shortB} -1`,
-              })
-            }
-            className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
-          >
-            -1
-          </button>
+        <div className="space-y-2.5">
+          {(roster.teamA.length > 0 || roster.teamB.length > 0) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerA}
+                onChange={(name) => setQuickPlayerA(name)}
+                players={roster.teamA}
+                placeholder={`${shortA} player (optional)`}
+                emptyOptionLabel={`-- ${shortA} Player (Optional) --`}
+                ariaLabel={`${shortA} player`}
+              />
+              <PlayerPickerField
+                compact
+                themeVariant={themeVariant}
+                value={quickPlayerB}
+                onChange={(name) => setQuickPlayerB(name)}
+                players={roster.teamB}
+                placeholder={`${shortB} player (optional)`}
+                emptyOptionLabel={`-- ${shortB} Player (Optional) --`}
+                ariaLabel={`${shortB} player`}
+              />
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const pName = quickPlayerA.trim();
+                void submitPatch({
+                  teamAScore: (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) + 1,
+                  action: `${shortA} +1${pName ? ` (${pName})` : ''}`,
+                });
+              }}
+              className="min-h-[42px] px-4 py-2 rounded-lg bg-[#EA580C] hover:bg-orange-600 text-white text-xs font-bold"
+            >
+              +1 {shortA} ({score?.teamAScore ?? 0})
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                submitPatch({
+                  teamAScore: Math.max(0, (scoreRef.current?.teamAScore ?? score?.teamAScore ?? 0) - 1),
+                  action: `${shortA} -1`,
+                })
+              }
+              className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
+            >
+              -1
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const pName = quickPlayerB.trim();
+                void submitPatch({
+                  teamBScore: (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) + 1,
+                  action: `${shortB} +1${pName ? ` (${pName})` : ''}`,
+                });
+              }}
+              className="min-h-[42px] px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold"
+            >
+              +1 {shortB} ({score?.teamBScore ?? 0})
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                submitPatch({
+                  teamBScore: Math.max(0, (scoreRef.current?.teamBScore ?? score?.teamBScore ?? 0) - 1),
+                  action: `${shortB} -1`,
+                })
+              }
+              className={`min-h-[42px] px-3 py-2 rounded-lg border text-xs font-semibold ${btnNeutral}`}
+            >
+              -1
+            </button>
+          </div>
         </div>
       )}
 
@@ -1159,14 +1549,15 @@ export function QuickLiveScoreControls({
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Incoming New Batter (Optional)
+              Next Batsman / Incoming Batter (Optional)
             </label>
-            <input
-              type="text"
+            <PlayerPickerField
               value={newBatsman}
-              onChange={(e) => setNewBatsman(e.target.value)}
-              placeholder="e.g. R. Sharma"
-              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white text-slate-900"
+              onChange={(name) => setNewBatsman(name)}
+              players={battingRoster}
+              placeholder="Select or type next batsman"
+              emptyOptionLabel="-- Select next batsman (Optional) --"
+              ariaLabel="Incoming New Batter"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -1181,17 +1572,27 @@ export function QuickLiveScoreControls({
               type="button"
               disabled={busy}
               onClick={async () => {
+                const s = quickStriker.trim() || cricketDetails.batsman1 || '';
+                const ns = quickNonStriker.trim() || cricketDetails.batsman2 || '';
+                const bw = quickBowler.trim() || cricketDetails.bowler || '';
                 await submitEvent(
                   {
                     type: 'WICKET',
                     wicketType,
-                    dismissedPlayer: cricketDetails.batsman1 || undefined,
+                    dismissedPlayer: s || undefined,
                     newBatsman: newBatsman.trim() || undefined,
-                    striker: cricketDetails.batsman1 || undefined,
-                    nonStriker: cricketDetails.batsman2 || undefined,
-                    bowler: cricketDetails.bowler || undefined,
+                    striker: s || undefined,
+                    nonStriker: ns || undefined,
+                    bowler: bw || undefined,
                   },
-                  `Wicket (${wicketType.replace(/_/g, ' ')})`
+                  `Wicket (${wicketType.replace(/_/g, ' ')})`,
+                  'Cricket',
+                  {
+                    playerId: findDbPlayerId(s, battingRoster),
+                    playerName: s || undefined,
+                    assistPlayerId: findDbPlayerId(bw, bowlingRoster),
+                    assistPlayerName: bw || undefined,
+                  }
                 );
                 setWicketModalOpen(false);
               }}
@@ -1208,43 +1609,46 @@ export function QuickLiveScoreControls({
         open={secondInningsOpen}
         onClose={() => setSecondInningsOpen(false)}
         title="Start 2nd Innings"
-        subtitle={`Chasing Target: ${cricketChase.target || cricketDetails.teamARuns + 1}`}
+        subtitle={`Chasing Target: ${cricketChase.target || cricketDetails.teamARuns + 1} · All player fields optional`}
       >
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Striker (Batter 1)
+              Opening Striker (Optional)
             </label>
-            <input
-              type="text"
+            <PlayerPickerField
               value={secondBatter1}
-              onChange={(e) => setSecondBatter1(e.target.value)}
-              placeholder="Opener 1"
-              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white text-slate-900"
+              onChange={(name) => setSecondBatter1(name)}
+              players={secondBattingRoster}
+              placeholder="Opening striker (optional)"
+              emptyOptionLabel="-- Select striker (Optional) --"
+              ariaLabel="Opening Striker"
             />
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Non-Striker (Batter 2)
+              Opening Non-Striker (Optional)
             </label>
-            <input
-              type="text"
+            <PlayerPickerField
               value={secondBatter2}
-              onChange={(e) => setSecondBatter2(e.target.value)}
-              placeholder="Opener 2"
-              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white text-slate-900"
+              onChange={(name) => setSecondBatter2(name)}
+              players={secondBattingRoster}
+              placeholder="Non-striker (optional)"
+              emptyOptionLabel="-- Select non-striker (Optional) --"
+              ariaLabel="Opening Non-Striker"
             />
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Opening Bowler
+              Opening Bowler (Optional)
             </label>
-            <input
-              type="text"
+            <PlayerPickerField
               value={secondBowler}
-              onChange={(e) => setSecondBowler(e.target.value)}
-              placeholder="Opening Bowler"
-              className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white text-slate-900"
+              onChange={(name) => setSecondBowler(name)}
+              players={secondBowlingRoster}
+              placeholder="Opening bowler (optional)"
+              emptyOptionLabel="-- Select bowler (Optional) --"
+              ariaLabel="Opening Bowler"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">

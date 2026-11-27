@@ -127,6 +127,13 @@ export interface LiveScoreData {
   lastUpdatedAt: string;
 }
 
+export interface MatchDraftPlayerData {
+  id?: string;
+  name: string;
+  position?: string;
+  jerseyNumber?: number | null;
+}
+
 export interface LiveStreamData {
   id: string;
   _id?: string;
@@ -151,6 +158,8 @@ export interface LiveStreamData {
   teamBId?: string | null;
   teamALogo: string;
   teamBLogo: string;
+  teamAPlayers?: MatchDraftPlayerData[];
+  teamBPlayers?: MatchDraftPlayerData[];
   location: string;
   venueId?: string | VenueData | null;
   gameName: SportOption | '';

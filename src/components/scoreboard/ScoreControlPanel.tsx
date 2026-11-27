@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   AlertTriangle,
@@ -75,6 +75,11 @@ import {
   getPendingScoreCount,
   subscribePendingScoreCount,
 } from '../../utils/scoreMutationQueue.ts';
+import { PlayerPickerField } from './PlayerPickerField.tsx';
+import {
+  mergeMatchRoster,
+  UnifiedMatchPlayer,
+} from '../../utils/sportPositions.ts';
 
 interface ScoreControlPanelProps {
   stream: LiveStreamData;
@@ -139,6 +144,7 @@ export function ScoreControlPanel({
   const sport: SportOption = score?.sportType || (stream.gameName as SportOption) || 'Other';
   const teamA = stream.teamAName || 'Team A';
   const teamB = stream.teamBName || 'Team B';
+  const mergedRoster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
   const [matchStatusInput, setMatchStatusInput] = useState(score?.matchStatus || 'Live');
   const scoreUpdateCount = history.filter(
     (h) =>
@@ -558,11 +564,16 @@ export function ScoreControlPanel({
     }
   }
 
-  async function handleVolleyballEvent(action: VolleyballActionPayload) {
+  async function handleVolleyballEvent(
+    action: VolleyballActionPayload,
+    playerMeta?: { playerId?: string; playerName?: string }
+  ) {
     await handleSubmitStructuredEvent({
       clientEventId: `vb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       sportType: 'Volleyball',
       action: action as unknown as Record<string, unknown>,
+      ...(playerMeta?.playerId ? { playerId: playerMeta.playerId } : {}),
+      ...(playerMeta?.playerName ? { playerName: playerMeta.playerName } : {}),
     });
   }
 
@@ -983,7 +994,10 @@ export function ScoreControlPanel({
             ...createInitialFootballDetails(),
             ...((score?.sportSpecificDetails || {}) as Partial<FootballDetails>),
           }}
+          rosterA={mergedRoster.teamA}
+          rosterB={mergedRoster.teamB}
           saving={false}
+          onStructuredEvent={handleSubmitStructuredEvent}
           onApply={(next) =>
             commitUpdate({
               teamAScore: next.teamAScore,
@@ -1009,7 +1023,9 @@ export function ScoreControlPanel({
           locked={controlLocked}
           winnerName={score?.winnerTeamName || ''}
           resultDescription={score?.resultDescription || ''}
-          players={players}
+          rosterA={mergedRoster.teamA}
+          rosterB={mergedRoster.teamB}
+          rosterAll={mergedRoster.all}
           onEvent={handleVolleyballEvent}
           onSaveRules={handleSaveVolleyballRules}
           onCompleteMatch={handleCompleteVolleyballMatch}
@@ -1024,6 +1040,8 @@ export function ScoreControlPanel({
           scoreA={score?.teamAScore ?? 0}
           scoreB={score?.teamBScore ?? 0}
           details={score?.sportSpecificDetails || {}}
+          rosterA={mergedRoster.teamA}
+          rosterB={mergedRoster.teamB}
           saving={false}
           onCommit={commitUpdate}
         />
@@ -1195,7 +1213,10 @@ function FootballControls({
   scoreA,
   scoreB,
   details,
+  rosterA,
+  rosterB,
   saving,
+  onStructuredEvent,
   onApply,
 }: {
   teamA: string;
@@ -1203,13 +1224,24 @@ function FootballControls({
   scoreA: number;
   scoreB: number;
   details: FootballDetails;
+  rosterA: UnifiedMatchPlayer[];
+  rosterB: UnifiedMatchPlayer[];
   saving: boolean;
+  onStructuredEvent: (payload: {
+    clientEventId: string;
+    sportType: string;
+    action: Record<string, unknown>;
+    playerId?: string;
+    playerName?: string;
+  }) => Promise<void>;
   onApply: (res: ReturnType<typeof applyFootballAction>) => void;
 }) {
   const [half, setHalf] = useState<FootballDetails['half']>(details.half);
   const [mins, setMins] = useState(String(details.timerMinutes));
   const [secs, setSecs] = useState(String(details.timerSeconds));
   const [extraMins, setExtraMins] = useState(String(details.extraTimeMinutes));
+  const [selectedA, setSelectedA] = useState('');
+  const [selectedB, setSelectedB] = useState('');
 
   useEffect(() => {
     setHalf(details.half);
@@ -1218,98 +1250,134 @@ function FootballControls({
     setExtraMins(String(details.extraTimeMinutes));
   }, [details.half, details.timerMinutes, details.timerSeconds, details.extraTimeMinutes]);
 
-  const renderTeam = (team: 'A' | 'B', name: string, goals: number) => (
-    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-semibold text-slate-900">{name}</h4>
-        <span className="font-mono text-xl font-bold tabular-nums">{goals}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(applyFootballAction(details, scoreA, scoreB, { type: 'GOAL', team, delta: 1 }))
-          }
-          className="min-h-[46px] rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700"
-        >
-          +1 Goal
-        </button>
-        <button
-          type="button"
-          disabled={saving || goals <= 0}
-          onClick={() =>
-            onApply(applyFootballAction(details, scoreA, scoreB, { type: 'GOAL', team, delta: -1 }))
-          }
-          className="min-h-[46px] rounded-lg bg-slate-100 text-slate-800 text-sm font-semibold hover:bg-slate-200 disabled:opacity-40"
-        >
-          -1 Goal
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyFootballAction(details, scoreA, scoreB, {
+  const dispatchTeamAction = (
+    team: 'A' | 'B',
+    eventType: 'GOAL' | 'YELLOW_CARD' | 'RED_CARD' | 'FOUL' | 'SHOOTOUT_SCORED',
+    fallbackAction: Parameters<typeof applyFootballAction>[3]
+  ) => {
+    const pickedName = (team === 'A' ? selectedA : selectedB).trim();
+    if (!pickedName) {
+      onApply(applyFootballAction(details, scoreA, scoreB, fallbackAction));
+      return;
+    }
+    const pool = team === 'A' ? rosterA : rosterB;
+    const match = pool.find((p) => p.name.trim().toLowerCase() === pickedName.toLowerCase());
+    void onStructuredEvent({
+      clientEventId: makeClientEventId('fb'),
+      sportType: 'Football',
+      action: {
+        type: 'STRUCTURED_EVENT',
+        team,
+        eventType,
+        minute: Number(mins) || details.timerMinutes || 0,
+        playerName: pickedName,
+      },
+      ...(match?.dbPlayerId ? { playerId: match.dbPlayerId } : {}),
+      playerName: pickedName,
+    });
+  };
+
+  const renderTeam = (team: 'A' | 'B', name: string, goals: number) => {
+    const teamRoster = team === 'A' ? rosterA : rosterB;
+    const picked = team === 'A' ? selectedA : selectedB;
+    const setPicked = team === 'A' ? setSelectedA : setSelectedB;
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="font-semibold text-slate-900">{name}</h4>
+          <span className="font-mono text-xl font-bold tabular-nums">{goals}</span>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-slate-500 mb-1">
+            Active Player (Optional)
+          </label>
+          <PlayerPickerField
+            compact
+            value={picked}
+            onChange={(val) => setPicked(val)}
+            players={teamRoster}
+            placeholder="Type player name (optional)"
+            emptyOptionLabel={`-- ${name} Player (Optional) --`}
+            ariaLabel={`${name} active player`}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => dispatchTeamAction(team, 'GOAL', { type: 'GOAL', team, delta: 1 })}
+            className="min-h-[46px] rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700"
+          >
+            +1 Goal
+          </button>
+          <button
+            type="button"
+            disabled={saving || goals <= 0}
+            onClick={() =>
+              onApply(applyFootballAction(details, scoreA, scoreB, { type: 'GOAL', team, delta: -1 }))
+            }
+            className="min-h-[46px] rounded-lg bg-slate-100 text-slate-800 text-sm font-semibold hover:bg-slate-200 disabled:opacity-40"
+          >
+            -1 Goal
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              dispatchTeamAction(team, 'YELLOW_CARD', {
                 type: 'CARD',
                 team,
                 card: 'yellow',
                 delta: 1,
               })
-            )
-          }
-          className="min-h-[42px] rounded-lg bg-amber-100 text-amber-900 text-xs font-semibold hover:bg-amber-200"
-        >
-          +1 Yellow Card
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyFootballAction(details, scoreA, scoreB, {
+            }
+            className="min-h-[42px] rounded-lg bg-amber-100 text-amber-900 text-xs font-semibold hover:bg-amber-200"
+          >
+            +1 Yellow Card
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              dispatchTeamAction(team, 'RED_CARD', {
                 type: 'CARD',
                 team,
                 card: 'red',
                 delta: 1,
               })
-            )
-          }
-          className="min-h-[42px] rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
-        >
-          +1 Red Card
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyFootballAction(details, scoreA, scoreB, {
+            }
+            className="min-h-[42px] rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
+          >
+            +1 Red Card
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              dispatchTeamAction(team, 'FOUL', {
                 type: 'FOUL',
                 team,
                 delta: 1,
               })
-            )
-          }
-          className="min-h-[42px] rounded-lg bg-orange-100 text-orange-900 text-xs font-semibold hover:bg-orange-200"
-        >
-          +1 Foul ({(team === 'A' ? details.teamAFouls : details.teamBFouls) || 0})
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() =>
-            onApply(
-              applyFootballAction(details, scoreA, scoreB, { type: 'PENALTY', team, delta: 1 })
-            )
-          }
-          className="min-h-[42px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
-        >
-          +1 Shootout Penalty
-        </button>
+            }
+            className="min-h-[42px] rounded-lg bg-orange-100 text-orange-900 text-xs font-semibold hover:bg-orange-200"
+          >
+            +1 Foul ({(team === 'A' ? details.teamAFouls : details.teamBFouls) || 0})
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              dispatchTeamAction(team, 'SHOOTOUT_SCORED', { type: 'PENALTY', team, delta: 1 })
+            }
+            className="min-h-[42px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+          >
+            +1 Shootout Penalty
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -1401,7 +1469,9 @@ function VolleyballControls({
   locked,
   winnerName,
   resultDescription,
-  players,
+  rosterA,
+  rosterB,
+  rosterAll,
   onEvent,
   onSaveRules,
   onCompleteMatch,
@@ -1417,8 +1487,13 @@ function VolleyballControls({
   locked: boolean;
   winnerName: string;
   resultDescription: string;
-  players: PlayerData[];
-  onEvent: (action: VolleyballActionPayload) => Promise<void>;
+  rosterA: UnifiedMatchPlayer[];
+  rosterB: UnifiedMatchPlayer[];
+  rosterAll: UnifiedMatchPlayer[];
+  onEvent: (
+    action: VolleyballActionPayload,
+    playerMeta?: { playerId?: string; playerName?: string }
+  ) => Promise<void>;
   onSaveRules: (rules: Partial<VolleyballRules>) => Promise<void>;
   onCompleteMatch: (payload: {
     winnerSide: 'A' | 'B';
@@ -1438,6 +1513,8 @@ function VolleyballControls({
   const [customSetsInput, setCustomSetsInput] = useState(String(details.bestOfSets));
   const [rulesDraft, setRulesDraft] = useState<VolleyballRules>(details.rules);
   const [rulesError, setRulesError] = useState<string | null>(null);
+  const [selectedPlayerA, setSelectedPlayerA] = useState('');
+  const [selectedPlayerB, setSelectedPlayerB] = useState('');
 
   const [completeModalOpen, setCompleteModalOpen] = useState(false);
   const [winnerSide, setWinnerSide] = useState<'A' | 'B'>(
@@ -1938,11 +2015,52 @@ function VolleyballControls({
                   Sets {side.setsWon}/{details.winningThreshold} · Pts {side.pts}
                 </span>
               </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                  Scorer / Active Player (Optional)
+                </label>
+                <PlayerPickerField
+                  compact
+                  value={side.team === 'A' ? selectedPlayerA : selectedPlayerB}
+                  onChange={(val) =>
+                    side.team === 'A' ? setSelectedPlayerA(val) : setSelectedPlayerB(val)
+                  }
+                  players={side.team === 'A' ? rosterA : rosterB}
+                  placeholder="Type player name (optional)"
+                  emptyOptionLabel={`-- ${side.name} Player (Optional) --`}
+                  ariaLabel={`${side.name} active player`}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   disabled={saving || locked || currentSetAwarded}
-                  onClick={() => onEvent({ type: 'POINT', team: side.team, delta: 1 })}
+                  onClick={() => {
+                    const pickedName = (
+                      side.team === 'A' ? selectedPlayerA : selectedPlayerB
+                    ).trim();
+                    if (pickedName) {
+                      const pool = side.team === 'A' ? rosterA : rosterB;
+                      const match = pool.find(
+                        (p) => p.name.trim().toLowerCase() === pickedName.toLowerCase()
+                      );
+                      void onEvent(
+                        {
+                          type: 'STRUCTURED_POINT',
+                          team: side.team,
+                          eventType: 'ATTACK_POINT',
+                          points: 1,
+                          playerName: pickedName,
+                        },
+                        {
+                          ...(match?.dbPlayerId ? { playerId: match.dbPlayerId } : {}),
+                          playerName: pickedName,
+                        }
+                      );
+                    } else {
+                      void onEvent({ type: 'POINT', team: side.team, delta: 1 });
+                    }
+                  }}
                   className="min-h-[48px] rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
                 >
                   +1 Point
@@ -2065,34 +2183,17 @@ function VolleyballControls({
             <label className="block text-xs font-medium text-slate-700 mb-1">
               Player of the Match (Optional)
             </label>
-            <div className="flex gap-2">
-              {players.length > 0 && (
-                <select
-                  value={mvpPlayerId}
-                  onChange={(e) => {
-                    const pid = e.target.value;
-                    setMvpPlayerId(pid);
-                    const found = players.find((p) => (p.id || p._id) === pid);
-                    if (found) setMvpPlayerName(found.name);
-                  }}
-                  className="w-1/2 min-h-[40px] px-2.5 text-xs border border-slate-300 rounded-lg bg-white"
-                >
-                  <option value="">-- Roster --</option>
-                  {players.map((p) => (
-                    <option key={p.id || p._id} value={p.id || p._id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                type="text"
-                value={mvpPlayerName}
-                onChange={(e) => setMvpPlayerName(e.target.value)}
-                placeholder="MVP player name"
-                className="flex-1 min-h-[40px] px-3 text-xs border border-slate-300 rounded-lg"
-              />
-            </div>
+            <PlayerPickerField
+              value={mvpPlayerName}
+              onChange={(name, player) => {
+                setMvpPlayerName(name);
+                setMvpPlayerId(player?.dbPlayerId || '');
+              }}
+              players={rosterAll}
+              placeholder="MVP player name (optional)"
+              emptyOptionLabel="-- Select MVP from Roster (Optional) --"
+              ariaLabel="Volleyball MVP"
+            />
           </div>
 
           <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -2192,6 +2293,8 @@ function OtherSportControls({
   scoreA,
   scoreB,
   details,
+  rosterA,
+  rosterB,
   saving,
   onCommit,
 }: {
@@ -2200,6 +2303,8 @@ function OtherSportControls({
   scoreA: number;
   scoreB: number;
   details: Record<string, any>;
+  rosterA: UnifiedMatchPlayer[];
+  rosterB: UnifiedMatchPlayer[];
   saving: boolean;
   onCommit: (payload: any) => void;
 }) {
@@ -2207,6 +2312,8 @@ function OtherSportControls({
   const [valB, setValB] = useState(String(scoreB));
   const [periodLabel, setPeriodLabel] = useState(String(details.periodLabel || ''));
   const [notes, setNotes] = useState(String(details.notes || ''));
+  const [playerA, setPlayerA] = useState('');
+  const [playerB, setPlayerB] = useState('');
 
   useEffect(() => {
     setValA(String(scoreA));
@@ -2223,18 +2330,28 @@ function OtherSportControls({
             <span className="text-sm font-semibold text-slate-900">{teamA}</span>
             <span className="font-mono text-xl font-bold tabular-nums">{scoreA}</span>
           </div>
+          <PlayerPickerField
+            compact
+            value={playerA}
+            onChange={(val) => setPlayerA(val)}
+            players={rosterA}
+            placeholder={`${teamA} player (optional)`}
+            emptyOptionLabel={`-- ${teamA} Player (Optional) --`}
+            ariaLabel={`${teamA} player`}
+          />
           <div className="flex flex-wrap gap-2">
             {[1, 2, 5].map((inc) => (
               <button
                 key={inc}
                 type="button"
                 disabled={saving}
-                onClick={() =>
+                onClick={() => {
+                  const pName = playerA.trim();
                   onCommit({
                     teamAScore: scoreA + inc,
-                    action: `${teamA} +${inc}`,
-                  })
-                }
+                    action: `${teamA} +${inc}${pName ? ` (${pName})` : ''}`,
+                  });
+                }}
                 className="min-h-[44px] flex-1 px-3 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
               >
                 +{inc}
@@ -2261,18 +2378,28 @@ function OtherSportControls({
             <span className="text-sm font-semibold text-slate-900">{teamB}</span>
             <span className="font-mono text-xl font-bold tabular-nums">{scoreB}</span>
           </div>
+          <PlayerPickerField
+            compact
+            value={playerB}
+            onChange={(val) => setPlayerB(val)}
+            players={rosterB}
+            placeholder={`${teamB} player (optional)`}
+            emptyOptionLabel={`-- ${teamB} Player (Optional) --`}
+            ariaLabel={`${teamB} player`}
+          />
           <div className="flex flex-wrap gap-2">
             {[1, 2, 5].map((inc) => (
               <button
                 key={inc}
                 type="button"
                 disabled={saving}
-                onClick={() =>
+                onClick={() => {
+                  const pName = playerB.trim();
                   onCommit({
                     teamBScore: scoreB + inc,
-                    action: `${teamB} +${inc}`,
-                  })
-                }
+                    action: `${teamB} +${inc}${pName ? ` (${pName})` : ''}`,
+                  });
+                }}
                 className="min-h-[44px] flex-1 px-3 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
               >
                 +{inc}

@@ -24,6 +24,8 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx';
 import { Modal } from '../common/Modal.tsx';
 import { CricketScorecardPanel } from './CricketScorecardPanel.tsx';
+import { PlayerPickerField } from './PlayerPickerField.tsx';
+import { mergeMatchRoster, UnifiedMatchPlayer } from '../../utils/sportPositions.ts';
 
 interface CricketScorerConsoleProps {
   stream: LiveStreamData;
@@ -158,44 +160,32 @@ export function CricketScorerConsole({
     setSoWktsB(String(details.superOverTeamBWickets || 0));
   }, [details]);
 
-  // Split roster players by team for datalist suggestions
-  const { battingPlayers, bowlingPlayers } = useMemo(() => {
-    const batTeamId = details.battingTeam === 'A' ? stream.teamAId : stream.teamBId;
-    const bowlTeamId = details.battingTeam === 'A' ? stream.teamBId : stream.teamAId;
-    const bat: PlayerData[] = [];
-    const bowl: PlayerData[] = [];
-    for (const p of players) {
-      const tid = typeof p.teamId === 'object' && p.teamId ? p.teamId._id : (p.teamId as string | null);
-      if (batTeamId && tid === batTeamId) bat.push(p);
-      else if (bowlTeamId && tid === bowlTeamId) bowl.push(p);
-    }
-    return {
-      battingPlayers: bat.length > 0 ? bat : players,
-      bowlingPlayers: bowl.length > 0 ? bowl : players,
-    };
-  }, [players, details.battingTeam, stream.teamAId, stream.teamBId]);
+  // Merge drafted match players with DB roster players per team side
+  const roster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
 
-  const { secondBattingPlayers, secondBowlingPlayers } = useMemo(() => {
-    const batTeamId = secondBattingTeam === 'A' ? stream.teamAId : stream.teamBId;
-    const bowlTeamId = secondBattingTeam === 'A' ? stream.teamBId : stream.teamAId;
-    const bat: PlayerData[] = [];
-    const bowl: PlayerData[] = [];
-    for (const p of players) {
-      const tid = typeof p.teamId === 'object' && p.teamId ? p.teamId._id : (p.teamId as string | null);
-      if (batTeamId && tid === batTeamId) bat.push(p);
-      else if (bowlTeamId && tid === bowlTeamId) bowl.push(p);
-    }
+  const { battingRoster, bowlingRoster } = useMemo(() => {
+    const batSide = details.battingTeam === 'A' ? roster.teamA : roster.teamB;
+    const bowlSide = details.battingTeam === 'A' ? roster.teamB : roster.teamA;
     return {
-      secondBattingPlayers: bat.length > 0 ? bat : players,
-      secondBowlingPlayers: bowl.length > 0 ? bowl : players,
+      battingRoster: batSide.length > 0 ? batSide : roster.all,
+      bowlingRoster: bowlSide.length > 0 ? bowlSide : roster.all,
     };
-  }, [players, secondBattingTeam, stream.teamAId, stream.teamBId]);
+  }, [roster, details.battingTeam]);
 
-  function findPlayerIdByName(name: string, pool: PlayerData[]): string | undefined {
+  const { secondBattingRoster, secondBowlingRoster } = useMemo(() => {
+    const batSide = secondBattingTeam === 'A' ? roster.teamA : roster.teamB;
+    const bowlSide = secondBattingTeam === 'A' ? roster.teamB : roster.teamA;
+    return {
+      secondBattingRoster: batSide.length > 0 ? batSide : roster.all,
+      secondBowlingRoster: bowlSide.length > 0 ? bowlSide : roster.all,
+    };
+  }, [roster, secondBattingTeam]);
+
+  function findPlayerIdByName(name: string, pool: UnifiedMatchPlayer[]): string | undefined {
     const norm = name.trim().toLowerCase();
     if (!norm) return undefined;
     const match = pool.find((p) => p.name.trim().toLowerCase() === norm);
-    return match?.id;
+    return match?.dbPlayerId;
   }
 
   async function dispatchDelivery(
@@ -210,8 +200,8 @@ export function CricketScorerConsole({
     const nonStrikerName = batsman2.trim();
     const bowlerName = (opts?.bowlerOverride ?? bowler).trim();
 
-    const pId = findPlayerIdByName(strikerName, battingPlayers);
-    const bId = findPlayerIdByName(bowlerName, bowlingPlayers);
+    const pId = findPlayerIdByName(opts?.dismissedOverride || strikerName, battingRoster);
+    const bId = findPlayerIdByName(bowlerName, bowlingRoster);
 
     await onSubmitCricketEvent({
       clientEventId: makeClientEventId('cric'),
@@ -260,19 +250,25 @@ export function CricketScorerConsole({
 
   async function handleStartSecondInnings(e: React.FormEvent) {
     e.preventDefault();
-    if (!secondBatter1.trim() || !secondBatter2.trim() || !secondBowler.trim()) {
-      onError('Please enter Striker, Non-Striker, and Opening Bowler.');
-      return;
-    }
     try {
       setStartingSecondInnings(true);
+      const firstSideLocal = details.firstInningsBattingTeam || details.battingTeam || 'A';
+      const firstRunsLocal = firstSideLocal === 'A' ? details.teamARuns : details.teamBRuns;
+      const resolvedTarget = Math.max(
+        1,
+        Math.floor(Number(secondTarget) || details.target || firstRunsLocal + 1 || 1)
+      );
+      const resolvedOvers = Math.max(
+        1,
+        Math.min(90, Math.floor(Number(secondOvers) || details.oversLimit || 20))
+      );
       const res = await scoreboardService.startSecondCricketInnings(stream.id, {
         battingTeam: secondBattingTeam,
         batsman1: secondBatter1.trim(),
         batsman2: secondBatter2.trim(),
         bowler: secondBowler.trim(),
-        oversLimit: Math.max(1, Math.min(90, Math.floor(Number(secondOvers) || details.oversLimit || 20))),
-        target: Math.max(1, Math.floor(Number(secondTarget) || 1)),
+        oversLimit: resolvedOvers,
+        target: resolvedTarget,
       });
       onScoreChange(res.score);
       onRefreshHistory();
@@ -366,26 +362,6 @@ export function CricketScorerConsole({
 
   return (
     <div className="space-y-4">
-      <datalist id="cricket-batting-players">
-        {battingPlayers.map((p) => (
-          <option key={p.id} value={p.name} />
-        ))}
-      </datalist>
-      <datalist id="cricket-bowling-players">
-        {bowlingPlayers.map((p) => (
-          <option key={p.id} value={p.name} />
-        ))}
-      </datalist>
-      <datalist id="cricket-second-batters">
-        {secondBattingPlayers.map((p) => (
-          <option key={p.id} value={p.name} />
-        ))}
-      </datalist>
-      <datalist id="cricket-second-bowlers">
-        {secondBowlingPlayers.map((p) => (
-          <option key={p.id} value={p.name} />
-        ))}
-      </datalist>
 
       {/* Locked State Banner: INNINGS BREAK */}
       {chase.isInningsBreak && (
@@ -718,41 +694,44 @@ export function CricketScorerConsole({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
-                Striker (*)
+                Striker (On Strike)
               </label>
-              <input
-                type="text"
-                list="cricket-batting-players"
+              <PlayerPickerField
+                compact
                 value={batsman1}
-                onChange={(e) => setBatsman1(e.target.value)}
-                placeholder="Striker name"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
+                onChange={(name) => setBatsman1(name)}
+                players={battingRoster}
+                placeholder="Striker name (optional)"
+                emptyOptionLabel="-- Select striker --"
+                ariaLabel="Striker"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Non-Striker
               </label>
-              <input
-                type="text"
-                list="cricket-batting-players"
+              <PlayerPickerField
+                compact
                 value={batsman2}
-                onChange={(e) => setBatsman2(e.target.value)}
-                placeholder="Non-striker"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
+                onChange={(name) => setBatsman2(name)}
+                players={battingRoster}
+                placeholder="Non-striker (optional)"
+                emptyOptionLabel="-- Select non-striker --"
+                ariaLabel="Non-Striker"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Current Bowler
               </label>
-              <input
-                type="text"
-                list="cricket-bowling-players"
+              <PlayerPickerField
+                compact
                 value={bowler}
-                onChange={(e) => setBowler(e.target.value)}
-                placeholder="Bowler name"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
+                onChange={(name) => setBowler(name)}
+                players={bowlingRoster}
+                placeholder="Bowler name (optional)"
+                emptyOptionLabel="-- Select bowler --"
+                ariaLabel="Current Bowler"
               />
             </div>
             <div>
@@ -980,18 +959,18 @@ export function CricketScorerConsole({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Fielder / Keeper (Optional)
               </label>
-              <input
-                type="text"
-                list="cricket-bowling-players"
+              <PlayerPickerField
                 value={wicketFielder}
-                onChange={(e) => setWicketFielder(e.target.value)}
+                onChange={(name) => setWicketFielder(name)}
+                players={bowlingRoster}
                 placeholder="Catcher / Run-out fielder"
-                className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg"
+                emptyOptionLabel="-- Select fielder (Optional) --"
+                ariaLabel="Fielder or Keeper"
               />
             </div>
             <div>
@@ -1011,15 +990,15 @@ export function CricketScorerConsole({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Incoming New Batter (Optional)
+              Next Batsman / Incoming Batter (Optional)
             </label>
-            <input
-              type="text"
-              list="cricket-batting-players"
+            <PlayerPickerField
               value={wicketNewBatter}
-              onChange={(e) => setWicketNewBatter(e.target.value)}
-              placeholder="Select or enter new batter name"
-              className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              onChange={(name) => setWicketNewBatter(name)}
+              players={battingRoster}
+              placeholder="Select or enter next batsman"
+              emptyOptionLabel="-- Select next batsman (Optional) --"
+              ariaLabel="Incoming New Batter"
             />
           </div>
 
@@ -1055,13 +1034,13 @@ export function CricketScorerConsole({
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Next Over Bowler (Optional)
             </label>
-            <input
-              type="text"
-              list="cricket-bowling-players"
+            <PlayerPickerField
               value={nextOverBowler}
-              onChange={(e) => setNextOverBowler(e.target.value)}
+              onChange={(name) => setNextOverBowler(name)}
+              players={bowlingRoster}
               placeholder="Select or type bowler name"
-              className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              emptyOptionLabel="-- Select next bowler (Optional) --"
+              ariaLabel="Next Over Bowler"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -1121,28 +1100,28 @@ export function CricketScorerConsole({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Target Runs <span className="text-red-600">*</span>
+                Target Runs (Optional)
               </label>
               <input
                 type="number"
-                required
                 min={1}
                 value={secondTarget}
                 onChange={(e) => setSecondTarget(e.target.value)}
+                placeholder={String(firstRuns + 1)}
                 className="w-full min-h-[42px] px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
               />
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Match Overs <span className="text-red-600">*</span>
+                Match Overs (Optional)
               </label>
               <input
                 type="number"
-                required
                 min={1}
                 max={90}
                 value={secondOvers}
                 onChange={(e) => setSecondOvers(e.target.value)}
+                placeholder={String(details.oversLimit || 20)}
                 className="w-full min-h-[42px] px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
               />
             </div>
@@ -1151,46 +1130,43 @@ export function CricketScorerConsole({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Opening Striker (*) <span className="text-red-600">*</span>
+                Opening Striker (Optional)
               </label>
-              <input
-                type="text"
-                required
-                list="cricket-second-batters"
+              <PlayerPickerField
                 value={secondBatter1}
-                onChange={(e) => setSecondBatter1(e.target.value)}
-                placeholder="Opening striker"
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(name) => setSecondBatter1(name)}
+                players={secondBattingRoster}
+                placeholder="Opening striker (optional)"
+                emptyOptionLabel="-- Select striker (Optional) --"
+                ariaLabel="Opening Striker"
               />
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Opening Non-Striker <span className="text-red-600">*</span>
+                Opening Non-Striker (Optional)
               </label>
-              <input
-                type="text"
-                required
-                list="cricket-second-batters"
+              <PlayerPickerField
                 value={secondBatter2}
-                onChange={(e) => setSecondBatter2(e.target.value)}
-                placeholder="Non-striker"
-                className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(name) => setSecondBatter2(name)}
+                players={secondBattingRoster}
+                placeholder="Non-striker (optional)"
+                emptyOptionLabel="-- Select non-striker (Optional) --"
+                ariaLabel="Opening Non-Striker"
               />
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Opening Bowler <span className="text-red-600">*</span>
+              Opening Bowler (Optional)
             </label>
-            <input
-              type="text"
-              required
-              list="cricket-second-bowlers"
+            <PlayerPickerField
               value={secondBowler}
-              onChange={(e) => setSecondBowler(e.target.value)}
-              placeholder="Opening bowler"
-              className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              onChange={(name) => setSecondBowler(name)}
+              players={secondBowlingRoster}
+              placeholder="Opening bowler (optional)"
+              emptyOptionLabel="-- Select bowler (Optional) --"
+              ariaLabel="Opening Bowler"
             />
           </div>
 

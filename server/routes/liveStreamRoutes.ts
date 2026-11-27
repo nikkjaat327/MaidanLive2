@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { LiveStream } from '../models/LiveStream.ts';
 import type {
   BroadcastPhase,
+  IMatchDraftPlayer,
   ScoreboardPosition,
   SportType,
   StreamStatus,
@@ -71,6 +72,7 @@ import {
   verifyMediaMTXStreamHealth,
 } from '../services/mediamtxService.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
+import { applyKabaddiEngineAction, normalizeKabaddiDetails } from '../../src/utils/kabaddiScoring.ts';
 import {
   applyVolleyballAction,
   validateVolleyballRules,
@@ -128,6 +130,35 @@ function normalizeVisibility(val: unknown): ViewerCountVisibility {
   return 'public';
 }
 
+export function sanitizeMatchDraftPlayers(raw: unknown): IMatchDraftPlayer[] {
+  if (!Array.isArray(raw)) return [];
+  const out: IMatchDraftPlayer[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const name = sanitizeText(rec.name, 80);
+    if (!name) continue;
+    const position = sanitizeText(rec.position, 60);
+    const id = sanitizeText(rec.id, 64);
+    const jRaw =
+      rec.jerseyNumber !== undefined && rec.jerseyNumber !== null && String(rec.jerseyNumber) !== ''
+        ? Number(rec.jerseyNumber)
+        : null;
+    const jerseyNumber =
+      jRaw !== null && Number.isFinite(jRaw) && jRaw >= 0 && jRaw <= 999
+        ? Math.floor(jRaw)
+        : null;
+    out.push({
+      ...(id ? { id } : {}),
+      name,
+      ...(position ? { position } : {}),
+      ...(jerseyNumber !== null ? { jerseyNumber } : {}),
+    });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
 function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isAdminViewer = false) {
   const clean = stripPrivateMediaMTXFields(streamObj);
   const id = (clean._id || clean.id)?.toString();
@@ -148,6 +179,8 @@ function formatPublicStream(streamObj: any, extra: Record<string, any> = {}, isA
   return {
     ...clean,
     id,
+    teamAPlayers: Array.isArray(clean.teamAPlayers) ? clean.teamAPlayers : [],
+    teamBPlayers: Array.isArray(clean.teamBPlayers) ? clean.teamBPlayers : [],
     streamingProvider: clean.streamingProvider || 'youtube',
     activeStreamingProvider: clean.activeStreamingProvider || clean.streamingProvider || 'youtube',
     viewerCountVisibility: vis,
@@ -407,6 +440,9 @@ async function createMatchOrStreamSession(
         ? req.body.fixtureId
         : null;
 
+    const teamAPlayers = sanitizeMatchDraftPlayers(req.body.teamAPlayers);
+    const teamBPlayers = sanitizeMatchDraftPlayers(req.body.teamBPlayers);
+
     const stream = await LiveStream.create({
       _id: tempObjectId,
       streamingProvider,
@@ -426,6 +462,8 @@ async function createMatchOrStreamSession(
       teamBId,
       teamALogo,
       teamBLogo,
+      teamAPlayers,
+      teamBPlayers,
       location,
       venueId,
       gameName,
@@ -463,16 +501,41 @@ async function createMatchOrStreamSession(
       updatedBy: req.user!._id,
     });
 
+    let initialSportDetails = getInitialSportDetails(scoreSport, {
+      oversLimit: parsedOversLimit,
+      playersPerSide: parsedPlayersPerSide,
+      volleyballRules: parsedVolleyballRules,
+    });
+    if (scoreSport === 'Kabaddi' && (teamAPlayers.length > 0 || teamBPlayers.length > 0)) {
+      const kApplied = applyKabaddiEngineAction(
+        normalizeKabaddiDetails(initialSportDetails),
+        0,
+        0,
+        {
+          type: 'SYNC_ROSTER',
+          teamAPlayers: teamAPlayers.map((p, idx) => ({
+            playerId: p.id || `draft_A_${idx}`,
+            name: p.name,
+            jerseyNumber: p.jerseyNumber ?? undefined,
+            role: p.position || undefined,
+          })),
+          teamBPlayers: teamBPlayers.map((p, idx) => ({
+            playerId: p.id || `draft_B_${idx}`,
+            name: p.name,
+            jerseyNumber: p.jerseyNumber ?? undefined,
+            role: p.position || undefined,
+          })),
+        }
+      );
+      initialSportDetails = kApplied.details as unknown as Record<string, unknown>;
+    }
+
     const initialScore = await LiveScore.create({
       liveStreamId: stream._id,
       sportType: scoreSport,
       teamAScore: 0,
       teamBScore: 0,
-      sportSpecificDetails: getInitialSportDetails(scoreSport, {
-        oversLimit: parsedOversLimit,
-        playersPerSide: parsedPlayersPerSide,
-        volleyballRules: parsedVolleyballRules,
-      }),
+      sportSpecificDetails: initialSportDetails,
       matchStatus: initializeOnly ? 'Prepared' : requestedStatus === 'UPCOMING' ? 'Upcoming' : 'Live',
       resultStatus: 'NOT_DECLARED',
       lastUpdatedBy: req.user!._id,
@@ -863,6 +926,27 @@ router.get('/:id/detail', optionalAuthenticate, async (req: AuthenticatedRequest
     const mapPlayer = (p: any) =>
       isAdminViewer ? { ...p, id: p._id.toString() } : sanitizePublicDetailPlayer(p);
 
+    const mergeDraftIntoLineup = (dbMapped: any[], draftList: any[], side: 'A' | 'B') => {
+      const seenNames = new Set(dbMapped.map((p) => String(p?.name || '').trim().toLowerCase()));
+      const merged = [...dbMapped];
+      (Array.isArray(draftList) ? draftList : []).forEach((dp: any, idx: number) => {
+        const cleanName = sanitizeText(dp?.name, 80);
+        if (!cleanName) return;
+        const lower = cleanName.toLowerCase();
+        if (seenNames.has(lower)) return;
+        seenNames.add(lower);
+        merged.push({
+          id: dp?.id || `draft_${side}_${idx}`,
+          name: cleanName,
+          sportType: stream.gameName || 'Other',
+          role: sanitizeText(dp?.position, 60),
+          position: sanitizeText(dp?.position, 60),
+          jerseyNumber: dp?.jerseyNumber ?? null,
+        });
+      });
+      return merged;
+    };
+
     const upcomingFixtures = (fixturesRaw as any[])
       .filter((f) => f.status === 'SCHEDULED' || f.status === 'LIVE')
       .slice(0, 6)
@@ -877,8 +961,8 @@ router.get('/:id/detail', optionalAuthenticate, async (req: AuthenticatedRequest
       publicSponsors: (sponsorsRaw as any[]).map((s) => ({ ...s, id: s._id.toString() })),
       playerStats: (playerStatsRaw as any[]).map((s) => ({ ...s, id: s._id.toString() })),
       lineupPlayers: {
-        teamA: teamAUnique.map(mapPlayer),
-        teamB: teamBUnique.map(mapPlayer),
+        teamA: mergeDraftIntoLineup(teamAUnique.map(mapPlayer), (stream as any).teamAPlayers || [], 'A'),
+        teamB: mergeDraftIntoLineup(teamBUnique.map(mapPlayer), (stream as any).teamBPlayers || [], 'B'),
       },
       upcomingFixtures,
       brandLogoUrl: (process.env.VITE_BRAND_LOGO_URL || process.env.BRAND_LOGO_URL || '').trim(),
@@ -1732,6 +1816,12 @@ router.patch(
       if (req.body.teamBName !== undefined) stream.teamBName = sanitizeText(req.body.teamBName, 100);
       if (req.body.teamALogo !== undefined) stream.teamALogo = sanitizeImageUrl(req.body.teamALogo);
       if (req.body.teamBLogo !== undefined) stream.teamBLogo = sanitizeImageUrl(req.body.teamBLogo);
+      if (req.body.teamAPlayers !== undefined) {
+        stream.teamAPlayers = sanitizeMatchDraftPlayers(req.body.teamAPlayers);
+      }
+      if (req.body.teamBPlayers !== undefined) {
+        stream.teamBPlayers = sanitizeMatchDraftPlayers(req.body.teamBPlayers);
+      }
       if (req.body.location !== undefined) stream.location = sanitizeText(req.body.location, 160);
       if (req.body.matchTitle !== undefined) stream.matchTitle = sanitizeText(req.body.matchTitle, 180);
       if (req.body.tournamentName !== undefined) {

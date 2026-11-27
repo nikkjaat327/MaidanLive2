@@ -25,7 +25,6 @@ import type {
 } from '../../../types/index.ts';
 import { extractApiError } from '../../../services/api/httpClient.ts';
 import { scoreboardService } from '../../../services/scoreboard/scoreboardService.ts';
-import { resolveTeamId } from '../../../utils/dedupe.ts';
 import {
   computeEffectiveKabaddiClock,
   normalizeKabaddiDetails,
@@ -61,6 +60,11 @@ import {
   getPendingScoreCount,
   subscribePendingScoreCount,
 } from '../../../utils/scoreMutationQueue.ts';
+import type { KabaddiCourtPlayer } from '../../../utils/kabaddiScoring.ts';
+import {
+  mergeMatchRoster,
+  type UnifiedMatchPlayer,
+} from '../../../utils/sportPositions.ts';
 
 interface KabaddiScorerConsoleProps {
   stream: LiveStreamData;
@@ -193,6 +197,52 @@ export function KabaddiScorerConsole({
     (h) => (!h.entryType || h.entryType === 'SCORE_UPDATE') && !h.reverted
   ).length;
 
+  const mergedRoster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
+
+  function buildSelectableCourtPlayers(
+    side: KabaddiSide,
+    activeCourtList: KabaddiCourtPlayer[],
+    fullCourtList: KabaddiCourtPlayer[],
+    rosterSide: UnifiedMatchPlayer[]
+  ): KabaddiCourtPlayer[] {
+    if (rosterSide.length === 0) return activeCourtList;
+    const toCourtPlayer = (p: UnifiedMatchPlayer): KabaddiCourtPlayer => ({
+      playerId: p.dbPlayerId || p.id,
+      name: p.name,
+      team: side,
+      jerseyNumber: p.jerseyNumber ?? undefined,
+      role: p.position || undefined,
+      status: 'ON_COURT',
+      cards: { green: 0, yellow: 0, red: 0, custom: [] },
+      stats: {
+        raidPoints: 0,
+        tacklePoints: 0,
+        bonusPoints: 0,
+        totalPoints: 0,
+        raidsAttempted: 0,
+        successfulRaids: 0,
+        emptyRaids: 0,
+        raidersTackled: 0,
+        superRaids: 0,
+        superTackles: 0,
+        outCount: 0,
+        revivals: 0,
+        substitutions: 0,
+      },
+    });
+    const isGenericSlot = (p: KabaddiCourtPlayer) =>
+      /^slot_[AB]_/i.test(p.playerId) || /^Player\s+\d+$/i.test(p.name.trim());
+    const hasCustomCourtPlayers = fullCourtList.some((p) => !isGenericSlot(p));
+    if (!hasCustomCourtPlayers) {
+      return rosterSide.map((p) => toCourtPlayer(p));
+    }
+    const existingNames = new Set(fullCourtList.map((p) => p.name.trim().toLowerCase()));
+    const extras: KabaddiCourtPlayer[] = rosterSide
+      .filter((p) => !existingNames.has(p.name.trim().toLowerCase()))
+      .map((p) => toCourtPlayer(p));
+    return extras.length > 0 ? [...activeCourtList, ...extras] : activeCourtList;
+  }
+
   async function dispatchEvent(action: Record<string, unknown>, successFallback?: string) {
     const baseScore = scoreRef.current || score;
     const traceId = makeClientEventId('kbd');
@@ -298,28 +348,26 @@ export function KabaddiScorerConsole({
   }
 
   async function handleSyncRosterFromDb() {
-    const teamAPlayers = players
-      .filter((p) => resolveTeamId(p.teamId) === stream.teamAId)
+    const teamAPlayers = mergedRoster.teamA
       .map((p) => ({
-        playerId: p.id || p._id || '',
+        playerId: p.dbPlayerId || p.id,
         name: p.name,
-        jerseyNumber: p.jerseyNumber,
-        role: p.role,
+        jerseyNumber: p.jerseyNumber ?? undefined,
+        role: p.position || undefined,
       }))
-      .filter((p) => p.playerId);
+      .filter((p) => p.playerId && p.name);
 
-    const teamBPlayers = players
-      .filter((p) => resolveTeamId(p.teamId) === stream.teamBId)
+    const teamBPlayers = mergedRoster.teamB
       .map((p) => ({
-        playerId: p.id || p._id || '',
+        playerId: p.dbPlayerId || p.id,
         name: p.name,
-        jerseyNumber: p.jerseyNumber,
-        role: p.role,
+        jerseyNumber: p.jerseyNumber ?? undefined,
+        role: p.position || undefined,
       }))
-      .filter((p) => p.playerId);
+      .filter((p) => p.playerId && p.name);
 
     if (teamAPlayers.length === 0 && teamBPlayers.length === 0) {
-      onError('No database roster players linked to Team A or Team B yet.');
+      onError('No drafted or database roster players linked to Team A or Team B yet.');
       return;
     }
     await dispatchEvent(
@@ -407,14 +455,27 @@ export function KabaddiScorerConsole({
     const oppCourtList = isTeamA ? details.courtPlayersB : details.courtPlayersA;
     const activeOnCourt = courtList.filter((p) => p.status === 'ON_COURT');
     const oppActiveOnCourt = oppCourtList.filter((p) => p.status === 'ON_COURT');
+    const oppSide: KabaddiSide = isTeamA ? 'B' : 'A';
+    const selectableTeamPlayers = buildSelectableCourtPlayers(
+      side,
+      activeOnCourt,
+      courtList,
+      isTeamA ? mergedRoster.teamA : mergedRoster.teamB
+    );
+    const selectableOppPlayers = buildSelectableCourtPlayers(
+      oppSide,
+      oppActiveOnCourt,
+      oppCourtList,
+      isTeamA ? mergedRoster.teamB : mergedRoster.teamA
+    );
 
     const raiderId = isTeamA ? selectedRaiderA : selectedRaiderB;
     const defId = isTeamA ? selectedDefA : selectedDefB;
     const setRaiderId = isTeamA ? setSelectedRaiderA : setSelectedRaiderB;
     const setDefId = isTeamA ? setSelectedDefA : setSelectedDefB;
 
-    const chosenRaider = activeOnCourt.find((p) => p.playerId === raiderId);
-    const chosenDefender = oppActiveOnCourt.find((p) => p.playerId === defId);
+    const chosenRaider = selectableTeamPlayers.find((p) => p.playerId === raiderId);
+    const chosenDefender = selectableOppPlayers.find((p) => p.playerId === defId);
 
     const superTackleEligible = activeOnCourt.length <= (details.rules.superTackleMaxDefenders || 3);
     const dodActiveForSide = details.doOrDie.active && details.doOrDie.team === side && clock.doOrDieVisible;
@@ -490,9 +551,9 @@ export function KabaddiScorerConsole({
               className="min-h-[38px] px-2.5 text-xs rounded-lg bg-slate-950 border border-slate-700 text-slate-100"
             >
               <option value="">Raider / Scorer (Optional)</option>
-              {activeOnCourt.map((p) => (
+              {selectableTeamPlayers.map((p) => (
                 <option key={p.playerId} value={p.playerId}>
-                  {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}{p.name}
+                  {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}{p.name}{p.role ? ` (${p.role})` : ''}
                 </option>
               ))}
             </select>
@@ -503,9 +564,9 @@ export function KabaddiScorerConsole({
               className="min-h-[38px] px-2.5 text-xs rounded-lg bg-slate-950 border border-slate-700 text-slate-100"
             >
               <option value="">Opp Player Put Out (Optional)</option>
-              {oppActiveOnCourt.map((p) => (
+              {selectableOppPlayers.map((p) => (
                 <option key={p.playerId} value={p.playerId}>
-                  {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}{p.name}
+                  {p.jerseyNumber ? `#${p.jerseyNumber} ` : ''}{p.name}{p.role ? ` (${p.role})` : ''}
                 </option>
               ))}
             </select>
@@ -1006,12 +1067,22 @@ export function KabaddiScorerConsole({
           team={multiModalTeam}
           teamName={multiModalTeam === 'A' ? teamAName : teamBName}
           oppTeamName={multiModalTeam === 'A' ? teamBName : teamAName}
-          raiders={(multiModalTeam === 'A' ? details.courtPlayersA : details.courtPlayersB).filter(
-            (p) => p.status === 'ON_COURT'
+          raiders={buildSelectableCourtPlayers(
+            multiModalTeam,
+            (multiModalTeam === 'A' ? details.courtPlayersA : details.courtPlayersB).filter(
+              (p) => p.status === 'ON_COURT'
+            ),
+            multiModalTeam === 'A' ? details.courtPlayersA : details.courtPlayersB,
+            multiModalTeam === 'A' ? mergedRoster.teamA : mergedRoster.teamB
           )}
-          oppDefenders={(
-            multiModalTeam === 'A' ? details.courtPlayersB : details.courtPlayersA
-          ).filter((p) => p.status === 'ON_COURT')}
+          oppDefenders={buildSelectableCourtPlayers(
+            multiModalTeam === 'A' ? 'B' : 'A',
+            (multiModalTeam === 'A' ? details.courtPlayersB : details.courtPlayersA).filter(
+              (p) => p.status === 'ON_COURT'
+            ),
+            multiModalTeam === 'A' ? details.courtPlayersB : details.courtPlayersA,
+            multiModalTeam === 'A' ? mergedRoster.teamB : mergedRoster.teamA
+          )}
           defaultMode={scoringMode}
           rules={details.rules}
           saving={false}

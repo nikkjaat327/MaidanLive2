@@ -1501,12 +1501,6 @@ router.post(
       const batsman1 = sanitizeText(req.body.batsman1, 120);
       const batsman2 = sanitizeText(req.body.batsman2, 120);
       const bowler = sanitizeText(req.body.bowler, 120);
-      if (!batsman1 || !batsman2 || !bowler) {
-        res.status(400).json({
-          message: 'Striker, Non-Striker, and Opening Bowler are required to start the 2nd innings.',
-        });
-        return;
-      }
 
       const defaultSecondBatting: 'A' | 'B' =
         (currentDetails.firstInningsBattingTeam || currentDetails.battingTeam) === 'A' ? 'B' : 'A';

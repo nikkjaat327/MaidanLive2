@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Award, CheckCircle2, Trophy } from 'lucide-react';
 import { LiveScoreData, LiveStreamData, PlayerData } from '../../types/index.ts';
 import { Modal } from '../common/Modal.tsx';
 import { formatCricketOvers } from '../../utils/cricketScoring.ts';
 import { MatchResultType, validateMatchResult } from '../../utils/matchResultValidation.ts';
+import { PlayerPickerField } from './PlayerPickerField.tsx';
+import { mergeMatchRoster } from '../../utils/sportPositions.ts';
 
 interface MatchResultModalProps {
   open: boolean;
@@ -142,14 +144,7 @@ export function MatchResultModal({
     });
   }
 
-  const eligiblePlayers = players.filter(
-    (p) =>
-      !stream.teamAId ||
-      !stream.teamBId ||
-      (typeof p.teamId === 'object'
-        ? p.teamId?._id === stream.teamAId || p.teamId?._id === stream.teamBId
-        : p.teamId === stream.teamAId || p.teamId === stream.teamBId)
-  );
+  const mergedRoster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
 
   return (
     <Modal
@@ -238,45 +233,21 @@ export function MatchResultModal({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {eligiblePlayers.length > 0 && (
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    MVP / Player of the Match
-                  </label>
-                  <select
-                    value={mvpPlayerId}
-                    onChange={(e) => {
-                      const pid = e.target.value;
-                      setMvpPlayerId(pid);
-                      const found = eligiblePlayers.find((p) => (p.id || p._id) === pid);
-                      if (found) setMvpPlayerName(found.name);
-                    }}
-                    className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">-- Select MVP (Optional) --</option>
-                    {eligiblePlayers.map((p) => (
-                      <option key={p.id || p._id} value={p.id || p._id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className={eligiblePlayers.length > 0 ? '' : 'sm:col-span-2'}>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  MVP Name (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={mvpPlayerName}
-                  onChange={(e) => setMvpPlayerName(e.target.value)}
-                  maxLength={120}
-                  placeholder="e.g. R. Sharma"
-                  className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                MVP / Player of the Match (Optional)
+              </label>
+              <PlayerPickerField
+                value={mvpPlayerName}
+                onChange={(name, picked) => {
+                  setMvpPlayerName(name);
+                  setMvpPlayerId(picked?.dbPlayerId || '');
+                }}
+                players={mergedRoster.all}
+                placeholder="e.g. R. Sharma (optional)"
+                emptyOptionLabel="-- Select MVP from Roster (Optional) --"
+                ariaLabel="MVP or Player of the Match"
+              />
             </div>
 
             <div>

@@ -25,6 +25,8 @@ import {
   FootballDetails,
   FootballEventType,
 } from '../../utils/footballScoring.ts';
+import { PlayerPickerField } from './PlayerPickerField.tsx';
+import { mergeMatchRoster } from '../../utils/sportPositions.ts';
 
 interface AdvancedEventComposerProps {
   stream: LiveStreamData;
@@ -61,6 +63,7 @@ export function AdvancedEventComposer({
   const teamB = stream.teamBName || 'Team B';
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
+  const roster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
 
   const [expanded, setExpanded] = useState(true);
 
@@ -576,22 +579,26 @@ export function AdvancedEventComposer({
                       <label className="block text-[11px] text-slate-500 mb-0.5">
                         Dismissed Batsman
                       </label>
-                      <input
-                        type="text"
+                      <PlayerPickerField
+                        compact
                         value={crkDismissed}
-                        onChange={(e) => setCrkDismissed(e.target.value)}
+                        onChange={(name) => setCrkDismissed(name)}
+                        players={roster.all}
                         placeholder="Batsman out"
-                        className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg"
+                        emptyOptionLabel="-- Select batsman (Optional) --"
+                        ariaLabel="Dismissed Batsman"
                       />
                     </div>
                     <div>
                       <label className="block text-[11px] text-slate-500 mb-0.5">New Batsman</label>
-                      <input
-                        type="text"
+                      <PlayerPickerField
+                        compact
                         value={crkNewBatsman}
-                        onChange={(e) => setCrkNewBatsman(e.target.value)}
+                        onChange={(name) => setCrkNewBatsman(name)}
+                        players={roster.all}
                         placeholder="Incoming batsman"
-                        className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg"
+                        emptyOptionLabel="-- Select next batsman (Optional) --"
+                        ariaLabel="New Batsman"
                       />
                     </div>
                   </>
@@ -599,12 +606,14 @@ export function AdvancedEventComposer({
 
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-0.5">Bowler</label>
-                  <input
-                    type="text"
+                  <PlayerPickerField
+                    compact
                     value={crkBowler}
-                    onChange={(e) => setCrkBowler(e.target.value)}
+                    onChange={(name) => setCrkBowler(name)}
+                    players={roster.all}
                     placeholder="Bowler name"
-                    className="w-full min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg"
+                    emptyOptionLabel="-- Select bowler (Optional) --"
+                    ariaLabel="Bowler"
                   />
                 </div>
               </div>
@@ -746,12 +755,14 @@ export function AdvancedEventComposer({
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Player Replaced (Sub Off)
                   </label>
-                  <input
-                    type="text"
+                  <PlayerPickerField
+                    compact
                     value={fbPlayerOut}
-                    onChange={(e) => setFbPlayerOut(e.target.value)}
+                    onChange={(name) => setFbPlayerOut(name)}
+                    players={fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all)}
                     placeholder="Player leaving the pitch"
-                    className="w-full min-h-[38px] px-3 text-xs border border-slate-300 rounded-lg"
+                    emptyOptionLabel="-- Select replaced player (Optional) --"
+                    ariaLabel="Player Replaced"
                   />
                 </div>
               )}
@@ -764,34 +775,26 @@ export function AdvancedEventComposer({
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Player (Linked or Name)
               </label>
-              <div className="flex gap-1.5">
-                {players.length > 0 && (
-                  <select
-                    value={playerId}
-                    onChange={(e) => {
-                      const pid = e.target.value;
-                      setPlayerId(pid);
-                      const found = players.find((p) => (p.id || p._id) === pid);
-                      if (found) setPlayerName(found.name);
-                    }}
-                    className="w-1/2 min-h-[38px] px-2 text-xs border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">-- Roster --</option>
-                    {players.map((p) => (
-                      <option key={p.id || p._id} value={p.id || p._id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  placeholder="Player name"
-                  className="flex-1 min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg"
-                />
-              </div>
+              <PlayerPickerField
+                compact
+                value={playerName}
+                onChange={(name, picked) => {
+                  setPlayerName(name);
+                  setPlayerId(picked?.dbPlayerId || '');
+                }}
+                players={
+                  sport === 'Football'
+                    ? (fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                    : sport === 'Volleyball'
+                      ? (vbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                      : sport === 'Kabaddi'
+                        ? (kabTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                        : roster.all
+                }
+                placeholder="Player name (optional)"
+                emptyOptionLabel="-- Select player (Optional) --"
+                ariaLabel="Event Player"
+              />
             </div>
 
             <div>
@@ -802,34 +805,22 @@ export function AdvancedEventComposer({
                     ? 'Bowler / Fielder'
                     : 'Secondary / Assist Player'}
               </label>
-              <div className="flex gap-1.5">
-                {players.length > 0 && (
-                  <select
-                    value={assistPlayerId}
-                    onChange={(e) => {
-                      const pid = e.target.value;
-                      setAssistPlayerId(pid);
-                      const found = players.find((p) => (p.id || p._id) === pid);
-                      if (found) setAssistPlayerName(found.name);
-                    }}
-                    className="w-1/2 min-h-[38px] px-2 text-xs border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="">-- Roster --</option>
-                    {players.map((p) => (
-                      <option key={p.id || p._id} value={p.id || p._id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={assistPlayerName}
-                  onChange={(e) => setAssistPlayerName(e.target.value)}
-                  placeholder="Optional"
-                  className="flex-1 min-h-[38px] px-2.5 text-xs border border-slate-300 rounded-lg"
-                />
-              </div>
+              <PlayerPickerField
+                compact
+                value={assistPlayerName}
+                onChange={(name, picked) => {
+                  setAssistPlayerName(name);
+                  setAssistPlayerId(picked?.dbPlayerId || '');
+                }}
+                players={
+                  sport === 'Football'
+                    ? (fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                    : roster.all
+                }
+                placeholder="Assist / Secondary (optional)"
+                emptyOptionLabel="-- Select assist / secondary (Optional) --"
+                ariaLabel="Assist Player"
+              />
             </div>
 
             <div>

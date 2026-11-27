@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Info, Sparkles } from 'lucide-react';
+import { CheckCircle2, Info, Plus, Sparkles, Trash2, Users } from 'lucide-react';
 import {
   LiveStreamData,
+  MatchDraftPlayerData,
   ScoreboardPosition,
   TeamData,
   TournamentData,
@@ -15,6 +16,7 @@ import {
   normalizeVolleyballDetails,
   validateVolleyballRules,
 } from '../../utils/volleyballScoring.ts';
+import { getSportPositions, sanitizeDraftPlayersClient } from '../../utils/sportPositions.ts';
 import { liveStreamService } from '../../services/liveStream/liveStreamService.ts';
 import { entityService } from '../../services/entities/entityService.ts';
 import { platformOpsService } from '../../services/platformOps/platformOpsService.ts';
@@ -81,6 +83,10 @@ export function MatchSetupFormModal({
   const [vbAutoCompleteSets, setVbAutoCompleteSets] = useState(true);
   const [vbAllowManualWinner, setVbAllowManualWinner] = useState(true);
   const [vbAllowMatchReopen, setVbAllowMatchReopen] = useState(true);
+  const [teamAPlayers, setTeamAPlayers] = useState<MatchDraftPlayerData[]>([]);
+  const [teamBPlayers, setTeamBPlayers] = useState<MatchDraftPlayerData[]>([]);
+  const [customPosKeys, setCustomPosKeys] = useState<Record<string, boolean>>({});
+  const [importingRosterSide, setImportingRosterSide] = useState<'A' | 'B' | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +159,17 @@ export function MatchSetupFormModal({
       setVbAutoCompleteSets(vbNorm.rules.autoCompleteSets);
       setVbAllowManualWinner(vbNorm.rules.allowManualWinnerDeclaration);
       setVbAllowMatchReopen(vbNorm.rules.allowMatchReopen);
+      setTeamAPlayers(
+        Array.isArray(initialStream.teamAPlayers)
+          ? initialStream.teamAPlayers.map((p) => ({ ...p }))
+          : []
+      );
+      setTeamBPlayers(
+        Array.isArray(initialStream.teamBPlayers)
+          ? initialStream.teamBPlayers.map((p) => ({ ...p }))
+          : []
+      );
+      setCustomPosKeys({});
     } else {
       setGameName('');
       setMatchTitle('');
@@ -184,8 +201,63 @@ export function MatchSetupFormModal({
       setVbAutoCompleteSets(true);
       setVbAllowManualWinner(true);
       setVbAllowMatchReopen(true);
+      setTeamAPlayers([]);
+      setTeamBPlayers([]);
+      setCustomPosKeys({});
     }
   }, [open, mode, initialStream]);
+
+  const positionPresets = getSportPositions(gameName);
+
+  function addDraftPlayer(side: 'A' | 'B') {
+    const updater = side === 'A' ? setTeamAPlayers : setTeamBPlayers;
+    updater((prev) => [
+      ...prev,
+      { id: `draft_${side}_${Date.now()}_${prev.length}`, name: '', position: '' },
+    ]);
+  }
+
+  function updateDraftPlayer(
+    side: 'A' | 'B',
+    index: number,
+    patch: Partial<MatchDraftPlayerData>
+  ) {
+    const updater = side === 'A' ? setTeamAPlayers : setTeamBPlayers;
+    updater((prev) => prev.map((row, idx) => (idx === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeDraftPlayer(side: 'A' | 'B', index: number) {
+    const updater = side === 'A' ? setTeamAPlayers : setTeamBPlayers;
+    updater((prev) => prev.filter((_, idx) => idx !== index));
+  }
+
+  async function importSavedTeamPlayers(side: 'A' | 'B', selectedTeamId: string) {
+    if (!selectedTeamId) return;
+    try {
+      setImportingRosterSide(side);
+      const list = await entityService.listPlayers({ teamId: selectedTeamId });
+      const updater = side === 'A' ? setTeamAPlayers : setTeamBPlayers;
+      updater((prev) => {
+        const existingNames = new Set(
+          prev.map((p) => p.name.trim().toLowerCase()).filter(Boolean)
+        );
+        const cleanedPrev = prev.filter((p) => p.name.trim().length > 0);
+        const imported: MatchDraftPlayerData[] = list
+          .filter((p) => p.name && !existingNames.has(p.name.trim().toLowerCase()))
+          .map((p) => ({
+            id: p.id || p._id,
+            name: p.name,
+            position: p.position || p.role || '',
+            jerseyNumber: p.jerseyNumber ?? null,
+          }));
+        return [...cleanedPrev, ...imported].slice(0, 30);
+      });
+    } catch {
+      // Optional helper; fail silently
+    } finally {
+      setImportingRosterSide(null);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -222,6 +294,8 @@ export function MatchSetupFormModal({
         teamBName: teamBName.trim(),
         teamALogo: teamALogo.trim(),
         teamBLogo: teamBLogo.trim(),
+        teamAPlayers: sanitizeDraftPlayersClient(teamAPlayers),
+        teamBPlayers: sanitizeDraftPlayersClient(teamBPlayers),
         tournamentId: tournamentId || null,
         tournamentName: tournamentName.trim(),
         venueId: venueId || null,
@@ -695,6 +769,162 @@ export function MatchSetupFormModal({
             placeholder="Optional match context, pitch notes, or stage details"
             className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
           />
+        </div>
+
+        {/* Optional Team Squads & Sport Positions */}
+        <div className="pt-3 border-t border-slate-200 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-bold text-slate-800 inline-flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-[#EA580C]" />
+                <span>Team Players &amp; Positions (Optional — All Sports)</span>
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Add players and positions now to pick them from dropdowns while live scoring. Nothing here is required to draft or start the match.
+              </p>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500">
+              {gameName ? `${gameName} positions` : 'General positions'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {(
+              [
+                {
+                  side: 'A' as const,
+                  title: teamAName.trim() || 'Team A',
+                  selectedTeamId: teamAId,
+                  list: teamAPlayers,
+                },
+                {
+                  side: 'B' as const,
+                  title: teamBName.trim() || 'Team B',
+                  selectedTeamId: teamBId,
+                  list: teamBPlayers,
+                },
+              ] as const
+            ).map((teamBox) => (
+              <div
+                key={teamBox.side}
+                className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2.5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-900 truncate">
+                      {teamBox.title} Squad ({teamBox.list.filter((p) => p.name.trim()).length})
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {teamBox.selectedTeamId && (
+                      <button
+                        type="button"
+                        disabled={importingRosterSide === teamBox.side}
+                        onClick={() => importSavedTeamPlayers(teamBox.side, teamBox.selectedTeamId)}
+                        className="min-h-[30px] px-2 py-1 text-[11px] font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        {importingRosterSide === teamBox.side ? 'Loading...' : 'Import DB Squad'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => addDraftPlayer(teamBox.side)}
+                      className="min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-white bg-slate-900 rounded-md hover:bg-slate-800"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Add Player</span>
+                    </button>
+                  </div>
+                </div>
+
+                {teamBox.list.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 py-1.5">
+                    No players added yet (optional). Click <strong>Add Player</strong> to list squad members.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                    {teamBox.list.map((player, idx) => {
+                      const rowKey = `${teamBox.side}_${idx}`;
+                      const curPos = player.position || '';
+                      const isPresetPos = !curPos || positionPresets.includes(curPos);
+                      const showCustomPos = Boolean(customPosKeys[rowKey]) || !isPresetPos;
+                      return (
+                        <div key={rowKey} className="grid grid-cols-12 gap-1.5 items-center">
+                          <input
+                            type="text"
+                            value={player.name}
+                            onChange={(e) =>
+                              updateDraftPlayer(teamBox.side, idx, { name: e.target.value })
+                            }
+                            placeholder={`Player ${idx + 1} name`}
+                            aria-label={`${teamBox.title} Player ${idx + 1} name`}
+                            className="col-span-6 min-h-[36px] px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-lg"
+                          />
+                          {!showCustomPos ? (
+                            <select
+                              value={curPos}
+                              aria-label={`${teamBox.title} Player ${idx + 1} position`}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '__CUSTOM__') {
+                                  setCustomPosKeys((prev) => ({ ...prev, [rowKey]: true }));
+                                  return;
+                                }
+                                updateDraftPlayer(teamBox.side, idx, { position: val });
+                              }}
+                              className="col-span-5 min-h-[36px] px-2 py-1 text-xs bg-white border border-slate-300 rounded-lg"
+                            >
+                              <option value="">Position (Opt.)</option>
+                              {positionPresets.map((pos) => (
+                                <option key={pos} value={pos}>
+                                  {pos}
+                                </option>
+                              ))}
+                              <option value="__CUSTOM__">Custom position...</option>
+                            </select>
+                          ) : (
+                            <div className="col-span-5 flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={curPos}
+                                onChange={(e) =>
+                                  updateDraftPlayer(teamBox.side, idx, { position: e.target.value })
+                                }
+                                placeholder="Position"
+                                aria-label={`${teamBox.title} Player ${idx + 1} custom position`}
+                                className="w-full min-h-[36px] px-2 py-1 text-xs bg-white border border-slate-300 rounded-lg"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCustomPosKeys((prev) => ({ ...prev, [rowKey]: false }));
+                                  if (curPos && !positionPresets.includes(curPos)) {
+                                    updateDraftPlayer(teamBox.side, idx, { position: '' });
+                                  }
+                                }}
+                                title="Use preset positions"
+                                className="min-h-[36px] px-1.5 text-[10px] font-semibold bg-white border border-slate-300 rounded-lg text-slate-600"
+                              >
+                                List
+                              </button>
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => removeDraftPlayer(teamBox.side, idx)}
+                            aria-label={`Remove ${player.name || `player ${idx + 1}`}`}
+                            className="col-span-1 min-h-[36px] inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-200"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-200">
