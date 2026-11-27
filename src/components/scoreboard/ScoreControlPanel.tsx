@@ -14,6 +14,7 @@ import {
   Sparkles,
   Trophy,
   Undo2,
+  Users,
   Wifi,
 } from 'lucide-react';
 import {
@@ -122,6 +123,12 @@ export function ScoreControlPanel({
   const [undoOpen, setUndoOpen] = useState(false);
   const [resultModalOpen, setResultModalOpen] = useState(false);
   const [correctionItem, setCorrectionItem] = useState<ScoreHistoryItem | null>(null);
+  const [substituteModalOpen, setSubstituteModalOpen] = useState(false);
+  const [panelSubTeam, setPanelSubTeam] = useState<'A' | 'B'>('A');
+  const [panelSubRole, setPanelSubRole] = useState<'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD'>('STRIKER');
+  const [panelSubOut, setPanelSubOut] = useState('');
+  const [panelSubIn, setPanelSubIn] = useState('');
+  const [panelSubReason, setPanelSubReason] = useState('');
 
   const [commentaryText, setCommentaryText] = useState('');
   const [postingCommentary, setPostingCommentary] = useState(false);
@@ -641,6 +648,144 @@ export function ScoreControlPanel({
     }
   }
 
+  function openPanelSubstituteModal() {
+    if (sport === 'Cricket') {
+      const c = (score?.sportSpecificDetails || {}) as Record<string, unknown>;
+      const batSide: 'A' | 'B' = c.battingTeam === 'B' ? 'B' : 'A';
+      setPanelSubRole('STRIKER');
+      setPanelSubTeam(batSide);
+      setPanelSubOut(String(c.batsman1 || ''));
+    } else {
+      setPanelSubRole('SQUAD');
+      setPanelSubTeam('A');
+      setPanelSubOut('');
+    }
+    setPanelSubIn('');
+    setPanelSubReason('');
+    setSubstituteModalOpen(true);
+  }
+
+  async function handleConfirmPanelSubstitute(e: FormEvent) {
+    e.preventDefault();
+    const outClean = panelSubOut.trim();
+    const inClean = panelSubIn.trim();
+    if (!inClean) {
+      setError('Select or enter the incoming substitute player.');
+      return;
+    }
+
+    if (sport === 'Cricket') {
+      const c = (score?.sportSpecificDetails || {}) as Record<string, unknown>;
+      const batSide: 'A' | 'B' = c.battingTeam === 'B' ? 'B' : 'A';
+      const resolvedTeam: 'A' | 'B' =
+        panelSubRole === 'BOWLER'
+          ? batSide === 'A'
+            ? 'B'
+            : 'A'
+          : panelSubRole === 'SQUAD'
+            ? panelSubTeam
+            : batSide;
+      const pool = resolvedTeam === 'A' ? mergedRoster.teamA : mergedRoster.teamB;
+      const effectivePool = pool.length > 0 ? pool : mergedRoster.all;
+      const inId = effectivePool.find((p) => p.name.trim().toLowerCase() === inClean.toLowerCase())?.dbPlayerId;
+      const outId = outClean
+        ? effectivePool.find((p) => p.name.trim().toLowerCase() === outClean.toLowerCase())?.dbPlayerId
+        : undefined;
+      await handleSubmitStructuredEvent({
+        clientEventId: makeClientEventId('sub'),
+        sportType: 'Cricket',
+        action: {
+          type: 'SUBSTITUTE_PLAYER',
+          team: resolvedTeam,
+          role: panelSubRole,
+          playerOut: outClean,
+          playerIn: inClean,
+          ...(panelSubReason.trim() ? { reason: panelSubReason.trim() } : {}),
+        },
+        playerId: inId,
+        playerName: inClean,
+        assistPlayerId: outId,
+        assistPlayerName: outClean || undefined,
+      });
+      setSubstituteModalOpen(false);
+      return;
+    }
+
+    const pool = panelSubTeam === 'A' ? mergedRoster.teamA : mergedRoster.teamB;
+    const effectivePool = pool.length > 0 ? pool : mergedRoster.all;
+    const inId = effectivePool.find((p) => p.name.trim().toLowerCase() === inClean.toLowerCase())?.dbPlayerId;
+    const outId = outClean
+      ? effectivePool.find((p) => p.name.trim().toLowerCase() === outClean.toLowerCase())?.dbPlayerId
+      : undefined;
+
+    if (sport === 'Kabaddi') {
+      try {
+        setSaving(true);
+        setError(null);
+        const res = await scoreboardService.recordKabaddiEvent(stream.id, {
+          clientEventId: makeClientEventId('ksub'),
+          action: {
+            type: 'SUBSTITUTION',
+            team: panelSubTeam,
+            playerOutName: outClean || undefined,
+            playerInName: inClean,
+            reason: panelSubReason.trim() || undefined,
+          },
+        });
+        onScoreChange(res.score);
+        if (res.historyItem && onAddHistoryItem) onAddHistoryItem(res.historyItem);
+        else onRefreshHistory();
+        setSuccessMsg(`Substitution: ${outClean || 'Player'} → ${inClean}`);
+        setSubstituteModalOpen(false);
+      } catch (err) {
+        setError(extractApiError(err, 'Failed to record substitution.'));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    if (sport === 'Football') {
+      const fbMin = Number((score?.sportSpecificDetails as any)?.timerMinutes || 0);
+      await handleSubmitStructuredEvent({
+        clientEventId: makeClientEventId('fsub'),
+        sportType: 'Football',
+        action: {
+          type: 'STRUCTURED_EVENT',
+          team: panelSubTeam,
+          eventType: 'SUBSTITUTION',
+          minute: fbMin,
+          playerName: inClean,
+          playerOutName: outClean,
+          ...(panelSubReason.trim() ? { reason: panelSubReason.trim() } : {}),
+        },
+        playerId: inId,
+        playerName: inClean,
+        assistPlayerId: outId,
+        assistPlayerName: outClean || undefined,
+      });
+      setSubstituteModalOpen(false);
+      return;
+    }
+
+    await handleSubmitStructuredEvent({
+      clientEventId: makeClientEventId('sub'),
+      sportType: sport,
+      action: {
+        type: 'SUBSTITUTE_PLAYER',
+        team: panelSubTeam,
+        playerOut: outClean,
+        playerIn: inClean,
+        ...(panelSubReason.trim() ? { reason: panelSubReason.trim() } : {}),
+      },
+      playerId: inId,
+      playerName: inClean,
+      assistPlayerId: outId,
+      assistPlayerName: outClean || undefined,
+    });
+    setSubstituteModalOpen(false);
+  }
+
   const conflictItems = queuedItems.filter((q) => q.status === 'CONFLICT');
 
   return (
@@ -817,6 +962,15 @@ export function ScoreControlPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={terminalBusy || controlLocked}
+              onClick={openPanelSubstituteModal}
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-bold tracking-wide uppercase text-white bg-violet-600 rounded-lg hover:bg-violet-700 whitespace-nowrap shrink-0 disabled:opacity-40"
+            >
+              <Users className="w-4 h-4" />
+              <span>Substitute Player</span>
+            </button>
             <button
               type="button"
               disabled={terminalBusy}
@@ -1202,6 +1356,177 @@ export function ScoreControlPanel({
         saving={saving}
         onConfirmCorrection={handleConfirmEventCorrection}
       />
+
+      <Modal
+        open={substituteModalOpen}
+        onClose={() => setSubstituteModalOpen(false)}
+        title="Substitute Player"
+        subtitle="Swap a player from the team roster and update Active Players & Match Timeline."
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleConfirmPanelSubstitute} className="space-y-4">
+          {sport === 'Cricket' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Position / Role
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {(
+                  [
+                    { id: 'STRIKER', label: 'Striker' },
+                    { id: 'NON_STRIKER', label: 'Non-Striker' },
+                    { id: 'BOWLER', label: 'Bowler' },
+                    { id: 'SQUAD', label: 'Team Squad' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      const c = (score?.sportSpecificDetails || {}) as Record<string, unknown>;
+                      const batSide: 'A' | 'B' = c.battingTeam === 'B' ? 'B' : 'A';
+                      const bowlSide: 'A' | 'B' = batSide === 'A' ? 'B' : 'A';
+                      setPanelSubRole(opt.id);
+                      if (opt.id === 'STRIKER') {
+                        setPanelSubTeam(batSide);
+                        setPanelSubOut(String(c.batsman1 || ''));
+                      } else if (opt.id === 'NON_STRIKER') {
+                        setPanelSubTeam(batSide);
+                        setPanelSubOut(String(c.batsman2 || ''));
+                      } else if (opt.id === 'BOWLER') {
+                        setPanelSubTeam(bowlSide);
+                        setPanelSubOut(String(c.bowler || ''));
+                      } else {
+                        setPanelSubOut('');
+                      }
+                      setPanelSubIn('');
+                    }}
+                    className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs font-semibold border ${
+                      panelSubRole === opt.id
+                        ? 'bg-violet-600 text-white border-violet-600'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(sport !== 'Cricket' || panelSubRole === 'SQUAD') && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Team</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['A', 'B'] as const).map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    onClick={() => {
+                      setPanelSubTeam(side);
+                      setPanelSubOut('');
+                      setPanelSubIn('');
+                    }}
+                    className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold border truncate ${
+                      panelSubTeam === side
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-300'
+                    }`}
+                  >
+                    {side === 'A' ? teamA : teamB}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(() => {
+            const c = (score?.sportSpecificDetails || {}) as Record<string, unknown>;
+            const batSide: 'A' | 'B' = c.battingTeam === 'B' ? 'B' : 'A';
+            const side: 'A' | 'B' =
+              sport === 'Cricket' && panelSubRole !== 'SQUAD'
+                ? panelSubRole === 'BOWLER'
+                  ? batSide === 'A'
+                    ? 'B'
+                    : 'A'
+                  : batSide
+                : panelSubTeam;
+            const sidePool =
+              side === 'A'
+                ? mergedRoster.teamA.length > 0
+                  ? mergedRoster.teamA
+                  : mergedRoster.all
+                : mergedRoster.teamB.length > 0
+                  ? mergedRoster.teamB
+                  : mergedRoster.all;
+            const outNorm = panelSubOut.trim().toLowerCase();
+            const incomingPool = outNorm
+              ? sidePool.filter((p) => p.name.trim().toLowerCase() !== outNorm)
+              : sidePool;
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Player Out (Swapped Out)
+                  </label>
+                  <PlayerPickerField
+                    value={panelSubOut}
+                    onChange={(name) => setPanelSubOut(name)}
+                    players={sidePool}
+                    placeholder="Player leaving"
+                    emptyOptionLabel="-- Select outgoing player --"
+                    ariaLabel="Player Out"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Substitute In (Team List)
+                  </label>
+                  <PlayerPickerField
+                    value={panelSubIn}
+                    onChange={(name) => setPanelSubIn(name)}
+                    players={incomingPool.length > 0 ? incomingPool : sidePool}
+                    placeholder="Select substitute player"
+                    emptyOptionLabel="-- Select substitute player --"
+                    ariaLabel="Substitute In"
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Reason (Optional)
+            </label>
+            <input
+              type="text"
+              maxLength={100}
+              value={panelSubReason}
+              onChange={(e) => setPanelSubReason(e.target.value)}
+              placeholder="e.g. Injury, Tactical, Concussion Sub"
+              className="w-full min-h-[38px] px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setSubstituteModalOpen(false)}
+              className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={terminalBusy || !panelSubIn.trim()}
+              className="min-h-[40px] px-5 py-2 text-sm font-bold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
+            >
+              Confirm Substitution
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

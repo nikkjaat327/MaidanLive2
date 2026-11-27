@@ -8,6 +8,7 @@ import {
   ShieldAlert,
   Trophy,
   UserPlus,
+  Users,
 } from 'lucide-react';
 import { LiveScoreData, LiveStreamData, PlayerData } from '../../types/index.ts';
 import {
@@ -141,6 +142,13 @@ export function CricketScorerConsole({
   const [startingSecondInnings, setStartingSecondInnings] = useState(false);
 
   const [showLiveScorecard, setShowLiveScorecard] = useState(false);
+
+  const [substituteOpen, setSubstituteOpen] = useState(false);
+  const [subRole, setSubRole] = useState<'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD'>('STRIKER');
+  const [subTeam, setSubTeam] = useState<'A' | 'B'>(details.battingTeam);
+  const [subPlayerOut, setSubPlayerOut] = useState('');
+  const [subPlayerIn, setSubPlayerIn] = useState('');
+  const [subReason, setSubReason] = useState('');
 
   useEffect(() => {
     setBatsman1(details.batsman1 || '');
@@ -343,6 +351,97 @@ export function CricketScorerConsole({
         superOverTeamBWickets: Number(soWktsB) || 0,
       },
     });
+  }
+
+  function openSubstituteModal(
+    initialRole: 'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD' = 'STRIKER'
+  ) {
+    const batSide = details.battingTeam;
+    const bowlSide: 'A' | 'B' = batSide === 'A' ? 'B' : 'A';
+    setSubRole(initialRole);
+    setSubTeam(initialRole === 'BOWLER' ? bowlSide : batSide);
+    setSubPlayerOut(
+      initialRole === 'STRIKER'
+        ? batsman1
+        : initialRole === 'NON_STRIKER'
+          ? batsman2
+          : initialRole === 'BOWLER'
+            ? bowler
+            : ''
+    );
+    setSubPlayerIn('');
+    setSubReason('');
+    setSubstituteOpen(true);
+  }
+
+  function handleSelectSubRole(nextRole: 'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD') {
+    const batSide = details.battingTeam;
+    const bowlSide: 'A' | 'B' = batSide === 'A' ? 'B' : 'A';
+    setSubRole(nextRole);
+    if (nextRole === 'STRIKER') {
+      setSubTeam(batSide);
+      setSubPlayerOut(batsman1);
+    } else if (nextRole === 'NON_STRIKER') {
+      setSubTeam(batSide);
+      setSubPlayerOut(batsman2);
+    } else if (nextRole === 'BOWLER') {
+      setSubTeam(bowlSide);
+      setSubPlayerOut(bowler);
+    } else {
+      setSubPlayerOut('');
+    }
+    setSubPlayerIn('');
+  }
+
+  async function handleConfirmSubstitute(e: React.FormEvent) {
+    e.preventDefault();
+    const outClean = subPlayerOut.trim();
+    const inClean = subPlayerIn.trim();
+    if (!inClean) {
+      onError('Select or enter the incoming substitute player.');
+      return;
+    }
+    const resolvedTeam: 'A' | 'B' =
+      subRole === 'BOWLER'
+        ? details.battingTeam === 'A'
+          ? 'B'
+          : 'A'
+        : subRole === 'SQUAD'
+          ? subTeam
+          : details.battingTeam;
+    const activePool =
+      resolvedTeam === 'A'
+        ? roster.teamA.length > 0
+          ? roster.teamA
+          : roster.all
+        : roster.teamB.length > 0
+          ? roster.teamB
+          : roster.all;
+    const inId = findPlayerIdByName(inClean, activePool);
+    const outId = findPlayerIdByName(outClean, activePool);
+
+    await onSubmitCricketEvent({
+      clientEventId: makeClientEventId('sub'),
+      sportType: 'Cricket',
+      action: {
+        type: 'SUBSTITUTE_PLAYER',
+        team: resolvedTeam,
+        role: subRole,
+        playerOut: outClean,
+        playerIn: inClean,
+        ...(subReason.trim() ? { reason: subReason.trim() } : {}),
+      },
+      playerId: inId,
+      playerName: inClean,
+      assistPlayerId: outId,
+      assistPlayerName: outClean || undefined,
+    });
+    if (subRole === 'STRIKER') setBatsman1(inClean);
+    else if (subRole === 'NON_STRIKER') setBatsman2(inClean);
+    else if (subRole === 'BOWLER') setBowler(inClean);
+    setSubstituteOpen(false);
+    setSubPlayerIn('');
+    setSubReason('');
   }
 
   const activeTeamName = details.battingTeam === 'A' ? teamA : teamB;
@@ -627,6 +726,14 @@ export function CricketScorerConsole({
                 className="min-h-[48px] px-3 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700"
               >
                 End Over
+              </button>
+              <button
+                type="button"
+                onClick={() => openSubstituteModal('STRIKER')}
+                className="min-h-[48px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 col-span-2 sm:col-span-1 lg:col-span-7"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Substitute Player</span>
               </button>
             </div>
           </div>
@@ -1185,6 +1292,175 @@ export function CricketScorerConsole({
             >
               <UserPlus className="w-4 h-4" />
               <span>{startingSecondInnings ? 'Starting...' : 'Confirm & Start 2nd Innings'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Substitute Player Modal */}
+      <Modal
+        open={substituteOpen}
+        onClose={() => setSubstituteOpen(false)}
+        title="Substitute Player"
+        subtitle="Swap an active or squad player from the team list. Updates Active Players & Match Timeline live."
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleConfirmSubstitute} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              Substitution Role / Position
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {(
+                [
+                  { id: 'STRIKER', label: 'Striker' },
+                  { id: 'NON_STRIKER', label: 'Non-Striker' },
+                  { id: 'BOWLER', label: 'Bowler' },
+                  { id: 'SQUAD', label: 'Team Squad' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleSelectSubRole(opt.id)}
+                  className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    subRole === opt.id
+                      ? 'bg-violet-600 text-white border-violet-600'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {subRole === 'SQUAD' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Team
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['A', 'B'] as const).map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    onClick={() => {
+                      setSubTeam(side);
+                      setSubPlayerOut('');
+                      setSubPlayerIn('');
+                    }}
+                    className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold border truncate ${
+                      subTeam === side
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-300'
+                    }`}
+                  >
+                    {side === 'A' ? teamA : teamB}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(() => {
+            const targetSide: 'A' | 'B' =
+              subRole === 'BOWLER'
+                ? details.battingTeam === 'A'
+                  ? 'B'
+                  : 'A'
+                : subRole === 'SQUAD'
+                  ? subTeam
+                  : details.battingTeam;
+            const sidePool =
+              targetSide === 'A'
+                ? roster.teamA.length > 0
+                  ? roster.teamA
+                  : roster.all
+                : roster.teamB.length > 0
+                  ? roster.teamB
+                  : roster.all;
+            const outNorm = subPlayerOut.trim().toLowerCase();
+            const incomingPool = outNorm
+              ? sidePool.filter((p) => p.name.trim().toLowerCase() !== outNorm)
+              : sidePool;
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Player Out (Swapped Out)
+                  </label>
+                  <PlayerPickerField
+                    value={subPlayerOut}
+                    onChange={(name) => setSubPlayerOut(name)}
+                    players={sidePool}
+                    placeholder="Player leaving field"
+                    emptyOptionLabel="-- Select outgoing player --"
+                    ariaLabel="Player Out"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Substitute In (Team Roster)
+                  </label>
+                  <PlayerPickerField
+                    value={subPlayerIn}
+                    onChange={(name) => setSubPlayerIn(name)}
+                    players={incomingPool.length > 0 ? incomingPool : sidePool}
+                    placeholder="Select or enter substitute"
+                    emptyOptionLabel="-- Select substitute player --"
+                    ariaLabel="Substitute Player In"
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Reason (Optional)
+            </label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {['Injury', 'Tactical', 'Concussion Sub', 'Fielding Sub'].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setSubReason(subReason === preset ? '' : preset)}
+                  className={`px-2.5 py-1 rounded text-[11px] font-semibold border ${
+                    subReason === preset
+                      ? 'bg-violet-100 border-violet-400 text-violet-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              maxLength={100}
+              value={subReason}
+              onChange={(e) => setSubReason(e.target.value)}
+              placeholder="Optional substitution note (e.g. Retired hurt / Concussion)"
+              className="w-full min-h-[38px] px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setSubstituteOpen(false)}
+              className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={terminalBusy || !subPlayerIn.trim()}
+              className="min-h-[40px] inline-flex items-center gap-2 px-5 py-2 text-sm font-bold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
+            >
+              <ArrowLeftRight className="w-4 h-4" />
+              <span>Confirm Substitution</span>
             </button>
           </div>
         </form>

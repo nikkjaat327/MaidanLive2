@@ -107,6 +107,9 @@ function trimScoreForFeed(score: any): any {
         batsman1: details.batsman1 || '',
         batsman2: details.batsman2 || '',
         bowler: details.bowler || '',
+        ...(Array.isArray(details.substitutions) && details.substitutions.length > 0
+          ? { substitutions: details.substitutions.slice(0, 5) }
+          : {}),
         ...(creaseSummary.batsman1 || creaseSummary.batsman2 || creaseSummary.bowler
           ? { creaseSummary }
           : {}),

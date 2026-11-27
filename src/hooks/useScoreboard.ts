@@ -289,6 +289,14 @@ export function useScoreboard(
       });
     };
 
+    const handleTimelineUpdated = (payload: {
+      streamId: string;
+      historyItem?: ScoreHistoryItem;
+    }) => {
+      if (payload.streamId !== streamId || !payload.historyItem?._id) return;
+      addHistoryItem(payload.historyItem);
+    };
+
     const handleResultEvent = (payload: {
       streamId: string;
       score: LiveScoreData;
@@ -343,6 +351,7 @@ export function useScoreboard(
     socket.on('score:undo', handleScoreUndo);
     socket.on('score:reset', handleScoreReset);
     socket.on('commentary:added', handleCommentaryAdded);
+    socket.on('match:timeline:updated', handleTimelineUpdated);
     socket.on('match:result:declared', handleResultEvent);
     socket.on('match:result:updated', handleResultEvent);
     socket.on('streaming_provider_changed', handleProviderChanged);
@@ -366,6 +375,7 @@ export function useScoreboard(
       socket.off('score:undo', handleScoreUndo);
       socket.off('score:reset', handleScoreReset);
       socket.off('commentary:added', handleCommentaryAdded);
+      socket.off('match:timeline:updated', handleTimelineUpdated);
       socket.off('match:result:declared', handleResultEvent);
       socket.off('match:result:updated', handleResultEvent);
       socket.off('streaming_provider_changed', handleProviderChanged);

@@ -732,7 +732,11 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           pointsAwarded = applied.pointsAwarded;
           eventCategory = applied.eventCategory;
           eventType = applied.eventType;
-          teamSide = applied.details.battingTeam;
+          teamSide =
+            actionPayload.type === 'SUBSTITUTE_PLAYER' &&
+            (actionPayload.team === 'A' || actionPayload.team === 'B')
+              ? actionPayload.team
+              : applied.details.battingTeam;
           autoCompletedInnings1 = Boolean(applied.autoCompletedInnings1);
           autoCompletedMatch = Boolean(applied.autoCompletedMatch);
           cricketWicketEvent = Boolean(
@@ -740,6 +744,40 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           );
           if (applied.details.tossWinner) score.tossWinner = applied.details.tossWinner;
           if (applied.details.tossDecision) score.tossDecision = applied.details.tossDecision;
+        } else if (
+          actionPayload.type === 'SUBSTITUTE_PLAYER' ||
+          actionPayload.type === 'SUBSTITUTION'
+        ) {
+          eventCategory = 'SUBSTITUTION';
+          eventType = 'SUBSTITUTION';
+          pointsAwarded = 0;
+          const outClean = sanitizeText(actionPayload.playerOut || actionPayload.assistPlayerName, 100);
+          const inClean = sanitizeText(actionPayload.playerIn || actionPayload.playerName, 100);
+          const reasonClean = sanitizeText(actionPayload.reason, 120);
+          const existingSubs = Array.isArray((nextDetails as any).substitutions)
+            ? [...(nextDetails as any).substitutions]
+            : [];
+          const subRecord = {
+            id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            team: teamSide || 'A',
+            playerOut: outClean,
+            playerIn: inClean,
+            ...(reasonClean ? { reason: reasonClean } : {}),
+            timestamp: new Date().toISOString(),
+          };
+          nextDetails = {
+            ...nextDetails,
+            substitutions: [subRecord, ...existingSubs].slice(0, 50),
+          };
+          const teamLabel =
+            teamSide === 'A'
+              ? stream.teamAName || 'Team A'
+              : teamSide === 'B'
+                ? stream.teamBName || 'Team B'
+                : 'Match';
+          label = `Substitution (${teamLabel}): ${outClean || 'Player'} → ${inClean || 'Substitute'}${
+            reasonClean ? ` (${reasonClean})` : ''
+          }`;
         } else if (sport === 'Volleyball') {
           const applied = applyVolleyballAction(
             nextDetails as unknown as VolleyballDetails,
@@ -835,12 +873,19 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
               pointsAwarded,
               playerId: playerId ? new mongoose.Types.ObjectId(playerId) : null,
               playerName: sanitizeText(
-                req.body.playerName || actionPayload.playerName || actionPayload.dismissedPlayer,
+                req.body.playerName ||
+                  actionPayload.playerName ||
+                  actionPayload.playerIn ||
+                  actionPayload.dismissedPlayer,
                 120
               ),
               assistPlayerId: assistPlayerId ? new mongoose.Types.ObjectId(assistPlayerId) : null,
               assistPlayerName: sanitizeText(
-                req.body.assistPlayerName || actionPayload.assistPlayerName || actionPayload.bowler,
+                req.body.assistPlayerName ||
+                  actionPayload.assistPlayerName ||
+                  actionPayload.playerOut ||
+                  actionPayload.playerOutName ||
+                  actionPayload.bowler,
                 120
               ),
               eventPhase: sanitizeText(req.body.eventPhase, 60),

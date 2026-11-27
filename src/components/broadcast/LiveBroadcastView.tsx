@@ -54,6 +54,7 @@ import { BroadcastResultBar } from './BroadcastResultBar.tsx';
 import { LiveCommentaryFeed } from './LiveCommentaryFeed.tsx';
 import { ScoreboardSummary } from '../scoreboard/ScoreboardSummary.tsx';
 import { ActivePlayersCard } from '../scoreboard/ActivePlayersCard.tsx';
+import { MatchTimelineWidget } from '../scoreboard/MatchTimelineWidget.tsx';
 import { CricketScorecardPanel } from '../scoreboard/CricketScorecardPanel.tsx';
 import { MatchStatusBadge } from '../common/MatchStatusBadge.tsx';
 import { StartingSoonGraphic } from '../streaming/StartingSoonGraphic.tsx';
@@ -1569,6 +1570,14 @@ export function LiveBroadcastView({
         {broadcast.sport === 'Cricket' && (
           <ActivePlayersCard matchId={broadcast.id} stream={stream} score={score} />
         )}
+
+        {/* Match Timeline (Last 5 Major Events) */}
+        <MatchTimelineWidget
+          matchId={broadcast.id}
+          history={history}
+          teamAName={broadcast.teamA.name}
+          teamBName={broadcast.teamB.name}
+        />
 
         {/* 3. MATCH CENTER TABS */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">

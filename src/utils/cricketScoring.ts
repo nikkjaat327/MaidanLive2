@@ -179,6 +179,17 @@ export interface CricketDetails {
   superOverTeamAWickets: number;
   superOverTeamBRuns: number;
   superOverTeamBWickets: number;
+  substitutions?: CricketSubstitutionRecord[];
+}
+
+export interface CricketSubstitutionRecord {
+  id: string;
+  team: 'A' | 'B';
+  role: 'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD';
+  playerOut: string;
+  playerIn: string;
+  reason?: string;
+  timestamp: string;
 }
 
 export const CRICKET_OVER_PRESETS = [5, 6, 10, 12, 15, 20, 25, 30, 40, 50] as const;
@@ -226,6 +237,7 @@ export function createInitialCricketDetails(oversLimit = 20, playersPerSide = 11
     superOverTeamAWickets: 0,
     superOverTeamBRuns: 0,
     superOverTeamBWickets: 0,
+    substitutions: [],
   };
 }
 
@@ -244,6 +256,7 @@ export function normalizeCricketDetails(raw?: Partial<CricketDetails> | null): C
     recentBalls: Array.isArray(raw?.recentBalls) ? [...raw.recentBalls] : [],
     lastOverSummary: Array.isArray(raw?.lastOverSummary) ? [...raw.lastOverSummary] : [],
     deliveryHistory: Array.isArray(raw?.deliveryHistory) ? [...raw.deliveryHistory] : [],
+    substitutions: Array.isArray(raw?.substitutions) ? [...raw.substitutions] : [],
   };
 
   if (!merged.firstInningsBattingTeam) {
@@ -983,6 +996,14 @@ export type CricketActionPayload =
       superOverTeamAWickets?: number;
       superOverTeamBRuns?: number;
       superOverTeamBWickets?: number;
+    }
+  | {
+      type: 'SUBSTITUTE_PLAYER';
+      team?: 'A' | 'B';
+      role?: 'STRIKER' | 'NON_STRIKER' | 'BOWLER' | 'SQUAD';
+      playerOut: string;
+      playerIn: string;
+      reason?: string;
     };
 
 export function isCricketScoringLocked(details: Partial<CricketDetails>): {
@@ -1586,6 +1607,65 @@ export function applyCricketAction(
         next.superOverTeamBWickets = Math.max(0, Math.min(2, Number(action.superOverTeamBWickets) || 0));
       }
       label = action.isSuperOver ? 'Updated Cricket Super Over & match info' : 'Updated match & player info';
+      break;
+    }
+    case 'SUBSTITUTE_PLAYER': {
+      eventCategory = 'SUBSTITUTION';
+      eventType = 'SUBSTITUTION';
+      const outClean = (action.playerOut || '').trim();
+      const inClean = (action.playerIn || '').trim();
+      const role = action.role || 'SQUAD';
+      const subTeam: 'A' | 'B' =
+        action.team === 'A' || action.team === 'B'
+          ? action.team
+          : role === 'BOWLER'
+            ? next.battingTeam === 'A'
+              ? 'B'
+              : 'A'
+            : next.battingTeam;
+
+      if (inClean) {
+        const outLower = outClean.toLowerCase();
+        if (
+          role === 'STRIKER' ||
+          (role === 'SQUAD' && outLower && next.batsman1.trim().toLowerCase() === outLower)
+        ) {
+          next.batsman1 = inClean;
+        } else if (
+          role === 'NON_STRIKER' ||
+          (role === 'SQUAD' && outLower && next.batsman2.trim().toLowerCase() === outLower)
+        ) {
+          next.batsman2 = inClean;
+        } else if (
+          role === 'BOWLER' ||
+          (role === 'SQUAD' && outLower && next.bowler.trim().toLowerCase() === outLower)
+        ) {
+          next.bowler = inClean;
+        }
+      }
+
+      const subRecord: CricketSubstitutionRecord = {
+        id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        team: subTeam,
+        role,
+        playerOut: outClean,
+        playerIn: inClean,
+        ...(action.reason?.trim() ? { reason: action.reason.trim() } : {}),
+        timestamp: new Date().toISOString(),
+      };
+      next.substitutions = [subRecord, ...(next.substitutions || [])].slice(0, 50);
+
+      const roleLabel =
+        role === 'STRIKER'
+          ? 'Striker'
+          : role === 'NON_STRIKER'
+            ? 'Non-Striker'
+            : role === 'BOWLER'
+              ? 'Bowler'
+              : 'Squad';
+      label = `Substitution (${roleLabel}): ${outClean || 'Player'} → ${inClean || 'Substitute'}${
+        action.reason?.trim() ? ` (${action.reason.trim()})` : ''
+      }`;
       break;
     }
   }

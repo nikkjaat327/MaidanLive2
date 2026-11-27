@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   Tv,
   Undo2,
+  Users,
   Zap,
 } from 'lucide-react';
 import type {
@@ -129,6 +130,13 @@ export function QuickLiveScoreControls({
   const [secondBatter1, setSecondBatter1] = useState('');
   const [secondBatter2, setSecondBatter2] = useState('');
   const [secondBowler, setSecondBowler] = useState('');
+
+  // Quick substitute player modal state
+  const [subModalOpen, setSubModalOpen] = useState(false);
+  const [subRole, setSubRole] = useState<'STRIKER' | 'NON_STRIKER' | 'BOWLER'>('STRIKER');
+  const [subOut, setSubOut] = useState('');
+  const [subIn, setSubIn] = useState('');
+  const [subReason, setSubReason] = useState('');
 
   // Quick per-team / crease player selection state
   const [quickStriker, setQuickStriker] = useState('');
@@ -814,6 +822,22 @@ export function QuickLiveScoreControls({
             >
               <ArrowLeftRight className="w-3.5 h-3.5" />
               <span>Swap Strike</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={terminalBusy}
+              onClick={() => {
+                setSubRole('STRIKER');
+                setSubOut(quickStriker || cricketDetails.batsman1 || '');
+                setSubIn('');
+                setSubReason('');
+                setSubModalOpen(true);
+              }}
+              className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-500/40 bg-violet-600/25 text-violet-200 hover:bg-violet-600/40 text-xs font-semibold disabled:opacity-40 whitespace-nowrap"
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Substitute</span>
             </button>
 
             {cricketDetails.innings === 1 && !cricketDetails.innings1Completed && (
@@ -1666,6 +1690,123 @@ export function QuickLiveScoreControls({
               className="min-h-[40px] px-4 py-2 text-xs font-bold text-white bg-[#EA580C] rounded-lg hover:bg-orange-600 disabled:opacity-50"
             >
               Start Chase
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Quick Substitute Player Modal */}
+      <Modal
+        open={subModalOpen}
+        onClose={() => setSubModalOpen(false)}
+        title="Substitute Player"
+        subtitle="Swap an active player from the team list and update Active Players live."
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Slot</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  { id: 'STRIKER', label: 'Striker', current: quickStriker || cricketDetails.batsman1 || '' },
+                  { id: 'NON_STRIKER', label: 'Non-Striker', current: quickNonStriker || cricketDetails.batsman2 || '' },
+                  { id: 'BOWLER', label: 'Bowler', current: quickBowler || cricketDetails.bowler || '' },
+                ] as const
+              ).map((slot) => (
+                <button
+                  key={slot.id}
+                  type="button"
+                  onClick={() => {
+                    setSubRole(slot.id);
+                    setSubOut(slot.current);
+                    setSubIn('');
+                  }}
+                  className={`min-h-[36px] px-2.5 py-1 rounded-lg border text-xs font-semibold ${
+                    subRole === slot.id
+                      ? 'bg-violet-600 text-white border-violet-600'
+                      : 'bg-white text-slate-700 border-slate-300'
+                  }`}
+                >
+                  {slot.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Player Out</label>
+            <PlayerPickerField
+              value={subOut}
+              onChange={(name) => setSubOut(name)}
+              players={subRole === 'BOWLER' ? bowlingRoster : battingRoster}
+              placeholder="Player swapped out"
+              emptyOptionLabel="-- Select outgoing player --"
+              ariaLabel="Player Out"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Substitute In</label>
+            <PlayerPickerField
+              value={subIn}
+              onChange={(name) => setSubIn(name)}
+              players={subRole === 'BOWLER' ? bowlingRoster : battingRoster}
+              placeholder="Select substitute from team"
+              emptyOptionLabel="-- Select substitute player --"
+              ariaLabel="Substitute In"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Reason (Optional)</label>
+            <input
+              type="text"
+              maxLength={80}
+              value={subReason}
+              onChange={(e) => setSubReason(e.target.value)}
+              placeholder="e.g. Injury / Tactical"
+              className="w-full min-h-[38px] px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setSubModalOpen(false)}
+              className="min-h-[40px] px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={terminalBusy || !subIn.trim()}
+              onClick={async () => {
+                const subTeamSide: 'A' | 'B' =
+                  subRole === 'BOWLER'
+                    ? cricketDetails.battingTeam === 'A'
+                      ? 'B'
+                      : 'A'
+                    : cricketDetails.battingTeam;
+                const pool = subRole === 'BOWLER' ? bowlingRoster : battingRoster;
+                await submitEvent(
+                  {
+                    type: 'SUBSTITUTE_PLAYER',
+                    team: subTeamSide,
+                    role: subRole,
+                    playerOut: subOut.trim(),
+                    playerIn: subIn.trim(),
+                    ...(subReason.trim() ? { reason: subReason.trim() } : {}),
+                  },
+                  `Subbed in ${subIn.trim()}`,
+                  'Cricket',
+                  {
+                    playerId: findDbPlayerId(subIn, pool),
+                    playerName: subIn.trim(),
+                    assistPlayerId: findDbPlayerId(subOut, pool),
+                    assistPlayerName: subOut.trim() || undefined,
+                  }
+                );
+                setSubModalOpen(false);
+              }}
+              className="min-h-[40px] px-4 py-2 text-xs font-bold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
+            >
+              Confirm Substitution
             </button>
           </div>
         </div>

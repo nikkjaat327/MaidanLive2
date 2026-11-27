@@ -123,6 +123,33 @@ export function ActivePlayersCard({
     return null;
   }
 
+  const substitutions = Array.isArray(details.substitutions) ? details.substitutions : [];
+  const findSubNoteForSlot = (
+    role: 'STRIKER' | 'NON_STRIKER' | 'BOWLER',
+    playerName?: string
+  ): string | null => {
+    if (!playerName || substitutions.length === 0) return null;
+    const clean = playerName.trim().toLowerCase();
+    const match = substitutions.find(
+      (s) =>
+        s.playerIn.trim().toLowerCase() === clean &&
+        (s.role === role || s.role === 'SQUAD')
+    );
+    if (!match) return null;
+    return match.playerOut ? `Subbed in for ${match.playerOut}` : 'Substitute';
+  };
+
+  const strikerSubNote = findSubNoteForSlot('STRIKER', crease.batsman1?.name);
+  const nonStrikerSubNote = findSubNoteForSlot('NON_STRIKER', crease.batsman2?.name);
+  const bowlerSubNote = findSubNoteForSlot('BOWLER', crease.bowler?.name);
+  const latestSub = substitutions[0] || null;
+  const latestSubShownOnCard = Boolean(
+    latestSub &&
+      ((crease.batsman1 && latestSub.playerIn.trim().toLowerCase() === crease.batsman1.name.trim().toLowerCase()) ||
+        (crease.batsman2 && latestSub.playerIn.trim().toLowerCase() === crease.batsman2.name.trim().toLowerCase()) ||
+        (crease.bowler && latestSub.playerIn.trim().toLowerCase() === crease.bowler.name.trim().toLowerCase()))
+  );
+
   return (
     <section
       aria-label="Active Players"
@@ -182,6 +209,11 @@ export function ActivePlayersCard({
               {crease.batsman1.strikeRate}
             </p>
           )}
+          {strikerSubNote && (
+            <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">
+              {strikerSubNote}
+            </p>
+          )}
         </div>
 
         {/* Non-Striker */}
@@ -222,6 +254,11 @@ export function ActivePlayersCard({
               {crease.batsman2.strikeRate}
             </p>
           )}
+          {nonStrikerSubNote && (
+            <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">
+              {nonStrikerSubNote}
+            </p>
+          )}
         </div>
 
         {/* Current Bowler */}
@@ -259,8 +296,24 @@ export function ActivePlayersCard({
               Econ {crease.bowler.economy}
             </p>
           )}
+          {bowlerSubNote && (
+            <p className="mt-1 text-[10px] font-semibold text-violet-300 truncate">
+              {bowlerSubNote}
+            </p>
+          )}
         </div>
       </div>
+
+      {latestSub && !latestSubShownOnCard && (
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px] text-violet-200">
+          <span>
+            Latest Substitution ({latestSub.team === 'B' ? teamBName : teamAName}):{' '}
+            <strong>{latestSub.playerOut || 'Player'}</strong> →{' '}
+            <strong>{latestSub.playerIn || 'Substitute'}</strong>
+            {latestSub.reason ? ` (${latestSub.reason})` : ''}
+          </span>
+        </div>
+      )}
     </section>
   );
 }
