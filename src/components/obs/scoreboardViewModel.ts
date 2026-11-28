@@ -3,6 +3,8 @@ import type { BroadcastOverlayConfig, LiveScoreData, LiveStreamData } from '../.
 import {
   computeCricketChaseState,
   formatCricketOvers,
+  getCricketBowlerLine,
+  getCurrentOverBalls,
   getMaxWickets,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -49,6 +51,8 @@ export interface ScoreboardViewModel {
   statChips: Array<{ label: string; value: string; accent?: 'primary' | 'secondary' | 'normal' }>;
   battersText: string;
   bowlerText: string;
+  leftPlayerLine?: string;
+  rightPlayerLine?: string;
   leftStatsText?: string;
   rightStatsText?: string;
   recentBalls: string[];
@@ -221,18 +225,25 @@ export function buildScoreboardViewModel(
     }
 
     const showCrease = !chase.isInningsBreak && !isCompleted && !isAbandoned;
+    const leftPlayerLine =
+      showCrease && config.showBatters
+        ? [details.batsman1 ? `* ${details.batsman1}` : '', details.batsman2 || '']
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+    const rightPlayerLine =
+      showCrease && config.showBowler ? getCricketBowlerLine(details) : '';
     const battersText =
       showCrease && config.showBatters
         ? [details.batsman1 ? `* ${details.batsman1}` : '', details.batsman2 || '']
             .filter(Boolean)
             .join('  |  ')
         : '';
-    const bowlerText =
-      showCrease && config.showBowler && details.bowler ? `BWL ${details.bowler}` : '';
+    const bowlerText = rightPlayerLine ? `BWL ${rightPlayerLine}` : '';
 
     const recentBalls =
       config.showRecentOver && !isAbandoned
-        ? (details.recentBalls || []).slice(-6)
+        ? getCurrentOverBalls(details)
         : [];
 
     const oversDisplay = `${formatCricketOvers(balls)}/${details.oversLimit} OV`;
@@ -272,6 +283,8 @@ export function buildScoreboardViewModel(
       statChips,
       battersText,
       bowlerText,
+      leftPlayerLine,
+      rightPlayerLine,
       recentBalls,
       footerNote: details.isSuperOver
         ? `SUPER OVER: ${cShortA} ${details.superOverTeamARuns}/${details.superOverTeamAWickets} · ${cShortB} ${details.superOverTeamBRuns}/${details.superOverTeamBWickets}`

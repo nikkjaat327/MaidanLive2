@@ -3,6 +3,7 @@ import {
   CricketDetails,
   computeCricketChaseState,
   formatCricketOvers,
+  getCricketBowlerLine,
   getTotalExtras,
   normalizeCricketDetails,
 } from './cricketScoring.ts';
@@ -143,6 +144,11 @@ export function normalizeBroadcast(
       });
     }
 
+    const cricketBattersLine = [cd.batsman1 ? `${cd.batsman1}*` : '', cd.batsman2]
+      .filter(Boolean)
+      .join(' · ');
+    const cricketBowlerLine = getCricketBowlerLine(cd);
+
     return {
       id: stream.id || stream._id || '',
       sourceType: stream.fixtureId ? 'match' : 'stream',
@@ -176,6 +182,7 @@ export function normalizeBroadcast(
         primaryText: teamAPrimary,
         secondaryText: teamASecondary,
         badgeText: teamABadge,
+        playerLine: cd.battingTeam === 'A' ? cricketBattersLine : cricketBowlerLine,
       },
       teamB: {
         id: stream.teamBId,
@@ -185,6 +192,7 @@ export function normalizeBroadcast(
         primaryText: teamBPrimary,
         secondaryText: teamBSecondary,
         badgeText: teamBBadge,
+        playerLine: cd.battingTeam === 'B' ? cricketBattersLine : cricketBowlerLine,
       },
       centerMeta: {
         statusLabel,

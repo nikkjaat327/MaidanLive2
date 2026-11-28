@@ -17,6 +17,7 @@ import {
   CricketDetails,
   computeCricketChaseState,
   formatCricketOvers,
+  getCurrentOverBalls,
   isCricketScoringLocked,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -175,8 +176,8 @@ export function CricketScorerConsole({
     const batSide = details.battingTeam === 'A' ? roster.teamA : roster.teamB;
     const bowlSide = details.battingTeam === 'A' ? roster.teamB : roster.teamA;
     return {
-      battingRoster: batSide.length > 0 ? batSide : roster.all,
-      bowlingRoster: bowlSide.length > 0 ? bowlSide : roster.all,
+      battingRoster: batSide,
+      bowlingRoster: bowlSide,
     };
   }, [roster, details.battingTeam]);
 
@@ -184,10 +185,78 @@ export function CricketScorerConsole({
     const batSide = secondBattingTeam === 'A' ? roster.teamA : roster.teamB;
     const bowlSide = secondBattingTeam === 'A' ? roster.teamB : roster.teamA;
     return {
-      secondBattingRoster: batSide.length > 0 ? batSide : roster.all,
-      secondBowlingRoster: bowlSide.length > 0 ? bowlSide : roster.all,
+      secondBattingRoster: batSide,
+      secondBowlingRoster: bowlSide,
     };
   }, [roster, secondBattingTeam]);
+
+  const strikerOptions = useMemo(() => {
+    const other = batsman2.trim().toLowerCase();
+    return other
+      ? battingRoster.filter((p) => p.name.trim().toLowerCase() !== other)
+      : battingRoster;
+  }, [battingRoster, batsman2]);
+
+  const nonStrikerOptions = useMemo(() => {
+    const other = batsman1.trim().toLowerCase();
+    return other
+      ? battingRoster.filter((p) => p.name.trim().toLowerCase() !== other)
+      : battingRoster;
+  }, [battingRoster, batsman1]);
+
+  const secondBatter1Options = useMemo(() => {
+    const other = secondBatter2.trim().toLowerCase();
+    return other
+      ? secondBattingRoster.filter((p) => p.name.trim().toLowerCase() !== other)
+      : secondBattingRoster;
+  }, [secondBattingRoster, secondBatter2]);
+
+  const secondBatter2Options = useMemo(() => {
+    const other = secondBatter1.trim().toLowerCase();
+    return other
+      ? secondBattingRoster.filter((p) => p.name.trim().toLowerCase() !== other)
+      : secondBattingRoster;
+  }, [secondBattingRoster, secondBatter1]);
+
+  // Auto-clear incompatible player selections if team rosters, toss, or innings change
+  useEffect(() => {
+    if (roster.teamA.length === 0 && roster.teamB.length === 0) return;
+    const batSet = new Set(battingRoster.map((p) => p.name.trim().toLowerCase()));
+    const bowlSet = new Set(bowlingRoster.map((p) => p.name.trim().toLowerCase()));
+    const b1Norm = batsman1.trim().toLowerCase();
+    const b2Norm = batsman2.trim().toLowerCase();
+    const bwNorm = bowler.trim().toLowerCase();
+
+    if (b1Norm && !batSet.has(b1Norm) && bowlSet.has(b1Norm)) {
+      setBatsman1('');
+    }
+    if (b2Norm && ((!batSet.has(b2Norm) && bowlSet.has(b2Norm)) || (b1Norm && b2Norm === b1Norm))) {
+      setBatsman2('');
+    }
+    if (bwNorm && !bowlSet.has(bwNorm) && batSet.has(bwNorm)) {
+      setBowler('');
+    }
+  }, [battingRoster, bowlingRoster, roster.teamA.length, roster.teamB.length, batsman1, batsman2, bowler]);
+
+  useEffect(() => {
+    if (roster.teamA.length === 0 && roster.teamB.length === 0) return;
+    const batSet = new Set(secondBattingRoster.map((p) => p.name.trim().toLowerCase()));
+    const bowlSet = new Set(secondBowlingRoster.map((p) => p.name.trim().toLowerCase()));
+    const s1 = secondBatter1.trim().toLowerCase();
+    const s2 = secondBatter2.trim().toLowerCase();
+    const sb = secondBowler.trim().toLowerCase();
+    if (s1 && !batSet.has(s1) && bowlSet.has(s1)) setSecondBatter1('');
+    if (s2 && ((!batSet.has(s2) && bowlSet.has(s2)) || (s1 && s2 === s1))) setSecondBatter2('');
+    if (sb && !bowlSet.has(sb) && batSet.has(sb)) setSecondBowler('');
+  }, [
+    secondBattingRoster,
+    secondBowlingRoster,
+    roster.teamA.length,
+    roster.teamB.length,
+    secondBatter1,
+    secondBatter2,
+    secondBowler,
+  ]);
 
   function findPlayerIdByName(name: string, pool: UnifiedMatchPlayer[]): string | undefined {
     const norm = name.trim().toLowerCase();
@@ -293,8 +362,8 @@ export function CricketScorerConsole({
     e.preventDefault();
     const dismissedName =
       dismissedRole === 'NON_STRIKER'
-        ? batsman2.trim() || batsman1.trim() || 'Non-Striker'
-        : batsman1.trim() || 'Batter';
+        ? batsman2.trim() || batsman1.trim() || ''
+        : batsman1.trim();
     await dispatchDelivery(
       {
         type: 'WICKET',
@@ -409,14 +478,7 @@ export function CricketScorerConsole({
         : subRole === 'SQUAD'
           ? subTeam
           : details.battingTeam;
-    const activePool =
-      resolvedTeam === 'A'
-        ? roster.teamA.length > 0
-          ? roster.teamA
-          : roster.all
-        : roster.teamB.length > 0
-          ? roster.teamB
-          : roster.all;
+    const activePool = resolvedTeam === 'A' ? roster.teamA : roster.teamB;
     const inId = findPlayerIdByName(inClean, activePool);
     const outId = findPlayerIdByName(outClean, activePool);
 
@@ -596,30 +658,34 @@ export function CricketScorerConsole({
           </div>
         </div>
 
-        {/* This Over / Recent Deliveries Timeline */}
-        {details.recentBalls.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-              Recent Balls:
-            </span>
-            {details.recentBalls.slice(-8).map((b, idx) => (
-              <span
-                key={`${b}-${idx}`}
-                className={`inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-md font-mono text-xs font-bold tabular-nums ${
-                  b.includes('W') && !b.startsWith('Wd')
-                    ? 'bg-red-600 text-white'
-                    : b === '4' || b === '6'
-                      ? 'bg-emerald-600 text-white'
-                      : b.startsWith('Wd') || b.startsWith('Nb')
-                        ? 'bg-amber-500 text-slate-950'
-                        : 'bg-white border border-slate-300 text-slate-800'
-                }`}
-              >
-                {b}
+        {/* Current Over Deliveries Timeline */}
+        {(() => {
+          const currentOverBalls = getCurrentOverBalls(details);
+          if (currentOverBalls.length === 0) return null;
+          return (
+            <div className="flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                This Over:
               </span>
-            ))}
-          </div>
-        )}
+              {currentOverBalls.map((b, idx) => (
+                <span
+                  key={`${b}-${idx}`}
+                  className={`inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-md font-mono text-xs font-bold tabular-nums ${
+                    b.includes('W') && !b.startsWith('Wd')
+                      ? 'bg-red-600 text-white'
+                      : b === '4' || b === '6'
+                        ? 'bg-emerald-600 text-white'
+                        : b.startsWith('Wd') || b.startsWith('Nb')
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-white border border-slate-300 text-slate-800'
+                  }`}
+                >
+                  {b}
+                </span>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* Active Scoring Pad (never blocks rapid taps during network latency; locks only on innings/match lock) */}
         <fieldset disabled={lockState.locked} className="space-y-4 disabled:opacity-55">
@@ -807,7 +873,7 @@ export function CricketScorerConsole({
                 compact
                 value={batsman1}
                 onChange={(name) => setBatsman1(name)}
-                players={battingRoster}
+                players={strikerOptions}
                 placeholder="Striker name (optional)"
                 emptyOptionLabel="-- Select striker --"
                 ariaLabel="Striker"
@@ -821,7 +887,7 @@ export function CricketScorerConsole({
                 compact
                 value={batsman2}
                 onChange={(name) => setBatsman2(name)}
-                players={battingRoster}
+                players={nonStrikerOptions}
                 placeholder="Non-striker (optional)"
                 emptyOptionLabel="-- Select non-striker --"
                 ariaLabel="Non-Striker"
@@ -1060,8 +1126,12 @@ export function CricketScorerConsole({
                 onChange={(e) => setDismissedRole(e.target.value as 'STRIKER' | 'NON_STRIKER')}
                 className="w-full min-h-[40px] px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white"
               >
-                <option value="STRIKER">Striker: {batsman1 || 'Batter 1'}</option>
-                <option value="NON_STRIKER">Non-Striker: {batsman2 || 'Batter 2'}</option>
+                <option value="STRIKER">
+                  {batsman1 ? `Striker: ${batsman1}` : 'Striker (Unselected)'}
+                </option>
+                <option value="NON_STRIKER">
+                  {batsman2 ? `Non-Striker: ${batsman2}` : 'Non-Striker (Unselected)'}
+                </option>
               </select>
             </div>
           </div>
@@ -1242,7 +1312,7 @@ export function CricketScorerConsole({
               <PlayerPickerField
                 value={secondBatter1}
                 onChange={(name) => setSecondBatter1(name)}
-                players={secondBattingRoster}
+                players={secondBatter1Options}
                 placeholder="Opening striker (optional)"
                 emptyOptionLabel="-- Select striker (Optional) --"
                 ariaLabel="Opening Striker"
@@ -1255,7 +1325,7 @@ export function CricketScorerConsole({
               <PlayerPickerField
                 value={secondBatter2}
                 onChange={(name) => setSecondBatter2(name)}
-                players={secondBattingRoster}
+                players={secondBatter2Options}
                 placeholder="Non-striker (optional)"
                 emptyOptionLabel="-- Select non-striker (Optional) --"
                 ariaLabel="Opening Non-Striker"
@@ -1372,14 +1442,7 @@ export function CricketScorerConsole({
                 : subRole === 'SQUAD'
                   ? subTeam
                   : details.battingTeam;
-            const sidePool =
-              targetSide === 'A'
-                ? roster.teamA.length > 0
-                  ? roster.teamA
-                  : roster.all
-                : roster.teamB.length > 0
-                  ? roster.teamB
-                  : roster.all;
+            const sidePool = targetSide === 'A' ? roster.teamA : roster.teamB;
             const outNorm = subPlayerOut.trim().toLowerCase();
             const incomingPool = outNorm
               ? sidePool.filter((p) => p.name.trim().toLowerCase() !== outNorm)

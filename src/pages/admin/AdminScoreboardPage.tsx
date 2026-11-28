@@ -161,7 +161,7 @@ export function AdminScoreboardPage() {
             const tid = resolveTeamId(p.teamId);
             return tid === stream.teamAId || tid === stream.teamBId;
           });
-          setPlayers(matching.length > 0 ? matching : all);
+          setPlayers(matching);
         } else {
           setPlayers(all);
         }

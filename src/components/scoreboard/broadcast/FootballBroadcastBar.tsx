@@ -37,7 +37,7 @@ export function FootballBroadcastBar({ stream, score }: FootballBroadcastBarProp
     d.teamBRedCards > 0;
 
   return (
-    <div className="w-full max-w-[700px] bg-slate-950/90 backdrop-blur-md text-white rounded-md shadow-xl overflow-hidden border border-white/10">
+    <div className="w-full bg-slate-950/90 backdrop-blur-md text-white rounded-md shadow-xl overflow-hidden border border-white/10">
       {/* Main Broadcast Score Bug */}
       <div className="flex items-center justify-between gap-2 px-2.5 sm:px-3.5 py-1.5">
         {/* Left: Clock & Period */}
@@ -51,9 +51,9 @@ export function FootballBroadcastBar({ stream, score }: FootballBroadcastBarProp
           )}
         </div>
 
-        {/* Center: Team A Score - Team B Score */}
-        <div className="flex items-center justify-center gap-2 sm:gap-3 min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 min-w-0 justify-end flex-1">
+        {/* Center: Team A Score - Team B Score (Equal Wings) */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0 justify-end">
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate text-right">
               <span className="hidden portrait:inline">{shortA}</span>
               <span className="portrait:hidden">{nameA}</span>
@@ -67,7 +67,7 @@ export function FootballBroadcastBar({ stream, score }: FootballBroadcastBarProp
             <span>{score.teamBScore}</span>
           </div>
 
-          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
             <BroadcastLogo logoUrl={stream.teamBLogo} alt={shortB} />
             <span className="font-display font-bold text-xs sm:text-sm uppercase truncate">
               <span className="hidden portrait:inline">{shortB}</span>

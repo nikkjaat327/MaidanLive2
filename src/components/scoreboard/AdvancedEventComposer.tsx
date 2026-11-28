@@ -64,6 +64,12 @@ export function AdvancedEventComposer({
   const scoreA = score?.teamAScore ?? 0;
   const scoreB = score?.teamBScore ?? 0;
   const roster = useMemo(() => mergeMatchRoster(stream, players), [stream, players]);
+  const cricketBattingSide: 'A' | 'B' =
+    (score?.sportSpecificDetails as any)?.battingTeam === 'B' ? 'B' : 'A';
+  const cricketBattingRoster =
+    cricketBattingSide === 'A' ? roster.teamA : roster.teamB;
+  const cricketBowlingRoster =
+    cricketBattingSide === 'A' ? roster.teamB : roster.teamA;
 
   const [expanded, setExpanded] = useState(true);
 
@@ -583,7 +589,7 @@ export function AdvancedEventComposer({
                         compact
                         value={crkDismissed}
                         onChange={(name) => setCrkDismissed(name)}
-                        players={roster.all}
+                        players={cricketBattingRoster}
                         placeholder="Batsman out"
                         emptyOptionLabel="-- Select batsman (Optional) --"
                         ariaLabel="Dismissed Batsman"
@@ -595,7 +601,7 @@ export function AdvancedEventComposer({
                         compact
                         value={crkNewBatsman}
                         onChange={(name) => setCrkNewBatsman(name)}
-                        players={roster.all}
+                        players={cricketBattingRoster}
                         placeholder="Incoming batsman"
                         emptyOptionLabel="-- Select next batsman (Optional) --"
                         ariaLabel="New Batsman"
@@ -610,7 +616,7 @@ export function AdvancedEventComposer({
                     compact
                     value={crkBowler}
                     onChange={(name) => setCrkBowler(name)}
-                    players={roster.all}
+                    players={cricketBowlingRoster}
                     placeholder="Bowler name"
                     emptyOptionLabel="-- Select bowler (Optional) --"
                     ariaLabel="Bowler"
@@ -759,7 +765,7 @@ export function AdvancedEventComposer({
                     compact
                     value={fbPlayerOut}
                     onChange={(name) => setFbPlayerOut(name)}
-                    players={fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all)}
+                    players={fbTeam === 'A' ? roster.teamA : roster.teamB}
                     placeholder="Player leaving the pitch"
                     emptyOptionLabel="-- Select replaced player (Optional) --"
                     ariaLabel="Player Replaced"
@@ -784,12 +790,14 @@ export function AdvancedEventComposer({
                 }}
                 players={
                   sport === 'Football'
-                    ? (fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                    ? (fbTeam === 'A' ? roster.teamA : roster.teamB)
                     : sport === 'Volleyball'
-                      ? (vbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
+                      ? (vbTeam === 'A' ? roster.teamA : roster.teamB)
                       : sport === 'Kabaddi'
-                        ? (kabTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
-                        : roster.all
+                        ? (kabTeam === 'A' ? roster.teamA : roster.teamB)
+                        : sport === 'Cricket'
+                          ? cricketBattingRoster
+                          : roster.all
                 }
                 placeholder="Player name (optional)"
                 emptyOptionLabel="-- Select player (Optional) --"
@@ -814,8 +822,10 @@ export function AdvancedEventComposer({
                 }}
                 players={
                   sport === 'Football'
-                    ? (fbTeam === 'A' ? (roster.teamA.length > 0 ? roster.teamA : roster.all) : (roster.teamB.length > 0 ? roster.teamB : roster.all))
-                    : roster.all
+                    ? (fbTeam === 'A' ? roster.teamA : roster.teamB)
+                    : sport === 'Cricket'
+                      ? cricketBowlingRoster
+                      : roster.all
                 }
                 placeholder="Assist / Secondary (optional)"
                 emptyOptionLabel="-- Select assist / secondary (Optional) --"

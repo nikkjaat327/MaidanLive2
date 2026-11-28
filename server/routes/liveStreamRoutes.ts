@@ -1171,6 +1171,27 @@ router.patch(
                 ...incoming.customScoreboardDesign,
               }
             : currentConfig.customScoreboardDesign,
+        obsBox:
+          incoming.obsBox && typeof incoming.obsBox === 'object'
+            ? {
+                ...currentConfig.obsBox,
+                ...incoming.obsBox,
+              }
+            : currentConfig.obsBox,
+        viewerLandscapeBox:
+          incoming.viewerLandscapeBox && typeof incoming.viewerLandscapeBox === 'object'
+            ? {
+                ...currentConfig.viewerLandscapeBox,
+                ...incoming.viewerLandscapeBox,
+              }
+            : currentConfig.viewerLandscapeBox,
+        viewerPortraitBox:
+          incoming.viewerPortraitBox && typeof incoming.viewerPortraitBox === 'object'
+            ? {
+                ...currentConfig.viewerPortraitBox,
+                ...incoming.viewerPortraitBox,
+              }
+            : currentConfig.viewerPortraitBox,
         eventAnimations: mergedEventAnimations,
       };
 

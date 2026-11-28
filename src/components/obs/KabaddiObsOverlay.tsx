@@ -179,90 +179,97 @@ export function KabaddiObsOverlay({
             paddingTop: m.stripPadY,
             paddingBottom: m.stripPadY,
           }}
-          className={`flex-1 min-w-0 flex items-center justify-between ${
-            isPortrait ? 'flex-wrap' : ''
-          }`}
+          className="flex-1 min-w-0 flex items-center justify-between"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <ObsTeamBadge
-              logoUrl={stream.teamALogo}
-              shortName={shortA}
-              accentColor={config.teamAColor}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <span
-              style={{ fontSize: m.teamNameFontPx }}
-              className="font-display font-extrabold uppercase tracking-wide truncate"
-            >
-              {displayA}
-            </span>
-          </div>
-
           <div
-            key={pulseKey}
-            style={{
-              background: theme.scorePillBg,
-              color: theme.scorePillText,
-              paddingLeft: m.scorePillPadX,
-              paddingRight: m.scorePillPadX,
-              paddingTop: m.scorePillPadY,
-              paddingBottom: m.scorePillPadY,
-            }}
-            className="obs-score-pop flex items-center gap-3 rounded-md font-mono tabular-nums font-extrabold leading-none shrink-0"
+            style={{ gap: m.sectionGapPx }}
+            className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
           >
-            <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreA : '•'}</span>
-            {config.showMatchStatus && (vis.showMatchTimer || vis.showHalf) ? (
-              <span className="flex flex-col items-center px-1.5 leading-tight opacity-90">
-                {vis.showMatchTimer && (
-                  <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}>
-                    {clock}
-                    {vis.showRaidTimer && d.clock.raidTimerEnabled && !d.matchCompleted
-                      ? ` · R${effClock.raidRemainingSec}s`
-                      : ''}
-                  </span>
-                )}
-                {vis.showHalf && (
-                  <span style={{ fontSize: m.metaLabelPx }} className="uppercase tracking-wider opacity-80">
-                    {d.clock.halfLabel || d.half}
-                  </span>
-                )}
-              </span>
-            ) : (
-              <span style={{ fontSize: m.metaFontPx }} className="px-1 opacity-60">
-                -
-              </span>
-            )}
-            <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreB : '•'}</span>
-          </div>
+            <div className="flex items-center gap-2.5 min-w-0 justify-end">
+              <ObsTeamBadge
+                logoUrl={stream.teamALogo}
+                shortName={shortA}
+                accentColor={config.teamAColor}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos}
+              />
+              {vis.showTeamNames && (
+                <span
+                  style={{ fontSize: m.teamNameFontPx }}
+                  className="font-display font-extrabold uppercase tracking-wide truncate"
+                >
+                  {displayA}
+                </span>
+              )}
+            </div>
 
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-start">
-            {vis.showTeamNames && (
-              <span
-                style={{ fontSize: m.teamNameFontPx }}
-                className="font-display font-extrabold uppercase tracking-wide truncate"
-              >
-                {displayB}
-              </span>
-            )}
-            <ObsTeamBadge
-              logoUrl={stream.teamBLogo}
-              shortName={shortB}
-              accentColor={config.teamBColor}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos && vis.showTeamLogos}
-            />
+            <div
+              key={pulseKey}
+              style={{
+                background: theme.scorePillBg,
+                color: theme.scorePillText,
+                paddingLeft: m.scorePillPadX,
+                paddingRight: m.scorePillPadX,
+                paddingTop: m.scorePillPadY,
+                paddingBottom: m.scorePillPadY,
+              }}
+              className="obs-score-pop flex items-center gap-3 rounded-md font-mono tabular-nums font-extrabold leading-none shrink-0"
+            >
+              <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreA : '•'}</span>
+              {config.showMatchStatus && (vis.showMatchTimer || vis.showHalf) ? (
+                <span className="flex flex-col items-center px-1.5 leading-tight opacity-90">
+                  {vis.showMatchTimer && (
+                    <span style={{ color: theme.accentPrimary, fontSize: m.metaFontPx }}>
+                      {clock}
+                      {vis.showRaidTimer && d.clock.raidTimerEnabled && !d.matchCompleted
+                        ? ` · R${effClock.raidRemainingSec}s`
+                        : ''}
+                    </span>
+                  )}
+                  {vis.showHalf && (
+                    <span style={{ fontSize: m.metaLabelPx }} className="uppercase tracking-wider opacity-80">
+                      {d.clock.halfLabel || d.half}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span style={{ fontSize: m.metaFontPx }} className="px-1 opacity-60">
+                  -
+                </span>
+              )}
+              <span style={{ fontSize: m.scoreFontPx }}>{vis.showScores ? scoreB : '•'}</span>
+            </div>
+
+            <div className="flex items-center gap-2.5 min-w-0 justify-start">
+              {vis.showTeamNames && (
+                <span
+                  style={{ fontSize: m.teamNameFontPx }}
+                  className="font-display font-extrabold uppercase tracking-wide truncate"
+                >
+                  {displayB}
+                </span>
+              )}
+              <ObsTeamBadge
+                logoUrl={stream.teamBLogo}
+                shortName={shortB}
+                accentColor={config.teamBColor}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos && vis.showTeamLogos}
+              />
+            </div>
           </div>
 
           {config.showLiveIndicator && (
-            <ObsLiveStatusPill
-              label={resultDeclared ? 'FINAL' : stdStatus === 'LIVE' ? 'LIVE' : stdStatus}
-              isLive={stream.status === 'LIVE' && !resultDeclared}
-              variant={resultDeclared ? 'final' : stdStatus === 'LIVE' ? 'live' : 'break'}
-              fontPx={m.pillFontPx}
-              padX={m.pillPadX}
-              padY={m.pillPadY}
-            />
+            <div className="shrink-0">
+              <ObsLiveStatusPill
+                label={resultDeclared ? 'FINAL' : stdStatus === 'LIVE' ? 'LIVE' : stdStatus}
+                isLive={stream.status === 'LIVE' && !resultDeclared}
+                variant={resultDeclared ? 'final' : stdStatus === 'LIVE' ? 'live' : 'break'}
+                fontPx={m.pillFontPx}
+                padX={m.pillPadX}
+                padY={m.pillPadY}
+              />
+            </div>
           )}
         </div>
       </div>

@@ -283,6 +283,139 @@ export function formatCricketOvers(totalBalls: number): string {
   return `${overs}.${rem}`;
 }
 
+export function deriveCricketBattingTeamFromToss(
+  tossWinner: 'A' | 'B' | '',
+  tossDecision: 'BAT' | 'BOWL' | ''
+): 'A' | 'B' {
+  if (tossWinner !== 'A' && tossWinner !== 'B') return 'A';
+  if (tossDecision === 'BOWL') {
+    return tossWinner === 'A' ? 'B' : 'A';
+  }
+  return tossWinner;
+}
+
+export function hasCricketScoringStarted(
+  rawDetails?: Partial<CricketDetails> | CricketDetails | null
+): boolean {
+  if (!rawDetails) return false;
+  const d = normalizeCricketDetails(rawDetails);
+  if (
+    d.teamARuns > 0 ||
+    d.teamAWickets > 0 ||
+    d.teamABalls > 0 ||
+    d.teamBRuns > 0 ||
+    d.teamBWickets > 0 ||
+    d.teamBBalls > 0 ||
+    d.innings > 1 ||
+    Boolean(d.innings1Completed) ||
+    Boolean(d.innings1Locked) ||
+    Boolean(d.innings2Started) ||
+    Boolean(d.innings2Locked) ||
+    d.deliveryHistory.length > 0 ||
+    d.recentBalls.length > 0 ||
+    d.lastOverSummary.length > 0 ||
+    getTotalExtras(d.extrasA) > 0 ||
+    getTotalExtras(d.extrasB) > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Canonical current-over deliveries helper.
+ * Always returns ONLY the deliveries bowled in the active, incomplete over
+ * (e.g. after 6 legal balls finish an over, returns `[]` until the next delivery starts).
+ * Never falls back to `lastOverSummary` or `.slice(-6)`.
+ */
+export function getCurrentOverBalls(
+  rawDetails?: Partial<CricketDetails> | CricketDetails | null
+): string[] {
+  if (!rawDetails) return [];
+  const d = normalizeCricketDetails(rawDetails);
+  const inningsNum: 1 | 2 = d.innings === 2 ? 2 : 1;
+  if (d.matchPhase === 'COMPLETED' || d.matchPhase === 'INNINGS_BREAK') {
+    return [];
+  }
+  if (inningsNum === 1 && (d.innings1Completed || d.innings1Locked)) {
+    return [];
+  }
+  const activeBalls = d.battingTeam === 'B' ? d.teamBBalls : d.teamABalls;
+  const currentOverNum = Math.floor(Math.max(0, activeBalls) / 6) + 1;
+
+  const inningsDeliveries = (d.deliveryHistory || []).filter((item) => item.innings === inningsNum);
+  if (inningsDeliveries.length > 0) {
+    // deliveryHistory is newest-first; walk chronologically to ensure exact overNumber
+    const chronological = [...inningsDeliveries].reverse();
+    let legalCount = 0;
+    const currentOverTokens: string[] = [];
+    for (const ev of chronological) {
+      const extraType = String(ev.extraType || 'NONE').toUpperCase();
+      const isLegal =
+        typeof ev.isLegal === 'boolean'
+          ? ev.isLegal
+          : extraType !== 'WIDE' && extraType !== 'NO_BALL' && extraType !== 'PENALTY';
+      const inferredOverNum =
+        typeof ev.overNumber === 'number' && ev.overNumber >= 1
+          ? ev.overNumber
+          : Math.floor(legalCount / 6) + 1;
+      if (isLegal) legalCount += 1;
+
+      if (inferredOverNum === currentOverNum) {
+        const batRuns = Math.max(0, Number(ev.batRuns || 0));
+        const extraRuns = Math.max(0, Number(ev.extraRuns || 0));
+        const totalAdded = typeof ev.totalAdded === 'number' ? ev.totalAdded : batRuns + extraRuns;
+        const token =
+          ev.token ||
+          (ev.isWicket
+            ? totalAdded > 0
+              ? `${totalAdded}+W`
+              : 'W'
+            : extraType === 'WIDE'
+              ? totalAdded > 1
+                ? `Wd+${totalAdded - 1}`
+                : 'Wd'
+              : extraType === 'NO_BALL'
+                ? totalAdded > 1
+                  ? `Nb+${totalAdded - 1}`
+                  : 'Nb'
+                : extraType === 'BYE'
+                  ? `B${extraRuns}`
+                  : extraType === 'LEG_BYE'
+                    ? `Lb${extraRuns}`
+                    : extraType === 'PENALTY'
+                      ? `P${extraRuns}`
+                      : String(batRuns));
+        currentOverTokens.push(token);
+      }
+    }
+    return currentOverTokens;
+  }
+
+  // Fallback when deliveryHistory is empty (e.g. synthetic test states):
+  // If an over just completed cleanly (activeBalls % 6 === 0 and > 0) and recentBalls has >= 6 entries,
+  // treat current over as empty rather than showing the finished over.
+  const recent = Array.isArray(d.recentBalls) ? d.recentBalls.filter(Boolean) : [];
+  if (activeBalls > 0 && activeBalls % 6 === 0 && recent.length >= 6) {
+    return [];
+  }
+  return recent;
+}
+
+export function getCricketBowlerLine(
+  rawDetails?: Partial<CricketDetails> | CricketDetails | null,
+  bowlerNameOverride?: string
+): string {
+  if (!rawDetails) return '';
+  const d = normalizeCricketDetails(rawDetails);
+  const bowlerName = (bowlerNameOverride ?? d.bowler ?? '').trim();
+  if (!bowlerName) return '';
+  const crease = getCricketCreaseSummary(d);
+  const bw = crease.bowler;
+  if (!bw) return bowlerName;
+  return `${bw.name} (${bw.wickets}-${bw.runsConceded}, ${bw.overs})`;
+}
+
 export function calculateCricketRunRate(runs: number, balls: number): string {
   if (!balls || balls <= 0) return '0.00';
   return ((runs * 6) / balls).toFixed(2);
@@ -1004,6 +1137,11 @@ export type CricketActionPayload =
       playerOut: string;
       playerIn: string;
       reason?: string;
+    }
+  | {
+      type: 'SET_PRE_MATCH_TOSS';
+      tossWinner: 'A' | 'B' | '';
+      tossDecision: 'BAT' | 'BOWL' | '';
     };
 
 export function isCricketScoringLocked(details: Partial<CricketDetails>): {
@@ -1666,6 +1804,33 @@ export function applyCricketAction(
       label = `Substitution (${roleLabel}): ${outClean || 'Player'} → ${inClean || 'Substitute'}${
         action.reason?.trim() ? ` (${action.reason.trim()})` : ''
       }`;
+      break;
+    }
+    case 'SET_PRE_MATCH_TOSS': {
+      eventCategory = 'META';
+      eventType = 'SET_PRE_MATCH_TOSS';
+      const prevBatting = next.battingTeam;
+      next.tossWinner = action.tossWinner;
+      next.tossDecision = action.tossDecision;
+      if (action.tossWinner === 'A' || action.tossWinner === 'B') {
+        const derivedBatting = deriveCricketBattingTeamFromToss(
+          action.tossWinner,
+          action.tossDecision
+        );
+        if (next.innings === 1) {
+          next.battingTeam = derivedBatting;
+          next.firstInningsBattingTeam = derivedBatting;
+          if (prevBatting !== derivedBatting) {
+            next.batsman1 = '';
+            next.batsman2 = '';
+            next.bowler = '';
+          }
+        }
+        const decLabel = action.tossDecision === 'BOWL' ? 'Bowl' : 'Bat';
+        label = `Toss: Team ${action.tossWinner} won & elected to ${decLabel}`;
+      } else {
+        label = 'Pre-match toss cleared';
+      }
       break;
     }
   }

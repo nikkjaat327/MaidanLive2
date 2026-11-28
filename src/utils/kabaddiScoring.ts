@@ -253,6 +253,8 @@ export interface KabaddiDetails {
   goldenRaidWinner: KabaddiSide | '';
   forfeitTeam: KabaddiSide | '';
   forfeitReason: string;
+  tossWinner?: KabaddiSide | '';
+  tossDecision?: 'RAID' | 'COURT' | '';
 }
 
 export function createDefaultKabaddiRules(): KabaddiRulesConfig {
@@ -455,6 +457,8 @@ export function createInitialKabaddiDetails(rulesOverride?: Partial<KabaddiRules
     goldenRaidWinner: '',
     forfeitTeam: '',
     forfeitReason: '',
+    tossWinner: '',
+    tossDecision: '',
   };
 }
 
@@ -550,7 +554,31 @@ export function normalizeKabaddiDetails(raw?: Partial<KabaddiDetails> | Record<s
       ...(input.doOrDie || {}),
     },
     lastAllOut: input.lastAllOut || null,
+    tossWinner: input.tossWinner === 'A' || input.tossWinner === 'B' ? input.tossWinner : '',
+    tossDecision:
+      input.tossDecision === 'RAID' || input.tossDecision === 'COURT' ? input.tossDecision : '',
   };
+}
+
+export function hasKabaddiScoringStarted(
+  rawDetails?: Partial<KabaddiDetails> | Record<string, unknown> | null,
+  teamAScore = 0,
+  teamBScore = 0
+): boolean {
+  if ((teamAScore || 0) > 0 || (teamBScore || 0) > 0) return true;
+  if (!rawDetails) return false;
+  const d = normalizeKabaddiDetails(rawDetails);
+  return Boolean(
+    d.raidNumber > 0 ||
+      d.raidTimeline.length > 0 ||
+      d.clock.status !== 'NOT_STARTED' ||
+      Boolean(d.clock.matchStartedAtIso) ||
+      d.matchCompleted ||
+      d.teamA.raidPoints > 0 ||
+      d.teamA.tacklePoints > 0 ||
+      d.teamB.raidPoints > 0 ||
+      d.teamB.tacklePoints > 0
+  );
 }
 
 export interface ComputedKabaddiClock {
@@ -1046,6 +1074,13 @@ export type KabaddiEngineActionPayload =
       teamAScore: number;
       teamBScore: number;
       reason: string;
+    }
+  | {
+      type: 'SET_PRE_MATCH_SETUP';
+      tossWinner?: KabaddiSide | '';
+      tossDecision?: 'RAID' | 'COURT' | '';
+      startingRaidingTeam?: KabaddiSide;
+      sideSwapped?: boolean;
     };
 
 export interface KabaddiEngineResult {
@@ -2015,6 +2050,32 @@ export function applyKabaddiEngineAction(
       eventCategory = 'CORRECTION';
       eventType = 'MANUAL_SCORE_CORRECTION';
       label = `Manual score correction (${teamAScore}-${teamBScore}): ${action.reason}`;
+      break;
+    }
+
+    case 'SET_PRE_MATCH_SETUP': {
+      if (action.tossWinner !== undefined) next.tossWinner = action.tossWinner;
+      if (action.tossDecision !== undefined) next.tossDecision = action.tossDecision;
+      if (action.startingRaidingTeam) {
+        next.activeRaidingTeam = action.startingRaidingTeam;
+      } else if (action.tossWinner === 'A' || action.tossWinner === 'B') {
+        if (action.tossDecision === 'COURT') {
+          next.activeRaidingTeam = action.tossWinner === 'A' ? 'B' : 'A';
+          next.clock.sideSwapped = action.tossWinner === 'A';
+        } else if (action.tossDecision === 'RAID') {
+          next.activeRaidingTeam = action.tossWinner;
+          next.clock.sideSwapped = false;
+        }
+      }
+      if (typeof action.sideSwapped === 'boolean') {
+        next.clock.sideSwapped = action.sideSwapped;
+      }
+      eventCategory = 'META';
+      eventType = 'SET_PRE_MATCH_SETUP';
+      label =
+        next.tossWinner && next.tossDecision
+          ? `Kabaddi Toss: Team ${next.tossWinner} chose ${next.tossDecision === 'RAID' ? 'First Raid' : 'Court Side'} (Raiding: Team ${next.activeRaidingTeam})`
+          : `Kabaddi Pre-Match Setup: Team ${next.activeRaidingTeam} raids first`;
       break;
     }
   }

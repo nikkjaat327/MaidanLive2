@@ -23,7 +23,12 @@ import { BroadcastBrandLogoBug } from '../obs/ObsBrandMark.tsx';
 import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
 import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
 import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
-import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
+import {
+  DEFAULT_VIEWER_LANDSCAPE_BOX,
+  DEFAULT_VIEWER_PORTRAIT_BOX,
+  clampScoreboardGeometryBox,
+  normalizeOverlayConfig,
+} from '../../utils/overlayConfig.ts';
 import {
   resolveMatchTimeoutState,
   resolveTimeoutOverlayDecision,
@@ -119,6 +124,16 @@ export function BroadcastPlayerShell({
 
   const position: ScoreboardPosition = stream.scoreboardPosition || 'BOTTOM';
   const normalizedOverlayConfig = normalizeOverlayConfig(stream.overlayConfig);
+  const activeViewerBox =
+    layout.stageOrientation === 'portrait'
+      ? clampScoreboardGeometryBox(
+          normalizedOverlayConfig.viewerPortraitBox,
+          DEFAULT_VIEWER_PORTRAIT_BOX
+        )
+      : clampScoreboardGeometryBox(
+          normalizedOverlayConfig.viewerLandscapeBox,
+          DEFAULT_VIEWER_LANDSCAPE_BOX
+        );
   const timeoutInfo = resolveMatchTimeoutState(stream, score);
   const timeoutDecision = resolveTimeoutOverlayDecision(normalizedOverlayConfig, timeoutInfo);
   const { activeItem: activeEventItem, isExiting: isEventExiting } = useBroadcastEventQueue({
@@ -129,7 +144,7 @@ export function BroadcastPlayerShell({
   const getScoreboardAnchorClass = () => {
     switch (position) {
       case 'BOTTOM':
-        return 'bottom-12 left-2 right-2 sm:left-3 sm:right-3 flex justify-center safe-pb safe-px';
+        return 'bottom-0 inset-x-0 flex justify-center safe-pb';
       case 'LEFT':
         return 'top-14 left-2 sm:left-3 max-w-[85%] sm:max-w-[65%]';
       case 'RIGHT':
@@ -344,16 +359,52 @@ export function BroadcastPlayerShell({
 
           {/* Smart Positioned Container-Aware Scoreboard Overlay */}
           {scoreboardVisible && score && (
-            <div className={`pointer-events-none absolute z-20 ${getScoreboardAnchorClass()}`}>
-              <div className="pointer-events-auto inline-block max-w-full">
-                <BroadcastScoreboardOverlay
-                  stream={stream}
-                  score={score}
-                  compact={layout.isCompactStage}
-                  layoutMode={layout.stageOrientation}
-                />
+            activeViewerBox.enabled ? (
+              <div className="pointer-events-none absolute inset-0 z-20">
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${activeViewerBox.xPct}%`,
+                    top: `${activeViewerBox.yPct}%`,
+                    width: `${activeViewerBox.widthPct}%`,
+                    ...(activeViewerBox.heightPx > 0
+                      ? { height: `${activeViewerBox.heightPx}px`, overflow: 'hidden' }
+                      : {}),
+                    ...(activeViewerBox.scale !== 1
+                      ? {
+                          transform: `scale(${activeViewerBox.scale})`,
+                          transformOrigin: 'top left',
+                        }
+                      : {}),
+                  }}
+                  className="pointer-events-auto max-w-full"
+                >
+                  <BroadcastScoreboardOverlay
+                    stream={stream}
+                    score={score}
+                    compact={layout.isCompactStage}
+                    layoutMode={layout.stageOrientation}
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className={`pointer-events-none absolute z-20 ${getScoreboardAnchorClass()}`}>
+                <div
+                  className={
+                    position === 'BOTTOM'
+                      ? 'pointer-events-auto w-full'
+                      : 'pointer-events-auto inline-block max-w-full'
+                  }
+                >
+                  <BroadcastScoreboardOverlay
+                    stream={stream}
+                    score={score}
+                    compact={layout.isCompactStage}
+                    layoutMode={layout.stageOrientation}
+                  />
+                </div>
+              </div>
+            )
           )}
 
           {/* Admin-Configured Brand Logo Bug */}
@@ -376,7 +427,7 @@ export function BroadcastPlayerShell({
               className={`pointer-events-none absolute z-20 ${
                 position === 'BOTTOM'
                   ? 'top-2 left-2 sm:top-3 sm:left-3 max-w-[65%]'
-                  : 'bottom-12 right-2 sm:right-3 max-w-[75%] flex justify-end'
+                  : 'bottom-2 right-2 sm:right-3 max-w-[75%] flex justify-end'
               }`}
             >
               <SponsorOverlayBanner

@@ -175,9 +175,9 @@ export function FootballObsOverlay({
 
           <div
             style={{ gap: m.sectionGapPx }}
-            className="flex-1 min-w-0 flex items-center justify-center"
+            className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
           >
-            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+            <div className="flex items-center gap-2.5 min-w-0 justify-end">
               <ObsTeamBadge
                 logoUrl={stream.teamALogo}
                 shortName={shortA}
@@ -211,7 +211,7 @@ export function FootballObsOverlay({
               <span>{scoreB}</span>
             </div>
 
-            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-start">
+            <div className="flex items-center gap-2.5 min-w-0 justify-start">
               <span
                 style={{ fontSize: m.teamNameFontPx }}
                 className="font-display font-extrabold uppercase tracking-wide truncate"

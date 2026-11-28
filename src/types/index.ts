@@ -233,6 +233,7 @@ export interface NormalizedBroadcast {
     primaryText: string;
     secondaryText: string;
     badgeText?: string;
+    playerLine?: string;
   };
   teamB: {
     id?: string | null;
@@ -242,6 +243,7 @@ export interface NormalizedBroadcast {
     primaryText: string;
     secondaryText: string;
     badgeText?: string;
+    playerLine?: string;
   };
   centerMeta: {
     statusLabel: string;

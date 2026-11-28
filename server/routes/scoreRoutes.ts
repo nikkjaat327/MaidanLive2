@@ -16,11 +16,12 @@ import {
 } from '../middleware/auth.ts';
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
 import { getInitialSportDetails } from '../../src/utils/scoringEngine.ts';
-import { applyKabaddiAction } from '../../src/utils/kabaddiScoring.ts';
+import { applyKabaddiAction, applyKabaddiEngineAction, hasKabaddiScoringStarted } from '../../src/utils/kabaddiScoring.ts';
 import type { KabaddiDetails } from '../../src/utils/kabaddiScoring.ts';
 import {
   applyCricketAction,
   computeCricketChaseState,
+  hasCricketScoringStarted,
   isBowlerCreditedWicket,
   isCricketScoringLocked,
   normalizeCricketDetails,
@@ -30,12 +31,21 @@ import {
   applyVolleyballAction,
   createInitialVolleyballDetails,
   getVolleyballCompletionEligibility,
+  hasVolleyballScoringStarted,
   isVolleyballScoringLocked,
   normalizeVolleyballDetails,
 } from '../../src/utils/volleyballScoring.ts';
 import type { VolleyballDetails } from '../../src/utils/volleyballScoring.ts';
-import { applyFootballAction } from '../../src/utils/footballScoring.ts';
+import {
+  applyFootballAction,
+  createInitialFootballDetails,
+  hasFootballScoringStarted,
+} from '../../src/utils/footballScoring.ts';
 import type { FootballDetails } from '../../src/utils/footballScoring.ts';
+import {
+  buildTeamRosterSets,
+  validateSportPlayerOwnership,
+} from '../utils/rosterOwnershipValidation.ts';
 import { validateMatchResult } from '../../src/utils/matchResultValidation.ts';
 import type { MatchResultType } from '../../src/utils/matchResultValidation.ts';
 import {
@@ -72,6 +82,24 @@ import {
 
 const router = Router();
 const recentUndoByClientEventId = new Map<string, { at: number; payload: any }>();
+
+async function loadStreamRosterSets(stream: any, session: any = null) {
+  const teamIds = [stream?.teamAId, stream?.teamBId].filter(Boolean);
+  const dbPlayers =
+    teamIds.length > 0
+      ? await Player.find({ teamId: { $in: teamIds } })
+          .select('name teamId')
+          .session(session || null)
+          .lean()
+      : [];
+  return buildTeamRosterSets({
+    teamAId: stream?.teamAId,
+    teamBId: stream?.teamBId,
+    teamAPlayers: stream?.teamAPlayers,
+    teamBPlayers: stream?.teamBPlayers,
+    dbPlayers: dbPlayers as Array<{ name?: string | null; teamId?: unknown }>,
+  });
+}
 
 async function ensureLiveScore(streamId: string, session: any = null) {
   let score = await LiveScore.findOne({ liveStreamId: streamId }).session(session);
@@ -407,8 +435,31 @@ router.patch(
         }
       }
 
-      const streamDocForPrev =
-        score.sportType === 'Volleyball' ? await LiveStream.findById(id).lean() : null;
+      const streamDocForPrev = await LiveStream.findById(id).lean();
+      if (targetSport === 'Cricket' && req.body.sportSpecificDetails && streamDocForPrev) {
+        const incD = req.body.sportSpecificDetails as Record<string, unknown>;
+        const effBatting: 'A' | 'B' =
+          incD.battingTeam === 'B'
+            ? 'B'
+            : incD.battingTeam === 'A'
+              ? 'A'
+              : (score.sportSpecificDetails as any)?.battingTeam === 'B'
+                ? 'B'
+                : 'A';
+        const rosters = await loadStreamRosterSets(streamDocForPrev);
+        const rosterCheck = validateSportPlayerOwnership({
+          sportType: 'Cricket',
+          rosters,
+          battingTeam: effBatting,
+          batsman1: typeof incD.batsman1 === 'string' ? incD.batsman1 : undefined,
+          batsman2: typeof incD.batsman2 === 'string' ? incD.batsman2 : undefined,
+          bowler: typeof incD.bowler === 'string' ? incD.bowler : undefined,
+        });
+        if (!rosterCheck.valid) {
+          res.status(400).json({ message: rosterCheck.message || 'Invalid player team selection.' });
+          return;
+        }
+      }
       const previousSnapshot = {
         sportType: score.sportType,
         teamAScore: score.teamAScore,
@@ -683,6 +734,22 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
           }
         }
 
+        const rosters = await loadStreamRosterSets(stream, session);
+        const curBattingTeam: 'A' | 'B' =
+          (score.sportSpecificDetails as any)?.battingTeam === 'B' ? 'B' : 'A';
+        const rosterCheck = validateSportPlayerOwnership({
+          sportType: sport,
+          rosters,
+          battingTeam: curBattingTeam,
+          action: actionPayload,
+          playerName: typeof req.body.playerName === 'string' ? req.body.playerName : undefined,
+          assistPlayerName:
+            typeof req.body.assistPlayerName === 'string' ? req.body.assistPlayerName : undefined,
+        });
+        if (!rosterCheck.valid) {
+          return { validationError: true as const, reason: rosterCheck.message || 'Invalid player selection.' };
+        }
+
         const previousSnapshot = {
           sportType: score.sportType,
           teamAScore: score.teamAScore,
@@ -934,8 +1001,18 @@ async function handleStructuredScoreEvent(req: AuthenticatedRequest, res: Respon
         return;
       }
 
-      if (txResult.locked) {
-        res.status(409).json({ message: txResult.reason, locked: true });
+      if ((txResult as any).validationError) {
+        res.status(400).json({ message: (txResult as any).reason });
+        return;
+      }
+
+      if ((txResult as any).locked) {
+        res.status(409).json({ message: (txResult as any).reason, locked: true });
+        return;
+      }
+
+      if (!txResult.score) {
+        res.status(404).json({ message: 'Live score not found.' });
         return;
       }
 
@@ -1557,6 +1634,20 @@ router.post(
         req.body.battingTeam === 'A' || req.body.battingTeam === 'B'
           ? req.body.battingTeam
           : defaultSecondBatting;
+
+      const rosters = await loadStreamRosterSets(stream);
+      const rosterCheck = validateSportPlayerOwnership({
+        sportType: 'Cricket',
+        rosters,
+        battingTeam,
+        batsman1,
+        batsman2,
+        bowler,
+      });
+      if (!rosterCheck.valid) {
+        res.status(400).json({ message: rosterCheck.message || 'Invalid player selection for 2nd innings.' });
+        return;
+      }
 
       const oversLimit =
         req.body.oversLimit !== undefined && req.body.oversLimit !== ''
@@ -2251,6 +2342,214 @@ router.post(
     } catch (err) {
       console.error('[Score] Reset error:', err);
       res.status(500).json({ message: 'Failed to reset scoreboard.' });
+    }
+  }
+);
+
+// POST /api/live/:id/score/toss - Pre-match toss & opening side setup with started lock & admin override
+router.post(
+  '/:id/score/toss',
+  authenticate,
+  requireAdminPortal,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400).json({ message: 'Invalid stream ID.' });
+        return;
+      }
+
+      const [allowed, stream, score] = await Promise.all([
+        canManageStream(req.user!, id, 'score'),
+        LiveStream.findById(id),
+        ensureLiveScore(id),
+      ]);
+
+      if (!allowed) {
+        res.status(403).json({
+          message: 'Forbidden: You are not authorized to configure pre-match toss for this stream.',
+        });
+        return;
+      }
+
+      if (!stream || !score) {
+        res.status(404).json({ message: 'Live stream or score not found.' });
+        return;
+      }
+
+      const sport = (score.sportType || stream.gameName || 'Other') as SportType;
+      const details = (score.sportSpecificDetails || {}) as Record<string, any>;
+      const matchStarted =
+        sport === 'Cricket'
+          ? hasCricketScoringStarted(details)
+          : sport === 'Football'
+            ? hasFootballScoringStarted(details, score.teamAScore, score.teamBScore)
+            : sport === 'Kabaddi'
+              ? hasKabaddiScoringStarted(details, score.teamAScore, score.teamBScore)
+              : sport === 'Volleyball'
+                ? hasVolleyballScoringStarted(details, score.teamAScore, score.teamBScore)
+                : score.teamAScore > 0 || score.teamBScore > 0;
+
+      const isAdminRole = req.user!.role === 'ADMIN' || req.user!.role === 'SUPER_ADMIN';
+      if (matchStarted && !(req.body.adminOverride === true && isAdminRole)) {
+        res.status(409).json({
+          message:
+            'Pre-match toss/opening setup is locked once scoring has started. Reset the scoreboard or use Admin override.',
+          locked: true,
+        });
+        return;
+      }
+
+      const rawWinner = req.body.tossWinner;
+      const tossWinner: 'A' | 'B' | '' = rawWinner === 'A' || rawWinner === 'B' ? rawWinner : '';
+      const rawDecision = typeof req.body.tossDecision === 'string' ? req.body.tossDecision.trim().toUpperCase() : '';
+
+      const previousSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      let label = 'Pre-match toss & opening setup updated';
+      if (sport === 'Cricket') {
+        const cricketDecision: 'BAT' | 'BOWL' | '' =
+          rawDecision === 'BAT' || rawDecision === 'BOWL' ? rawDecision : tossWinner ? 'BAT' : '';
+        const applied = applyCricketAction(details as Partial<CricketDetails>, {
+          type: 'SET_PRE_MATCH_TOSS',
+          tossWinner,
+          tossDecision: cricketDecision,
+        });
+        score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+        score.tossWinner = tossWinner;
+        score.tossDecision = cricketDecision;
+        label = applied.label;
+      } else if (sport === 'Football') {
+        const fbDecision: 'KICKOFF' | 'SIDE' | '' =
+          rawDecision === 'KICKOFF' || rawDecision === 'SIDE' ? rawDecision : '';
+        const kickoffTeam: 'A' | 'B' | '' | undefined =
+          req.body.kickoffTeam === 'A' || req.body.kickoffTeam === 'B'
+            ? req.body.kickoffTeam
+            : req.body.kickoffTeam === ''
+              ? ''
+              : undefined;
+        const applied = applyFootballAction(
+          { ...createInitialFootballDetails(), ...(details as Partial<FootballDetails>) },
+          score.teamAScore,
+          score.teamBScore,
+          {
+            type: 'SET_PRE_MATCH_SETUP',
+            kickoffTeam,
+            tossWinner,
+            tossDecision: fbDecision,
+          }
+        );
+        score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+        score.tossWinner = tossWinner || (applied.details.kickoffTeam || '');
+        score.tossDecision = fbDecision || (applied.details.kickoffTeam ? 'KICKOFF' : '');
+        label = applied.label;
+      } else if (sport === 'Kabaddi') {
+        const kbDecision: 'RAID' | 'COURT' | '' =
+          rawDecision === 'RAID' || rawDecision === 'COURT' ? rawDecision : '';
+        const startingRaidingTeam: 'A' | 'B' | undefined =
+          req.body.startingRaidingTeam === 'A' || req.body.startingRaidingTeam === 'B'
+            ? req.body.startingRaidingTeam
+            : undefined;
+        const applied = applyKabaddiEngineAction(
+          details as Partial<KabaddiDetails>,
+          score.teamAScore,
+          score.teamBScore,
+          {
+            type: 'SET_PRE_MATCH_SETUP',
+            tossWinner,
+            tossDecision: kbDecision,
+            startingRaidingTeam,
+            sideSwapped: typeof req.body.sideSwapped === 'boolean' ? req.body.sideSwapped : undefined,
+          }
+        );
+        score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+        score.tossWinner = tossWinner;
+        score.tossDecision = kbDecision;
+        label = applied.label;
+      } else if (sport === 'Volleyball') {
+        const vbDecision: 'SERVE' | 'RECEIVE' | '' =
+          rawDecision === 'SERVE' || rawDecision === 'RECEIVE' ? rawDecision : '';
+        const servingTeam: 'A' | 'B' | undefined =
+          req.body.servingTeam === 'A' || req.body.servingTeam === 'B'
+            ? req.body.servingTeam
+            : undefined;
+        const applied = applyVolleyballAction(
+          details as Partial<VolleyballDetails>,
+          score.teamAScore,
+          score.teamBScore,
+          {
+            type: 'SET_PRE_MATCH_SETUP',
+            servingTeam,
+            tossWinner,
+            tossDecision: vbDecision,
+          }
+        );
+        score.sportSpecificDetails = applied.details as unknown as Record<string, unknown>;
+        score.tossWinner = tossWinner || applied.details.servingTeam;
+        score.tossDecision = vbDecision || 'SERVE';
+        label = applied.label;
+      } else {
+        score.tossWinner = tossWinner;
+        score.tossDecision = sanitizeText(req.body.tossDecision, 40);
+        score.sportSpecificDetails = {
+          ...details,
+          tossWinner: score.tossWinner,
+          tossDecision: score.tossDecision,
+        };
+      }
+
+      score.lastUpdatedBy = req.user!._id as mongoose.Types.ObjectId;
+      score.lastUpdatedAt = new Date();
+      score.markModified?.('sportSpecificDetails');
+      await score.save();
+
+      const updatedSnapshot = {
+        sportType: score.sportType,
+        teamAScore: score.teamAScore,
+        teamBScore: score.teamBScore,
+        sportSpecificDetails: score.sportSpecificDetails,
+        matchStatus: score.matchStatus,
+      };
+
+      const historyItem = await ScoreHistory.create({
+        liveStreamId: score.liveStreamId,
+        entryType: 'SCORE_UPDATE',
+        sportType: score.sportType,
+        eventCategory: 'META',
+        eventType: 'SET_PRE_MATCH_TOSS',
+        previousScore: previousSnapshot,
+        updatedScore: updatedSnapshot,
+        action: label,
+        updatedBy: req.user!._id,
+      });
+      const populatedHistory = buildInMemoryPopulatedHistory(historyItem, req.user);
+      const payload = {
+        streamId: id,
+        score: score.toObject(),
+        historyItem: populatedHistory,
+      };
+
+      emitStreamEvent(id, 'score:updated', payload);
+      emitStreamEvent(id, 'match:timeline:updated', { streamId: id, historyItem: populatedHistory });
+
+      runBackgroundTask(
+        'preMatchTossAudit',
+        recordActivity(req.user!, 'UPDATE_PRE_MATCH_TOSS', 'LiveScore', score._id.toString(), label, {
+          previousValue: { tossWinner: previousSnapshot.sportSpecificDetails?.tossWinner || '' },
+          newValue: { tossWinner: score.tossWinner, tossDecision: score.tossDecision },
+        })
+      );
+
+      res.json(payload);
+    } catch (err) {
+      console.error('[Score] Pre-match toss error:', err);
+      res.status(500).json({ message: 'Failed to save pre-match toss setup.' });
     }
   }
 );

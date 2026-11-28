@@ -597,6 +597,50 @@ export const DEFAULT_CUSTOM_SCOREBOARD_DESIGN: CustomScoreboardDesign = {
   showTelemetryBar: true,
 };
 
+export interface ScoreboardGeometryBox {
+  enabled: boolean;
+  xPct: number;
+  yPct: number;
+  widthPct: number;
+  heightPx: number;
+  scale: number;
+}
+
+export const SCOREBOARD_BOX_BOUNDS = {
+  xPct: { min: 0, max: 80, step: 0.5 },
+  yPct: { min: 0, max: 95, step: 0.5 },
+  widthPct: { min: 20, max: 100, step: 1 },
+  heightPx: { min: 0, max: 360, step: 2 },
+  scale: { min: 0.5, max: 1.8, step: 0.05 },
+} as const;
+
+export const DEFAULT_OBS_BOX: ScoreboardGeometryBox = {
+  enabled: false,
+  xPct: 5,
+  yPct: 84,
+  widthPct: 90,
+  heightPx: 0,
+  scale: 1,
+};
+
+export const DEFAULT_VIEWER_LANDSCAPE_BOX: ScoreboardGeometryBox = {
+  enabled: false,
+  xPct: 2,
+  yPct: 82,
+  widthPct: 96,
+  heightPx: 0,
+  scale: 1,
+};
+
+export const DEFAULT_VIEWER_PORTRAIT_BOX: ScoreboardGeometryBox = {
+  enabled: false,
+  xPct: 0,
+  yPct: 78,
+  widthPct: 100,
+  heightPx: 0,
+  scale: 1,
+};
+
 export interface BroadcastOverlayConfig {
   visible: boolean;
   mode: OverlayMode;
@@ -672,6 +716,9 @@ export interface BroadcastOverlayConfig {
   liveMvpStatsLine: string;
   liveMvpLabel: string;
   liveMvpPosition: OverlayPosition;
+  obsBox: ScoreboardGeometryBox;
+  viewerLandscapeBox: ScoreboardGeometryBox;
+  viewerPortraitBox: ScoreboardGeometryBox;
 }
 
 export const OVERLAY_MODES: readonly OverlayMode[] = ['full', 'compact', 'score_only', 'hidden'];
@@ -797,6 +844,9 @@ export const DEFAULT_OVERLAY_CONFIG: BroadcastOverlayConfig = {
   liveMvpStatsLine: '',
   liveMvpLabel: 'LIVE MVP',
   liveMvpPosition: 'top-right',
+  obsBox: { ...DEFAULT_OBS_BOX },
+  viewerLandscapeBox: { ...DEFAULT_VIEWER_LANDSCAPE_BOX },
+  viewerPortraitBox: { ...DEFAULT_VIEWER_PORTRAIT_BOX },
 };
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -857,6 +907,52 @@ export function clampScaleNumber(val: unknown, min: number, max: number, fallbac
   if (!Number.isFinite(num)) return fallback;
   const clamped = Math.min(max, Math.max(min, num));
   return Math.round(clamped * 100) / 100;
+}
+
+export function clampScoreboardGeometryBox(
+  raw: Partial<ScoreboardGeometryBox> | Record<string, unknown> | null | undefined,
+  defaults: ScoreboardGeometryBox = DEFAULT_OBS_BOX
+): ScoreboardGeometryBox {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<ScoreboardGeometryBox>;
+  const widthPct = clampScaleNumber(
+    src.widthPct,
+    SCOREBOARD_BOX_BOUNDS.widthPct.min,
+    SCOREBOARD_BOX_BOUNDS.widthPct.max,
+    defaults.widthPct
+  );
+  const maxXPct = Math.min(SCOREBOARD_BOX_BOUNDS.xPct.max, Math.max(0, 100 - widthPct));
+  const xPct = clampScaleNumber(
+    src.xPct,
+    SCOREBOARD_BOX_BOUNDS.xPct.min,
+    maxXPct,
+    Math.min(defaults.xPct, maxXPct)
+  );
+  const yPct = clampScaleNumber(
+    src.yPct,
+    SCOREBOARD_BOX_BOUNDS.yPct.min,
+    SCOREBOARD_BOX_BOUNDS.yPct.max,
+    defaults.yPct
+  );
+  const rawHeightVal: unknown = src.heightPx;
+  const rawH = typeof rawHeightVal === 'number' ? rawHeightVal : typeof rawHeightVal === 'string' && rawHeightVal.trim() !== '' ? Number(rawHeightVal) : NaN;
+  const heightPx =
+    Number.isFinite(rawH) && rawH > 0
+      ? Math.round(clampScaleNumber(rawH, 44, SCOREBOARD_BOX_BOUNDS.heightPx.max, 0))
+      : 0;
+  const scale = clampScaleNumber(
+    src.scale,
+    SCOREBOARD_BOX_BOUNDS.scale.min,
+    SCOREBOARD_BOX_BOUNDS.scale.max,
+    defaults.scale
+  );
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : defaults.enabled,
+    xPct,
+    yPct,
+    widthPct,
+    heightPx,
+    scale,
+  };
 }
 
 export function normalizeCustomScoreboardDesign(
@@ -1249,6 +1345,15 @@ export function normalizeOverlayConfig(
         ? src.liveMvpLabel.trim().slice(0, 40)
         : DEFAULT_OVERLAY_CONFIG.liveMvpLabel,
     liveMvpPosition,
+    obsBox: clampScoreboardGeometryBox(src.obsBox, DEFAULT_OBS_BOX),
+    viewerLandscapeBox: clampScoreboardGeometryBox(
+      src.viewerLandscapeBox,
+      DEFAULT_VIEWER_LANDSCAPE_BOX
+    ),
+    viewerPortraitBox: clampScoreboardGeometryBox(
+      src.viewerPortraitBox,
+      DEFAULT_VIEWER_PORTRAIT_BOX
+    ),
   };
 }
 
@@ -1262,6 +1367,9 @@ export function applyOverlayQueryParams(
     ...base,
     customScoreboardDesign: { ...base.customScoreboardDesign },
     eventAnimations: normalizeEventAnimationsConfig(base.eventAnimations),
+    obsBox: { ...base.obsBox },
+    viewerLandscapeBox: { ...base.viewerLandscapeBox },
+    viewerPortraitBox: { ...base.viewerPortraitBox },
   };
 
   const mode = params.get('mode');

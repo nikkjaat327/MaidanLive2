@@ -86,6 +86,8 @@ import {
   mergeMatchRoster,
   UnifiedMatchPlayer,
 } from '../../utils/sportPositions.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
+import { PreMatchTossSetupPanel } from './PreMatchTossSetupPanel.tsx';
 
 interface ScoreControlPanelProps {
   stream: LiveStreamData;
@@ -154,6 +156,7 @@ export function ScoreControlPanel({
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
 
+  const { adminUser } = useAuth();
   const sport: SportOption = score?.sportType || (stream.gameName as SportOption) || 'Other';
   const teamA = stream.teamAName || 'Team A';
   const teamB = stream.teamBName || 'Team B';
@@ -1028,6 +1031,17 @@ export function ScoreControlPanel({
         )}
       </div>
 
+      {/* Sport-Adaptive Pre-Match Toss & Opening Setup */}
+      <PreMatchTossSetupPanel
+        stream={stream}
+        score={score}
+        userRole={adminUser?.role}
+        onScoreChange={onScoreChange}
+        onRefreshHistory={onRefreshHistory}
+        onError={setError}
+        onSuccess={setSuccessMsg}
+      />
+
       {/* Live MVP Tracker & Overlay Feature Control */}
       <LiveMvpTrackerPanel
         stream={stream}
@@ -1519,14 +1533,7 @@ export function ScoreControlPanel({
                     : 'A'
                   : batSide
                 : panelSubTeam;
-            const sidePool =
-              side === 'A'
-                ? mergedRoster.teamA.length > 0
-                  ? mergedRoster.teamA
-                  : mergedRoster.all
-                : mergedRoster.teamB.length > 0
-                  ? mergedRoster.teamB
-                  : mergedRoster.all;
+            const sidePool = side === 'A' ? mergedRoster.teamA : mergedRoster.teamB;
             const outNorm = panelSubOut.trim().toLowerCase();
             const incomingPool = outNorm
               ? sidePool.filter((p) => p.name.trim().toLowerCase() !== outNorm)

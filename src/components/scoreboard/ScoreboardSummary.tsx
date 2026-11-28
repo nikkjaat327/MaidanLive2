@@ -5,6 +5,7 @@ import {
   computeCricketChaseState,
   formatCricketOvers,
   getCricketCreaseSummary,
+  getCurrentOverBalls,
   getTotalExtras,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -95,6 +96,9 @@ export function ScoreboardSummary({
 
     const activeExtras = isBattingA ? details.extrasA : details.extrasB;
     const extrasTotal = getTotalExtras(activeExtras);
+    const currentOverBalls = getCurrentOverBalls(details);
+    const hasBatters = Boolean(crease.batsman1 || crease.batsman2);
+    const hasBowler = Boolean(crease.bowler);
 
     const chaseLine =
       chase.isInningsBreak || chase.isSecondInnings || chase.isMatchCompleted
@@ -199,18 +203,18 @@ export function ScoreboardSummary({
           </div>
         </div>
 
-        {/* Batters, Bowler & Recent Balls (Detail Mode) */}
-        {!isCompact && (
+        {/* Batters, Bowler & Current Over Deliveries (Detail Mode) */}
+        {!isCompact && (hasBatters || hasBowler || currentOverBalls.length > 0) && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-            {(crease.batsman1 || crease.batsman2 || crease.bowler) && (
+            {(hasBatters || hasBowler) && (
               <div className="rounded-lg border border-slate-200 p-3 bg-white space-y-2 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
-                      <span>On Crease</span>
-                      <span className="font-mono">R (B) · SR</span>
-                    </div>
-                    {crease.batsman1 || crease.batsman2 ? (
+                <div className={`grid grid-cols-1 ${hasBatters && hasBowler ? 'sm:grid-cols-2' : ''} gap-3`}>
+                  {hasBatters && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                        <span>On Crease</span>
+                        <span className="font-mono">R (B) · SR</span>
+                      </div>
                       <div className="space-y-1">
                         {crease.batsman1 && (
                           <div className="flex items-center justify-between gap-2">
@@ -251,17 +255,15 @@ export function ScoreboardSummary({
                           </div>
                         )}
                       </div>
-                    ) : (
-                      <span className="text-slate-400">Batters not updated</span>
-                    )}
-                  </div>
-
-                  <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-3">
-                    <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
-                      <span>Bowling</span>
-                      <span className="font-mono">O-M-R-W · Econ</span>
                     </div>
-                    {crease.bowler ? (
+                  )}
+
+                  {hasBowler && crease.bowler && (
+                    <div className={`space-y-1 ${hasBatters ? 'sm:border-l sm:border-slate-100 sm:pl-3' : ''}`}>
+                      <div className="flex items-center justify-between text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                        <span>Bowling</span>
+                        <span className="font-mono">O-M-R-W · Econ</span>
+                      </div>
                       <div className="flex items-center justify-between gap-2">
                         <span
                           key={`bw-${playerFlash.bowlerAnimKey}`}
@@ -279,21 +281,19 @@ export function ScoreboardSummary({
                           <span className="text-slate-500">· {crease.bowler.economy}</span>
                         </span>
                       </div>
-                    ) : (
-                      <span className="text-slate-400">Bowler not updated</span>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {details.recentBalls && details.recentBalls.length > 0 && (
+            {currentOverBalls.length > 0 && (
               <div className="rounded-lg border border-slate-200 p-3 bg-white">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
-                  Recent Deliveries
+                  Current Over
                 </p>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {details.recentBalls.slice(-10).map((ball, idx) => {
+                  {currentOverBalls.map((ball, idx) => {
                     const isWkt = ball.includes('W') && !ball.startsWith('Wd');
                     const isBoundary = ball === '4' || ball === '6';
                     return (

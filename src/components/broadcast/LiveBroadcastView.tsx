@@ -89,7 +89,12 @@ import { BroadcastSponsorAdBanner } from '../obs/BroadcastSponsorAdBanner.tsx';
 import { LiveMvpBroadcastOverlay } from '../obs/LiveMvpBroadcastOverlay.tsx';
 import { TimeoutFullscreenSponsorAd } from '../obs/TimeoutFullscreenSponsorAd.tsx';
 import { JioHotstarFullScoreboard } from '../obs/JioHotstarFullScoreboard.tsx';
-import { normalizeOverlayConfig } from '../../utils/overlayConfig.ts';
+import {
+  DEFAULT_VIEWER_LANDSCAPE_BOX,
+  DEFAULT_VIEWER_PORTRAIT_BOX,
+  clampScoreboardGeometryBox,
+  normalizeOverlayConfig,
+} from '../../utils/overlayConfig.ts';
 import {
   resolveMatchTimeoutState,
   resolveTimeoutOverlayDecision,
@@ -229,6 +234,23 @@ export function LiveBroadcastView({
   const normalizedOverlayConfig = useMemo(
     () => normalizeOverlayConfig(stream.overlayConfig),
     [stream.overlayConfig]
+  );
+  const activeViewerBox = useMemo(
+    () =>
+      layout.stageOrientation === 'portrait'
+        ? clampScoreboardGeometryBox(
+            normalizedOverlayConfig.viewerPortraitBox,
+            DEFAULT_VIEWER_PORTRAIT_BOX
+          )
+        : clampScoreboardGeometryBox(
+            normalizedOverlayConfig.viewerLandscapeBox,
+            DEFAULT_VIEWER_LANDSCAPE_BOX
+          ),
+    [
+      layout.stageOrientation,
+      normalizedOverlayConfig.viewerLandscapeBox,
+      normalizedOverlayConfig.viewerPortraitBox,
+    ]
   );
   const timeoutInfo = useMemo(
     () => resolveMatchTimeoutState(stream, score, kabaddiNowMs),
@@ -1326,18 +1348,103 @@ export function LiveBroadcastView({
               canPlayVideo &&
               !videoDisabled &&
               !(broadcast.status === 'UPCOMING' && !showUpcomingPreview) && (
-                <div
-                  className={`pointer-events-none absolute z-25 flex ${
-                    !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
-                      ? 'bottom-12 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
-                      : stream.scoreboardPosition === 'LEFT'
-                        ? 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
-                        : stream.scoreboardPosition === 'RIGHT'
-                          ? 'top-14 left-2.5 right-2.5 sm:left-auto sm:right-4 justify-end'
-                          : 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
-                  }`}
-                >
-                  <div className="pointer-events-auto max-w-full">
+                activeViewerBox.enabled ? (
+                  <div className="pointer-events-none absolute inset-0 z-25">
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: `${activeViewerBox.xPct}%`,
+                        top: `${activeViewerBox.yPct}%`,
+                        width: `${activeViewerBox.widthPct}%`,
+                        ...(activeViewerBox.heightPx > 0
+                          ? { height: `${activeViewerBox.heightPx}px`, overflow: 'hidden' }
+                          : {}),
+                        ...(activeViewerBox.scale !== 1
+                          ? {
+                              transform: `scale(${activeViewerBox.scale})`,
+                              transformOrigin: 'top left',
+                            }
+                          : {}),
+                      }}
+                      className="pointer-events-auto max-w-full"
+                    >
+                      {score ? (
+                        <BroadcastScoreboardOverlay
+                          stream={stream}
+                          score={score}
+                          compact={layout.isCompactStage}
+                          layoutMode={layout.stageOrientation}
+                        />
+                      ) : (
+                        <BroadcastScoreboard
+                          broadcast={broadcast}
+                          compact
+                          layoutMode={layout.stageOrientation}
+                          className="w-full"
+                        />
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className={`pointer-events-none absolute z-25 flex ${
+                      !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
+                        ? 'bottom-0 inset-x-0 justify-center safe-pb'
+                        : stream.scoreboardPosition === 'LEFT'
+                          ? 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-auto justify-start'
+                          : stream.scoreboardPosition === 'RIGHT'
+                            ? 'top-14 left-2.5 right-2.5 sm:left-auto sm:right-4 justify-end'
+                            : 'top-14 left-2.5 right-2.5 sm:left-4 sm:right-4 justify-center'
+                    }`}
+                  >
+                    <div
+                      className={
+                        !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
+                          ? 'pointer-events-auto w-full'
+                          : 'pointer-events-auto max-w-full'
+                      }
+                    >
+                      {score ? (
+                        <BroadcastScoreboardOverlay
+                          stream={stream}
+                          score={score}
+                          compact={layout.isCompactStage}
+                          layoutMode={layout.stageOrientation}
+                        />
+                      ) : (
+                        <BroadcastScoreboard
+                          broadcast={broadcast}
+                          compact
+                          layoutMode={layout.stageOrientation}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )
+              )}
+
+            {/* Fullscreen Scoreboard Overlay (adapts cleanly to Portrait vs Landscape Fullscreen) */}
+            {isFullscreenActive && scoreboardVisible && !videoDisabled && (
+              activeViewerBox.enabled ? (
+                <div className="pointer-events-none absolute inset-0 z-25">
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: `${activeViewerBox.xPct}%`,
+                      top: `${activeViewerBox.yPct}%`,
+                      width: `${activeViewerBox.widthPct}%`,
+                      ...(activeViewerBox.heightPx > 0
+                        ? { height: `${activeViewerBox.heightPx}px`, overflow: 'hidden' }
+                        : {}),
+                      ...(activeViewerBox.scale !== 1
+                        ? {
+                            transform: `scale(${activeViewerBox.scale})`,
+                            transformOrigin: 'top left',
+                          }
+                        : {}),
+                    }}
+                    className="pointer-events-auto max-w-full"
+                  >
                     {score ? (
                       <BroadcastScoreboardOverlay
                         stream={stream}
@@ -1350,33 +1457,32 @@ export function LiveBroadcastView({
                         broadcast={broadcast}
                         compact
                         layoutMode={layout.stageOrientation}
+                        className="w-full"
                       />
                     )}
                   </div>
                 </div>
-              )}
-
-            {/* Fullscreen Scoreboard Overlay (adapts cleanly to Portrait vs Landscape Fullscreen) */}
-            {isFullscreenActive && scoreboardVisible && !videoDisabled && (
-              <div className="pointer-events-none absolute bottom-12 left-3 right-3 sm:left-6 sm:right-6 z-25 flex justify-center safe-pb safe-px">
-                <div className="pointer-events-auto w-full flex justify-center max-w-2xl">
-                  {score && layout.stageOrientation === 'landscape' ? (
-                    <BroadcastScoreboardOverlay
-                      stream={stream}
-                      score={score}
-                      compact
-                      layoutMode="landscape"
-                    />
-                  ) : (
-                    <BroadcastScoreboard
-                      broadcast={broadcast}
-                      compact
-                      layoutMode={layout.stageOrientation}
-                      className="w-full"
-                    />
-                  )}
+              ) : (
+                <div className="pointer-events-none absolute bottom-0 inset-x-0 z-25 flex justify-center safe-pb">
+                  <div className="pointer-events-auto w-full flex justify-center">
+                    {score && layout.stageOrientation === 'landscape' ? (
+                      <BroadcastScoreboardOverlay
+                        stream={stream}
+                        score={score}
+                        compact
+                        layoutMode="landscape"
+                      />
+                    ) : (
+                      <BroadcastScoreboard
+                        broadcast={broadcast}
+                        compact
+                        layoutMode={layout.stageOrientation}
+                        className="w-full"
+                      />
+                    )}
+                  </div>
                 </div>
-              </div>
+              )
             )}
 
             {/* Brand Logo Bug inside Viewer Video Stage */}
@@ -1406,7 +1512,13 @@ export function LiveBroadcastView({
 
             {/* Sponsor Overlay Strip */}
             {sponsorOverlays.length > 0 && (
-              <div className="pointer-events-none absolute bottom-12 right-2.5 z-20 max-w-[75%] flex justify-end">
+              <div
+                className={`pointer-events-none absolute z-20 ${
+                  !stream.scoreboardPosition || stream.scoreboardPosition === 'BOTTOM'
+                    ? 'top-2 left-2.5 max-w-[65%]'
+                    : 'bottom-2 right-2.5 max-w-[75%] flex justify-end'
+                }`}
+              >
                 <SponsorOverlayBanner
                   overlays={sponsorOverlays}
                   suppress={timeoutDecision.isAnyTakeoverActive}

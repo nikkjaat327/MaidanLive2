@@ -6,6 +6,8 @@ import {
   CricketDetails,
   computeCricketChaseState,
   formatCricketOvers,
+  getCricketBowlerLine,
+  getCurrentOverBalls,
   getMaxWickets,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -88,8 +90,7 @@ export function CricketObsOverlay({
     }
   }, [runs, wickets, balls]);
 
-  const recentBalls = details.recentBalls || [];
-  const lastOver = recentBalls.slice(-6);
+  const lastOver = getCurrentOverBalls(details);
 
   let statusPillLabel = 'LIVE';
   let statusPillVariant: 'live' | 'break' | 'warning' | 'final' | 'upcoming' = 'live';
@@ -380,19 +381,21 @@ export function CricketObsOverlay({
   }
 
   // 3) FULL Broadcast Scoreboard (90% landscape / 100% portrait)
-  const showCreaseInfo =
-    !chase.isInningsBreak &&
-    !isCompleted &&
-    !isAbandoned &&
-    ((config.showBatters && Boolean(details.batsman1 || details.batsman2)) ||
-      (config.showBowler && Boolean(details.bowler)));
+  const showCreaseInfo = !chase.isInningsBreak && !isCompleted && !isAbandoned;
+  const battersLine =
+    showCreaseInfo && config.showBatters
+      ? [details.batsman1 ? `* ${details.batsman1}` : '', details.batsman2 || '']
+          .filter(Boolean)
+          .join(' · ')
+      : '';
+  const bowlerLine =
+    showCreaseInfo && config.showBowler ? getCricketBowlerLine(details) : '';
 
   const showRecentStrip = config.showRecentOver && lastOver.length > 0 && !isAbandoned;
   const showTournamentRow = config.showTournamentName && Boolean(stream.tournamentName);
 
   const showBottomSubStrip =
     showTournamentRow ||
-    showCreaseInfo ||
     showRecentStrip ||
     details.isSuperOver ||
     (isCompleted && Boolean(score?.mvpPlayerName));
@@ -424,117 +427,163 @@ export function CricketObsOverlay({
 
         <div
           className={`flex-1 min-w-0 flex ${
-            isPortrait ? 'flex-wrap items-center justify-between' : 'items-stretch justify-between'
+            isPortrait ? 'flex-col' : 'items-stretch'
           }`}
         >
-          {/* Batting Team Wing + Main Score */}
-          <div
-            style={{
-              gap: m.sectionGapPx,
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className="flex items-center min-w-0"
-          >
-            <ObsTeamBadge
-              logoUrl={batLogo}
-              shortName={batShort}
-              accentColor={batAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 min-w-0">
+          {/* Equal-Width Left Batting Wing | Center Divider | Right Bowling Wing */}
+          <div className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
+            {/* Batting Team Wing + Score + ONLY Batters */}
+            <div
+              style={{
+                gap: m.sectionGapPx,
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="flex items-center justify-between min-w-0"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <ObsTeamBadge
+                  logoUrl={batLogo}
+                  shortName={batShort}
+                  accentColor={batAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      style={{ fontSize: m.teamNameFontPx }}
+                      className="font-display font-extrabold tracking-wide uppercase leading-none truncate"
+                    >
+                      {batDisplay}
+                    </span>
+                    <span
+                      style={{ color: theme.accentPrimary, fontSize: m.metaLabelPx }}
+                      className="font-bold uppercase tracking-wider leading-none shrink-0"
+                    >
+                      {details.innings === 2 ? '2ND' : '1ST'}
+                    </span>
+                  </div>
+                  {battersLine ? (
+                    <p
+                      style={{ color: theme.secondaryText, fontSize: m.metaLabelPx }}
+                      className="font-medium truncate mt-1 leading-none"
+                    >
+                      {battersLine}
+                    </p>
+                  ) : !isPortrait && batDisplay !== batShort ? (
+                    <p
+                      style={{ color: theme.mutedText, fontSize: m.subTeamFontPx }}
+                      className="font-mono font-semibold uppercase tracking-wider truncate mt-1 leading-none"
+                    >
+                      {batShort}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Batting Score Capsule + Overs */}
+              <div
+                key={pulseKey}
+                style={{
+                  background: theme.scorePillBg,
+                  color: theme.scorePillText,
+                  paddingLeft: m.scorePillPadX,
+                  paddingRight: m.scorePillPadX,
+                  paddingTop: m.scorePillPadY,
+                  paddingBottom: m.scorePillPadY,
+                }}
+                className="obs-score-pop flex items-baseline gap-2 rounded-md shadow-inner shrink-0"
+              >
                 <span
-                  style={{ fontSize: m.teamNameFontPx }}
-                  className="font-display font-extrabold tracking-wide uppercase leading-none truncate max-w-[320px]"
+                  style={{ fontSize: m.scoreFontPx }}
+                  className="font-mono tabular-nums font-extrabold leading-none tracking-tight"
                 >
-                  {batDisplay}
+                  {runs}/{wickets}
                 </span>
                 <span
-                  style={{ color: theme.accentPrimary, fontSize: m.metaLabelPx }}
-                  className="font-bold uppercase tracking-wider leading-none shrink-0"
+                  style={{ fontSize: m.metaFontPx }}
+                  className="font-mono tabular-nums font-bold opacity-85 leading-none whitespace-nowrap"
                 >
-                  {details.innings === 2 ? '2ND' : '1ST'}
+                  {formatCricketOvers(balls)}
+                  <span className="opacity-65">/{details.oversLimit}</span>
                 </span>
               </div>
-              {!isPortrait && batDisplay !== batShort && (
-                <p
-                  style={{ color: theme.mutedText, fontSize: m.subTeamFontPx }}
-                  className="font-mono font-semibold uppercase tracking-wider truncate max-w-[210px] mt-1 leading-none"
-                >
-                  {batShort}
-                </p>
-              )}
             </div>
 
-            {/* Score Capsule + Overs */}
+            {/* Symmetrical Center Hub Divider */}
             <div
-              key={pulseKey}
-              style={{
-                background: theme.scorePillBg,
-                color: theme.scorePillText,
-                paddingLeft: m.scorePillPadX,
-                paddingRight: m.scorePillPadX,
-                paddingTop: m.scorePillPadY,
-                paddingBottom: m.scorePillPadY,
-              }}
-              className="obs-score-pop flex items-baseline gap-2.5 rounded-md shadow-inner shrink-0"
+              style={{ borderColor: theme.divider }}
+              className="border-x px-2.5 flex flex-col items-center justify-center shrink-0"
             >
               <span
-                style={{ fontSize: m.scoreFontPx }}
-                className="font-mono tabular-nums font-extrabold leading-none tracking-tight"
+                style={{ color: theme.accentPrimary, fontSize: m.metaLabelPx }}
+                className="font-display font-black uppercase tracking-widest leading-none"
               >
-                {runs}/{wickets}
+                VS
               </span>
               <span
-                style={{ fontSize: m.metaFontPx }}
-                className="font-mono tabular-nums font-bold opacity-85 leading-none whitespace-nowrap"
+                style={{ color: theme.mutedText, fontSize: Math.max(9, m.metaLabelPx - 1) }}
+                className="font-mono uppercase mt-1 leading-none whitespace-nowrap"
               >
-                {formatCricketOvers(balls)}
-                <span className="opacity-65">/{details.oversLimit}</span> OV
+                {details.innings === 2 ? '2ND INN' : '1ST INN'}
               </span>
             </div>
-          </div>
 
-          {/* Opponent / Bowling Team Wing */}
-          <div
-            style={{
-              borderColor: theme.divider,
-              gap: Math.max(8, Math.round(m.sectionGapPx * 0.8)),
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className={`flex items-center min-w-0 ${isPortrait ? '' : 'border-l'}`}
-          >
-            <ObsTeamBadge
-              logoUrl={bowlLogo}
-              shortName={bowlShort}
-              accentColor={bowlAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <div className="leading-tight min-w-0">
+            {/* Bowling Team Wing + Opponent Score + ONLY Bowler + Figures */}
+            <div
+              style={{
+                gap: Math.max(8, Math.round(m.sectionGapPx * 0.8)),
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="flex items-center justify-between min-w-0"
+            >
               <span
-                style={{ fontSize: m.subTeamFontPx }}
-                className="font-display font-bold tracking-wide uppercase block truncate max-w-[240px]"
-              >
-                {bowlDisplay}
-              </span>
-              <span
-                style={{ color: theme.mutedText, fontSize: m.metaLabelPx }}
-                className="font-mono tabular-nums block truncate max-w-[180px]"
+                style={{ color: theme.secondaryText, fontSize: m.metaFontPx }}
+                className="font-mono tabular-nums font-bold leading-none shrink-0"
               >
                 {chase.isSecondInnings || bowlBalls > 0 || bowlRuns > 0
                   ? `${bowlRuns}/${bowlWickets} (${formatCricketOvers(bowlBalls)})`
-                  : isPortrait
-                    ? 'Bowling'
-                    : bowlShort}
+                  : '—'}
               </span>
+
+              <div className="flex items-center gap-2 min-w-0 justify-end">
+                <div className="leading-tight min-w-0 text-right">
+                  <span
+                    style={{ fontSize: m.teamNameFontPx }}
+                    className="font-display font-extrabold tracking-wide uppercase block truncate leading-none"
+                  >
+                    {bowlDisplay}
+                  </span>
+                  {bowlerLine ? (
+                    <span
+                      style={{ color: theme.secondaryText, fontSize: m.metaLabelPx }}
+                      className="font-mono tabular-nums block truncate mt-1 leading-none"
+                    >
+                      {bowlerLine}
+                    </span>
+                  ) : !isPortrait && bowlDisplay !== bowlShort ? (
+                    <span
+                      style={{ color: theme.mutedText, fontSize: m.metaLabelPx }}
+                      className="font-mono uppercase block truncate mt-1 leading-none"
+                    >
+                      {bowlShort}
+                    </span>
+                  ) : null}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={bowlLogo}
+                  shortName={bowlShort}
+                  accentColor={bowlAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+              </div>
             </div>
           </div>
 
@@ -548,8 +597,8 @@ export function CricketObsOverlay({
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className={`flex items-center min-w-0 flex-wrap justify-end ${
-              isPortrait ? 'w-full border-t justify-between' : 'border-l ml-auto'
+            className={`flex items-center min-w-0 flex-wrap justify-end shrink-0 ${
+              isPortrait ? 'w-full border-t justify-between' : 'border-l'
             }`}
           >
             <div style={{ gap: m.sectionGapPx }} className="flex items-center min-w-0 flex-wrap">
@@ -624,7 +673,7 @@ export function CricketObsOverlay({
                           ? 'rgba(251, 113, 133, 0.35)'
                           : 'rgba(251, 191, 36, 0.26)',
                   }}
-                  className="px-3 py-1 rounded border flex items-center gap-1.5 font-display font-extrabold tracking-wide uppercase truncate max-w-[420px]"
+                  className="px-3 py-1 rounded border flex items-center gap-1.5 font-display font-extrabold tracking-wide uppercase truncate max-w-[320px]"
                 >
                   {situationAccent === 'result' && <Trophy className="w-3.5 h-3.5 shrink-0" />}
                   <span className="truncate">{situationBannerText}</span>
@@ -677,39 +726,6 @@ export function CricketObsOverlay({
                 SUPER OVER: {shortA} {details.superOverTeamARuns}/{details.superOverTeamAWickets} · {shortB}{' '}
                 {details.superOverTeamBRuns}/{details.superOverTeamBWickets}
               </span>
-            )}
-
-            {showCreaseInfo && (
-              <div style={{ gap: m.sectionGapPx }} className="flex items-center min-w-0 font-medium flex-wrap">
-                {config.showBatters && (details.batsman1 || details.batsman2) && (
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {details.batsman1 && (
-                      <span className="truncate max-w-[200px] font-semibold">
-                        <span style={{ color: theme.accentPrimary }}>*</span> {details.batsman1}
-                      </span>
-                    )}
-                    {details.batsman2 && (
-                      <span style={{ color: theme.mutedText }} className="truncate max-w-[180px]">
-                        {details.batsman2}
-                      </span>
-                    )}
-                  </div>
-                )}
-                {config.showBowler && details.bowler && (
-                  <span
-                    style={{ borderColor: theme.divider }}
-                    className="truncate max-w-[220px] pl-3 border-l"
-                  >
-                    <span
-                      style={{ color: theme.mutedText, fontSize: m.metaLabelPx }}
-                      className="uppercase mr-1"
-                    >
-                      BWL
-                    </span>
-                    <span className="font-semibold">{details.bowler}</span>
-                  </span>
-                )}
-              </div>
             )}
 
             {isCompleted && score?.mvpPlayerName && (

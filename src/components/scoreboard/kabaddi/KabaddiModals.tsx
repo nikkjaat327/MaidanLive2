@@ -574,9 +574,9 @@ export function KabaddiPlayerOpsModal({
 
   useEffect(() => {
     if (open) {
-      setPlayerOutId(onCourt[0]?.playerId || '');
-      setPlayerInId(bench[0]?.playerId || '');
-      setTargetPlayerId(roster[0]?.playerId || '');
+      setPlayerOutId('');
+      setPlayerInId('');
+      setTargetPlayerId('');
     }
   }, [open, team]);
 
@@ -620,6 +620,7 @@ export function KabaddiPlayerOpsModal({
                     onChange={(e) => setPlayerOutId(e.target.value)}
                     className="w-full min-h-[40px] px-3 border border-slate-300 rounded-lg bg-white"
                   >
+                    <option value="">-- Select player leaving court --</option>
                     {onCourt.map((p) => (
                       <option key={p.playerId} value={p.playerId}>{p.name}</option>
                     ))}
@@ -632,6 +633,7 @@ export function KabaddiPlayerOpsModal({
                     onChange={(e) => setPlayerInId(e.target.value)}
                     className="w-full min-h-[40px] px-3 border border-slate-300 rounded-lg bg-white"
                   >
+                    <option value="">-- Select substitute --</option>
                     {bench.map((p) => (
                       <option key={p.playerId} value={p.playerId}>{p.name}</option>
                     ))}
@@ -662,6 +664,7 @@ export function KabaddiPlayerOpsModal({
                 onChange={(e) => setTargetPlayerId(e.target.value)}
                 className="w-full min-h-[40px] px-3 border border-slate-300 rounded-lg bg-white"
               >
+                <option value="">-- Select player --</option>
                 {roster.map((p) => (
                   <option key={p.playerId} value={p.playerId}>{p.name} ({p.status})</option>
                 ))}
@@ -752,7 +755,7 @@ export function KabaddiPlayerOpsModal({
                 type="button"
                 onClick={() => {
                   setInjuryStatus('INJURED');
-                  setTargetPlayerId(onCourt[0]?.playerId || '');
+                  setTargetPlayerId('');
                 }}
                 className={`min-h-[38px] rounded-lg text-xs font-bold border ${
                   injuryStatus === 'INJURED' ? 'bg-amber-500 text-slate-950 border-amber-500' : 'bg-white border-slate-300'
@@ -764,7 +767,7 @@ export function KabaddiPlayerOpsModal({
                 type="button"
                 onClick={() => {
                   setInjuryStatus('ON_COURT');
-                  setTargetPlayerId(injured[0]?.playerId || '');
+                  setTargetPlayerId('');
                 }}
                 className={`min-h-[38px] rounded-lg text-xs font-bold border ${
                   injuryStatus === 'ON_COURT' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-slate-300'
@@ -780,6 +783,7 @@ export function KabaddiPlayerOpsModal({
                 onChange={(e) => setTargetPlayerId(e.target.value)}
                 className="w-full min-h-[40px] px-3 border border-slate-300 rounded-lg bg-white"
               >
+                <option value="">-- Select player --</option>
                 {(injuryStatus === 'INJURED' ? onCourt : injured).map((p) => (
                   <option key={p.playerId} value={p.playerId}>{p.name}</option>
                 ))}

@@ -52,7 +52,7 @@ export function KabaddiBroadcastBar({
   const clock = eff.formattedClock;
 
   return (
-    <div className="w-full max-w-[740px] flex flex-col gap-2">
+    <div className="w-full flex flex-col gap-2">
       <KabaddiAnimations
         streamId={stream.id}
         teamAName={nameA}
@@ -71,7 +71,7 @@ export function KabaddiBroadcastBar({
       />
       <div className="w-full bg-slate-950/90 backdrop-blur-md text-white rounded-md shadow-xl overflow-hidden border border-white/10">
         {/* Main Broadcast Score Strip */}
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-2.5 sm:px-3.5 py-1.5">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-2.5 sm:px-3.5 py-1.5">
           {/* Team A */}
           <div className="flex items-center justify-between gap-2 min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">

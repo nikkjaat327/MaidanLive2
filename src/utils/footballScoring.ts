@@ -24,6 +24,9 @@ export interface FootballDetails {
   teamBRedCards: number;
   teamAFouls?: number;
   teamBFouls?: number;
+  kickoffTeam?: 'A' | 'B' | '';
+  tossWinner?: 'A' | 'B' | '';
+  tossDecision?: 'KICKOFF' | 'SIDE' | '';
   events: FootballTimelineEvent[];
 }
 
@@ -41,8 +44,34 @@ export function createInitialFootballDetails(): FootballDetails {
     teamBRedCards: 0,
     teamAFouls: 0,
     teamBFouls: 0,
+    kickoffTeam: '',
+    tossWinner: '',
+    tossDecision: '',
     events: [],
   };
+}
+
+export function hasFootballScoringStarted(
+  details?: Partial<FootballDetails> | null,
+  teamAScore = 0,
+  teamBScore = 0
+): boolean {
+  if ((teamAScore || 0) > 0 || (teamBScore || 0) > 0) return true;
+  if (!details) return false;
+  return Boolean(
+    (details.timerMinutes || 0) > 0 ||
+      (details.timerSeconds || 0) > 0 ||
+      (details.teamAPenalties || 0) > 0 ||
+      (details.teamBPenalties || 0) > 0 ||
+      (details.teamAYellowCards || 0) > 0 ||
+      (details.teamARedCards || 0) > 0 ||
+      (details.teamBYellowCards || 0) > 0 ||
+      (details.teamBRedCards || 0) > 0 ||
+      (details.teamAFouls || 0) > 0 ||
+      (details.teamBFouls || 0) > 0 ||
+      (details.half && details.half !== '1st Half') ||
+      (Array.isArray(details.events) && details.events.length > 0)
+  );
 }
 
 export type FootballEventType =
@@ -82,6 +111,12 @@ export type FootballActionPayload =
       timerMinutes?: number;
       timerSeconds?: number;
       extraTimeMinutes?: number;
+    }
+  | {
+      type: 'SET_PRE_MATCH_SETUP';
+      kickoffTeam?: 'A' | 'B' | '';
+      tossWinner?: 'A' | 'B' | '';
+      tossDecision?: 'KICKOFF' | 'SIDE' | '';
     };
 
 export function applyFootballAction(
@@ -279,6 +314,26 @@ export function applyFootballAction(
       if (action.timerSeconds !== undefined) next.timerSeconds = Math.max(0, Math.min(59, action.timerSeconds));
       if (action.extraTimeMinutes !== undefined) next.extraTimeMinutes = Math.max(0, Math.min(30, action.extraTimeMinutes));
       label = `Match time/period: ${next.half} (${next.timerMinutes}')`;
+      break;
+    }
+    case 'SET_PRE_MATCH_SETUP': {
+      eventCategory = 'META';
+      eventType = 'SET_PRE_MATCH_SETUP';
+      if (action.tossWinner !== undefined) next.tossWinner = action.tossWinner;
+      if (action.tossDecision !== undefined) next.tossDecision = action.tossDecision;
+      if (action.kickoffTeam !== undefined) {
+        next.kickoffTeam = action.kickoffTeam;
+      } else if (action.tossWinner === 'A' || action.tossWinner === 'B') {
+        next.kickoffTeam =
+          action.tossDecision === 'SIDE'
+            ? action.tossWinner === 'A'
+              ? 'B'
+              : 'A'
+            : action.tossWinner;
+      }
+      label = next.kickoffTeam
+        ? `Football Pre-Match: Team ${next.kickoffTeam} Kick-off`
+        : 'Football pre-match setup updated';
       break;
     }
   }

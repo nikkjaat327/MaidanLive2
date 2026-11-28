@@ -46,6 +46,8 @@ export interface VolleyballDetails {
   reopenedCount: number;
   lastReopenedAt: string | null;
   allowCustomMultiPoint: boolean;
+  tossWinner?: 'A' | 'B' | '';
+  tossDecision?: 'SERVE' | 'RECEIVE' | '';
   eventHistory: VolleyballEventItem[];
 }
 
@@ -265,6 +267,8 @@ export function createInitialVolleyballDetails(
     reopenedCount: 0,
     lastReopenedAt: null,
     allowCustomMultiPoint: false,
+    tossWinner: '',
+    tossDecision: '',
     eventHistory: [],
   };
 }
@@ -368,8 +372,29 @@ export function normalizeVolleyballDetails(
     reopenedCount: Math.max(0, Math.trunc(Number(src.reopenedCount) || 0)),
     lastReopenedAt: typeof src.lastReopenedAt === 'string' ? src.lastReopenedAt : null,
     allowCustomMultiPoint: Boolean(src.allowCustomMultiPoint),
+    tossWinner: src.tossWinner === 'A' || src.tossWinner === 'B' ? src.tossWinner : '',
+    tossDecision:
+      src.tossDecision === 'SERVE' || src.tossDecision === 'RECEIVE' ? src.tossDecision : '',
     eventHistory: Array.isArray(src.eventHistory) ? src.eventHistory.slice(0, 50) : [],
   };
+}
+
+export function hasVolleyballScoringStarted(
+  details?: Partial<VolleyballDetails> | Record<string, unknown> | null,
+  teamAScore = 0,
+  teamBScore = 0
+): boolean {
+  if ((teamAScore || 0) > 0 || (teamBScore || 0) > 0) return true;
+  if (!details) return false;
+  const d = normalizeVolleyballDetails(details);
+  return Boolean(
+    d.currentSet > 1 ||
+      d.teamASetsWon > 0 ||
+      d.teamBSetsWon > 0 ||
+      d.matchCompleted ||
+      d.eventHistory.length > 0 ||
+      d.setScores.some((s) => s.teamA > 0 || s.teamB > 0 || s.winner === 'A' || s.winner === 'B')
+  );
 }
 
 export function getVolleyballCompletionEligibility(details: VolleyballDetails): {
@@ -444,7 +469,13 @@ export type VolleyballActionPayload =
   | { type: 'SET_BEST_OF'; bestOfSets: number }
   | { type: 'UPDATE_RULES'; rules: Partial<VolleyballRules> }
   | { type: 'SET_ADVANTAGE'; team: 'A' | 'B' | null }
-  | { type: 'SET_CUSTOM_MULTI_POINT'; enabled: boolean };
+  | { type: 'SET_CUSTOM_MULTI_POINT'; enabled: boolean }
+  | {
+      type: 'SET_PRE_MATCH_SETUP';
+      servingTeam?: 'A' | 'B';
+      tossWinner?: 'A' | 'B' | '';
+      tossDecision?: 'SERVE' | 'RECEIVE' | '';
+    };
 
 export interface ApplyVolleyballActionResult {
   details: VolleyballDetails;
@@ -886,6 +917,22 @@ export function applyVolleyballAction(
     eventCategory = 'META';
     next.allowCustomMultiPoint = action.enabled;
     label = `Volleyball multi-point correction mode ${action.enabled ? 'enabled' : 'disabled'}`;
+  } else if (action.type === 'SET_PRE_MATCH_SETUP') {
+    eventCategory = 'META';
+    eventType = 'SET_PRE_MATCH_SETUP';
+    if (action.tossWinner !== undefined) next.tossWinner = action.tossWinner;
+    if (action.tossDecision !== undefined) next.tossDecision = action.tossDecision;
+    if (action.servingTeam === 'A' || action.servingTeam === 'B') {
+      next.servingTeam = action.servingTeam;
+    } else if (action.tossWinner === 'A' || action.tossWinner === 'B') {
+      next.servingTeam =
+        action.tossDecision === 'RECEIVE'
+          ? action.tossWinner === 'A'
+            ? 'B'
+            : 'A'
+          : action.tossWinner;
+    }
+    label = `Volleyball Pre-Match: Team ${next.servingTeam} serves first`;
   }
 
   return {

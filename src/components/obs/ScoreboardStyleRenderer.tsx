@@ -94,12 +94,14 @@ function TelemetrySubRow({
   className?: string;
   style?: React.CSSProperties;
 }) {
+  const showLegacyBatters = !vm.isCricket && Boolean(vm.battersText);
+  const showLegacyBowler = !vm.isCricket && Boolean(vm.bowlerText);
   const hasSplitStats = Boolean(vm.leftStatsText || vm.rightStatsText);
   const hasContent =
     hasSplitStats ||
     vm.tournamentName ||
-    vm.battersText ||
-    vm.bowlerText ||
+    showLegacyBatters ||
+    showLegacyBowler ||
     vm.statChips.length > 0 ||
     vm.recentBalls.length > 0 ||
     vm.situationBanner ||
@@ -173,10 +175,10 @@ function TelemetrySubRow({
             {vm.tournamentName}
           </span>
         )}
-        {vm.battersText && (
+        {showLegacyBatters && (
           <span className="font-semibold truncate">{vm.battersText}</span>
         )}
-        {vm.bowlerText && (
+        {showLegacyBowler && (
           <span style={{ color: theme.mutedText }} className="font-semibold truncate">
             {vm.bowlerText}
           </span>
@@ -396,111 +398,129 @@ function AlternativeScoreboardStyles({
             isScoreOnly ? 'inline-flex' : 'w-full flex'
           } items-center justify-between rounded-full border-2 shadow-[0_14px_40px_rgba(0,0,0,0.65)] backdrop-blur-xl`}
         >
-          {/* Left Team Pill */}
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <span
-              style={{ background: vm.primaryAccent }}
-              className="w-2.5 h-2.5 rounded-full shrink-0 shadow"
-            />
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <div className="min-w-0">
-              <span
-                style={{ fontSize: m.teamNameFontPx }}
-                className="font-display font-extrabold uppercase tracking-wide truncate block leading-none"
-              >
-                {teamADisplay}
-              </span>
-              {vm.primaryServing && (
-                <span className="text-[9px] font-mono font-bold text-amber-400 uppercase">SERVING</span>
-              )}
-            </div>
-            <span
-              key={`fp-a-${pulseKey}`}
-              style={{
-                background: theme.scorePillBg,
-                color: theme.scorePillText,
-                fontSize: m.scoreFontPx,
-                paddingLeft: m.scorePillPadX,
-                paddingRight: m.scorePillPadX,
-                paddingTop: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
-                paddingBottom: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
-              }}
-              className="obs-score-pop rounded-full font-mono tabular-nums font-extrabold leading-none ml-auto shrink-0 border border-white/15"
-            >
-              {vm.primaryScore}
-            </span>
-          </div>
-
-          {/* Center Orb */}
           <div
-            style={{
-              background: theme.brandBg,
-              color: theme.brandText,
-              paddingLeft: m.pillPadX * 1.4,
-              paddingRight: m.pillPadX * 1.4,
-              paddingTop: Math.max(5, Math.round(m.stripPadY * 0.65)),
-              paddingBottom: Math.max(5, Math.round(m.stripPadY * 0.65)),
-            }}
-            className="rounded-full flex flex-col items-center justify-center shrink-0 shadow-lg border border-white/25"
+            style={{ gap: m.sectionGapPx }}
+            className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
           >
-            {vm.centerPrimary ? (
-              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-extrabold leading-none whitespace-nowrap">
-                {vm.centerPrimary}
-              </span>
-            ) : !(!isScoreOnly && vm.centerSecondary) ? (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
-                VS
-              </span>
-            ) : null}
-            {!isScoreOnly && vm.centerSecondary && (
-              <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-wider opacity-85 leading-none whitespace-nowrap ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
-                {vm.centerSecondary}
-              </span>
-            )}
-          </div>
-
-          {/* Right Team Pill */}
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <span
-              key={`fp-b-${pulseKey}`}
-              style={{
-                background: theme.scorePillBg,
-                color: theme.scorePillText,
-                fontSize: m.scoreFontPx,
-                paddingLeft: m.scorePillPadX,
-                paddingRight: m.scorePillPadX,
-                paddingTop: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
-                paddingBottom: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
-              }}
-              className="obs-score-pop rounded-full font-mono tabular-nums font-extrabold leading-none mr-auto shrink-0 border border-white/15"
-            >
-              {vm.secondaryScore}
-            </span>
-            <div className="min-w-0 text-right">
+            {/* Left Team Pill */}
+            <div className="flex items-center gap-2.5 min-w-0">
               <span
-                style={{ fontSize: m.teamNameFontPx }}
-                className="font-display font-extrabold uppercase tracking-wide truncate block leading-none"
+                style={{ background: vm.primaryAccent }}
+                className="w-2.5 h-2.5 rounded-full shrink-0 shadow"
+              />
+              <ObsTeamBadge
+                logoUrl={vm.primaryLogo}
+                shortName={vm.primaryShort}
+                accentColor={vm.primaryAccent}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos}
+              />
+              <div className="min-w-0 flex-1">
+                <span
+                  style={{ fontSize: m.teamNameFontPx }}
+                  className="font-display font-extrabold uppercase tracking-wide truncate block leading-none"
+                >
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+                {vm.primaryServing && (
+                  <span className="text-[9px] font-mono font-bold text-amber-400 uppercase block">SERVING</span>
+                )}
+              </div>
+              <span
+                key={`fp-a-${pulseKey}`}
+                style={{
+                  background: theme.scorePillBg,
+                  color: theme.scorePillText,
+                  fontSize: m.scoreFontPx,
+                  paddingLeft: m.scorePillPadX,
+                  paddingRight: m.scorePillPadX,
+                  paddingTop: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
+                  paddingBottom: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
+                }}
+                className="obs-score-pop rounded-full font-mono tabular-nums font-extrabold leading-none shrink-0 border border-white/15"
               >
-                {teamBDisplay}
+                {vm.primaryScore}
               </span>
-              {!vm.isCricket && vm.secondaryServing && (
-                <span className="text-[9px] font-mono font-bold text-amber-400 uppercase">SERVING</span>
+            </div>
+
+            {/* Center Orb */}
+            <div
+              style={{
+                background: theme.brandBg,
+                color: theme.brandText,
+                paddingLeft: m.pillPadX * 1.4,
+                paddingRight: m.pillPadX * 1.4,
+                paddingTop: Math.max(5, Math.round(m.stripPadY * 0.65)),
+                paddingBottom: Math.max(5, Math.round(m.stripPadY * 0.65)),
+              }}
+              className="rounded-full flex flex-col items-center justify-center shrink-0 shadow-lg border border-white/25"
+            >
+              {vm.centerPrimary ? (
+                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-extrabold leading-none whitespace-nowrap">
+                  {vm.centerPrimary}
+                </span>
+              ) : !(!isScoreOnly && vm.centerSecondary) ? (
+                <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
+                  VS
+                </span>
+              ) : null}
+              {!isScoreOnly && vm.centerSecondary && (
+                <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-wider opacity-85 leading-none whitespace-nowrap ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
+                  {vm.centerSecondary}
+                </span>
               )}
             </div>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            {config.showLiveIndicator && !isScoreOnly && (
+
+            {/* Right Team Pill */}
+            <div className="flex items-center gap-2.5 min-w-0 justify-end">
+              <span
+                key={`fp-b-${pulseKey}`}
+                style={{
+                  background: theme.scorePillBg,
+                  color: theme.scorePillText,
+                  fontSize: m.scoreFontPx,
+                  paddingLeft: m.scorePillPadX,
+                  paddingRight: m.scorePillPadX,
+                  paddingTop: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
+                  paddingBottom: Math.max(4, Math.round(m.scorePillPadY * 0.7)),
+                }}
+                className="obs-score-pop rounded-full font-mono tabular-nums font-extrabold leading-none shrink-0 border border-white/15"
+              >
+                {vm.secondaryScore}
+              </span>
+              <div className="min-w-0 flex-1 text-right">
+                <span
+                  style={{ fontSize: m.teamNameFontPx }}
+                  className="font-display font-extrabold uppercase tracking-wide truncate block leading-none"
+                >
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+                {!vm.isCricket && vm.secondaryServing && (
+                  <span className="text-[9px] font-mono font-bold text-amber-400 uppercase block">SERVING</span>
+                )}
+              </div>
+              <ObsTeamBadge
+                logoUrl={vm.secondaryLogo}
+                shortName={vm.secondaryShort}
+                accentColor={vm.secondaryAccent}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos}
+              />
+            </div>
+          </div>
+
+          {config.showLiveIndicator && !isScoreOnly && (
+            <div className="shrink-0">
               <ObsLiveStatusPill
                 label={vm.statusPillLabel}
                 isLive={vm.showLiveDot}
@@ -509,8 +529,8 @@ function AlternativeScoreboardStyles({
                 padX={m.pillPadX}
                 padY={m.pillPadY}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Floating Sub Capsule */}
@@ -556,118 +576,133 @@ function AlternativeScoreboardStyles({
             }}
             className="flex items-center justify-between min-w-0"
           >
-            {/* Team A Angular Wing */}
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <div
-                style={{
-                  background: vm.primaryAccent,
-                  transform: 'skewX(-14deg)',
-                }}
-                className="w-2.5 h-8 shrink-0"
-              />
-              <ObsTeamBadge
-                logoUrl={vm.primaryLogo}
-                shortName={vm.primaryShort}
-                accentColor={vm.primaryAccent}
-                sizePx={m.logoMdPx}
-                showLogo={config.showTeamLogos}
-              />
-              <div className="min-w-0">
-                <span
-                  style={{ fontSize: m.teamNameFontPx }}
-                  className="font-display font-black uppercase tracking-wider block truncate leading-none"
-                >
-                  {teamADisplay}
-                </span>
-                {!isScoreOnly && (
-                  <span style={{ color: theme.mutedText, fontSize: m.metaLabelPx }} className="font-mono uppercase block mt-0.5 truncate">
-                    {vm.primarySub}
-                  </span>
-                )}
-              </div>
-              <div
-                key={`ea-a-${pulseKey}`}
-                style={{
-                  background: theme.scorePillBg,
-                  color: theme.scorePillText,
-                  fontSize: m.scoreFontPx,
-                  transform: 'skewX(-12deg)',
-                  paddingLeft: m.scorePillPadX * 1.1,
-                  paddingRight: m.scorePillPadX * 1.1,
-                  paddingTop: m.scorePillPadY,
-                  paddingBottom: m.scorePillPadY,
-                }}
-                className="obs-score-pop ml-auto font-mono tabular-nums font-black leading-none shrink-0 border-l-4 border-amber-400"
-              >
-                <span style={{ transform: 'skewX(12deg)' }} className="inline-block">
-                  {vm.primaryScore}
-                </span>
-              </div>
-            </div>
-
-            {/* Hexagonal Center Core */}
             <div
-              style={{
-                background: 'linear-gradient(135deg, #7C3AED 0%, #4C1D95 100%)',
-                clipPath: 'polygon(12% 0%, 88% 0%, 100% 50%, 88% 100%, 12% 100%, 0% 50%)',
-                paddingLeft: m.stripPadX * 1.25,
-                paddingRight: m.stripPadX * 1.25,
-                paddingTop: m.stripPadY * 0.75,
-                paddingBottom: m.stripPadY * 0.75,
-              }}
-              className="flex flex-col items-center justify-center text-white shrink-0"
+              style={{ gap: m.sectionGapPx }}
+              className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
             >
-              <span style={{ fontSize: m.metaLabelPx }} className="font-mono font-bold uppercase tracking-widest text-purple-200 leading-none">
-                {vm.sportLabel}
-              </span>
-              {vm.centerPrimary && (
-                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-tight whitespace-nowrap">
-                  {vm.centerPrimary}
-                </span>
-              )}
-            </div>
-
-            {/* Team B Angular Wing */}
-            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-              <div
-                key={`ea-b-${pulseKey}`}
-                style={{
-                  background: theme.scorePillBg,
-                  color: theme.scorePillText,
-                  fontSize: m.scoreFontPx,
-                  transform: 'skewX(-12deg)',
-                  paddingLeft: m.scorePillPadX * 1.1,
-                  paddingRight: m.scorePillPadX * 1.1,
-                  paddingTop: m.scorePillPadY,
-                  paddingBottom: m.scorePillPadY,
-                }}
-                className="obs-score-pop mr-auto font-mono tabular-nums font-black leading-none shrink-0 border-r-4 border-sky-400"
-              >
-                <span style={{ transform: 'skewX(12deg)' }} className="inline-block">
-                  {vm.secondaryScore}
-                </span>
-              </div>
-              <div className="min-w-0 text-right">
-                <span
-                  style={{ fontSize: m.teamNameFontPx }}
-                  className="font-display font-black uppercase tracking-wider block truncate leading-none"
+              {/* Team A Angular Wing */}
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  style={{
+                    background: vm.primaryAccent,
+                    transform: 'skewX(-14deg)',
+                  }}
+                  className="w-2.5 h-8 shrink-0"
+                />
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0 flex-1">
+                  <span
+                    style={{ fontSize: m.teamNameFontPx }}
+                    className="font-display font-black uppercase tracking-wider block truncate leading-none"
+                  >
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && (
+                    <span style={{ color: theme.mutedText, fontSize: m.metaLabelPx }} className="font-mono uppercase block mt-0.5 truncate">
+                      {vm.isCricket && vm.leftPlayerLine ? vm.leftPlayerLine : vm.primarySub}
+                    </span>
+                  )}
+                </div>
+                <div
+                  key={`ea-a-${pulseKey}`}
+                  style={{
+                    background: theme.scorePillBg,
+                    color: theme.scorePillText,
+                    fontSize: m.scoreFontPx,
+                    transform: 'skewX(-12deg)',
+                    paddingLeft: m.scorePillPadX * 1.1,
+                    paddingRight: m.scorePillPadX * 1.1,
+                    paddingTop: m.scorePillPadY,
+                    paddingBottom: m.scorePillPadY,
+                  }}
+                  className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0 border-l-4 border-amber-400"
                 >
-                  {teamBDisplay}
+                  <span style={{ transform: 'skewX(12deg)' }} className="inline-block">
+                    {vm.primaryScore}
+                  </span>
+                </div>
+              </div>
+
+              {/* Hexagonal Center Core */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, #7C3AED 0%, #4C1D95 100%)',
+                  clipPath: 'polygon(12% 0%, 88% 0%, 100% 50%, 88% 100%, 12% 100%, 0% 50%)',
+                  paddingLeft: m.stripPadX * 1.25,
+                  paddingRight: m.stripPadX * 1.25,
+                  paddingTop: m.stripPadY * 0.75,
+                  paddingBottom: m.stripPadY * 0.75,
+                }}
+                className="flex flex-col items-center justify-center text-white shrink-0"
+              >
+                <span style={{ fontSize: m.metaLabelPx }} className="font-mono font-bold uppercase tracking-widest text-purple-200 leading-none">
+                  {vm.sportLabel}
                 </span>
-                {!isScoreOnly && (
-                  <span style={{ color: theme.mutedText, fontSize: m.metaLabelPx }} className="font-mono uppercase block mt-0.5 truncate">
-                    {vm.secondarySub}
+                {vm.centerPrimary && (
+                  <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-tight whitespace-nowrap">
+                    {vm.centerPrimary}
                   </span>
                 )}
               </div>
-              <ObsTeamBadge
-                logoUrl={vm.secondaryLogo}
-                shortName={vm.secondaryShort}
-                accentColor={vm.secondaryAccent}
-                sizePx={m.logoMdPx}
-                showLogo={config.showTeamLogos}
-              />
-              {config.showLiveIndicator && (
+
+              {/* Team B Angular Wing */}
+              <div className="flex items-center gap-2.5 min-w-0 justify-end">
+                <div
+                  key={`ea-b-${pulseKey}`}
+                  style={{
+                    background: theme.scorePillBg,
+                    color: theme.scorePillText,
+                    fontSize: m.scoreFontPx,
+                    transform: 'skewX(-12deg)',
+                    paddingLeft: m.scorePillPadX * 1.1,
+                    paddingRight: m.scorePillPadX * 1.1,
+                    paddingTop: m.scorePillPadY,
+                    paddingBottom: m.scorePillPadY,
+                  }}
+                  className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0 border-r-4 border-sky-400"
+                >
+                  <span style={{ transform: 'skewX(12deg)' }} className="inline-block">
+                    {vm.secondaryScore}
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1 text-right">
+                  <span
+                    style={{ fontSize: m.teamNameFontPx }}
+                    className="font-display font-black uppercase tracking-wider block truncate leading-none"
+                  >
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && (
+                    <span style={{ color: theme.mutedText, fontSize: m.metaLabelPx }} className="font-mono uppercase block mt-0.5 truncate">
+                      {vm.isCricket && vm.rightPlayerLine ? vm.rightPlayerLine : vm.secondarySub}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div
+                  style={{
+                    background: vm.secondaryAccent,
+                    transform: 'skewX(-14deg)',
+                  }}
+                  className="w-2.5 h-8 shrink-0"
+                />
+              </div>
+            </div>
+
+            {config.showLiveIndicator && (
+              <div className="shrink-0">
                 <ObsLiveStatusPill
                   label={vm.statusPillLabel}
                   isLive={vm.showLiveDot}
@@ -676,15 +711,8 @@ function AlternativeScoreboardStyles({
                   padX={m.pillPadX}
                   padY={m.pillPadY}
                 />
-              )}
-              <div
-                style={{
-                  background: vm.secondaryAccent,
-                  transform: 'skewX(-14deg)',
-                }}
-                className="w-2.5 h-8 shrink-0"
-              />
-            </div>
+              </div>
+            )}
           </div>
 
           <TelemetrySubRow
@@ -729,22 +757,31 @@ function AlternativeScoreboardStyles({
             </div>
           )}
 
-          <div className="flex items-center gap-3 min-w-0 flex-1 justify-center">
-            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end px-3 py-1.5 rounded-xl bg-white/5 border border-white/10">
-              <ObsTeamBadge
-                logoUrl={vm.primaryLogo}
-                shortName={vm.primaryShort}
-                accentColor={vm.primaryAccent}
-                sizePx={m.logoSmPx}
-                showLogo={config.showTeamLogos}
-              />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamADisplay}
-              </span>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0 justify-between px-3 py-1.5 rounded-xl bg-white/5 border border-white/10">
+              <div className="flex items-center gap-2 min-w-0">
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && vm.leftPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                      {vm.leftPlayerLine}
+                    </span>
+                  )}
+                </div>
+              </div>
               <span
                 key={`sg-a-${pulseKey}`}
                 style={{ fontSize: m.scoreFontPx, color: theme.accentPrimary }}
-                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0 ml-2"
+                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0"
               >
                 {vm.primaryScore}
               </span>
@@ -767,24 +804,33 @@ function AlternativeScoreboardStyles({
               )}
             </div>
 
-            <div className="flex items-center gap-2 min-w-0 flex-1 justify-start px-3 py-1.5 rounded-xl bg-white/5 border border-white/10">
+            <div className="flex items-center gap-2 min-w-0 justify-between px-3 py-1.5 rounded-xl bg-white/5 border border-white/10">
               <span
                 key={`sg-b-${pulseKey}`}
                 style={{ fontSize: m.scoreFontPx, color: theme.accentSecondary }}
-                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0 mr-2"
+                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0"
               >
                 {vm.secondaryScore}
               </span>
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamBDisplay}
-              </span>
-              <ObsTeamBadge
-                logoUrl={vm.secondaryLogo}
-                shortName={vm.secondaryShort}
-                accentColor={vm.secondaryAccent}
-                sizePx={m.logoSmPx}
-                showLogo={config.showTeamLogos}
-              />
+              <div className="flex items-center gap-2 min-w-0 justify-end text-right">
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && vm.rightPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                      {vm.rightPlayerLine}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+              </div>
             </div>
           </div>
 
@@ -841,92 +887,112 @@ function AlternativeScoreboardStyles({
             />
           )}
 
-          {/* Team A Solid Color Block */}
-          <div
-            style={{
-              background: vm.primaryAccent,
-              color: '#FFFFFF',
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className="flex items-center gap-2 min-w-0 flex-1"
-          >
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-tight truncate">
-              {teamADisplay}
-            </span>
-            <span
-              key={`et-a-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx }}
-              className="obs-score-pop font-mono tabular-nums font-black ml-auto shrink-0 leading-none"
+          <div className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
+            {/* Team A Solid Color Block */}
+            <div
+              style={{
+                background: vm.primaryAccent,
+                color: '#FFFFFF',
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="flex items-center justify-between gap-2 min-w-0"
             >
-              {vm.primaryScore}
-            </span>
-          </div>
+              <div className="flex items-center gap-2 min-w-0">
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-tight truncate block leading-none">
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && vm.leftPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-white/90 truncate block mt-0.5 leading-tight">
+                      {vm.leftPlayerLine}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span
+                key={`et-a-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx }}
+                className="obs-score-pop font-mono tabular-nums font-black shrink-0 leading-none"
+              >
+                {vm.primaryScore}
+              </span>
+            </div>
 
-          {/* Center Flat Divider Cell */}
-          <div
-            style={{
-              background: theme.isLight ? '#0F172A' : '#020617',
-              color: '#F8FAFC',
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-            }}
-            className="flex flex-col items-center justify-center border-x border-white/20 shrink-0"
-          >
-            {vm.centerPrimary ? (
-              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
-                {vm.centerPrimary}
-              </span>
-            ) : !(!isScoreOnly && vm.centerSecondary) ? (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
-                VS
-              </span>
-            ) : null}
-            {!isScoreOnly && vm.centerSecondary && (
-              <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-widest text-amber-400 leading-none ${vm.centerPrimary ? 'mt-1' : ''}`}>
-                {vm.centerSecondary}
-              </span>
-            )}
-          </div>
-
-          {/* Team B Solid Color Block */}
-          <div
-            style={{
-              background: vm.secondaryAccent,
-              color: '#FFFFFF',
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className="flex items-center gap-2 min-w-0 flex-1 justify-end"
-          >
-            <span
-              key={`et-b-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx }}
-              className="obs-score-pop font-mono tabular-nums font-black mr-auto shrink-0 leading-none"
+            {/* Center Flat Divider Cell */}
+            <div
+              style={{
+                background: theme.isLight ? '#0F172A' : '#020617',
+                color: '#F8FAFC',
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+              }}
+              className="flex flex-col items-center justify-center border-x border-white/20 shrink-0"
             >
-              {vm.secondaryScore}
-            </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-tight truncate">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
+              {vm.centerPrimary ? (
+                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
+                  {vm.centerPrimary}
+                </span>
+              ) : !(!isScoreOnly && vm.centerSecondary) ? (
+                <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase tracking-wider leading-none whitespace-nowrap">
+                  VS
+                </span>
+              ) : null}
+              {!isScoreOnly && vm.centerSecondary && (
+                <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase tracking-widest text-amber-400 leading-none ${vm.centerPrimary ? 'mt-1' : ''}`}>
+                  {vm.centerSecondary}
+                </span>
+              )}
+            </div>
+
+            {/* Team B Solid Color Block */}
+            <div
+              style={{
+                background: vm.secondaryAccent,
+                color: '#FFFFFF',
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="flex items-center justify-between gap-2 min-w-0"
+            >
+              <span
+                key={`et-b-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx }}
+                className="obs-score-pop font-mono tabular-nums font-black shrink-0 leading-none"
+              >
+                {vm.secondaryScore}
+              </span>
+              <div className="flex items-center gap-2 min-w-0 justify-end text-right">
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-tight truncate block leading-none">
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && vm.rightPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-white/90 truncate block mt-0.5 leading-tight">
+                      {vm.rightPlayerLine}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+              </div>
+            </div>
           </div>
 
           {config.showLiveIndicator && (
@@ -962,7 +1028,7 @@ function AlternativeScoreboardStyles({
   if (styleId === 'split_versus_card') {
     return wrapWithKabaddi(
       <div className={`${isScoreOnly ? 'inline-flex' : 'w-full flex'} flex-col items-center`}>
-        <div className="w-full flex items-end justify-center gap-0">
+        <div className="w-full grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-0">
           {/* Left Wing */}
           <div
             style={{
@@ -974,7 +1040,7 @@ function AlternativeScoreboardStyles({
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-l-xl border-b-4 border-l border-t shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-l-xl border-b-4 border-l border-t shadow-xl"
           >
             <div className="flex items-center gap-2 min-w-0">
               <ObsTeamBadge
@@ -990,7 +1056,7 @@ function AlternativeScoreboardStyles({
                 </span>
                 {!isScoreOnly && (
                   <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
-                    {vm.primarySub}
+                    {vm.isCricket && vm.leftPlayerLine ? vm.leftPlayerLine : vm.primarySub}
                   </span>
                 )}
               </div>
@@ -1049,7 +1115,7 @@ function AlternativeScoreboardStyles({
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-r-xl border-b-4 border-r border-t shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-r-xl border-b-4 border-r border-t shadow-xl"
           >
             <span
               key={`svc-b-${pulseKey}`}
@@ -1065,7 +1131,7 @@ function AlternativeScoreboardStyles({
                 </span>
                 {!isScoreOnly && (
                   <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
-                    {vm.secondarySub}
+                    {vm.isCricket && vm.rightPlayerLine ? vm.rightPlayerLine : vm.secondarySub}
                   </span>
                 )}
               </div>
@@ -1143,9 +1209,16 @@ function AlternativeScoreboardStyles({
                 sizePx={m.logoSmPx}
                 showLogo={config.showTeamLogos}
               />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamADisplay}
-              </span>
+              <div className="min-w-0">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex items-baseline gap-1.5 shrink-0">
               <span
@@ -1171,9 +1244,16 @@ function AlternativeScoreboardStyles({
                 sizePx={m.logoSmPx}
                 showLogo={config.showTeamLogos}
               />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamBDisplay}
-              </span>
+              <div className="min-w-0">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex items-baseline gap-1.5 shrink-0">
               <span
@@ -1200,13 +1280,13 @@ function AlternativeScoreboardStyles({
             <span className="truncate">{vm.leftStatsText}</span>
             <span className="truncate text-right">{vm.rightStatsText}</span>
           </div>
-        ) : config.mode === 'full' && (vm.situationBanner || vm.recentBalls.length > 0 || vm.battersText) ? (
+        ) : config.mode === 'full' && (vm.situationBanner || vm.recentBalls.length > 0 || (!vm.isCricket && vm.battersText)) ? (
           <div
             style={{ background: theme.subStripBg, borderColor: theme.subStripBorder, fontSize: m.metaLabelPx }}
             className="px-3 py-1 border-t flex items-center justify-between gap-2"
           >
             <span style={{ color: theme.chaseHighlightText }} className="font-bold uppercase truncate">
-              {vm.situationBanner || vm.battersText || vm.bowlerText}
+              {vm.situationBanner || (!vm.isCricket ? vm.battersText || vm.bowlerText : '')}
             </span>
             <BallChips balls={vm.recentBalls} chipPx={Math.max(14, m.ballChipPx - 3)} fontPx={Math.max(8, m.ballChipFontPx - 1)} isLight={theme.isLight} />
           </div>
@@ -1259,63 +1339,70 @@ function AlternativeScoreboardStyles({
           }}
           className="flex items-center justify-between min-w-0"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            <div className="min-w-0">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
-                {teamADisplay}
-              </span>
-              {!isScoreOnly && (
-                <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
-                  {vm.primarySub}
-                </span>
-              )}
-            </div>
-          </div>
-
           <div
-            key={`cm-${pulseKey}`}
-            style={{
-              background: theme.scorePillBg,
-              color: theme.scorePillText,
-              borderColor: 'rgba(251, 191, 36, 0.45)',
-              paddingLeft: m.scorePillPadX * 1.25,
-              paddingRight: m.scorePillPadX * 1.25,
-              paddingTop: m.scorePillPadY,
-              paddingBottom: m.scorePillPadY,
-            }}
-            className="obs-score-pop rounded-lg border flex items-center gap-3 font-mono tabular-nums font-black shrink-0"
+            style={{ gap: m.sectionGapPx }}
+            className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
           >
-            <span style={{ fontSize: m.scoreFontPx }} className="leading-none">{vm.primaryScore}</span>
-            <span className="text-amber-400 text-xs font-display font-black">VS</span>
-            <span style={{ fontSize: m.scoreFontPx }} className="leading-none">{vm.secondaryScore}</span>
-          </div>
-
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <div className="min-w-0 text-right">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
-                {teamBDisplay}
-              </span>
-              {!isScoreOnly && (
-                <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
-                  {vm.secondarySub}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <ObsTeamBadge
+                logoUrl={vm.primaryLogo}
+                shortName={vm.primaryShort}
+                accentColor={vm.primaryAccent}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
                 </span>
-              )}
+                {!isScoreOnly && (
+                  <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
+                    {vm.isCricket && vm.leftPlayerLine ? vm.leftPlayerLine : vm.primarySub}
+                  </span>
+                )}
+              </div>
             </div>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            {config.showLiveIndicator && (
+
+            <div
+              key={`cm-${pulseKey}`}
+              style={{
+                background: theme.scorePillBg,
+                color: theme.scorePillText,
+                borderColor: 'rgba(251, 191, 36, 0.45)',
+                paddingLeft: m.scorePillPadX * 1.25,
+                paddingRight: m.scorePillPadX * 1.25,
+                paddingTop: m.scorePillPadY,
+                paddingBottom: m.scorePillPadY,
+              }}
+              className="obs-score-pop rounded-lg border flex items-center gap-3 font-mono tabular-nums font-black shrink-0"
+            >
+              <span style={{ fontSize: m.scoreFontPx }} className="leading-none">{vm.primaryScore}</span>
+              <span className="text-amber-400 text-xs font-display font-black">VS</span>
+              <span style={{ fontSize: m.scoreFontPx }} className="leading-none">{vm.secondaryScore}</span>
+            </div>
+
+            <div className="flex items-center gap-2.5 min-w-0 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && (
+                  <span style={{ fontSize: m.metaLabelPx, color: theme.mutedText }} className="font-mono block mt-0.5 truncate">
+                    {vm.isCricket && vm.rightPlayerLine ? vm.rightPlayerLine : vm.secondarySub}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge
+                logoUrl={vm.secondaryLogo}
+                shortName={vm.secondaryShort}
+                accentColor={vm.secondaryAccent}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+            </div>
+          </div>
+          {config.showLiveIndicator && (
+            <div className="shrink-0">
               <ObsLiveStatusPill
                 label={vm.statusPillLabel}
                 isLive={vm.showLiveDot}
@@ -1324,8 +1411,8 @@ function AlternativeScoreboardStyles({
                 padX={m.pillPadX}
                 padY={m.pillPadY}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <TelemetrySubRow
@@ -1376,9 +1463,16 @@ function AlternativeScoreboardStyles({
                 sizePx={m.logoSmPx}
                 showLogo={config.showTeamLogos}
               />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamADisplay}
-              </span>
+              <div className="min-w-0">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
               {vm.primaryServing && <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />}
             </div>
             <div className="flex items-baseline gap-2 shrink-0">
@@ -1410,9 +1504,16 @@ function AlternativeScoreboardStyles({
                 sizePx={m.logoSmPx}
                 showLogo={config.showTeamLogos}
               />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-                {teamBDisplay}
-              </span>
+              <div className="min-w-0">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
               {vm.secondaryServing && <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />}
             </div>
             <div className="flex items-baseline gap-2 shrink-0">
@@ -1474,9 +1575,9 @@ function AlternativeScoreboardStyles({
                 <span className="truncate">{vm.leftStatsText}</span>
                 <span className="truncate text-right">{vm.rightStatsText}</span>
               </div>
-            ) : config.mode === 'full' && (vm.situationBanner || vm.battersText || vm.statChips.length > 0) ? (
+            ) : config.mode === 'full' && (vm.situationBanner || (!vm.isCricket && vm.battersText) || vm.statChips.length > 0) ? (
               <p style={{ fontSize: m.metaLabelPx, color: theme.secondaryText }} className="font-mono truncate">
-                {vm.situationBanner || vm.battersText || vm.statChips.map((c) => `${c.label} ${c.value}`).join(' · ')}
+                {vm.situationBanner || (!vm.isCricket ? vm.battersText : '') || vm.statChips.map((c) => `${c.label} ${c.value}`).join(' · ')}
               </p>
             ) : null}
             {config.mode === 'full' && vm.recentBalls.length > 0 && (
@@ -1494,7 +1595,7 @@ function AlternativeScoreboardStyles({
   if (styleId === 'dynamic_capsule') {
     return wrapWithKabaddi(
       <div className={`${isScoreOnly ? 'inline-flex' : 'w-full flex'} flex-col items-center gap-1.5`}>
-        <div className="w-full flex flex-wrap items-center justify-center gap-2">
+        <div className="w-full flex items-center gap-2">
           {/* Pod 1: Brand + Live Status */}
           {!isScoreOnly && (
             <div
@@ -1518,94 +1619,114 @@ function AlternativeScoreboardStyles({
             </div>
           )}
 
-          {/* Pod 2: Primary Team */}
-          <div
-            style={{
-              background: theme.barBg,
-              borderColor: vm.primaryAccent,
-              color: theme.primaryText,
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: Math.round(m.stripPadY * 0.8),
-              paddingBottom: Math.round(m.stripPadY * 0.8),
-            }}
-            className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[44%]"
-          >
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span
-              key={`dc-a-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx, color: theme.accentPrimary }}
-              className="obs-score-pop font-mono tabular-nums font-black ml-auto leading-none shrink-0"
-            >
-              {vm.primaryScore}
-            </span>
-          </div>
-
-          {/* Pod 3: Center Clock / Match Info */}
-          {(vm.centerPrimary || (!isScoreOnly && vm.centerSecondary)) && (
+          <div className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+            {/* Pod 2: Primary Team */}
             <div
               style={{
-                background: theme.brandBg,
-                color: theme.brandText,
+                background: theme.barBg,
+                borderColor: vm.primaryAccent,
+                color: theme.primaryText,
                 paddingLeft: m.stripPadX,
                 paddingRight: m.stripPadX,
                 paddingTop: Math.round(m.stripPadY * 0.8),
                 paddingBottom: Math.round(m.stripPadY * 0.8),
               }}
-              className="rounded-xl shadow-lg flex flex-col items-center justify-center shrink-0 border border-white/20"
+              className="rounded-xl border-b-2 border shadow-lg flex items-center justify-between gap-2.5 min-w-0"
             >
-              {vm.centerPrimary && (
-                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
-                  {vm.centerPrimary}
-                </span>
-              )}
-              {!isScoreOnly && vm.centerSecondary && (
-                <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase opacity-85 leading-none ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
-                  {vm.centerSecondary}
-                </span>
-              )}
+              <div className="flex items-center gap-2 min-w-0">
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && vm.leftPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                      {vm.leftPlayerLine}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span
+                key={`dc-a-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx, color: theme.accentPrimary }}
+                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0"
+              >
+                {vm.primaryScore}
+              </span>
             </div>
-          )}
 
-          {/* Pod 4: Secondary Team */}
-          <div
-            style={{
-              background: theme.barBg,
-              borderColor: vm.secondaryAccent,
-              color: theme.primaryText,
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: Math.round(m.stripPadY * 0.8),
-              paddingBottom: Math.round(m.stripPadY * 0.8),
-            }}
-            className="rounded-xl border-b-2 border shadow-lg flex items-center gap-2.5 min-w-0 flex-1 max-w-[44%]"
-          >
-            <span
-              key={`dc-b-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx }}
-              className="obs-score-pop font-mono tabular-nums font-black mr-auto leading-none shrink-0"
+            {/* Pod 3: Center Clock / Match Info */}
+            {(vm.centerPrimary || (!isScoreOnly && vm.centerSecondary)) ? (
+              <div
+                style={{
+                  background: theme.brandBg,
+                  color: theme.brandText,
+                  paddingLeft: m.stripPadX,
+                  paddingRight: m.stripPadX,
+                  paddingTop: Math.round(m.stripPadY * 0.8),
+                  paddingBottom: Math.round(m.stripPadY * 0.8),
+                }}
+                className="rounded-xl shadow-lg flex flex-col items-center justify-center shrink-0 border border-white/20"
+              >
+                {vm.centerPrimary && (
+                  <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
+                    {vm.centerPrimary}
+                  </span>
+                )}
+                {!isScoreOnly && vm.centerSecondary && (
+                  <span style={{ fontSize: m.metaLabelPx }} className={`font-bold uppercase opacity-85 leading-none ${vm.centerPrimary ? 'mt-0.5' : ''}`}>
+                    {vm.centerSecondary}
+                  </span>
+                )}
+              </div>
+            ) : <span className="w-1 shrink-0" />}
+
+            {/* Pod 4: Secondary Team */}
+            <div
+              style={{
+                background: theme.barBg,
+                borderColor: vm.secondaryAccent,
+                color: theme.primaryText,
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: Math.round(m.stripPadY * 0.8),
+                paddingBottom: Math.round(m.stripPadY * 0.8),
+              }}
+              className="rounded-xl border-b-2 border shadow-lg flex items-center justify-between gap-2.5 min-w-0"
             >
-              {vm.secondaryScore}
-            </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
+              <span
+                key={`dc-b-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx }}
+                className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0"
+              >
+                {vm.secondaryScore}
+              </span>
+              <div className="flex items-center gap-2 min-w-0 justify-end text-right">
+                <div className="min-w-0">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && vm.rightPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx), color: theme.secondaryText }} className="font-mono font-semibold truncate block mt-0.5 leading-tight">
+                      {vm.rightPlayerLine}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1629,6 +1750,8 @@ function AlternativeScoreboardStyles({
   // STYLE 11: T20 NEON RIBBON — vibrant magenta/indigo gradient wing ribbon
   // -----------------------------------------------------------------------
   if (styleId === 'ipl_neon_ribbon') {
+    const leftSub = vm.isCricket ? vm.leftPlayerLine : vm.primarySub;
+    const rightSub = vm.isCricket ? vm.rightPlayerLine : vm.secondarySub;
     return wrapWithKabaddi(
       <div className={`${isScoreOnly ? 'inline-flex' : 'w-full flex'} flex-col overflow-hidden rounded-2xl border border-fuchsia-400/50 shadow-[0_0_32px_rgba(217,70,239,0.38)]`}>
         <div
@@ -1643,90 +1766,102 @@ function AlternativeScoreboardStyles({
           }}
           className="flex items-center justify-between min-w-0"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            <div className="min-w-0">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wide truncate block leading-none">
-                {teamADisplay}
+          <div
+            style={{ gap: m.sectionGapPx }}
+            className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
+          >
+            <div className="flex items-center justify-between gap-2.5 min-w-0">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0 flex-1">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wide truncate block leading-none">
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && leftSub && (
+                    <span style={{ fontSize: m.metaLabelPx }} className="font-mono text-fuchsia-200/90 block mt-0.5 truncate">
+                      {leftSub}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span
+                key={`inr-a-${pulseKey}`}
+                style={{
+                  fontSize: m.scoreFontPx,
+                  background: 'linear-gradient(135deg, #EC4899 0%, #9333EA 100%)',
+                  paddingLeft: m.scorePillPadX,
+                  paddingRight: m.scorePillPadX,
+                  paddingTop: m.scorePillPadY,
+                  paddingBottom: m.scorePillPadY,
+                }}
+                className="obs-score-pop rounded-lg font-mono tabular-nums font-black text-white shadow-[0_0_16px_rgba(236,72,153,0.55)] leading-none shrink-0"
+              >
+                {vm.primaryScore}
               </span>
-              {!isScoreOnly && vm.primarySub && (
-                <span style={{ fontSize: m.metaLabelPx }} className="font-mono text-fuchsia-200/80 block mt-0.5 truncate">
-                  {vm.primarySub}
+            </div>
+
+            <div className="flex flex-col items-center justify-center px-3 py-1 rounded-xl bg-black/45 border border-fuchsia-400/35 shrink-0">
+              {vm.centerPrimary ? (
+                <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black text-amber-300 leading-none whitespace-nowrap">
+                  {vm.centerPrimary}
+                </span>
+              ) : (
+                <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase text-fuchsia-300 leading-none">
+                  {vm.sportLabel}
+                </span>
+              )}
+              {!isScoreOnly && vm.centerSecondary && (
+                <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-wider text-slate-200 mt-0.5 leading-none whitespace-nowrap">
+                  {vm.centerSecondary}
                 </span>
               )}
             </div>
-            <span
-              key={`inr-a-${pulseKey}`}
-              style={{
-                fontSize: m.scoreFontPx,
-                background: 'linear-gradient(135deg, #EC4899 0%, #9333EA 100%)',
-                paddingLeft: m.scorePillPadX,
-                paddingRight: m.scorePillPadX,
-                paddingTop: m.scorePillPadY,
-                paddingBottom: m.scorePillPadY,
-              }}
-              className="obs-score-pop ml-auto rounded-lg font-mono tabular-nums font-black text-white shadow-[0_0_16px_rgba(236,72,153,0.55)] leading-none shrink-0"
-            >
-              {vm.primaryScore}
-            </span>
-          </div>
 
-          <div className="flex flex-col items-center justify-center px-3 py-1 rounded-xl bg-black/45 border border-fuchsia-400/35 shrink-0">
-            {vm.centerPrimary ? (
-              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black text-amber-300 leading-none whitespace-nowrap">
-                {vm.centerPrimary}
+            <div className="flex items-center justify-between gap-2.5 min-w-0">
+              <span
+                key={`inr-b-${pulseKey}`}
+                style={{
+                  fontSize: m.scoreFontPx,
+                  background: 'linear-gradient(135deg, #2563EB 0%, #06B6D4 100%)',
+                  paddingLeft: m.scorePillPadX,
+                  paddingRight: m.scorePillPadX,
+                  paddingTop: m.scorePillPadY,
+                  paddingBottom: m.scorePillPadY,
+                }}
+                className="obs-score-pop rounded-lg font-mono tabular-nums font-black text-white shadow-[0_0_16px_rgba(6,182,212,0.45)] leading-none shrink-0"
+              >
+                {vm.secondaryScore}
               </span>
-            ) : (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-display font-black uppercase text-fuchsia-300 leading-none">
-                {vm.sportLabel}
-              </span>
-            )}
-            {!isScoreOnly && vm.centerSecondary && (
-              <span style={{ fontSize: m.metaLabelPx }} className="font-bold uppercase tracking-wider text-slate-200 mt-0.5 leading-none whitespace-nowrap">
-                {vm.centerSecondary}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <span
-              key={`inr-b-${pulseKey}`}
-              style={{
-                fontSize: m.scoreFontPx,
-                background: 'linear-gradient(135deg, #2563EB 0%, #06B6D4 100%)',
-                paddingLeft: m.scorePillPadX,
-                paddingRight: m.scorePillPadX,
-                paddingTop: m.scorePillPadY,
-                paddingBottom: m.scorePillPadY,
-              }}
-              className="obs-score-pop mr-auto rounded-lg font-mono tabular-nums font-black text-white shadow-[0_0_16px_rgba(6,182,212,0.45)] leading-none shrink-0"
-            >
-              {vm.secondaryScore}
-            </span>
-            <div className="min-w-0 text-right">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wide truncate block leading-none">
-                {teamBDisplay}
-              </span>
-              {!isScoreOnly && vm.secondarySub && (
-                <span style={{ fontSize: m.metaLabelPx }} className="font-mono text-cyan-200/80 block mt-0.5 truncate">
-                  {vm.secondarySub}
-                </span>
-              )}
+              <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+                <div className="min-w-0 flex-1 text-right">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wide truncate block leading-none">
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && rightSub && (
+                    <span style={{ fontSize: m.metaLabelPx }} className="font-mono text-cyan-200/90 block mt-0.5 truncate">
+                      {rightSub}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoMdPx}
+                  showLogo={config.showTeamLogos}
+                />
+              </div>
             </div>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            {config.showLiveIndicator && (
+          </div>
+
+          {config.showLiveIndicator && (
+            <div className="shrink-0">
               <ObsLiveStatusPill
                 label={vm.statusPillLabel}
                 isLive={vm.showLiveDot}
@@ -1735,8 +1870,8 @@ function AlternativeScoreboardStyles({
                 padX={m.pillPadX}
                 padY={m.pillPadY}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <TelemetrySubRow
@@ -1758,7 +1893,7 @@ function AlternativeScoreboardStyles({
   if (styleId === 'world_cup_crest') {
     return wrapWithKabaddi(
       <div className={`${isScoreOnly ? 'inline-flex' : 'w-full flex'} flex-col items-center`}>
-        <div className="w-full flex items-center justify-center relative">
+        <div className="w-full grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center relative">
           <div
             style={{
               background: 'linear-gradient(90deg, #0B1E45 0%, #16377A 100%)',
@@ -1768,9 +1903,9 @@ function AlternativeScoreboardStyles({
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-l-2xl border-y-2 border-l-2 text-white shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-l-2xl border-y-2 border-l-2 text-white shadow-xl"
           >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <ObsTeamBadge
                 logoUrl={vm.primaryLogo}
                 shortName={vm.primaryShort}
@@ -1778,9 +1913,16 @@ function AlternativeScoreboardStyles({
                 sizePx={m.logoMdPx}
                 showLogo={config.showTeamLogos}
               />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-                {teamADisplay}
-              </span>
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-sky-200/90 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
             </div>
             <span key={`wcc-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-amber-300 shrink-0">
               {vm.primaryScore}
@@ -1816,15 +1958,22 @@ function AlternativeScoreboardStyles({
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-r-2xl border-y-2 border-r-2 text-white shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-r-2xl border-y-2 border-r-2 text-white shadow-xl"
           >
             <span key={`wcc-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-amber-300 shrink-0">
               {vm.secondaryScore}
             </span>
-            <div className="flex items-center gap-2 min-w-0 justify-end">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-                {teamBDisplay}
-              </span>
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-sky-200/90 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
               <ObsTeamBadge
                 logoUrl={vm.secondaryLogo}
                 shortName={vm.secondaryShort}
@@ -1867,71 +2016,87 @@ function AlternativeScoreboardStyles({
             </div>
           )}
 
-          <div
-            style={{
-              background: '#FFFFFF',
-              color: '#1E002B',
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span style={{ background: vm.primaryAccent }} className="w-1.5 h-6 rounded-full shrink-0" />
-              <ObsTeamBadge
-                logoUrl={vm.primaryLogo}
-                shortName={vm.primaryShort}
-                accentColor={vm.primaryAccent}
-                sizePx={m.logoSmPx}
-                showLogo={config.showTeamLogos}
-              />
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-                {teamADisplay}
+          <div className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
+            <div
+              style={{
+                background: '#FFFFFF',
+                color: '#1E002B',
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="min-w-0 flex items-center justify-between gap-2"
+            >
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <span style={{ background: vm.primaryAccent }} className="w-1.5 h-6 rounded-full shrink-0" />
+                <ObsTeamBadge
+                  logoUrl={vm.primaryLogo}
+                  shortName={vm.primaryShort}
+                  accentColor={vm.primaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <div className="min-w-0 flex-1">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                    {teamADisplay}
+                  </span>
+                  {!isScoreOnly && vm.leftPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-600 truncate block mt-0.5 leading-tight">
+                      {vm.leftPlayerLine}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span
+                key={`pl-a-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx }}
+                className="obs-score-pop font-mono tabular-nums font-black px-2.5 py-0.5 rounded bg-[#38003C] text-white shrink-0 leading-none"
+              >
+                {vm.primaryScore}
               </span>
             </div>
-            <span
-              key={`pl-a-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx }}
-              className="obs-score-pop font-mono tabular-nums font-black px-2.5 py-0.5 rounded bg-[#38003C] text-white shrink-0 leading-none"
-            >
-              {vm.primaryScore}
-            </span>
-          </div>
 
-          <div className="w-px bg-slate-300 shrink-0" />
+            <div className="w-px bg-slate-300 shrink-0" />
 
-          <div
-            style={{
-              background: '#FFFFFF',
-              color: '#1E002B',
-              paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
-              paddingTop: m.stripPadY,
-              paddingBottom: m.stripPadY,
-            }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2"
-          >
-            <span
-              key={`pl-b-${pulseKey}`}
-              style={{ fontSize: m.scoreFontPx }}
-              className="obs-score-pop font-mono tabular-nums font-black px-2.5 py-0.5 rounded bg-[#38003C] text-white shrink-0 leading-none"
+            <div
+              style={{
+                background: '#FFFFFF',
+                color: '#1E002B',
+                paddingLeft: m.stripPadX,
+                paddingRight: m.stripPadX,
+                paddingTop: m.stripPadY,
+                paddingBottom: m.stripPadY,
+              }}
+              className="min-w-0 flex items-center justify-between gap-2"
             >
-              {vm.secondaryScore}
-            </span>
-            <div className="flex items-center gap-2 min-w-0 justify-end">
-              <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-                {teamBDisplay}
+              <span
+                key={`pl-b-${pulseKey}`}
+                style={{ fontSize: m.scoreFontPx }}
+                className="obs-score-pop font-mono tabular-nums font-black px-2.5 py-0.5 rounded bg-[#38003C] text-white shrink-0 leading-none"
+              >
+                {vm.secondaryScore}
               </span>
-              <ObsTeamBadge
-                logoUrl={vm.secondaryLogo}
-                shortName={vm.secondaryShort}
-                accentColor={vm.secondaryAccent}
-                sizePx={m.logoSmPx}
-                showLogo={config.showTeamLogos}
-              />
-              <span style={{ background: vm.secondaryAccent }} className="w-1.5 h-6 rounded-full shrink-0" />
+              <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+                <div className="min-w-0 flex-1 text-right">
+                  <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                    {teamBDisplay}
+                  </span>
+                  {!isScoreOnly && vm.rightPlayerLine && (
+                    <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-600 truncate block mt-0.5 leading-tight">
+                      {vm.rightPlayerLine}
+                    </span>
+                  )}
+                </div>
+                <ObsTeamBadge
+                  logoUrl={vm.secondaryLogo}
+                  shortName={vm.secondaryShort}
+                  accentColor={vm.secondaryAccent}
+                  sizePx={m.logoSmPx}
+                  showLogo={config.showTeamLogos}
+                />
+                <span style={{ background: vm.secondaryAccent }} className="w-1.5 h-6 rounded-full shrink-0" />
+              </div>
             </div>
           </div>
 
@@ -1979,23 +2144,32 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-              {teamADisplay}
-            </span>
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <ObsTeamBadge
+                logoUrl={vm.primaryLogo}
+                shortName={vm.primaryShort}
+                accentColor={vm.primaryAccent}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-amber-200/90 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
             <span
               key={`pkr-a-${pulseKey}`}
               style={{ fontSize: m.scoreFontPx, transform: 'skewX(-10deg)' }}
-              className="obs-score-pop ml-auto px-3 py-1 rounded bg-amber-500 text-slate-950 font-mono tabular-nums font-black leading-none shrink-0"
+              className="obs-score-pop px-3 py-1 rounded bg-amber-500 text-slate-950 font-mono tabular-nums font-black leading-none shrink-0"
             >
               <span style={{ transform: 'skewX(10deg)' }} className="inline-block">{vm.primaryScore}</span>
             </span>
@@ -2012,24 +2186,33 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+          <div className="flex items-center justify-between gap-2 min-w-0">
             <span
               key={`pkr-b-${pulseKey}`}
               style={{ fontSize: m.scoreFontPx, transform: 'skewX(-10deg)' }}
-              className="obs-score-pop mr-auto px-3 py-1 rounded bg-cyan-400 text-slate-950 font-mono tabular-nums font-black leading-none shrink-0"
+              className="obs-score-pop px-3 py-1 rounded bg-cyan-400 text-slate-950 font-mono tabular-nums font-black leading-none shrink-0"
             >
               <span style={{ transform: 'skewX(10deg)' }} className="inline-block">{vm.secondaryScore}</span>
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoMdPx}
-              showLogo={config.showTeamLogos}
-            />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-cyan-200/90 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge
+                logoUrl={vm.secondaryLogo}
+                shortName={vm.secondaryShort}
+                accentColor={vm.secondaryAccent}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2059,20 +2242,29 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <ObsTeamBadge
-              logoUrl={vm.primaryLogo}
-              shortName={vm.primaryShort}
-              accentColor={vm.primaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`ogc-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-slate-950 bg-amber-300/60 px-2.5 py-0.5 rounded leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <ObsTeamBadge
+                logoUrl={vm.primaryLogo}
+                shortName={vm.primaryShort}
+                accentColor={vm.primaryAccent}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos}
+              />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-600 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`ogc-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-slate-950 bg-amber-300/60 px-2.5 py-0.5 rounded leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
@@ -2084,20 +2276,29 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-            <span key={`ogc-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-slate-950 bg-amber-300/60 px-2.5 py-0.5 rounded leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span key={`ogc-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-slate-950 bg-amber-300/60 px-2.5 py-0.5 rounded leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge
-              logoUrl={vm.secondaryLogo}
-              shortName={vm.secondaryShort}
-              accentColor={vm.secondaryAccent}
-              sizePx={m.logoSmPx}
-              showLogo={config.showTeamLogos}
-            />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-600 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge
+                logoUrl={vm.secondaryLogo}
+                shortName={vm.secondaryShort}
+                accentColor={vm.secondaryAccent}
+                sizePx={m.logoSmPx}
+                showLogo={config.showTeamLogos}
+              />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2133,15 +2334,24 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="w-1 h-7 bg-cyan-400 shadow-[0_0_10px_#22D3EE] shrink-0" />
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase tracking-wider truncate text-cyan-100">
-              {teamADisplay}
-            </span>
-            <span key={`cgm-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-cyan-300 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="w-1 h-7 bg-cyan-400 shadow-[0_0_10px_#22D3EE] shrink-0" />
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase tracking-wider truncate text-cyan-100 block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-cyan-200/80 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`cgm-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-cyan-300 shrink-0 leading-none">
               {vm.primaryScore}
             </span>
           </div>
@@ -2157,15 +2367,24 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-            <span key={`cgm-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-emerald-300 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span key={`cgm-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-emerald-300 shrink-0 leading-none">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase tracking-wider truncate text-right text-emerald-100">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span className="w-1 h-7 bg-emerald-400 shadow-[0_0_10px_#34D399] shrink-0" />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase tracking-wider truncate text-emerald-100 block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-emerald-200/80 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <span className="w-1 h-7 bg-emerald-400 shadow-[0_0_10px_#34D399] shrink-0" />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2195,14 +2414,23 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1 bg-rose-600/90 px-2.5 py-1 border border-yellow-300/60">
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase text-white truncate">
-              {teamADisplay}
-            </span>
-            <span key={`rap-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-yellow-300 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0 bg-rose-600/90 px-2.5 py-1 border border-yellow-300/60">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase text-white truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-yellow-100/90 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`rap-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-yellow-300 shrink-0 leading-none">
               {vm.primaryScore}
             </span>
           </div>
@@ -2211,14 +2439,23 @@ function AlternativeScoreboardStyles({
             <span style={{ fontSize: m.metaFontPx }} className="leading-none block">{vm.centerPrimary || 'VS'}</span>
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 bg-sky-600/90 px-2.5 py-1 border border-yellow-300/60 justify-end">
-            <span key={`rap-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-yellow-300 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0 bg-sky-600/90 px-2.5 py-1 border border-yellow-300/60">
+            <span key={`rap-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-yellow-300 shrink-0 leading-none">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase text-white truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-mono font-black uppercase text-white truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-yellow-100/90 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2251,14 +2488,23 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`chs-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-white bg-slate-950/75 border border-slate-500/50 px-3 py-1 rounded-lg leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`chs-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-white bg-slate-950/75 border border-slate-500/50 px-3 py-1 rounded-lg leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
@@ -2270,14 +2516,23 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <span key={`chs-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-white bg-slate-950/75 border border-slate-500/50 px-3 py-1 rounded-lg leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <span key={`chs-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-white bg-slate-950/75 border border-slate-500/50 px-3 py-1 rounded-lg leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2313,15 +2568,24 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] shrink-0" />
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`scp-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-rose-400 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] shrink-0" />
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`scp-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-rose-400 shrink-0 leading-none">
               {vm.primaryScore}
             </span>
           </div>
@@ -2330,15 +2594,24 @@ function AlternativeScoreboardStyles({
             <span style={{ fontSize: m.metaFontPx }} className="font-bold text-slate-200 leading-none">{vm.centerPrimary || 'VS'}</span>
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-            <span key={`scp-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-emerald-400 shrink-0 leading-none">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span key={`scp-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-emerald-400 shrink-0 leading-none">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34D399] shrink-0" />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34D399] shrink-0" />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2371,14 +2644,23 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`sga-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto bg-white text-slate-950 px-3 py-0.5 rounded-full font-mono tabular-nums font-black leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-amber-100/90 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`sga-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop bg-white text-slate-950 px-3 py-0.5 rounded-full font-mono tabular-nums font-black leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
@@ -2387,14 +2669,23 @@ function AlternativeScoreboardStyles({
             <span style={{ fontSize: m.metaFontPx }} className="font-black leading-none">{vm.centerPrimary || 'LIVE'}</span>
           </div>
 
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-            <span key={`sga-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto bg-white text-slate-950 px-3 py-0.5 rounded-full font-mono tabular-nums font-black leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span key={`sga-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop bg-white text-slate-950 px-3 py-0.5 rounded-full font-mono tabular-nums font-black leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-purple-100/90 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2427,28 +2718,46 @@ function AlternativeScoreboardStyles({
             paddingBottom: Math.max(4, m.stripPadY * 0.8),
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-sans font-bold uppercase tracking-wide truncate">
-              {teamADisplay}
-            </span>
-            <span key={`mml-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-bold leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="min-w-0 flex-1">
+              <span style={{ fontSize: m.teamNameFontPx }} className="font-sans font-bold uppercase tracking-wide truncate block leading-none">
+                {teamADisplay}
+              </span>
+              {!isScoreOnly && vm.leftPlayerLine && (
+                <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                  {vm.leftPlayerLine}
+                </span>
+              )}
+            </div>
+            <span key={`mml-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-bold leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
-          <span className="h-5 w-px bg-white/25 shrink-0" />
-          <span style={{ fontSize: m.metaFontPx }} className="font-mono text-slate-300 shrink-0 leading-none">
-            {vm.centerPrimary || 'VS'}
-          </span>
-          <span className="h-5 w-px bg-white/25 shrink-0" />
-          <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-            <span key={`mml-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-bold leading-none shrink-0">
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="h-5 w-px bg-white/25 shrink-0" />
+            <span style={{ fontSize: m.metaFontPx }} className="font-mono text-slate-300 shrink-0 leading-none">
+              {vm.centerPrimary || 'VS'}
+            </span>
+            <span className="h-5 w-px bg-white/25 shrink-0" />
+          </div>
+
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span key={`mml-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-bold leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-sans font-bold uppercase tracking-wide truncate text-right">
-              {teamBDisplay}
-            </span>
+            <div className="min-w-0 flex-1 text-right">
+              <span style={{ fontSize: m.teamNameFontPx }} className="font-sans font-bold uppercase tracking-wide truncate block leading-none">
+                {teamBDisplay}
+              </span>
+              {!isScoreOnly && vm.rightPlayerLine && (
+                <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                  {vm.rightPlayerLine}
+                </span>
+              )}
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2478,14 +2787,23 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0 bg-[radial-gradient(circle_at_50%_0%,rgba(56,189,248,0.22),transparent_70%)]"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0 bg-[radial-gradient(circle_at_50%_0%,rgba(56,189,248,0.22),transparent_70%)]"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wider truncate">
-              {teamADisplay}
-            </span>
-            <span key={`sjs-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto px-3 py-1 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 font-mono tabular-nums font-black leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wider truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-sky-200/85 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`sjs-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop px-3 py-1 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 font-mono tabular-nums font-black leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
@@ -2501,14 +2819,23 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <span key={`sjs-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto px-3 py-1 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 font-mono tabular-nums font-black leading-none shrink-0">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <span key={`sjs-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop px-3 py-1 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 font-mono tabular-nums font-black leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wider truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase tracking-wider truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-sky-200/85 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2531,23 +2858,32 @@ function AlternativeScoreboardStyles({
     const hexClip = 'polygon(14% 0%, 86% 0%, 100% 50%, 86% 100%, 14% 100%, 0% 50%)';
     return wrapWithKabaddi(
       <div className={`${isScoreOnly ? 'inline-flex' : 'w-full flex'} flex-col items-center gap-1`}>
-        <div className="w-full flex items-center justify-center">
+        <div className="w-full grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center">
           <div
             style={{
               background: '#111827',
               borderColor: vm.primaryAccent,
               paddingLeft: m.stripPadX,
-              paddingRight: m.stripPadX,
+              paddingRight: m.stripPadX * 1.25,
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-l-lg border-l-4 border-y border-slate-700 text-white shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-l-lg border-l-4 border-y border-slate-700 text-white shadow-xl"
           >
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`thp-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop ml-auto font-mono tabular-nums font-black text-white leading-none shrink-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-emerald-200/85 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`thp-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-white leading-none shrink-0">
               {vm.primaryScore}
             </span>
           </div>
@@ -2570,20 +2906,29 @@ function AlternativeScoreboardStyles({
             style={{
               background: '#111827',
               borderColor: vm.secondaryAccent,
-              paddingLeft: m.stripPadX,
+              paddingLeft: m.stripPadX * 1.25,
               paddingRight: m.stripPadX,
               paddingTop: m.stripPadY,
               paddingBottom: m.stripPadY,
             }}
-            className="flex-1 min-w-0 flex items-center justify-between gap-2 rounded-r-lg border-r-4 border-y border-slate-700 text-white shadow-xl"
+            className="min-w-0 flex items-center justify-between gap-2 rounded-r-lg border-r-4 border-y border-slate-700 text-white shadow-xl"
           >
-            <span key={`thp-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop mr-auto font-mono tabular-nums font-black text-white leading-none shrink-0">
+            <span key={`thp-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx }} className="obs-score-pop font-mono tabular-nums font-black text-white leading-none shrink-0">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-extrabold uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-emerald-200/85 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2619,14 +2964,23 @@ function AlternativeScoreboardStyles({
             paddingBottom: m.stripPadY,
             gap: m.sectionGapPx,
           }}
-          className="flex items-center justify-between min-w-0"
+          className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center min-w-0"
         >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate">
-              {teamADisplay}
-            </span>
-            <span key={`asb-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx, background: vm.primaryAccent }} className="obs-score-pop ml-auto px-3 py-1 rounded-xl text-white font-mono tabular-nums font-black leading-none shrink-0 shadow-inner">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={vm.primaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span key={`asb-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx, background: vm.primaryAccent }} className="obs-score-pop px-3 py-1 rounded-xl text-white font-mono tabular-nums font-black leading-none shrink-0 shadow-inner">
               {vm.primaryScore}
             </span>
           </div>
@@ -2650,14 +3004,23 @@ function AlternativeScoreboardStyles({
             )}
           </div>
 
-          <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-            <span key={`asb-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx, background: vm.secondaryAccent }} className="obs-score-pop mr-auto px-3 py-1 rounded-xl text-white font-mono tabular-nums font-black leading-none shrink-0 shadow-inner">
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <span key={`asb-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx, background: vm.secondaryAccent }} className="obs-score-pop px-3 py-1 rounded-xl text-white font-mono tabular-nums font-black leading-none shrink-0 shadow-inner">
               {vm.secondaryScore}
             </span>
-            <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate text-right">
-              {teamBDisplay}
-            </span>
-            <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className="font-display font-black uppercase truncate block leading-none">
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="font-mono font-semibold text-slate-300 truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={vm.secondaryAccent} sizePx={m.logoMdPx} showLogo={config.showTeamLogos} />
+            </div>
           </div>
         </div>
         <TelemetrySubRow
@@ -2746,12 +3109,19 @@ function AlternativeScoreboardStyles({
         </div>
         <div className="p-2.5 space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <span style={{ background: d.primaryColor }} className="w-1.5 h-5 rounded-full shrink-0" />
               <ObsTeamBadge logoUrl={vm.primaryLogo} shortName={vm.primaryShort} accentColor={d.primaryColor} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-              <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase truncate`}>
-                {teamADisplay}
-              </span>
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase truncate block leading-none`}>
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && vm.leftPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="opacity-80 font-mono truncate block mt-0.5 leading-tight">
+                    {vm.leftPlayerLine}
+                  </span>
+                )}
+              </div>
             </div>
             <span key={`cd-t-a-${pulseKey}`} style={{ fontSize: m.scoreFontPx, color: d.accentColor }} className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0">
               {vm.primaryScore}
@@ -2759,12 +3129,19 @@ function AlternativeScoreboardStyles({
           </div>
           {d.showDivider && <div style={{ background: hexToRgba(d.borderColor, 0.35) }} className="h-px w-full" />}
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <span style={{ background: d.secondaryColor }} className="w-1.5 h-5 rounded-full shrink-0" />
               <ObsTeamBadge logoUrl={vm.secondaryLogo} shortName={vm.secondaryShort} accentColor={d.secondaryColor} sizePx={m.logoSmPx} showLogo={config.showTeamLogos} />
-              <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase truncate`}>
-                {teamBDisplay}
-              </span>
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase truncate block leading-none`}>
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && vm.rightPlayerLine && (
+                  <span style={{ fontSize: Math.max(9, m.metaLabelPx) }} className="opacity-80 font-mono truncate block mt-0.5 leading-tight">
+                    {vm.rightPlayerLine}
+                  </span>
+                )}
+              </div>
             </div>
             <span key={`cd-t-b-${pulseKey}`} style={{ fontSize: m.scoreFontPx, color: d.textColor }} className="obs-score-pop font-mono tabular-nums font-black leading-none shrink-0">
               {vm.secondaryScore}
@@ -2785,6 +3162,9 @@ function AlternativeScoreboardStyles({
       </div>
     );
   }
+
+  const customLeftSub = vm.isCricket ? vm.leftPlayerLine : vm.primarySub;
+  const customRightSub = vm.isCricket ? vm.rightPlayerLine : vm.secondarySub;
 
   return wrapWithKabaddi(
     <div
@@ -2808,106 +3188,120 @@ function AlternativeScoreboardStyles({
         }}
         className="w-full flex items-center justify-between min-w-0 overflow-hidden"
       >
-        {/* Left Team */}
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <span style={{ background: d.primaryColor }} className="w-1.5 h-7 rounded-full shrink-0" />
-          <ObsTeamBadge
-            logoUrl={vm.primaryLogo}
-            shortName={vm.primaryShort}
-            accentColor={d.primaryColor}
-            sizePx={m.logoMdPx}
-            showLogo={config.showTeamLogos}
-          />
-          <div className="min-w-0">
-            <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase tracking-wide truncate block leading-none`}>
-              {teamADisplay}
-            </span>
-            {!isScoreOnly && vm.primarySub && (
-              <span style={{ fontSize: m.metaLabelPx }} className="opacity-75 font-mono block mt-0.5 truncate">
-                {vm.primarySub}
-              </span>
-            )}
-          </div>
-          <span
-            key={`cd-a-${pulseKey}`}
-            style={{
-              fontSize: m.scoreFontPx,
-              background: hexToRgba(d.primaryColor, 0.24),
-              borderColor: d.primaryColor,
-              color: d.textColor,
-              paddingLeft: m.scorePillPadX,
-              paddingRight: m.scorePillPadX,
-              paddingTop: m.scorePillPadY,
-              paddingBottom: m.scorePillPadY,
-            }}
-            className="obs-score-pop ml-auto rounded-lg border font-mono tabular-nums font-black leading-none shrink-0"
-          >
-            {vm.primaryScore}
-          </span>
-        </div>
-
-        {/* Center Pod */}
-        {d.showDivider && (
-          <div style={{ background: hexToRgba(d.borderColor, 0.45) }} className="w-px h-7 shrink-0" />
-        )}
         <div
-          style={{
-            background: hexToRgba(d.accentColor, 0.18),
-            borderColor: d.accentColor,
-            color: d.accentColor,
-          }}
-          className="px-3 py-1 rounded-lg border flex flex-col items-center justify-center shrink-0"
+          style={{ gap: m.sectionGapPx }}
+          className="flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
         >
-          <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
-            {vm.centerPrimary || 'VS'}
-          </span>
-          {!isScoreOnly && vm.centerSecondary && (
-            <span style={{ fontSize: m.metaLabelPx, color: d.textColor }} className="font-bold uppercase opacity-85 mt-0.5 leading-none whitespace-nowrap">
-              {vm.centerSecondary}
+          {/* Left Team */}
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <span style={{ background: d.primaryColor }} className="w-1.5 h-7 rounded-full shrink-0" />
+              <ObsTeamBadge
+                logoUrl={vm.primaryLogo}
+                shortName={vm.primaryShort}
+                accentColor={d.primaryColor}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+              <div className="min-w-0 flex-1">
+                <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase tracking-wide truncate block leading-none`}>
+                  {teamADisplay}
+                </span>
+                {!isScoreOnly && customLeftSub && (
+                  <span style={{ fontSize: m.metaLabelPx }} className="opacity-80 font-mono block mt-0.5 truncate">
+                    {customLeftSub}
+                  </span>
+                )}
+              </div>
+            </div>
+            <span
+              key={`cd-a-${pulseKey}`}
+              style={{
+                fontSize: m.scoreFontPx,
+                background: hexToRgba(d.primaryColor, 0.24),
+                borderColor: d.primaryColor,
+                color: d.textColor,
+                paddingLeft: m.scorePillPadX,
+                paddingRight: m.scorePillPadX,
+                paddingTop: m.scorePillPadY,
+                paddingBottom: m.scorePillPadY,
+              }}
+              className="obs-score-pop rounded-lg border font-mono tabular-nums font-black leading-none shrink-0"
+            >
+              {vm.primaryScore}
             </span>
-          )}
-        </div>
-        {d.showDivider && (
-          <div style={{ background: hexToRgba(d.borderColor, 0.45) }} className="w-px h-7 shrink-0" />
-        )}
+          </div>
 
-        {/* Right Team */}
-        <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
-          <span
-            key={`cd-b-${pulseKey}`}
-            style={{
-              fontSize: m.scoreFontPx,
-              background: hexToRgba(d.secondaryColor, 0.24),
-              borderColor: d.secondaryColor,
-              color: d.textColor,
-              paddingLeft: m.scorePillPadX,
-              paddingRight: m.scorePillPadX,
-              paddingTop: m.scorePillPadY,
-              paddingBottom: m.scorePillPadY,
-            }}
-            className="obs-score-pop mr-auto rounded-lg border font-mono tabular-nums font-black leading-none shrink-0"
-          >
-            {vm.secondaryScore}
-          </span>
-          <div className="min-w-0 text-right">
-            <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase tracking-wide truncate block leading-none`}>
-              {teamBDisplay}
-            </span>
-            {!isScoreOnly && vm.secondarySub && (
-              <span style={{ fontSize: m.metaLabelPx }} className="opacity-75 font-mono block mt-0.5 truncate">
-                {vm.secondarySub}
+          {/* Center Pod */}
+          <div className="flex items-center gap-2 shrink-0">
+            {d.showDivider && (
+              <div style={{ background: hexToRgba(d.borderColor, 0.45) }} className="w-px h-7 shrink-0" />
+            )}
+            <div
+              style={{
+                background: hexToRgba(d.accentColor, 0.18),
+                borderColor: d.accentColor,
+                color: d.accentColor,
+              }}
+              className="px-3 py-1 rounded-lg border flex flex-col items-center justify-center shrink-0"
+            >
+              <span style={{ fontSize: m.metaFontPx }} className="font-mono tabular-nums font-black leading-none whitespace-nowrap">
+                {vm.centerPrimary || 'VS'}
               </span>
+              {!isScoreOnly && vm.centerSecondary && (
+                <span style={{ fontSize: m.metaLabelPx, color: d.textColor }} className="font-bold uppercase opacity-85 mt-0.5 leading-none whitespace-nowrap">
+                  {vm.centerSecondary}
+                </span>
+              )}
+            </div>
+            {d.showDivider && (
+              <div style={{ background: hexToRgba(d.borderColor, 0.45) }} className="w-px h-7 shrink-0" />
             )}
           </div>
-          <ObsTeamBadge
-            logoUrl={vm.secondaryLogo}
-            shortName={vm.secondaryShort}
-            accentColor={d.secondaryColor}
-            sizePx={m.logoMdPx}
-            showLogo={config.showTeamLogos}
-          />
-          <span style={{ background: d.secondaryColor }} className="w-1.5 h-7 rounded-full shrink-0" />
-          {config.showLiveIndicator && (
+
+          {/* Right Team */}
+          <div className="flex items-center justify-between gap-2.5 min-w-0">
+            <span
+              key={`cd-b-${pulseKey}`}
+              style={{
+                fontSize: m.scoreFontPx,
+                background: hexToRgba(d.secondaryColor, 0.24),
+                borderColor: d.secondaryColor,
+                color: d.textColor,
+                paddingLeft: m.scorePillPadX,
+                paddingRight: m.scorePillPadX,
+                paddingTop: m.scorePillPadY,
+                paddingBottom: m.scorePillPadY,
+              }}
+              className="obs-score-pop rounded-lg border font-mono tabular-nums font-black leading-none shrink-0"
+            >
+              {vm.secondaryScore}
+            </span>
+            <div className="flex items-center gap-2.5 min-w-0 flex-1 justify-end">
+              <div className="min-w-0 flex-1 text-right">
+                <span style={{ fontSize: m.teamNameFontPx }} className={`${fontWeightClass} uppercase tracking-wide truncate block leading-none`}>
+                  {teamBDisplay}
+                </span>
+                {!isScoreOnly && customRightSub && (
+                  <span style={{ fontSize: m.metaLabelPx }} className="opacity-80 font-mono block mt-0.5 truncate">
+                    {customRightSub}
+                  </span>
+                )}
+              </div>
+              <ObsTeamBadge
+                logoUrl={vm.secondaryLogo}
+                shortName={vm.secondaryShort}
+                accentColor={d.secondaryColor}
+                sizePx={m.logoMdPx}
+                showLogo={config.showTeamLogos}
+              />
+              <span style={{ background: d.secondaryColor }} className="w-1.5 h-7 rounded-full shrink-0" />
+            </div>
+          </div>
+        </div>
+
+        {config.showLiveIndicator && (
+          <div className="shrink-0">
             <ObsLiveStatusPill
               label={vm.statusPillLabel}
               isLive={vm.showLiveDot}
@@ -2916,8 +3310,8 @@ function AlternativeScoreboardStyles({
               padX={m.pillPadX}
               padY={m.pillPadY}
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {d.showTelemetryBar && (

@@ -7,6 +7,7 @@ import {
   computeCricketChaseState,
   formatCricketOvers,
   getCricketCreaseSummary,
+  getCurrentOverBalls,
   getTotalExtras,
   normalizeCricketDetails,
 } from '../../utils/cricketScoring.ts';
@@ -182,6 +183,7 @@ function CricketBoard({
   const isBattingA = details.battingTeam === 'A';
   const activeExtras = isBattingA ? details.extrasA : details.extrasB;
   const activePlay = !chase.isInningsBreak && !chase.isMatchCompleted;
+  const currentOverBalls = getCurrentOverBalls(details);
 
   return (
     <div className="space-y-4">
@@ -347,15 +349,15 @@ function CricketBoard({
         </div>
       )}
 
-      {Array.isArray(details.recentBalls) && details.recentBalls.length > 0 && (
+      {currentOverBalls.length > 0 && (
         <div className="flex items-center gap-2 pt-2 border-t border-slate-800/80 overflow-x-auto">
-          <span className="text-xs text-slate-400 shrink-0">Recent:</span>
+          <span className="text-xs text-slate-400 shrink-0">This Over:</span>
           <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
-            {details.recentBalls.map((ball, i) => (
+            {currentOverBalls.map((ball, i) => (
               <span
-                key={i}
+                key={`${ball}-${i}`}
                 className={`min-w-[28px] h-7 px-1.5 rounded flex items-center justify-center font-semibold ${
-                  ball === 'W'
+                  ball.includes('W') && !ball.startsWith('Wd')
                     ? 'bg-red-600 text-white'
                     : ball === '4' || ball === '6'
                       ? 'bg-emerald-600 text-white'

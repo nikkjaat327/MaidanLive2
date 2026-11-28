@@ -46,6 +46,30 @@ export const scoreboardService = {
     return data;
   },
 
+  async savePreMatchToss(
+    streamId: string,
+    payload: {
+      tossWinner?: 'A' | 'B' | '';
+      tossDecision?: string;
+      kickoffTeam?: 'A' | 'B' | '';
+      startingRaidingTeam?: 'A' | 'B';
+      servingTeam?: 'A' | 'B';
+      sideSwapped?: boolean;
+      adminOverride?: boolean;
+    }
+  ): Promise<{
+    streamId: string;
+    score: LiveScoreData;
+    historyItem?: ScoreHistoryItem;
+  }> {
+    const { data } = await adminApi.post<{
+      streamId: string;
+      score: LiveScoreData;
+      historyItem?: ScoreHistoryItem;
+    }>(`/live/${streamId}/score/toss`, payload);
+    return data;
+  },
+
   async recordScoreEvent(
     streamId: string,
     payload: {

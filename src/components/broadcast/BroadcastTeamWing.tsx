@@ -8,6 +8,7 @@ interface BroadcastTeamWingProps {
   logoUrl?: string;
   primaryText: string;
   secondaryText?: string;
+  playerLine?: string;
   badgeText?: string;
   compact?: boolean;
   isPortrait?: boolean;
@@ -21,6 +22,7 @@ export function BroadcastTeamWing({
   logoUrl,
   primaryText,
   secondaryText,
+  playerLine,
   badgeText,
   compact = false,
   isPortrait,
@@ -45,7 +47,7 @@ export function BroadcastTeamWing({
   return (
     <div
       className={`${bgClass} ${
-        compact ? 'px-2.5 py-1.5 sm:px-3 sm:py-2' : 'px-3 py-2.5 sm:px-4 sm:py-3'
+        compact ? 'px-2 py-1.5 sm:px-3 sm:py-2' : 'px-3 py-2.5 sm:px-4 sm:py-3'
       } flex items-center justify-between gap-2 sm:gap-3 min-w-0`}
     >
       {isLeft ? (
@@ -74,6 +76,11 @@ export function BroadcastTeamWing({
               {secondaryText && (
                 <p className="font-mono text-[10px] sm:text-[11px] text-blue-200/90 tabular-nums truncate">
                   {secondaryText}
+                </p>
+              )}
+              {playerLine && (
+                <p className="text-[9px] sm:text-[10px] font-medium text-white/90 truncate mt-0.5">
+                  {playerLine}
                 </p>
               )}
             </div>
@@ -120,6 +127,11 @@ export function BroadcastTeamWing({
               {secondaryText && (
                 <p className="font-mono text-[10px] sm:text-[11px] text-red-100/90 tabular-nums truncate">
                   {secondaryText}
+                </p>
+              )}
+              {playerLine && (
+                <p className="text-[9px] sm:text-[10px] font-medium text-white/90 truncate mt-0.5">
+                  {playerLine}
                 </p>
               )}
             </div>

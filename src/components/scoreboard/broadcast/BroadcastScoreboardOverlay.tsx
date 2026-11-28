@@ -40,7 +40,7 @@ export function BroadcastScoreboardOverlay({
           broadcast={portraitNormalized}
           compact
           layoutMode="portrait"
-          className="w-full max-w-[360px]"
+          className="w-full"
         />
       );
     }
@@ -69,7 +69,7 @@ export function BroadcastScoreboardOverlay({
   return (
     <div
       data-overlay-mode={layoutMode}
-      className="flex flex-col items-start gap-1 max-w-full"
+      className="flex flex-col items-stretch w-full gap-1 max-w-full"
     >
       {renderSportBar()}
       {resultDeclared && (

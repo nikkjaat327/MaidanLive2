@@ -15,6 +15,7 @@ import {
   Maximize2,
   Megaphone,
   Monitor,
+  Move,
   Radio,
   RotateCcw,
   SlidersHorizontal,
@@ -34,7 +35,10 @@ import { extractApiError } from '../../services/api/httpClient.ts';
 import { getPublicWebOrigin } from '../../utils/appOrigin.ts';
 import { useObsOverlay } from '../../hooks/useObsOverlay.ts';
 import {
+  DEFAULT_OBS_BOX,
   DEFAULT_OVERLAY_CONFIG,
+  DEFAULT_VIEWER_LANDSCAPE_BOX,
+  DEFAULT_VIEWER_PORTRAIT_BOX,
   OVERLAY_MODES,
   OVERLAY_POSITIONS,
   OVERLAY_SCALES,
@@ -45,6 +49,9 @@ import {
   OverlayScale,
   OverlayTheme,
   PRESET_SCALE_MULTIPLIERS,
+  SCOREBOARD_BOX_BOUNDS,
+  type ScoreboardGeometryBox,
+  clampScoreboardGeometryBox,
   computeOverlayMetrics,
   normalizeOverlayConfig,
 } from '../../utils/overlayConfig.ts';
@@ -88,6 +95,19 @@ import {
 } from '../../utils/eventAnimations.ts';
 
 type PreviewBackdrop = 'stadium' | 'turf' | 'checker' | 'custom';
+type GeometryBoxTarget = 'obsBox' | 'viewerLandscapeBox' | 'viewerPortraitBox';
+
+function getDefaultBoxForTarget(target: GeometryBoxTarget): ScoreboardGeometryBox {
+  if (target === 'viewerLandscapeBox') return DEFAULT_VIEWER_LANDSCAPE_BOX;
+  if (target === 'viewerPortraitBox') return DEFAULT_VIEWER_PORTRAIT_BOX;
+  return DEFAULT_OBS_BOX;
+}
+
+const GEOMETRY_BOX_TABS: Array<{ id: GeometryBoxTarget; label: string; hint: string }> = [
+  { id: 'obsBox', label: 'OBS Output', hint: '1920x1080 Browser Source canvas' },
+  { id: 'viewerLandscapeBox', label: 'Viewer Landscape', hint: 'Desktop & landscape player' },
+  { id: 'viewerPortraitBox', label: 'Viewer Portrait', hint: 'Mobile 9:16 & portrait player' },
+];
 
 const MODE_LABELS: Record<OverlayMode, string> = {
   full: 'Full Broadcast',
@@ -209,9 +229,23 @@ export function BroadcastOverlayConfigPage() {
   const [eventAnimationsDraft, setEventAnimationsDraft] = useState<EventAnimationConfigMap | null>(
     null
   );
+  const [activeBoxTarget, setActiveBoxTarget] = useState<GeometryBoxTarget>('obsBox');
+  const [boxDraft, setBoxDraft] = useState<
+    Partial<Record<GeometryBoxTarget, ScoreboardGeometryBox>>
+  >({});
+  const boxDragRef = useRef<{
+    target: GeometryBoxTarget;
+    startClientX: number;
+    startClientY: number;
+    startXPct: number;
+    startYPct: number;
+    widthPct: number;
+    box: ScoreboardGeometryBox;
+  } | null>(null);
 
   useEffect(() => {
     setEventAnimationsDraft(null);
+    setBoxDraft({});
   }, [matchId]);
 
   useEffect(() => {
@@ -358,13 +392,73 @@ export function BroadcastOverlayConfigPage() {
   }, [customBackdropUrl]);
 
   const effectiveOverlayConfig = useMemo(() => {
-    if (!sliderDraft && !eventAnimationsDraft) return overlayConfig;
+    const hasBoxDraft =
+      Boolean(boxDraft.obsBox) ||
+      Boolean(boxDraft.viewerLandscapeBox) ||
+      Boolean(boxDraft.viewerPortraitBox);
+    if (!sliderDraft && !eventAnimationsDraft && !hasBoxDraft) return overlayConfig;
     return normalizeOverlayConfig({
       ...overlayConfig,
       ...(sliderDraft || {}),
       ...(eventAnimationsDraft ? { eventAnimations: eventAnimationsDraft } : {}),
+      ...(boxDraft.obsBox ? { obsBox: boxDraft.obsBox } : {}),
+      ...(boxDraft.viewerLandscapeBox
+        ? { viewerLandscapeBox: boxDraft.viewerLandscapeBox }
+        : {}),
+      ...(boxDraft.viewerPortraitBox
+        ? { viewerPortraitBox: boxDraft.viewerPortraitBox }
+        : {}),
     });
-  }, [overlayConfig, sliderDraft, eventAnimationsDraft]);
+  }, [overlayConfig, sliderDraft, eventAnimationsDraft, boxDraft]);
+
+  const activeBoxDraft = useMemo(
+    () =>
+      clampScoreboardGeometryBox(
+        boxDraft[activeBoxTarget] || effectiveOverlayConfig[activeBoxTarget],
+        getDefaultBoxForTarget(activeBoxTarget)
+      ),
+    [activeBoxTarget, boxDraft, effectiveOverlayConfig]
+  );
+
+  const updateActiveBoxDraft = (patch: Partial<ScoreboardGeometryBox>) => {
+    const next = clampScoreboardGeometryBox(
+      { ...activeBoxDraft, ...patch },
+      getDefaultBoxForTarget(activeBoxTarget)
+    );
+    setBoxDraft((prev) => ({ ...prev, [activeBoxTarget]: next }));
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (ev: PointerEvent) => {
+      const drag = boxDragRef.current;
+      const container = previewContainerRef.current;
+      if (!drag || !container) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const dxPct = ((ev.clientX - drag.startClientX) / rect.width) * 100;
+      const dyPct = ((ev.clientY - drag.startClientY) / rect.height) * 100;
+      const next = clampScoreboardGeometryBox(
+        {
+          ...drag.box,
+          xPct: drag.startXPct + dxPct,
+          yPct: drag.startYPct + dyPct,
+        },
+        getDefaultBoxForTarget(drag.target)
+      );
+      setBoxDraft((prev) => ({ ...prev, [drag.target]: next }));
+    };
+    const handlePointerUp = () => {
+      boxDragRef.current = null;
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, []);
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const timeoutInfo = useMemo(
@@ -418,6 +512,24 @@ export function BroadcastOverlayConfigPage() {
         ...partial.eventAnimations,
       });
     }
+    if (partial.obsBox) {
+      apiPatch.obsBox = clampScoreboardGeometryBox(
+        { ...effectiveOverlayConfig.obsBox, ...partial.obsBox },
+        DEFAULT_OBS_BOX
+      );
+    }
+    if (partial.viewerLandscapeBox) {
+      apiPatch.viewerLandscapeBox = clampScoreboardGeometryBox(
+        { ...effectiveOverlayConfig.viewerLandscapeBox, ...partial.viewerLandscapeBox },
+        DEFAULT_VIEWER_LANDSCAPE_BOX
+      );
+    }
+    if (partial.viewerPortraitBox) {
+      apiPatch.viewerPortraitBox = clampScoreboardGeometryBox(
+        { ...effectiveOverlayConfig.viewerPortraitBox, ...partial.viewerPortraitBox },
+        DEFAULT_VIEWER_PORTRAIT_BOX
+      );
+    }
 
     const next = normalizeOverlayConfig({ ...effectiveOverlayConfig, ...apiPatch });
     pendingSliderPatchRef.current = {};
@@ -433,6 +545,15 @@ export function BroadcastOverlayConfigPage() {
       }
       if (partial.eventAnimations) {
         setEventAnimationsDraft(null);
+      }
+      if (partial.obsBox || partial.viewerLandscapeBox || partial.viewerPortraitBox) {
+        setBoxDraft((prevDraft) => {
+          const updated = { ...prevDraft };
+          if (partial.obsBox) delete updated.obsBox;
+          if (partial.viewerLandscapeBox) delete updated.viewerLandscapeBox;
+          if (partial.viewerPortraitBox) delete updated.viewerPortraitBox;
+          return updated;
+        });
       }
       setSaveNotice(customNotice || 'Synced to live OBS sources');
       window.setTimeout(() => setSaveNotice(null), 2400);
@@ -636,17 +757,23 @@ export function BroadcastOverlayConfigPage() {
   const stageCanvasW = isPreviewPortrait ? 1080 : 1920;
   const stageCanvasH = isPreviewPortrait ? 1920 : 1080;
   const previewScale = Math.max(0.15, previewWidth / stageCanvasW);
-  const previewOverlayConfig = useMemo<BroadcastOverlayConfig>(
-    () => ({
+  const previewOverlayConfig = useMemo<BroadcastOverlayConfig>(() => {
+    const targetPreviewBox =
+      activeBoxTarget === 'obsBox'
+        ? effectiveOverlayConfig.obsBox
+        : activeBoxTarget === 'viewerLandscapeBox'
+          ? effectiveOverlayConfig.viewerLandscapeBox
+          : effectiveOverlayConfig.viewerPortraitBox;
+    return {
       ...effectiveOverlayConfig,
+      obsBox: targetPreviewBox,
       visible: true,
       mode:
         effectiveOverlayConfig.mode === 'hidden'
           ? 'full'
           : effectiveOverlayConfig.mode || 'full',
-    }),
-    [effectiveOverlayConfig]
-  );
+    };
+  }, [effectiveOverlayConfig, activeBoxTarget]);
   const previewMetrics = useMemo(
     () => computeOverlayMetrics(previewOverlayConfig, isPreviewPortrait),
     [previewOverlayConfig, isPreviewPortrait]
@@ -1176,6 +1303,43 @@ export function BroadcastOverlayConfigPage() {
                           }}
                         />
                       </div>
+
+                      {/* Interactive Drag Handle for Active Geometry Box */}
+                      {activeBoxDraft.enabled && !stagePickActive && (
+                        <div
+                          style={{
+                            left: `${activeBoxDraft.xPct}%`,
+                            top: `${activeBoxDraft.yPct}%`,
+                            width: `${activeBoxDraft.widthPct}%`,
+                          }}
+                          className="absolute z-40 pointer-events-none border-2 border-dashed border-cyan-400/90 rounded-lg bg-cyan-400/5"
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              boxDragRef.current = {
+                                target: activeBoxTarget,
+                                startClientX: e.clientX,
+                                startClientY: e.clientY,
+                                startXPct: activeBoxDraft.xPct,
+                                startYPct: activeBoxDraft.yPct,
+                                widthPct: activeBoxDraft.widthPct,
+                                box: activeBoxDraft,
+                              };
+                            }}
+                            title="Drag to move scoreboard box"
+                            className="pointer-events-auto -top-6 left-1 absolute inline-flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-500 text-slate-950 text-[10px] font-black uppercase tracking-wider shadow cursor-grab active:cursor-grabbing"
+                          >
+                            <Move className="w-3 h-3" />
+                            <span>
+                              Drag {GEOMETRY_BOX_TABS.find((t) => t.id === activeBoxTarget)?.label}
+                            </span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </section>
@@ -1539,6 +1703,205 @@ export function BroadcastOverlayConfigPage() {
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Scoreboard Geometry & Position (OBS vs Viewer) */}
+                <div className="space-y-3 pt-3 border-t border-slate-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                        Scoreboard Geometry &amp; Position (OBS vs Viewer)
+                      </label>
+                    </div>
+                    {boxDraft[activeBoxTarget] && (
+                      <span className="text-[10px] font-mono text-amber-300">
+                        Unsaved draft
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 3 Independent Target Tabs */}
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {GEOMETRY_BOX_TABS.map((tab) => {
+                      const active = activeBoxTarget === tab.id;
+                      const tabCfg = effectiveOverlayConfig[tab.id];
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveBoxTarget(tab.id);
+                            if (tab.id === 'viewerPortraitBox') {
+                              setPreviewOrientation('portrait');
+                            } else if (tab.id === 'viewerLandscapeBox') {
+                              setPreviewOrientation('landscape');
+                            }
+                          }}
+                          className={`min-h-[40px] px-2 py-1.5 rounded-lg border text-left transition-colors ${
+                            active
+                              ? 'bg-cyan-500/15 border-cyan-400 text-white'
+                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-bold truncate">{tab.label}</span>
+                            {tabCfg?.enabled && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" />
+                            )}
+                          </div>
+                          <span className="text-[9px] text-slate-400 block truncate">
+                            {tab.hint}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-3">
+                    <label className="flex items-center justify-between gap-2 text-xs text-slate-100 cursor-pointer">
+                      <span>
+                        <strong className="block">Enable Custom Box</strong>
+                        <span className="text-[10px] text-slate-400">
+                          Overrides preset margins for{' '}
+                          {GEOMETRY_BOX_TABS.find((t) => t.id === activeBoxTarget)?.label} only.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={activeBoxDraft.enabled}
+                        onChange={(e) => updateActiveBoxDraft({ enabled: e.target.checked })}
+                        className="w-4 h-4 rounded border-slate-600 text-cyan-500 shrink-0"
+                      />
+                    </label>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {(
+                        [
+                          {
+                            key: 'xPct',
+                            label: 'X %',
+                            bounds: SCOREBOARD_BOX_BOUNDS.xPct,
+                            unit: '%',
+                          },
+                          {
+                            key: 'yPct',
+                            label: 'Y %',
+                            bounds: SCOREBOARD_BOX_BOUNDS.yPct,
+                            unit: '%',
+                          },
+                          {
+                            key: 'widthPct',
+                            label: 'Width %',
+                            bounds: SCOREBOARD_BOX_BOUNDS.widthPct,
+                            unit: '%',
+                          },
+                          {
+                            key: 'heightPx',
+                            label: 'Height px (0 = Auto)',
+                            bounds: SCOREBOARD_BOX_BOUNDS.heightPx,
+                            unit: 'px',
+                          },
+                          {
+                            key: 'scale',
+                            label: 'Scale',
+                            bounds: SCOREBOARD_BOX_BOUNDS.scale,
+                            unit: 'x',
+                          },
+                        ] as const
+                      ).map((field) => {
+                        const val = activeBoxDraft[field.key];
+                        return (
+                          <div
+                            key={field.key}
+                            className={`p-2 rounded border border-slate-800/90 bg-slate-900/70 space-y-1.5 ${
+                              field.key === 'scale' ? 'sm:col-span-2' : ''
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-semibold text-slate-200">
+                                {field.label}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={field.bounds.min}
+                                  max={field.bounds.max}
+                                  step={field.bounds.step}
+                                  value={val}
+                                  onChange={(e) =>
+                                    updateActiveBoxDraft({
+                                      [field.key]: Number(e.target.value),
+                                    })
+                                  }
+                                  aria-label={`${activeBoxTarget} ${field.label} number`}
+                                  className="w-16 px-1.5 py-0.5 text-right font-mono text-[11px] bg-slate-950 border border-slate-700 rounded text-cyan-300"
+                                />
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {field.unit}
+                                </span>
+                              </div>
+                            </div>
+                            <input
+                              type="range"
+                              min={field.bounds.min}
+                              max={field.bounds.max}
+                              step={field.bounds.step}
+                              value={val}
+                              onChange={(e) =>
+                                updateActiveBoxDraft({
+                                  [field.key]: Number(e.target.value),
+                                })
+                              }
+                              aria-label={`${activeBoxTarget} ${field.label}`}
+                              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => {
+                          const def = getDefaultBoxForTarget(activeBoxTarget);
+                          setBoxDraft((prevDraft) => {
+                            const updated = { ...prevDraft };
+                            delete updated[activeBoxTarget];
+                            return updated;
+                          });
+                          void persistOverlayPatch(
+                            { [activeBoxTarget]: def },
+                            `Reset ${
+                              GEOMETRY_BOX_TABS.find((t) => t.id === activeBoxTarget)?.label
+                            } geometry box to default`
+                          );
+                        }}
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-300 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset Target Default</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() =>
+                          persistOverlayPatch(
+                            { [activeBoxTarget]: activeBoxDraft },
+                            `Saved ${
+                              GEOMETRY_BOX_TABS.find((t) => t.id === activeBoxTarget)?.label
+                            } box geometry`
+                          )
+                        }
+                        className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Save Box Settings</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
